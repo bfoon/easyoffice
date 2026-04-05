@@ -1,0 +1,113 @@
+{% extends 'base.html' %}
+{% block title %}Tasks{% endblock %}
+{% block breadcrumb %}<a href="{% url 'dashboard' %}">Dashboard</a> / Tasks{% endblock %}
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Tasks</h1>
+    <p class="eo-page-subtitle">{{ task_counts.todo }} to do · {{ task_counts.in_progress }} in progress · {{ task_counts.done }} done</p>
+  </div>
+  <a href="{% url 'task_create' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus"></i> New Task</a>
+</div>
+
+<!-- Filters -->
+<div class="eo-card mb-4">
+  <form method="get" class="row g-3 align-items-end">
+    <div class="col-sm-4 col-lg-3">
+      <label class="eo-form-label">Search</label>
+      <input type="text" name="q" class="eo-form-control" placeholder="Search tasks..." value="{{ q }}"/>
+    </div>
+    <div class="col-sm-4 col-lg-2">
+      <label class="eo-form-label">Status</label>
+      <select name="status" class="eo-form-select">
+        <option value="">All Status</option>
+        {% for val, label in status_choices %}
+        <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-sm-4 col-lg-2">
+      <label class="eo-form-label">Priority</label>
+      <select name="priority" class="eo-form-select">
+        <option value="">All Priority</option>
+        {% for val, label in priority_choices %}
+        <option value="{{ val }}" {% if priority_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-sm-6 col-lg-2">
+      <label class="eo-form-label">View</label>
+      <select name="view" class="eo-form-select">
+        <option value="mine" {% if view_mode == 'mine' %}selected{% endif %}>My Tasks</option>
+        {% if can_view_team_tasks %}
+        <option value="team" {% if view_mode == 'team' %}selected{% endif %}>Team Tasks</option>
+        {% endif %}
+        {% if request.user.is_superuser %}
+        <option value="all" {% if view_mode == 'all' %}selected{% endif %}>All Tasks</option>
+        {% endif %}
+      </select>
+    </div>
+    <div class="col-auto d-flex gap-2">
+      <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
+      <a href="{% url 'task_list' %}" class="eo-btn eo-btn-secondary">Reset</a>
+    </div>
+  </form>
+</div>
+
+<!-- Task Grid -->
+{% if tasks %}
+<div class="row g-3">
+  {% for task in tasks %}
+  <div class="col-sm-6 col-xl-4">
+    <a href="{% url 'task_detail' task.pk %}" style="text-decoration:none">
+      <div class="eo-task-card {% if task.is_overdue %}overdue{% endif %}">
+        <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+          <span class="eo-status eo-status-{{ task.status }}">{{ task.get_status_display }}</span>
+          <span class="eo-priority eo-priority-{{ task.priority }}">
+            <i class="bi bi-flag-fill"></i>{{ task.get_priority_display }}
+          </span>
+        </div>
+        <div class="eo-task-title">{{ task.title|truncatechars:60 }}</div>
+        {% if task.description %}<div style="font-size:.8rem;color:var(--eo-text-muted);margin-top:4px">{{ task.description|truncatechars:80 }}</div>{% endif %}
+
+        {% if task.progress_pct > 0 %}
+        <div class="mt-3 mb-1">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span style="font-size:.72rem;color:var(--eo-text-muted)">Progress</span>
+            <span style="font-size:.72rem;font-weight:600">{{ task.progress_pct }}%</span>
+          </div>
+          <div class="eo-progress">
+            <div class="eo-progress-bar {% if task.progress_pct == 100 %}success{% endif %}" style="width:{{ task.progress_pct }}%"></div>
+          </div>
+        </div>
+        {% endif %}
+
+        <div class="eo-task-meta">
+          <div style="display:flex;align-items:center;gap:6px">
+            {% if task.assigned_to.avatar %}
+              <img src="{{ task.assigned_to.avatar.url }}" class="eo-avatar-sm" alt=""/>
+            {% else %}
+              <div class="eo-avatar-initials-sm">{{ task.assigned_to.initials }}</div>
+            {% endif %}
+            <span style="font-size:.78rem;color:var(--eo-text-muted)">{{ task.assigned_to.full_name }}</span>
+          </div>
+          {% if task.due_date %}
+          <span class="ms-auto eo-task-due {% if task.is_overdue %}overdue{% endif %}">
+            <i class="bi bi-calendar3"></i> {{ task.due_date|date:"N j" }}
+          </span>
+          {% endif %}
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="eo-card" style="text-align:center;padding:64px 32px">
+  <i class="bi bi-inbox" style="font-size:3rem;color:var(--eo-text-light);display:block;margin-bottom:16px"></i>
+  <h3 style="font-size:1.1rem;font-weight:600;color:var(--eo-text);margin-bottom:8px">No tasks found</h3>
+  <p style="color:var(--eo-text-muted);font-size:.88rem">Try adjusting your filters or create a new task.</p>
+  <a href="{% url 'task_create' %}" class="eo-btn eo-btn-primary mt-2"><i class="bi bi-plus"></i> Create Task</a>
+</div>
+{% endif %}
+{% endblock %}

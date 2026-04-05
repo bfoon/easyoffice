@@ -1,0 +1,466 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Messages{% endblock %}
+{% block breadcrumb %}<span>Messages</span>{% endblock %}
+
+{% block content %}
+<style>
+  .msg-layout {
+    display: flex;
+    height: calc(100vh - 140px);
+    min-height: 520px;
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  .msg-sidebar {
+    width: 280px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--eo-border);
+    background: var(--eo-bg);
+  }
+  .msg-sidebar-head {
+    padding: 16px 16px 12px;
+    border-bottom: 1px solid var(--eo-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .msg-search {
+    flex: 1;
+    position: relative;
+  }
+  .msg-search input {
+    width: 100%;
+    padding: 7px 12px 7px 32px;
+    border: 1px solid var(--eo-border);
+    border-radius: 20px;
+    background: var(--eo-surface);
+    color: var(--eo-text);
+    font-size: .82rem;
+    outline: none;
+    transition: border-color .15s;
+  }
+  .msg-search input:focus { border-color: var(--eo-accent); }
+  .msg-search i {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--eo-text-light);
+    font-size: .8rem;
+  }
+  .msg-rooms {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+  }
+  .msg-section-label {
+    padding: 10px 16px 4px;
+    font-size: .68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--eo-text-muted);
+  }
+  .msg-room-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: background .12s;
+    text-decoration: none;
+    position: relative;
+  }
+  .msg-room-item:hover { background: var(--eo-surface); }
+  .msg-room-item.active {
+    background: var(--eo-accent)12;
+    border-left: 3px solid var(--eo-accent);
+    padding-left: 11px;
+  }
+  .msg-room-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .85rem;
+    font-weight: 700;
+    color: #fff;
+    background: var(--eo-accent);
+    position: relative;
+  }
+  .msg-room-avatar.direct { background: #6366f1; }
+  .msg-room-avatar.group { background: #0ea5e9; }
+  .msg-room-avatar.unit { background: #10b981; }
+  .msg-room-avatar.department { background: #f59e0b; }
+  .msg-room-avatar.announcement { background: #ef4444; }
+  .msg-room-avatar.project { background: #8b5cf6; }
+  .msg-room-avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+  .msg-online-dot {
+    position: absolute;
+    bottom: 1px;
+    right: 1px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--eo-success);
+    border: 2px solid var(--eo-bg);
+  }
+  .msg-room-info { flex: 1; min-width: 0; }
+  .msg-room-name {
+    font-size: .88rem;
+    font-weight: 600;
+    color: var(--eo-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .msg-room-preview {
+    font-size: .75rem;
+    color: var(--eo-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 1px;
+  }
+  .msg-unread-badge {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--eo-accent);
+    color: #fff;
+    font-size: .68rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .msg-room-time {
+    font-size: .7rem;
+    color: var(--eo-text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+    align-self: flex-start;
+    margin-top: 2px;
+  }
+
+  /* ── Main (empty state) ── */
+  .msg-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    color: var(--eo-text-muted);
+    padding: 48px;
+  }
+
+  /* ── Modal ── */
+  .msg-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.45);
+    z-index: 1050;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .18s;
+  }
+  .msg-modal-backdrop.open {
+    opacity: 1;
+    pointer-events: all;
+  }
+  .msg-modal {
+    background: var(--eo-surface);
+    border-radius: var(--eo-radius);
+    border: 1px solid var(--eo-border);
+    width: 480px;
+    max-width: 95vw;
+    max-height: 85vh;
+    overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,.18);
+    transform: translateY(12px);
+    transition: transform .18s;
+  }
+  .msg-modal-backdrop.open .msg-modal { transform: translateY(0); }
+  .msg-modal-head {
+    padding: 20px 24px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--eo-border);
+  }
+  .msg-modal-body { padding: 20px 24px; }
+  .msg-member-list {
+    max-height: 180px;
+    overflow-y: auto;
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius-sm);
+  }
+  .msg-member-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: background .12s;
+  }
+  .msg-member-row:hover { background: var(--eo-bg); }
+  .msg-member-row input[type="checkbox"] { flex-shrink: 0; }
+</style>
+
+<div class="msg-layout">
+  <!-- ══ SIDEBAR ══ -->
+  <aside class="msg-sidebar">
+    <div class="msg-sidebar-head">
+      <div class="msg-search">
+        <i class="bi bi-search"></i>
+        <input type="text" id="roomSearch" placeholder="Search rooms..." autocomplete="off"/>
+      </div>
+      <button class="eo-btn eo-btn-primary eo-btn-icon eo-btn-sm" title="New conversation"
+              onclick="openModal('createModal')">
+        <i class="bi bi-pencil-square"></i>
+      </button>
+    </div>
+
+    <div class="msg-rooms" id="roomList">
+
+      <!-- Direct Messages -->
+      <div class="msg-section-label">Direct Messages</div>
+
+      {% for item in rooms_meta %}
+      {% if item.room.room_type == 'direct' %}
+      <a href="{% url 'chat_room' item.room.id %}" class="msg-room-item" data-name="{{ item.room.name|lower }}">
+        <div class="msg-room-avatar direct">
+          {% if item.room.avatar %}<img src="{{ item.room.avatar.url }}"/>
+          {% else %}{{ item.room.name|slice:':2'|upper }}{% endif %}
+          <span class="msg-online-dot" style="display:none"></span>
+        </div>
+        <div class="msg-room-info">
+          <div class="msg-room-name">{{ item.room.name }}</div>
+          <div class="msg-room-preview">
+            {% if item.last_message %}
+              {% if item.last_message.sender == request.user %}You: {% endif %}
+              {% if item.last_message.message_type == 'file' %}📎 {{ item.last_message.file_name }}
+              {% elif item.last_message.message_type == 'image' %}🖼️ Image
+              {% else %}{{ item.last_message.content|truncatechars:30 }}{% endif %}
+            {% else %}No messages yet{% endif %}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+          {% if item.last_message %}<span class="msg-room-time">{{ item.last_message.created_at|naturaltime|truncatechars:10 }}</span>{% endif %}
+          {% if item.unread %}<span class="msg-unread-badge">{{ item.unread }}</span>{% endif %}
+        </div>
+      </a>
+      {% endif %}
+      {% endfor %}
+
+      <!-- Groups & Channels -->
+      <div class="msg-section-label" style="margin-top:8px">Channels &amp; Groups</div>
+      {% for item in rooms_meta %}
+      {% if item.room.room_type != 'direct' %}
+      <a href="{% url 'chat_room' item.room.id %}" class="msg-room-item" data-name="{{ item.room.name|lower }}">
+        <div class="msg-room-avatar {{ item.room.room_type }}">
+          {% if item.room.avatar %}<img src="{{ item.room.avatar.url }}"/>
+          {% elif item.room.room_type == 'announcement' %}<i class="bi bi-megaphone-fill" style="font-size:.9rem"></i>
+          {% elif item.room.room_type == 'project' %}<i class="bi bi-kanban-fill" style="font-size:.9rem"></i>
+          {% elif item.room.room_type == 'unit' %}<i class="bi bi-people-fill" style="font-size:.9rem"></i>
+          {% elif item.room.room_type == 'department' %}<i class="bi bi-building" style="font-size:.9rem"></i>
+          {% else %}<i class="bi bi-hash" style="font-size:.9rem"></i>{% endif %}
+        </div>
+        <div class="msg-room-info">
+          <div class="msg-room-name">{{ item.room.name }}</div>
+          <div class="msg-room-preview">
+            {% if item.last_message %}
+              {% if item.last_message.sender == request.user %}You: {% endif %}
+              {% if item.last_message.message_type == 'file' %}📎 {{ item.last_message.file_name }}
+              {% elif item.last_message.message_type == 'image' %}🖼️ Image
+              {% else %}{{ item.last_message.content|truncatechars:30 }}{% endif %}
+            {% else %}No messages yet{% endif %}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+          {% if item.last_message %}<span class="msg-room-time">{{ item.last_message.created_at|naturaltime|truncatechars:10 }}</span>{% endif %}
+          {% if item.unread %}<span class="msg-unread-badge">{{ item.unread }}</span>{% endif %}
+        </div>
+      </a>
+      {% endif %}
+      {% endfor %}
+
+      {% if not rooms_meta %}
+      <div style="padding:32px 16px;text-align:center;color:var(--eo-text-muted);font-size:.82rem">
+        <i class="bi bi-chat-square-dots" style="font-size:1.8rem;display:block;margin-bottom:8px"></i>
+        No conversations yet
+      </div>
+      {% endif %}
+    </div>
+  </aside>
+
+  <!-- ══ MAIN EMPTY STATE ══ -->
+  <main class="msg-main">
+    <div style="width:72px;height:72px;border-radius:50%;background:var(--eo-accent)15;display:flex;align-items:center;justify-content:center;margin-bottom:4px">
+      <i class="bi bi-chat-heart" style="font-size:2rem;color:var(--eo-accent)"></i>
+    </div>
+    <div style="font-size:1.15rem;font-weight:700;color:var(--eo-text);margin-bottom:4px">Your Messages</div>
+    <p style="font-size:.88rem;text-align:center;max-width:320px;line-height:1.6">
+      Select a conversation from the sidebar or start a new one with a colleague.
+    </p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:8px">
+      <button class="eo-btn eo-btn-primary" onclick="openModal('dmModal')">
+        <i class="bi bi-person-plus"></i> Start a DM
+      </button>
+      <button class="eo-btn eo-btn-secondary" onclick="openModal('createModal')">
+        <i class="bi bi-hash"></i> New Channel
+      </button>
+    </div>
+  </main>
+</div>
+
+<!-- ══ NEW CHANNEL MODAL ══ -->
+<div class="msg-modal-backdrop" id="createModal">
+  <div class="msg-modal">
+    <div class="msg-modal-head">
+      <div>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">Create Channel or Group</div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px">Add members after creating</div>
+      </div>
+      <button onclick="closeModal('createModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="msg-modal-body">
+      <form method="post" action="{% url 'create_chat_room' %}">
+        {% csrf_token %}
+        <div class="eo-form-group">
+          <label class="eo-form-label">Room Name *</label>
+          <input type="text" name="name" class="eo-form-control" placeholder="e.g. project-atlas" required autofocus/>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Type</label>
+          <select name="room_type" class="eo-form-select">
+            {% for val, label in room_types %}
+            {% if val != 'direct' %}
+            <option value="{{ val }}">{{ label }}</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Description <span style="color:var(--eo-text-muted);font-weight:400">(optional)</span></label>
+          <input type="text" name="description" class="eo-form-control" placeholder="What's this room for?"/>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Add Members</label>
+          <div class="msg-member-list">
+            {% for staff in all_staff %}
+            <label class="msg-member-row">
+              <input type="checkbox" name="members" value="{{ staff.id }}"/>
+              {% if staff.avatar %}<img src="{{ staff.avatar.url }}" style="width:28px;height:28px;border-radius:50%;object-fit:cover"/>
+              {% else %}<div style="width:28px;height:28px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.68rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ staff.initials }}</div>{% endif %}
+              <div>
+                <div style="font-size:.85rem;font-weight:600;color:var(--eo-text)">{{ staff.full_name }}</div>
+                {% if staff.staffprofile.position %}<div style="font-size:.72rem;color:var(--eo-text-muted)">{{ staff.staffprofile.position.title }}</div>{% endif %}
+              </div>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button type="submit" class="eo-btn eo-btn-primary flex-grow-1">
+            <i class="bi bi-plus-circle"></i> Create Room
+          </button>
+          <button type="button" onclick="closeModal('createModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ══ NEW DM MODAL ══ -->
+<div class="msg-modal-backdrop" id="dmModal">
+  <div class="msg-modal">
+    <div class="msg-modal-head">
+      <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">New Direct Message</div>
+      <button onclick="closeModal('dmModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="msg-modal-body">
+      <div style="margin-bottom:12px">
+        <div style="position:relative">
+          <i class="bi bi-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.82rem"></i>
+          <input type="text" id="dmSearch" placeholder="Search staff..." class="eo-form-control" style="padding-left:32px" autocomplete="off"/>
+        </div>
+      </div>
+      <div class="msg-member-list" id="dmList">
+        {% for staff in all_staff %}
+        <a href="{% url 'direct_message' staff.id %}" class="msg-member-row" style="text-decoration:none"
+           data-name="{{ staff.full_name|lower }}">
+          <div style="position:relative">
+            {% if staff.avatar %}<img src="{{ staff.avatar.url }}" style="width:36px;height:36px;border-radius:50%;object-fit:cover"/>
+            {% else %}<div style="width:36px;height:36px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ staff.initials }}</div>{% endif %}
+            {% if staff.is_online %}<span class="msg-online-dot" style="display:block!important;border-color:var(--eo-surface)"></span>{% endif %}
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.9rem;font-weight:600;color:var(--eo-text)">{{ staff.full_name }}</div>
+            <div style="font-size:.75rem;color:var(--eo-text-muted)">
+              {% if staff.staffprofile.position %}{{ staff.staffprofile.position.title }}{% endif %}
+              {% if staff.is_online %}<span style="color:var(--eo-success);margin-left:6px">● Online</span>{% endif %}
+            </div>
+          </div>
+          <i class="bi bi-arrow-right" style="color:var(--eo-text-light);font-size:.8rem"></i>
+        </a>
+        {% empty %}
+        <div style="padding:24px;text-align:center;color:var(--eo-text-muted);font-size:.85rem">No staff available</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Modal helpers
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.msg-modal-backdrop').forEach(function(el) {
+  el.addEventListener('click', function(e) { if (e.target === el) el.classList.remove('open'); });
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') document.querySelectorAll('.msg-modal-backdrop.open').forEach(function(el) { el.classList.remove('open'); });
+});
+
+// Sidebar room search
+document.getElementById('roomSearch').addEventListener('input', function() {
+  var q = this.value.toLowerCase();
+  document.querySelectorAll('.msg-room-item').forEach(function(el) {
+    el.style.display = el.dataset.name.includes(q) ? '' : 'none';
+  });
+});
+
+// DM modal search
+document.getElementById('dmSearch').addEventListener('input', function() {
+  var q = this.value.toLowerCase();
+  document.querySelectorAll('#dmList a').forEach(function(el) {
+    el.style.display = el.dataset.name.includes(q) ? '' : 'none';
+  });
+});
+</script>
+{% endblock %}

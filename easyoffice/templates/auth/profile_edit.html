@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+{% block title %}Edit Profile{% endblock %}
+{% block breadcrumb %}<a href="{% url 'profile' %}">Profile</a> / Edit{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Edit Profile</h1>
+    <p class="eo-page-subtitle">Update your personal information and preferences</p>
+  </div>
+  <a href="{% url 'profile' %}" class="eo-btn eo-btn-secondary">
+    <i class="bi bi-arrow-left"></i> Back to Profile
+  </a>
+</div>
+
+<form method="post" enctype="multipart/form-data" id="profileForm">
+  {% csrf_token %}
+  <div class="row g-4">
+
+    <!-- ─── LEFT: Avatar + Quick Links ─── -->
+    <div class="col-lg-3">
+
+      <!-- Avatar upload -->
+      <div class="eo-card" style="text-align:center;padding:28px 20px">
+        <div style="position:relative;display:inline-block;margin-bottom:16px" id="avatarWrap">
+          {% if user.avatar %}
+            <img src="{{ user.avatar.url }}" id="avatarPreview"
+                 style="width:96px;height:96px;border-radius:50%;object-fit:cover;border:4px solid var(--eo-surface);box-shadow:0 0 0 2px var(--eo-border)"/>
+          {% else %}
+            <div id="avatarInitials"
+                 style="width:96px;height:96px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:2rem;font-weight:800;display:flex;align-items:center;justify-content:center;border:4px solid var(--eo-surface);box-shadow:0 0 0 2px var(--eo-border);margin:0 auto">
+              {{ user.initials }}
+            </div>
+            <img id="avatarPreview" style="display:none;width:96px;height:96px;border-radius:50%;object-fit:cover;border:4px solid var(--eo-surface);box-shadow:0 0 0 2px var(--eo-border)"/>
+          {% endif %}
+          <label for="avatarInput" style="position:absolute;bottom:2px;right:2px;width:28px;height:28px;border-radius:50%;background:var(--eo-accent);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:.75rem;box-shadow:0 2px 8px rgba(0,0,0,.2)">
+            <i class="bi bi-camera-fill"></i>
+          </label>
+        </div>
+        <input type="file" name="avatar" id="avatarInput" accept="image/*" style="display:none" onchange="previewAvatar(this)"/>
+        <div style="font-size:.88rem;font-weight:700;color:var(--eo-text)">{{ user.full_name }}</div>
+        {% if user.employee_id %}
+        <div style="font-size:.72rem;color:var(--eo-text-muted);font-family:var(--eo-mono);margin-top:3px">{{ user.employee_id }}</div>
+        {% endif %}
+        <div style="margin-top:12px;font-size:.72rem;color:var(--eo-text-muted)">
+          Click the camera icon to change your photo.<br/>Recommended: square image, max 2 MB.
+        </div>
+      </div>
+
+      <!-- Quick nav -->
+      <div class="eo-card mt-3" style="padding:12px">
+        <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:8px">Jump to section</div>
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <a href="#personal"      style="padding:7px 10px;border-radius:7px;font-size:.82rem;color:var(--eo-text-muted);text-decoration:none;transition:background .1s" onmouseover="this.style.background='var(--eo-bg)'" onmouseout="this.style.background=''"><i class="bi bi-person me-2"></i>Personal Info</a>
+          <a href="#account"       style="padding:7px 10px;border-radius:7px;font-size:.82rem;color:var(--eo-text-muted);text-decoration:none;transition:background .1s" onmouseover="this.style.background='var(--eo-bg)'" onmouseout="this.style.background=''"><i class="bi bi-at me-2"></i>Account</a>
+          <a href="#professional"  style="padding:7px 10px;border-radius:7px;font-size:.82rem;color:var(--eo-text-muted);text-decoration:none;transition:background .1s" onmouseover="this.style.background='var(--eo-bg)'" onmouseout="this.style.background=''"><i class="bi bi-briefcase me-2"></i>Professional</a>
+          <a href="#preferences"   style="padding:7px 10px;border-radius:7px;font-size:.82rem;color:var(--eo-text-muted);text-decoration:none;transition:background .1s" onmouseover="this.style.background='var(--eo-bg)'" onmouseout="this.style.background=''"><i class="bi bi-sliders me-2"></i>Preferences</a>
+          <a href="{% url 'change_password' %}" style="padding:7px 10px;border-radius:7px;font-size:.82rem;color:var(--eo-text-muted);text-decoration:none;transition:background .1s" onmouseover="this.style.background='var(--eo-bg)'" onmouseout="this.style.background=''"><i class="bi bi-shield-lock me-2"></i>Change Password</a>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ─── RIGHT: Form sections ─── -->
+    <div class="col-lg-9 d-flex flex-column gap-4">
+
+      <!-- Personal Info -->
+      <div class="eo-card" id="personal">
+        <div class="eo-card-header">
+          <div>
+            <h2 class="eo-card-title">Personal Information</h2>
+            <p class="eo-card-subtitle">Your name and contact details</p>
+          </div>
+          <i class="bi bi-person-circle" style="font-size:1.4rem;color:var(--eo-accent)"></i>
+        </div>
+        <div class="row g-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">First Name *</label>
+            <input type="text" name="first_name" class="eo-form-control" required value="{{ user.first_name }}"/>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Last Name *</label>
+            <input type="text" name="last_name" class="eo-form-control" required value="{{ user.last_name }}"/>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Phone Number</label>
+            <input type="tel" name="phone" class="eo-form-control" placeholder="+1 234 567 8900" value="{{ user.phone }}"/>
+          </div>
+        </div>
+        <div class="eo-form-group mt-3">
+          <label class="eo-form-label">Bio <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span></label>
+          <textarea name="bio" class="eo-form-control" rows="3" placeholder="A short description about yourself, your role, or expertise…">{{ user.bio }}</textarea>
+        </div>
+      </div>
+
+      <!-- Account -->
+      <div class="eo-card" id="account">
+        <div class="eo-card-header">
+          <div>
+            <h2 class="eo-card-title">Account</h2>
+            <p class="eo-card-subtitle">Email address and login details</p>
+          </div>
+          <i class="bi bi-at" style="font-size:1.4rem;color:var(--eo-accent)"></i>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Email Address</label>
+          <input type="email" class="eo-form-control" value="{{ user.email }}" disabled
+                 style="background:var(--eo-bg);color:var(--eo-text-muted);cursor:not-allowed"/>
+          <div class="eo-form-hint">Contact your IT administrator to change your email address.</div>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Employee ID</label>
+          <input type="text" class="eo-form-control" value="{{ user.employee_id|default:'' }}" disabled
+                 style="background:var(--eo-bg);color:var(--eo-text-muted);cursor:not-allowed;font-family:var(--eo-mono)"/>
+        </div>
+        <a href="{% url 'change_password' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-shield-lock"></i> Change Password
+        </a>
+      </div>
+
+      <!-- Professional -->
+      <div class="eo-card" id="professional">
+        <div class="eo-card-header">
+          <div>
+            <h2 class="eo-card-title">Professional</h2>
+            <p class="eo-card-subtitle">Skills, expertise and professional links</p>
+          </div>
+          <i class="bi bi-briefcase" style="font-size:1.4rem;color:var(--eo-accent)"></i>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Skills <span style="font-weight:400;color:var(--eo-text-muted)">(comma-separated)</span></label>
+          <input type="text" name="skills" class="eo-form-control" value="{{ user.skills }}"
+                 placeholder="e.g. Project Management, Excel, Data Analysis, Communication"/>
+          <div class="eo-form-hint">These will appear as tags on your public profile.</div>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">LinkedIn Profile URL</label>
+          <div style="position:relative">
+            <i class="bi bi-linkedin" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted)"></i>
+            <input type="url" name="linkedin_url" class="eo-form-control" style="padding-left:36px"
+                   placeholder="https://linkedin.com/in/yourname" value="{{ user.linkedin_url }}"/>
+          </div>
+        </div>
+      </div>
+
+      <!-- Preferences -->
+      <div class="eo-card" id="preferences">
+        <div class="eo-card-header">
+          <div>
+            <h2 class="eo-card-title">Preferences</h2>
+            <p class="eo-card-subtitle">Display, timezone and notification settings</p>
+          </div>
+          <i class="bi bi-sliders" style="font-size:1.4rem;color:var(--eo-accent)"></i>
+        </div>
+        <div class="row g-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Theme</label>
+            <select name="theme" class="eo-form-select">
+              <option value="light" {% if user.theme == 'light' %}selected{% endif %}>☀️ Light</option>
+              <option value="dark" {% if user.theme == 'dark' %}selected{% endif %}>🌙 Dark</option>
+              <option value="auto" {% if user.theme == 'auto' %}selected{% endif %}>🖥️ Auto (System)</option>
+            </select>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Timezone</label>
+            <select name="timezone_pref" class="eo-form-select">
+              <option value="UTC"                 {% if user.timezone_pref == 'UTC' %}selected{% endif %}>UTC</option>
+              <option value="Africa/Banjul"       {% if user.timezone_pref == 'Africa/Banjul' %}selected{% endif %}>Africa/Banjul</option>
+              <option value="Africa/Lagos"        {% if user.timezone_pref == 'Africa/Lagos' %}selected{% endif %}>Africa/Lagos</option>
+              <option value="Africa/Nairobi"      {% if user.timezone_pref == 'Africa/Nairobi' %}selected{% endif %}>Africa/Nairobi</option>
+              <option value="Africa/Cairo"        {% if user.timezone_pref == 'Africa/Cairo' %}selected{% endif %}>Africa/Cairo</option>
+              <option value="Europe/London"       {% if user.timezone_pref == 'Europe/London' %}selected{% endif %}>Europe/London</option>
+              <option value="Europe/Paris"        {% if user.timezone_pref == 'Europe/Paris' %}selected{% endif %}>Europe/Paris</option>
+              <option value="America/New_York"    {% if user.timezone_pref == 'America/New_York' %}selected{% endif %}>America/New_York</option>
+              <option value="America/Chicago"     {% if user.timezone_pref == 'America/Chicago' %}selected{% endif %}>America/Chicago</option>
+              <option value="America/Los_Angeles" {% if user.timezone_pref == 'America/Los_Angeles' %}selected{% endif %}>America/Los_Angeles</option>
+              <option value="Asia/Dubai"          {% if user.timezone_pref == 'Asia/Dubai' %}selected{% endif %}>Asia/Dubai</option>
+              <option value="Asia/Singapore"      {% if user.timezone_pref == 'Asia/Singapore' %}selected{% endif %}>Asia/Singapore</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:20px">
+          <div style="font-size:.8rem;font-weight:700;color:var(--eo-text);margin-bottom:12px">Notifications</div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <label style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:var(--eo-bg);border-radius:9px;cursor:pointer">
+              <div>
+                <div style="font-size:.87rem;font-weight:600;color:var(--eo-text)"><i class="bi bi-envelope me-2" style="color:var(--eo-accent)"></i>Email Notifications</div>
+                <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:2px">Receive notifications via email</div>
+              </div>
+              <input type="checkbox" name="notification_email" {% if user.notification_email %}checked{% endif %}
+                     style="width:18px;height:18px;cursor:pointer"/>
+            </label>
+            <label style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:var(--eo-bg);border-radius:9px;cursor:pointer">
+              <div>
+                <div style="font-size:.87rem;font-weight:600;color:var(--eo-text)"><i class="bi bi-bell me-2" style="color:var(--eo-accent)"></i>In-App Notifications</div>
+                <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:2px">Show push notifications in the sidebar</div>
+              </div>
+              <input type="checkbox" name="notification_push" {% if user.notification_push %}checked{% endif %}
+                     style="width:18px;height:18px;cursor:pointer"/>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Save bar -->
+      <div style="display:flex;gap:10px;padding-top:4px">
+        <button type="submit" class="eo-btn eo-btn-primary" style="min-width:140px">
+          <i class="bi bi-floppy"></i> Save Changes
+        </button>
+        <a href="{% url 'profile' %}" class="eo-btn eo-btn-secondary">Cancel</a>
+      </div>
+
+    </div>
+  </div>
+</form>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function previewAvatar(input) {
+  var file = input.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var preview = document.getElementById('avatarPreview');
+    var initials = document.getElementById('avatarInitials');
+    preview.src = e.target.result;
+    preview.style.display = 'block';
+    if (initials) initials.style.display = 'none';
+  };
+  reader.readAsDataURL(file);
+}
+</script>
+{% endblock %}

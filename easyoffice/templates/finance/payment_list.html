@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Payments{% endblock %}
+{% block breadcrumb %}<a href="{% url 'finance_dashboard' %}">Finance</a> / Payments{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Payments</h1>
+    <p class="eo-page-subtitle">Transaction history &amp; disbursements</p>
+  </div>
+  <a href="{% url 'finance_dashboard' %}" class="eo-btn eo-btn-secondary">
+    <i class="bi bi-arrow-left"></i> Dashboard
+  </a>
+</div>
+
+<!-- Filter bar -->
+<div class="eo-card mb-4">
+  <form method="get" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+    <!-- Search -->
+    <div style="position:relative;flex:1;min-width:180px;max-width:280px">
+      <i class="bi bi-search" style="position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.8rem;pointer-events:none"></i>
+      <input type="text" name="q" class="eo-form-control" style="padding-left:32px"
+             placeholder="Reference, recipient, description…" value="{{ q }}"/>
+    </div>
+
+    <!-- Method -->
+    <div>
+      <label class="eo-form-label">Method</label>
+      <select name="method" class="eo-form-select" onchange="this.form.submit()">
+        <option value="">All Methods</option>
+        {% for val, label in method_choices %}
+        <option value="{{ val }}" {% if method_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Year -->
+    <div>
+      <label class="eo-form-label">Year</label>
+      <select name="year" class="eo-form-select" onchange="this.form.submit()">
+        <option value="">All Years</option>
+        {% for y in year_range %}
+        <option value="{{ y }}" {% if year_filter == y|stringformat:'s' %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <button type="submit" class="eo-btn eo-btn-primary">
+      <i class="bi bi-search"></i> Search
+    </button>
+    {% if q or method_filter or year_filter %}
+    <a href="{% url 'payment_list' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-x-circle"></i> Reset
+    </a>
+    {% endif %}
+  </form>
+</div>
+
+{% if payments %}
+<div class="eo-card" style="padding:0;overflow:hidden">
+
+  <!-- Table header -->
+  <div style="display:grid;grid-template-columns:130px 1fr 160px 110px 100px 110px;
+              align-items:center;gap:0;padding:10px 20px;
+              background:var(--eo-bg);border-bottom:1.5px solid var(--eo-border)">
+    <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted)">Reference</span>
+    <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);padding:0 12px">Recipient / Description</span>
+    <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted)">Budget</span>
+    <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted)">Method</span>
+    <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted)">Date</span>
+    <span style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);text-align:right">Amount</span>
+  </div>
+
+  {% for p in payments %}
+  <div style="display:grid;grid-template-columns:130px 1fr 160px 110px 100px 110px;
+              align-items:center;gap:0;padding:12px 20px;
+              border-bottom:1px solid var(--eo-border);transition:background .1s;cursor:default"
+       onmouseover="this.style.background='var(--eo-bg)'"
+       onmouseout="this.style.background=''">
+
+    <!-- Reference -->
+    <div style="font-size:.77rem;font-family:var(--eo-mono,monospace);
+                color:var(--eo-accent);font-weight:600;
+                overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+      {{ p.reference }}
+    </div>
+
+    <!-- Recipient + description -->
+    <div style="padding:0 12px;min-width:0">
+      <div style="font-size:.87rem;font-weight:600;color:var(--eo-text);
+                  overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        {{ p.recipient }}
+      </div>
+      <div style="font-size:.74rem;color:var(--eo-text-muted);
+                  overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        {{ p.description|truncatechars:55 }}
+      </div>
+      {% if p.purchase_request %}
+      <div style="font-size:.71rem;color:var(--eo-text-light);margin-top:2px">
+        <i class="bi bi-cart me-1"></i>{{ p.purchase_request.title|truncatechars:40 }}
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Budget -->
+    <div style="font-size:.78rem;color:var(--eo-text-muted);
+                overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+      {% if p.budget %}
+      <i class="bi bi-wallet2 me-1"></i>{{ p.budget.name|truncatechars:20 }}
+      {% else %}&mdash;{% endif %}
+    </div>
+
+    <!-- Method badge -->
+    <div>
+      <span style="display:inline-flex;align-items:center;gap:5px;font-size:.74rem;font-weight:600;
+                   padding:3px 9px;border-radius:20px;
+        {% if p.method == 'bank_transfer' %}background:#dbeafe;color:#1e40af
+        {% elif p.method == 'cash' %}background:#d1fae5;color:#065f46
+        {% elif p.method == 'cheque' %}background:#fef3c7;color:#92400e
+        {% else %}background:#ede9fe;color:#5b21b6{% endif %}">
+        <i class="bi {% if p.method == 'bank_transfer' %}bi-bank
+          {% elif p.method == 'cash' %}bi-cash-coin
+          {% elif p.method == 'cheque' %}bi-file-text
+          {% else %}bi-credit-card{% endif %}"></i>
+        {{ p.get_method_display|truncatechars:12 }}
+      </span>
+    </div>
+
+    <!-- Date -->
+    <div style="font-size:.8rem;color:var(--eo-text-muted)">
+      {{ p.payment_date|date:"N j, Y" }}
+    </div>
+
+    <!-- Amount -->
+    <div style="text-align:right">
+      <div style="font-size:.92rem;font-weight:800;color:var(--eo-text)">
+        ${{ p.amount|floatformat:2|intcomma }}
+      </div>
+      {% if p.currency != 'USD' %}
+      <div style="font-size:.7rem;color:var(--eo-text-muted)">{{ p.currency }}</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+
+</div>
+
+{% else %}
+<div class="eo-card" style="text-align:center;padding:72px 32px">
+  <i class="bi bi-receipt" style="font-size:3rem;display:block;margin-bottom:16px;opacity:.25;color:var(--eo-text-light)"></i>
+  <div style="font-size:1.1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No payments found</div>
+  <p style="color:var(--eo-text-muted);font-size:.87rem">
+    {% if q or method_filter or year_filter %}
+    Try adjusting your search or filters.
+    <a href="{% url 'payment_list' %}" style="color:var(--eo-accent)">Clear all</a>
+    {% else %}
+    No payments have been recorded yet.
+    {% endif %}
+  </p>
+</div>
+{% endif %}
+
+{% endblock %}

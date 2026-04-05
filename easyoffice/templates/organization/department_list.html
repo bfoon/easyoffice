@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Departments{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'organization:org_chart' %}">Organization</a> / Departments
+{% endblock %}
+
+{% block content %}
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Departments</h1>
+    <p class="eo-page-subtitle">{{ departments.count }} department{{ departments.count|pluralize }} across the office</p>
+  </div>
+  {% if request.user.is_superuser %}
+  <a href="{% url 'admin:organization_department_add' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-plus"></i> Add Department
+  </a>
+  {% endif %}
+</div>
+
+<div class="row g-4">
+  {% for dept in departments %}
+  <div class="col-sm-6 col-xl-4">
+    <div class="eo-card" style="border-top:4px solid {{ dept.color }};height:100%">
+
+      <!-- Header -->
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:20px">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div style="width:48px;height:48px;border-radius:12px;background:{{ dept.color }}20;color:{{ dept.color }};display:flex;align-items:center;justify-content:center;font-size:1.3rem;flex-shrink:0">
+            <i class="{{ dept.icon|default:'bi-building' }}"></i>
+          </div>
+          <div>
+            <h2 style="font-size:1.05rem;font-weight:700;color:var(--eo-text);margin:0 0 3px">{{ dept.name }}</h2>
+            <span style="font-size:.72rem;font-weight:700;color:{{ dept.color }};background:{{ dept.color }}15;padding:2px 8px;border-radius:4px;font-family:var(--eo-mono)">
+              {{ dept.code }}
+            </span>
+          </div>
+        </div>
+        <span style="display:inline-flex;align-items:center;gap:5px;font-size:.72rem;font-weight:600;padding:3px 10px;border-radius:20px;
+          {% if dept.is_active %}background:#d1fae5;color:#065f46{% else %}background:#fee2e2;color:#991b1b{% endif %}">
+          <span style="width:6px;height:6px;border-radius:50%;background:{% if dept.is_active %}var(--eo-success){% else %}var(--eo-danger){% endif %}"></span>
+          {% if dept.is_active %}Active{% else %}Inactive{% endif %}
+        </span>
+      </div>
+
+      {% if dept.description %}
+      <p style="font-size:.83rem;color:var(--eo-text-muted);margin-bottom:16px;line-height:1.6">
+        {{ dept.description|truncatechars:110 }}
+      </p>
+      {% endif %}
+
+      <!-- Head -->
+      {% if dept.head %}
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--eo-bg);border-radius:var(--eo-radius-sm);margin-bottom:16px">
+        {% if dept.head.avatar %}
+          <img src="{{ dept.head.avatar.url }}" style="width:32px;height:32px;border-radius:50%;object-fit:cover"/>
+        {% else %}
+          <div style="width:32px;height:32px;border-radius:50%;background:{{ dept.color }};color:#fff;font-size:.75rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            {{ dept.head.initials }}
+          </div>
+        {% endif %}
+        <div>
+          <div style="font-size:.7rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase">Head of Department</div>
+          <a href="{% url 'staff_detail' dept.head.pk %}" style="font-size:.85rem;font-weight:600;color:var(--eo-text);text-decoration:none">
+            {{ dept.head.full_name }}
+          </a>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Units -->
+      <div style="margin-bottom:16px">
+        <div style="font-size:.72rem;font-weight:700;color:var(--eo-text-muted);text-transform:uppercase;margin-bottom:8px">
+          Units ({{ dept.units.count }})
+        </div>
+
+        {% for unit in dept.units.all %}
+        {% if forloop.counter <= 4 %}
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--eo-border)">
+          <div style="display:flex;gap:8px">
+            <span style="width:6px;height:6px;border-radius:50%;background:{{ unit.color|default:dept.color }}"></span>
+            {{ unit.name }}
+          </div>
+          <span style="font-size:.75rem;color:var(--eo-text-muted)">{{ unit.member_count }}</span>
+        </div>
+        {% endif %}
+        {% endfor %}
+
+        {% if dept.units.count > 4 %}
+        <div style="font-size:.75rem;text-align:center">
+          +{{ dept.units.count|add:"-4" }} more
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Actions -->
+      <div style="display:flex;gap:8px;padding-top:16px;border-top:1px solid var(--eo-border)">
+        <a href="{% url 'organization:unit_list' %}?dept={{ dept.id }}" class="eo-btn eo-btn-secondary eo-btn-sm">
+          View Units
+        </a>
+        <a href="{% url 'staff_directory' %}?dept={{ dept.id }}" class="eo-btn eo-btn-secondary eo-btn-sm">
+          Staff
+        </a>
+        {% if request.user.is_superuser %}
+        <a href="{% url 'admin:organization_department_change' dept.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm ms-auto">
+          Edit
+        </a>
+        {% endif %}
+      </div>
+
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% endblock %}

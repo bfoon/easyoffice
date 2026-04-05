@@ -1,0 +1,611 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Staff Directory{% endblock %}
+{% block breadcrumb %}<span>Staff Directory</span>{% endblock %}
+
+{% block content %}
+<style>
+/* ══════════════════════════════════
+   STAFF DIRECTORY
+══════════════════════════════════ */
+
+/* Stats */
+.dir-stats { display:flex; gap:1px; background:var(--eo-border); border-radius:var(--eo-radius); overflow:hidden; margin-bottom:20px; border:1px solid var(--eo-border); }
+.dir-stat  { flex:1; background:var(--eo-surface); padding:13px 16px; display:flex; align-items:center; gap:11px; min-width:0; }
+.dir-stat-ico { width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0; }
+.dir-stat-lbl { font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:2px; }
+.dir-stat-val { font-size:1.2rem;font-weight:800;color:var(--eo-text);line-height:1; }
+
+/* Dept tab strip */
+.dept-tabs { display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:18px;scrollbar-width:none; }
+.dept-tabs::-webkit-scrollbar { display:none; }
+.dept-tab  { display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border-radius:20px;border:1.5px solid var(--eo-border);background:var(--eo-surface);color:var(--eo-text-muted);font-size:.78rem;font-weight:600;cursor:pointer;white-space:nowrap;text-decoration:none;flex-shrink:0;transition:all .14s; }
+.dept-tab.active { background:var(--eo-accent);border-color:var(--eo-accent);color:#fff; }
+.dept-tab-dot { width:7px;height:7px;border-radius:50%;flex-shrink:0; }
+
+/* Filter bar */
+.dir-filter { display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:11px 14px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:var(--eo-radius);margin-bottom:14px; }
+.dir-search { position:relative;flex:1;min-width:160px;max-width:280px; }
+.dir-search i { position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.77rem;pointer-events:none; }
+.dir-search input { width:100%;padding:7px 10px 7px 30px;border:1.5px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);font-size:.82rem;outline:none;transition:border-color .15s; }
+.dir-search input:focus { border-color:var(--eo-accent); }
+.dir-sel { padding:7px 9px;border:1.5px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);font-size:.81rem;outline:none;cursor:pointer; }
+.view-tog { display:flex;border:1.5px solid var(--eo-border);border-radius:8px;overflow:hidden;flex-shrink:0; }
+.view-tog-btn { padding:6px 12px;border:none;background:var(--eo-bg);color:var(--eo-text-muted);font-size:.85rem;cursor:pointer;transition:background .12s,color .12s; }
+.view-tog-btn+.view-tog-btn { border-left:1.5px solid var(--eo-border); }
+.view-tog-btn.active { background:var(--eo-accent);color:#fff; }
+.online-tog { display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1.5px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text-muted);font-size:.77rem;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .14s;flex-shrink:0; }
+.online-tog.on { border-color:var(--eo-success);background:#d1fae518;color:#065f46; }
+
+/* Filter chips */
+.fchip { display:inline-flex;align-items:center;gap:5px;padding:3px 11px;border-radius:20px;background:var(--eo-accent)12;border:1px solid var(--eo-accent)30;color:var(--eo-accent);font-size:.74rem;font-weight:600; }
+.fchip a { color:inherit;text-decoration:none; }
+
+/* ══ GRID CARDS ══
+   Key: flex-column so actions pin to bottom regardless of content length.
+   Cards in the same row will match height via CSS grid (align-items:stretch).
+*/
+.dir-grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
+  gap:14px;
+  align-items:start; /* cards don't stretch — each is its own natural height */
+}
+
+.dir-card {
+  background:var(--eo-surface);
+  border:1px solid var(--eo-border);
+  border-radius:12px;
+  overflow:hidden;
+  text-decoration:none;
+  display:flex;
+  flex-direction:column;
+  transition:box-shadow .18s,transform .18s;
+}
+.dir-card:hover {
+  box-shadow:0 10px 32px rgba(0,0,0,.11);
+  transform:translateY(-2px);
+}
+
+/* Coloured left accent band (vertical, always visible) */
+.dir-card-accent {
+  height:4px;
+  flex-shrink:0;
+}
+
+/* Card header — avatar + identity */
+.dir-card-top {
+  padding:20px 18px 14px;
+  text-align:center;
+  flex-shrink:0;
+}
+.dir-av-wrap {
+  position:relative;
+  display:inline-block;
+  margin-bottom:11px;
+}
+.dir-av, .dir-av-init {
+  width:64px;height:64px;border-radius:50%;
+  border:3px solid var(--eo-surface);
+  box-shadow:0 0 0 1.5px var(--eo-border);
+  display:block;
+}
+.dir-av { object-fit:cover; }
+.dir-av-init {
+  color:#fff;font-size:1.25rem;font-weight:800;
+  display:flex;align-items:center;justify-content:center;
+}
+.dir-online-dot {
+  position:absolute;bottom:2px;right:2px;
+  width:13px;height:13px;border-radius:50%;
+  border:2.5px solid var(--eo-surface);
+}
+
+.dir-name  { font-size:.93rem;font-weight:800;color:var(--eo-text);line-height:1.2;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.dir-pos   { font-size:.73rem;color:var(--eo-text-muted);margin-bottom:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:14px; }
+.dir-badge {
+  display:inline-flex;align-items:center;gap:5px;
+  padding:3px 10px;border-radius:20px;
+  font-size:.68rem;font-weight:700;
+}
+
+/* Info rows */
+.dir-card-info {
+  padding:0 16px 14px;
+  display:flex;flex-direction:column;gap:5px;
+  border-top:1px solid var(--eo-border);
+  padding-top:12px;
+  flex:1; /* stretch to fill so footer always at bottom */
+}
+.dir-info-row {
+  display:flex;align-items:center;gap:8px;
+  font-size:.73rem;color:var(--eo-text-muted);
+  overflow:hidden;
+}
+.dir-info-row i { width:13px;flex-shrink:0;opacity:.7; }
+.dir-info-row span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+
+/* Actions — always visible, pinned to card bottom */
+.dir-card-actions {
+  display:flex;gap:6px;justify-content:center;
+  padding:11px 16px;
+  border-top:1px solid var(--eo-border);
+  background:var(--eo-bg);
+  flex-shrink:0;
+}
+.dir-act {
+  display:flex;align-items:center;justify-content:center;
+  width:32px;height:32px;border-radius:8px;
+  border:1px solid var(--eo-border);background:var(--eo-surface);
+  color:var(--eo-text-muted);font-size:.8rem;text-decoration:none;
+  transition:background .12s,color .12s,border-color .12s;
+}
+.dir-act:hover { background:var(--eo-accent);color:#fff;border-color:var(--eo-accent); }
+
+/* ══ LIST VIEW ══
+   CSS grid for perfect column alignment regardless of content.
+*/
+.dir-list { background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:var(--eo-radius);overflow:hidden; }
+
+.dir-alpha {
+  padding:6px 20px;
+  font-size:.68rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--eo-text-muted);background:var(--eo-bg);
+  border-bottom:1px solid var(--eo-border);
+  position:sticky;top:0;z-index:1;
+}
+
+.dir-list-head, .dir-row {
+  display:grid;
+  grid-template-columns: 48px 1fr 190px 200px 110px 110px;
+  align-items:center;
+  gap:0;
+  padding:0 20px;
+}
+.dir-list-head {
+  padding-top:10px;padding-bottom:10px;
+  border-bottom:1.5px solid var(--eo-border);
+  background:var(--eo-bg);
+}
+.dir-list-head span {
+  font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);
+  padding:0 8px;
+}
+.dir-list-head span:first-child { padding-left:0; }
+
+.dir-row {
+  border-bottom:1px solid var(--eo-border);
+  text-decoration:none;
+  min-height:58px;
+  transition:background .1s;
+  cursor:pointer;
+}
+.dir-row:last-child { border-bottom:none; }
+.dir-row:hover { background:var(--eo-bg); }
+
+/* Each grid cell in the row */
+.dir-row > * { padding:10px 8px; }
+.dir-row > *:first-child { padding-left:0; }
+.dir-row > *:last-child  { padding-right:0; }
+
+.dir-row-av-cell { display:flex;align-items:center;position:relative; }
+.dir-row-av  { width:38px;height:38px;border-radius:50%;object-fit:cover;flex-shrink:0; }
+.dir-row-init { width:38px;height:38px;border-radius:50%;color:#fff;font-size:.82rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0; }
+.dir-row-dot { position:absolute;bottom:8px;right:0;width:9px;height:9px;border-radius:50%;border:2px solid var(--eo-surface); }
+
+.dir-row-name { font-size:.88rem;font-weight:700;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.dir-row-sub  { font-size:.71rem;color:var(--eo-text-muted);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.dir-row-dept-dot { width:8px;height:8px;border-radius:50%;flex-shrink:0; }
+.dir-status {
+  display:inline-flex;align-items:center;gap:5px;
+  font-size:.71rem;font-weight:700;padding:3px 9px;border-radius:20px;
+}
+.dir-row-acts { display:flex;gap:5px;align-items:center; }
+
+/* Hidden by JS */
+.dir-card.hid, .dir-row.hid { display:none; }
+.dir-alpha.hid { display:none; }
+
+/* Empty / no-results */
+.dir-empty { padding:64px 32px;text-align:center;color:var(--eo-text-muted); }
+
+@media (max-width:860px) {
+  .dir-list-head { display:none; }
+  .dir-row { grid-template-columns:48px 1fr auto; }
+  .dir-row > *:not(:nth-child(1)):not(:nth-child(2)):not(:nth-child(6)) { display:none; }
+}
+@media (max-width:540px) {
+  .dir-grid { grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); }
+  .dir-stat-lbl { display:none; }
+  .dir-stat { padding:10px 12px; }
+}
+</style>
+
+<!-- PAGE HEADER -->
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Staff Directory</h1>
+    <p class="eo-page-subtitle">
+      {{ staff|length }} active member{{ staff|length|pluralize }}{% if q or selected_dept or selected_unit or selected_contract %} · <span style="color:var(--eo-accent)">filtered</span>{% endif %}
+    </p>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    {% if pending_approvals_count %}
+    <a href="{% url 'leave_approval' %}" class="eo-btn eo-btn-warning">
+      <i class="bi bi-calendar-check"></i> Approvals
+      <span style="display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;border-radius:9px;background:#fff;color:#d97706;font-size:.65rem;font-weight:800;padding:0 3px;margin-left:3px">{{ pending_approvals_count }}</span>
+    </a>
+    {% endif %}
+    {% if request.user.is_superuser %}
+    <a href="{% url 'admin:core_user_add' %}" class="eo-btn eo-btn-primary">
+      <i class="bi bi-person-plus"></i> Add Staff
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<!-- STATS -->
+<div class="dir-stats">
+  <div class="dir-stat">
+    <div class="dir-stat-ico" style="background:var(--eo-accent)14;color:var(--eo-accent)"><i class="bi bi-people-fill"></i></div>
+    <div><div class="dir-stat-lbl">Total Staff</div><div class="dir-stat-val">{{ staff|length }}</div></div>
+  </div>
+  <div class="dir-stat">
+    <div class="dir-stat-ico" style="background:#d1fae5;color:#065f46"><i class="bi bi-circle-fill" style="font-size:.55rem"></i></div>
+    <div><div class="dir-stat-lbl">Online Now</div><div class="dir-stat-val" id="statOnline">—</div></div>
+  </div>
+  <div class="dir-stat">
+    <div class="dir-stat-ico" style="background:#ede9fe;color:#5b21b6"><i class="bi bi-building"></i></div>
+    <div><div class="dir-stat-lbl">Departments</div><div class="dir-stat-val">{{ departments|length }}</div></div>
+  </div>
+  <div class="dir-stat">
+    <div class="dir-stat-ico" style="background:#fef3c7;color:#92400e"><i class="bi bi-diagram-3"></i></div>
+    <div><div class="dir-stat-lbl">Units</div><div class="dir-stat-val">{{ units|length }}</div></div>
+  </div>
+</div>
+
+<!-- DEPARTMENT TABS -->
+<div class="dept-tabs">
+  <a class="dept-tab {% if not selected_dept %}active{% endif %}"
+     href="{% url 'staff_directory' %}{% if q %}?q={{ q }}{% endif %}">
+    <i class="bi bi-grid-3x3-gap" style="font-size:.72rem"></i> All
+    <span style="font-size:.65rem;opacity:.7">({{ staff|length }})</span>
+  </a>
+  {% for dept in departments %}
+  <a class="dept-tab {% if selected_dept == dept.id|stringformat:'s' %}active{% endif %}"
+     href="?dept={{ dept.id }}{% if q %}&q={{ q }}{% endif %}"
+     data-dcolor="{{ dept.color }}">
+    <span class="dept-tab-dot" style="background:{{ dept.color }}"></span>
+    {{ dept.name|truncatechars:20 }}
+  </a>
+  {% endfor %}
+</div>
+
+<!-- FILTER BAR -->
+<form method="get" id="fForm">
+  {% if selected_dept %}<input type="hidden" name="dept" value="{{ selected_dept }}"/>{% endif %}
+  <div class="dir-filter">
+    <div class="dir-search">
+      <i class="bi bi-search"></i>
+      <input type="text" name="q" id="liveSearch" placeholder="Name, email or ID…" value="{{ q }}" autocomplete="off"/>
+    </div>
+    <select name="unit" class="dir-sel" onchange="this.form.submit()">
+      <option value="">All Units</option>
+      {% for unit in units %}
+      <option value="{{ unit.id }}" {% if selected_unit == unit.id|stringformat:'s' %}selected{% endif %}>{{ unit.name }}</option>
+      {% endfor %}
+    </select>
+    <select name="contract" class="dir-sel" onchange="this.form.submit()">
+      <option value="">All Contracts</option>
+      {% for val, label in contract_types %}
+      <option value="{{ val }}" {% if selected_contract == val %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button type="button" class="online-tog" id="oTog" onclick="toggleOnline()">
+      <span style="width:7px;height:7px;border-radius:50%;background:var(--eo-success);display:inline-block"></span>
+      Online only
+    </button>
+    {% if q or selected_unit or selected_contract %}
+    <a href="{% url 'staff_directory' %}{% if selected_dept %}?dept={{ selected_dept }}{% endif %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+      <i class="bi bi-x-circle"></i> Reset
+    </a>
+    {% endif %}
+    <div class="view-tog" style="margin-left:auto">
+      <button type="button" class="view-tog-btn" id="btnGrid" onclick="setView('grid')" title="Grid"><i class="bi bi-grid-3x3-gap"></i></button>
+      <button type="button" class="view-tog-btn" id="btnList" onclick="setView('list')" title="List"><i class="bi bi-list-ul"></i></button>
+    </div>
+  </div>
+</form>
+
+<!-- CHIPS -->
+{% if q or selected_unit or selected_contract %}
+<div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px">
+  {% if q %}<span class="fchip"><i class="bi bi-search" style="font-size:.65rem"></i>&nbsp;"{{ q }}"&nbsp;<a href="?{% if selected_dept %}dept={{ selected_dept }}&{% endif %}{% if selected_unit %}unit={{ selected_unit }}&{% endif %}{% if selected_contract %}contract={{ selected_contract }}{% endif %}">×</a></span>{% endif %}
+  {% if selected_unit %}{% for u in units %}{% if u.id|stringformat:'s' == selected_unit %}<span class="fchip"><i class="bi bi-people" style="font-size:.65rem"></i>&nbsp;{{ u.name }}&nbsp;<a href="?{% if selected_dept %}dept={{ selected_dept }}&{% endif %}{% if q %}q={{ q }}&{% endif %}{% if selected_contract %}contract={{ selected_contract }}{% endif %}">×</a></span>{% endif %}{% endfor %}{% endif %}
+  {% if selected_contract %}{% for val, label in contract_types %}{% if val == selected_contract %}<span class="fchip"><i class="bi bi-file-text" style="font-size:.65rem"></i>&nbsp;{{ label }}&nbsp;<a href="?{% if selected_dept %}dept={{ selected_dept }}&{% endif %}{% if q %}q={{ q }}&{% endif %}{% if selected_unit %}unit={{ selected_unit }}{% endif %}">×</a></span>{% endif %}{% endfor %}{% endif %}
+</div>
+{% endif %}
+
+<!-- ═══════════ GRID VIEW ═══════════ -->
+<div id="viewGrid">
+  {% if staff %}
+  <div class="dir-grid" id="dirGrid">
+    {% for member in staff %}
+    <div class="dir-card"
+         data-name="{{ member.full_name|lower }}"
+         data-email="{{ member.email|lower }}"
+         data-emp="{{ member.employee_id|lower|default:'' }}"
+         data-online="{% if member.is_online %}1{% else %}0{% endif %}"
+         onclick="window.location='{% url 'staff_detail' member.pk %}'">
+
+      <!-- Coloured top accent -->
+      <div class="dir-card-accent" style="background:{{ member.staffprofile.department.color|default:'var(--eo-accent)' }}"></div>
+
+      <!-- Avatar + Identity -->
+      <div class="dir-card-top">
+        <div class="dir-av-wrap">
+          {% if member.avatar %}
+            <img src="{{ member.avatar.url }}" class="dir-av" alt="{{ member.full_name }}"/>
+          {% else %}
+            <div class="dir-av-init" style="background:{{ member.staffprofile.department.color|default:'var(--eo-accent)' }}">{{ member.initials }}</div>
+          {% endif %}
+          <span class="dir-online-dot" style="background:{% if member.is_online %}var(--eo-success){% else %}var(--eo-text-light){% endif %}"></span>
+        </div>
+        <div class="dir-name">{{ member.full_name }}</div>
+        <div class="dir-pos">{{ member.staffprofile.position.title|default:" " }}</div>
+        {% if member.staffprofile.department %}
+        <div class="dir-badge" style="background:{{ member.staffprofile.department.color|default:'var(--eo-accent)' }}16;color:{{ member.staffprofile.department.color|default:'var(--eo-accent)' }}">
+          <span style="width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.8;flex-shrink:0"></span>
+          {{ member.staffprofile.department.name|truncatechars:22 }}
+        </div>
+        {% else %}
+        <div style="height:22px"></div>
+        {% endif %}
+      </div>
+
+      <!-- Contact info -->
+      <div class="dir-card-info">
+        {% if member.email %}
+        <div class="dir-info-row"><i class="bi bi-envelope"></i><span>{{ member.email }}</span></div>
+        {% endif %}
+        {% if member.staffprofile.unit %}
+        <div class="dir-info-row"><i class="bi bi-people"></i><span>{{ member.staffprofile.unit.name }}</span></div>
+        {% elif member.phone %}
+        <div class="dir-info-row"><i class="bi bi-telephone"></i><span>{{ member.phone }}</span></div>
+        {% endif %}
+        {% if member.staffprofile.contract_type %}
+        <div class="dir-info-row"><i class="bi bi-file-text"></i><span>{{ member.staffprofile.get_contract_type_display }}</span></div>
+        {% endif %}
+      </div>
+
+      <!-- Actions — always visible, pinned at bottom -->
+      <div class="dir-card-actions" onclick="event.stopPropagation()">
+        <a href="mailto:{{ member.email }}" class="dir-act" title="Send email"><i class="bi bi-envelope"></i></a>
+        <a href="{% url 'direct_message' member.pk %}" class="dir-act" title="Message"><i class="bi bi-chat-dots"></i></a>
+        {% if member.staffprofile.office_extension %}
+        <a href="tel:{{ member.staffprofile.office_extension }}" class="dir-act" title="Ext. {{ member.staffprofile.office_extension }}"><i class="bi bi-telephone"></i></a>
+        {% endif %}
+        {% if request.user == member.staffprofile.supervisor or request.user.is_superuser %}
+        <a href="{% url 'task_create' %}?assigned_to={{ member.pk }}" class="dir-act" title="Assign task"><i class="bi bi-plus-circle"></i></a>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <div id="gridNone" style="display:none" class="dir-empty">
+    <i class="bi bi-search" style="font-size:2.5rem;display:block;margin-bottom:14px;opacity:.3"></i>
+    <div style="font-size:1rem;font-weight:700;color:var(--eo-text);margin-bottom:6px">No staff match your search</div>
+    <p style="font-size:.84rem">Try a different name, email or employee ID.</p>
+  </div>
+  {% else %}
+  <div class="dir-empty">
+    <i class="bi bi-people" style="font-size:3rem;display:block;margin-bottom:16px;opacity:.25"></i>
+    <div style="font-size:1.1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No staff found</div>
+    <p style="font-size:.86rem;margin-bottom:20px">Try adjusting your filters.</p>
+    <a href="{% url 'staff_directory' %}" class="eo-btn eo-btn-secondary">Clear filters</a>
+  </div>
+  {% endif %}
+</div>
+
+<!-- ═══════════ LIST VIEW ═══════════ -->
+<div id="viewList" style="display:none">
+  {% if staff %}
+  <div class="dir-list">
+
+    <!-- Column header -->
+    <div class="dir-list-head">
+      <span></span><!-- avatar col -->
+      <span>Staff Member</span>
+      <span>Department / Unit</span>
+      <span>Contact</span>
+      <span>Status</span>
+      <span>Actions</span>
+    </div>
+
+    <!-- Rows -->
+    <div id="dirList">
+      {% for member in staff %}
+      <a href="{% url 'staff_detail' member.pk %}" class="dir-row"
+         data-name="{{ member.full_name|lower }}"
+         data-email="{{ member.email|lower }}"
+         data-emp="{{ member.employee_id|lower|default:'' }}"
+         data-online="{% if member.is_online %}1{% else %}0{% endif %}"
+         data-letter="{{ member.last_name|first|upper|default:'#' }}">
+
+        <!-- Avatar -->
+        <div class="dir-row-av-cell" style="padding-left:0">
+          <div style="position:relative">
+            {% if member.avatar %}
+              <img src="{{ member.avatar.url }}" class="dir-row-av"/>
+            {% else %}
+              <div class="dir-row-init" style="background:{{ member.staffprofile.department.color|default:'var(--eo-accent)' }}">{{ member.initials }}</div>
+            {% endif %}
+            <span class="dir-row-dot" style="background:{% if member.is_online %}var(--eo-success){% else %}var(--eo-text-light){% endif %}"></span>
+          </div>
+        </div>
+
+        <!-- Name -->
+        <div>
+          <div class="dir-row-name">{{ member.full_name }}</div>
+          <div class="dir-row-sub">
+            {{ member.staffprofile.position.title|default:"" }}
+            {% if member.employee_id %}<span style="margin-left:7px;font-family:var(--eo-mono,monospace);font-size:.68rem;opacity:.5">{{ member.employee_id }}</span>{% endif %}
+          </div>
+        </div>
+
+        <!-- Dept + Unit -->
+        <div>
+          {% if member.staffprofile.department %}
+          <div style="display:flex;align-items:center;gap:5px;font-size:.77rem;font-weight:600;color:{{ member.staffprofile.department.color|default:'var(--eo-text)' }};overflow:hidden;white-space:nowrap;text-overflow:ellipsis">
+            <span class="dir-row-dept-dot" style="background:{{ member.staffprofile.department.color|default:'var(--eo-text-muted)' }}"></span>
+            {{ member.staffprofile.department.name }}
+          </div>
+          {% endif %}
+          {% if member.staffprofile.unit %}
+          <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:2px;padding-left:13px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">{{ member.staffprofile.unit.name }}</div>
+          {% endif %}
+        </div>
+
+        <!-- Contact -->
+        <div style="font-size:.76rem;color:var(--eo-text-muted)">
+          {% if member.email %}<div style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis"><i class="bi bi-envelope me-1" style="opacity:.45"></i>{{ member.email }}</div>{% endif %}
+          {% if member.phone %}<div style="margin-top:2px"><i class="bi bi-telephone me-1" style="opacity:.45"></i>{{ member.phone }}</div>{% endif %}
+        </div>
+
+        <!-- Status -->
+        <div>
+          <span class="dir-status {% if member.is_online %}{% else %}{% endif %}"
+                style="{% if member.is_online %}background:#d1fae5;color:#065f46{% else %}background:#f1f5f9;color:#64748b{% endif %}">
+            <span style="width:6px;height:6px;border-radius:50%;background:{% if member.is_online %}var(--eo-success){% else %}var(--eo-text-light){% endif %}"></span>
+            {% if member.is_online %}Online{% else %}{{ member.get_status_display }}{% endif %}
+          </span>
+          {% if member.staffprofile.contract_type %}
+          <div style="font-size:.69rem;color:var(--eo-text-muted);margin-top:4px">{{ member.staffprofile.get_contract_type_display }}</div>
+          {% endif %}
+        </div>
+
+        <!-- Actions -->
+        <div class="dir-row-acts" onclick="event.preventDefault()" style="padding-right:0">
+          <a href="{% url 'staff_detail' member.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Profile" onclick="event.stopPropagation()"><i class="bi bi-person"></i></a>
+          <a href="{% url 'direct_message' member.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Message" onclick="event.stopPropagation()"><i class="bi bi-chat-dots"></i></a>
+          {% if request.user == member.staffprofile.supervisor or request.user.is_superuser %}
+          <a href="{% url 'leave_approval' %}?staff={{ member.pk }}" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Leave" onclick="event.stopPropagation()"><i class="bi bi-calendar-check"></i></a>
+          {% endif %}
+        </div>
+
+      </a>
+      {% endfor %}
+    </div><!-- /#dirList -->
+  </div>
+  <div id="listNone" style="display:none" class="dir-empty">
+    <i class="bi bi-search" style="font-size:2.5rem;display:block;margin-bottom:14px;opacity:.3"></i>
+    <div style="font-size:1rem;font-weight:700;color:var(--eo-text);margin-bottom:6px">No staff match your search</div>
+    <p style="font-size:.84rem">Try a different name, email or employee ID.</p>
+  </div>
+  {% else %}
+  <div class="dir-empty">
+    <i class="bi bi-people" style="font-size:3rem;display:block;margin-bottom:16px;opacity:.25"></i>
+    <div style="font-size:1.1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No staff found</div>
+    <a href="{% url 'staff_directory' %}" class="eo-btn eo-btn-secondary">Clear filters</a>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// ── VIEW ──
+var VK = 'eo_dir_view';
+function setView(v) {
+  document.getElementById('viewGrid').style.display = v === 'grid' ? '' : 'none';
+  document.getElementById('viewList').style.display = v === 'list' ? '' : 'none';
+  document.getElementById('btnGrid').classList.toggle('active', v === 'grid');
+  document.getElementById('btnList').classList.toggle('active', v === 'list');
+  localStorage.setItem(VK, v);
+  if (v === 'list') buildAlpha();
+}
+setView(localStorage.getItem(VK) || 'grid');
+
+// ── ONLINE STAT ──
+(function(){
+  var n = document.querySelectorAll('.dir-card[data-online="1"]').length;
+  var el = document.getElementById('statOnline');
+  if (el) el.textContent = n;
+})();
+
+// ── LIVE SEARCH ──
+var onlineOnly = false, deb;
+document.getElementById('liveSearch').addEventListener('input', function(){ clearTimeout(deb); deb = setTimeout(applyFilter, 120); });
+
+function applyFilter() {
+  var q = document.getElementById('liveSearch').value.toLowerCase().trim();
+
+  // Grid
+  var cards = Array.from(document.querySelectorAll('#dirGrid .dir-card'));
+  var gv = 0;
+  cards.forEach(function(c){
+    var ok = (!q || (c.dataset.name+c.dataset.email+c.dataset.emp).includes(q)) && (!onlineOnly || c.dataset.online==='1');
+    c.classList.toggle('hid', !ok);
+    if(ok) gv++;
+  });
+  var gn = document.getElementById('gridNone');
+  if(gn) gn.style.display = cards.length && gv===0 ? '' : 'none';
+
+  // List
+  var rows = Array.from(document.querySelectorAll('#dirList .dir-row'));
+  var lv = 0;
+  rows.forEach(function(r){
+    var ok = (!q || (r.dataset.name+r.dataset.email+r.dataset.emp).includes(q)) && (!onlineOnly || r.dataset.online==='1');
+    r.classList.toggle('hid', !ok);
+    if(ok) lv++;
+  });
+  var ln = document.getElementById('listNone');
+  if(ln) ln.style.display = rows.length && lv===0 ? '' : 'none';
+
+  // Alpha header visibility
+  document.querySelectorAll('.dir-alpha').forEach(function(h){
+    var l = h.dataset.l;
+    var any = Array.from(document.querySelectorAll('.dir-row[data-letter="'+l+'"]')).some(function(r){ return !r.classList.contains('hid'); });
+    h.classList.toggle('hid', !any);
+  });
+}
+
+// ── ONLINE TOGGLE ──
+function toggleOnline(){
+  onlineOnly = !onlineOnly;
+  document.getElementById('oTog').classList.toggle('on', onlineOnly);
+  applyFilter();
+}
+
+// ── ALPHABETICAL HEADERS ──
+var alphaBuilt = false;
+function buildAlpha(){
+  if(alphaBuilt) return;
+  alphaBuilt = true;
+  var list = document.getElementById('dirList');
+  if(!list) return;
+  var rows = Array.from(list.querySelectorAll('.dir-row'));
+  var cur = null;
+  rows.forEach(function(row){
+    var l = (row.dataset.letter || '#').toUpperCase();
+    if(l !== cur){
+      cur = l;
+      var h = document.createElement('div');
+      h.className = 'dir-alpha';
+      h.dataset.l = l;
+      h.textContent = l;
+      list.insertBefore(h, row);
+    }
+  });
+}
+
+// ── DEPT TAB HOVER COLOUR ──
+document.querySelectorAll('.dept-tab[data-dcolor]').forEach(function(tab){
+  if(tab.classList.contains('active')) return;
+  var c = tab.dataset.dcolor;
+  tab.addEventListener('mouseenter', function(){ tab.style.borderColor=c; tab.style.color=c; tab.style.background=c+'12'; });
+  tab.addEventListener('mouseleave', function(){ tab.style.borderColor=''; tab.style.color=''; tab.style.background=''; });
+});
+</script>
+{% endblock %}

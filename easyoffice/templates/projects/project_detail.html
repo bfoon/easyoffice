@@ -1,0 +1,676 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ project.name }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'project_list' %}">Projects</a> / {{ project.name }}
+{% endblock %}
+
+{% block content %}
+<style>
+.risk-low      { background:#d1fae5;color:#065f46; }
+.risk-medium   { background:#fef3c7;color:#92400e; }
+.risk-high     { background:#fee2e2;color:#991b1b; }
+.risk-critical { background:#fce7f3;color:#9d174d; }
+
+.ms-pending    { background:#f1f5f9;color:#64748b; }
+.ms-in_progress{ background:#dbeafe;color:#1e40af; }
+.ms-completed  { background:#d1fae5;color:#065f46; }
+.ms-missed     { background:#fee2e2;color:#991b1b; }
+
+.proj-modal-backdrop {
+  position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1050;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .18s;
+}
+.proj-modal-backdrop.open { opacity:1;pointer-events:all; }
+.proj-modal {
+  background:var(--eo-surface);border-radius:var(--eo-radius);
+  border:1px solid var(--eo-border);width:520px;max-width:96vw;
+  max-height:88vh;overflow-y:auto;
+  box-shadow:0 24px 64px rgba(0,0,0,.18);
+  transform:translateY(14px);transition:transform .18s;
+}
+.proj-modal-backdrop.open .proj-modal { transform:translateY(0); }
+.proj-modal-head {
+  padding:18px 22px 14px;
+  display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--eo-border);
+}
+.proj-modal-body { padding:20px 22px; }
+
+.ms-timeline { position:relative;padding-left:28px; }
+.ms-timeline::before {
+  content:'';position:absolute;left:9px;top:0;bottom:0;
+  width:2px;background:var(--eo-border);
+}
+.ms-dot {
+  position:absolute;left:0;width:20px;height:20px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;font-size:.62rem;
+  border:3px solid var(--eo-surface);
+}
+</style>
+
+<div style="background:{{ project.cover_color }};border-radius:var(--eo-radius);padding:28px 28px 24px;margin-bottom:24px;position:relative;overflow:hidden">
+  <div style="position:absolute;right:-40px;top:-40px;width:200px;height:200px;border-radius:50%;background:rgba(255,255,255,.06)"></div>
+  <div style="position:absolute;right:60px;bottom:-60px;width:180px;height:180px;border-radius:50%;background:rgba(255,255,255,.04)"></div>
+
+  <div style="position:relative;z-index:1">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:.75rem;font-weight:700;color:rgba(255,255,255,.65);letter-spacing:.07em;margin-bottom:6px">
+          {{ project.code }}{% if project.department %} · {{ project.department.name }}{% endif %}
+        </div>
+        <h1 style="font-size:1.5rem;font-weight:800;color:#fff;margin:0 0 8px;line-height:1.25">{{ project.name }}</h1>
+        {% if project.description %}
+        <p style="font-size:.87rem;color:rgba(255,255,255,.75);max-width:560px;line-height:1.6;margin:0">
+          {{ project.description|truncatechars:160 }}
+        </p>
+        {% endif %}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start">
+        {% if is_member %}
+        <button onclick="openModal('updateModal')" class="eo-btn eo-btn-sm"
+                style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3)">
+          <i class="bi bi-pencil-square"></i> Post Update
+        </button>
+        {% endif %}
+        {% if is_manager %}
+        <a href="{% url 'project_edit' project.pk %}" class="eo-btn eo-btn-sm"
+           style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3)">
+          <i class="bi bi-pencil"></i> Edit
+        </a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:18px;margin-top:20px">
+      <div style="color:rgba(255,255,255,.8);font-size:.8rem;display:flex;align-items:center;gap:6px">
+        <i class="bi bi-circle-fill" style="font-size:.5rem;
+          {% if project.status == 'active' %}color:#4ade80
+          {% elif project.status == 'completed' %}color:#60a5fa
+          {% elif project.status == 'on_hold' %}color:#fbbf24
+          {% elif project.status == 'cancelled' %}color:#f87171
+          {% else %}color:rgba(255,255,255,.5){% endif %}"></i>
+        {{ project.get_status_display }}
+      </div>
+
+      <div style="color:rgba(255,255,255,.8);font-size:.8rem;display:flex;align-items:center;gap:6px">
+        <i class="bi bi-flag-fill" style="font-size:.75rem"></i>
+        {{ project.get_priority_display }} Priority
+      </div>
+
+      {% if project.project_manager %}
+      <div style="color:rgba(255,255,255,.8);font-size:.8rem;display:flex;align-items:center;gap:8px">
+        {% if project.project_manager.avatar %}
+          <img src="{{ project.project_manager.avatar.url }}" style="width:22px;height:22px;border-radius:50%;border:2px solid rgba(255,255,255,.3)"/>
+        {% else %}
+          <div style="width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,.25);color:#fff;font-size:.6rem;font-weight:700;display:flex;align-items:center;justify-content:center">{{ project.project_manager.initials }}</div>
+        {% endif %}
+        {{ project.project_manager.full_name }}
+      </div>
+      {% endif %}
+
+      {% if project.start_date %}
+      <div style="color:rgba(255,255,255,.7);font-size:.8rem;display:flex;align-items:center;gap:5px">
+        <i class="bi bi-calendar3"></i>
+        {{ project.start_date|date:"N j, Y" }}
+        {% if project.end_date %}→ {{ project.end_date|date:"N j, Y" }}{% endif %}
+      </div>
+      {% endif %}
+
+      {% if days_remaining is not None %}
+      <div style="font-size:.8rem;display:flex;align-items:center;gap:5px;
+        {% if is_overdue %}color:#fca5a5{% elif days_remaining <= 7 %}color:#fde68a{% else %}color:rgba(255,255,255,.7){% endif %}">
+        <i class="bi bi-{% if is_overdue %}exclamation-triangle-fill{% else %}hourglass-split{% endif %}"></i>
+        {% if is_overdue %}
+          {{ days_remaining_abs }} day{{ days_remaining_abs|pluralize }} overdue
+        {% elif days_remaining == 0 %}
+          Due today
+        {% else %}
+          {{ days_remaining }} day{{ days_remaining|pluralize }} remaining
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="eo-stat">
+      <div class="eo-stat-label">Progress</div>
+      <div class="eo-stat-value">{{ project.progress_pct }}%</div>
+      <i class="bi bi-bar-chart-fill eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-info">
+      <div class="eo-stat-label">Milestones</div>
+      <div class="eo-stat-value">{{ completed_ms }}/{{ total_ms }}</div>
+      <i class="bi bi-flag eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-success">
+      <div class="eo-stat-label">Team Size</div>
+      <div class="eo-stat-value">{{ team_members.count }}</div>
+      <i class="bi bi-people eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat {% if active_risks.count > 0 %}eo-stat-warning{% endif %}">
+      <div class="eo-stat-label">Open Risks</div>
+      <div class="eo-stat-value">{{ active_risks.count }}</div>
+      <i class="bi bi-shield-exclamation eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
+<div class="eo-card mb-4">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <div>
+      <span style="font-size:.9rem;font-weight:700;color:var(--eo-text)">Overall Progress</span>
+      {% if project.status == 'completed' %}
+      <span style="margin-left:8px;font-size:.72rem;background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:4px;font-weight:600">Completed</span>
+      {% endif %}
+    </div>
+    <span style="font-size:1.4rem;font-weight:800;color:var(--eo-accent)">{{ project.progress_pct }}%</span>
+  </div>
+  <div class="eo-progress" style="height:12px;border-radius:6px">
+    <div class="eo-progress-bar {% if project.progress_pct == 100 %}success{% elif is_overdue %}danger{% endif %}"
+         style="width:{{ project.progress_pct }}%;border-radius:6px;transition:width .6s ease"></div>
+  </div>
+  {% if project.budget %}
+  <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--eo-border)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <span style="font-size:.82rem;color:var(--eo-text-muted)">Budget Utilisation</span>
+      <span style="font-size:.85rem;font-weight:600;color:var(--eo-text)">
+        ${{ project.budget_spent|floatformat:0|intcomma }} / ${{ project.budget|floatformat:0|intcomma }}
+        <span style="color:var(--eo-text-muted);font-weight:400">({{ budget_pct }}%)</span>
+      </span>
+    </div>
+    <div class="eo-progress" style="height:7px;border-radius:4px">
+      <div class="eo-progress-bar {% if budget_pct > 90 %}danger{% elif budget_pct > 70 %}warning{% endif %}"
+           style="width:{{ budget_pct }}%;border-radius:4px"></div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-8 d-flex flex-column gap-4">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">Milestones</h2>
+          <p class="eo-card-subtitle">{{ completed_ms }} of {{ total_ms }} completed{% if overdue_ms %} · <span style="color:var(--eo-danger)">{{ overdue_ms }} overdue</span>{% endif %}</p>
+        </div>
+        {% if is_member %}
+        <button onclick="openModal('milestoneModal')" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-plus"></i> Add
+        </button>
+        {% endif %}
+      </div>
+
+      {% if milestones %}
+      <div class="ms-timeline">
+        {% for ms in milestones %}
+        <div style="position:relative;margin-bottom:{% if not forloop.last %}20px{% else %}4px{% endif %}">
+          <div class="ms-dot
+            {% if ms.status == 'completed' %}ms-completed
+            {% elif ms.status == 'in_progress' %}ms-in_progress
+            {% elif ms.status == 'missed' %}ms-missed
+            {% else %}ms-pending{% endif %}"
+            style="top:2px;left:-28px;">
+            {% if ms.status == 'completed' %}<i class="bi bi-check-lg" style="font-size:.7rem"></i>
+            {% elif ms.status == 'missed' %}<i class="bi bi-x-lg" style="font-size:.65rem"></i>
+            {% elif ms.status == 'in_progress' %}<i class="bi bi-play-fill" style="font-size:.65rem"></i>
+            {% else %}<i class="bi bi-circle" style="font-size:.65rem"></i>{% endif %}
+          </div>
+
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:.9rem;font-weight:600;color:var(--eo-text);margin-bottom:2px
+                {% if ms.status == 'completed' %};text-decoration:line-through;color:var(--eo-text-muted){% endif %}">
+                {{ ms.name }}
+              </div>
+              {% if ms.description %}
+              <div style="font-size:.78rem;color:var(--eo-text-muted);line-height:1.5">{{ ms.description }}</div>
+              {% endif %}
+              <div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:4px;display:flex;align-items:center;gap:10px">
+                <span><i class="bi bi-calendar3 me-1"></i>Due {{ ms.due_date|date:"N j, Y" }}</span>
+                {% if ms.completed_at %}
+                <span><i class="bi bi-check2 me-1" style="color:var(--eo-success)"></i>Done {{ ms.completed_at|date:"N j, Y" }}</span>
+                {% endif %}
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+              <span style="font-size:.72rem;font-weight:600;padding:3px 9px;border-radius:20px;" class="ms-{{ ms.status }}">
+                {{ ms.get_status_display }}
+              </span>
+              {% if is_member %}
+              <form method="post" action="{% url 'milestone_status' project.pk ms.pk %}" style="display:inline">
+                {% csrf_token %}
+                <select name="status" class="eo-form-select" style="font-size:.75rem;padding:4px 8px;height:auto"
+                        onchange="this.form.submit()">
+                  {% for val, label in milestone_statuses %}
+                  <option value="{{ val }}" {% if ms.status == val %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </form>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:32px;color:var(--eo-text-muted)">
+        <i class="bi bi-flag" style="font-size:1.8rem;display:block;margin-bottom:8px;opacity:.4"></i>
+        <p style="font-size:.85rem">No milestones yet.{% if is_member %} Add one to track key deliverables.{% endif %}</p>
+        {% if is_member %}
+        <button onclick="openModal('milestoneModal')" class="eo-btn eo-btn-secondary eo-btn-sm mt-2">
+          <i class="bi bi-plus"></i> Add Milestone
+        </button>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">Activity Log</h2>
+          <p class="eo-card-subtitle">Latest updates and progress reports</p>
+        </div>
+        {% if is_member %}
+        <button onclick="openModal('updateModal')" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-plus"></i> Post Update
+        </button>
+        {% endif %}
+      </div>
+
+      {% if updates %}
+      <div style="display:flex;flex-direction:column;gap:0">
+        {% for update in updates %}
+        <div style="display:flex;gap:12px;padding:14px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
+          {% if update.author.avatar %}
+            <img src="{{ update.author.avatar.url }}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0;margin-top:2px"/>
+          {% else %}
+            <div style="width:34px;height:34px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.72rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px">{{ update.author.initials }}</div>
+          {% endif %}
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:5px">
+              <span style="font-size:.87rem;font-weight:700;color:var(--eo-text)">{{ update.author.full_name }}</span>
+              {% if update.title %}
+              <span style="font-size:.8rem;color:var(--eo-text-muted)">· {{ update.title }}</span>
+              {% endif %}
+              {% if update.progress_at_time is not None %}
+              <span style="font-size:.72rem;background:var(--eo-bg);border:1px solid var(--eo-border);padding:2px 8px;border-radius:12px;color:var(--eo-text-muted)">
+                {{ update.progress_at_time }}% progress
+              </span>
+              {% endif %}
+              {% if update.status_at_time %}
+              <span class="eo-status eo-status-{{ update.status_at_time }}" style="font-size:.68rem">{{ update.status_at_time|capfirst }}</span>
+              {% endif %}
+            </div>
+            <div style="font-size:.84rem;color:var(--eo-text);line-height:1.6">{{ update.content }}</div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:5px">{{ update.created_at|naturaltime }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:32px;color:var(--eo-text-muted)">
+        <i class="bi bi-chat-square-text" style="font-size:1.8rem;display:block;margin-bottom:8px;opacity:.4"></i>
+        <p style="font-size:.85rem">No updates yet.{% if is_member %} Post the first update below.{% endif %}</p>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if tasks %}
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Tasks</h2>
+        <a href="{% url 'task_create' %}?project={{ project.pk }}" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-plus"></i> Add Task
+        </a>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        {% for task in tasks %}
+        <a href="{% url 'task_detail' task.pk %}" style="text-decoration:none">
+          <div class="eo-task-card {% if task.is_overdue %}overdue{% endif %}">
+            <div style="display:flex;justify-content:space-between;align-items:start;gap:10px">
+              <div style="min-width:0">
+                <div class="eo-task-title">{{ task.title|truncatechars:65 }}</div>
+                {% if task.assigned_to %}
+                <div style="font-size:.73rem;color:var(--eo-text-muted);margin-top:3px">
+                  <i class="bi bi-person me-1"></i>{{ task.assigned_to.full_name }}
+                </div>
+                {% endif %}
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0">
+                <span class="eo-status eo-status-{{ task.status }}">{{ task.get_status_display }}</span>
+                <span class="eo-priority eo-priority-{{ task.priority }}"><i class="bi bi-flag-fill"></i> {{ task.get_priority_display }}</span>
+              </div>
+            </div>
+            {% if task.due_date %}
+            <div class="eo-task-due {% if task.is_overdue %}overdue{% endif %} mt-1">
+              <i class="bi bi-calendar3"></i> Due {{ task.due_date|date:"N j, Y" }}
+            </div>
+            {% endif %}
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-4 d-flex flex-column gap-4">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Team</h2>
+        <span style="font-size:.78rem;color:var(--eo-text-muted)">{{ team_members.count }} member{{ team_members.count|pluralize }}</span>
+      </div>
+
+      {% if project.project_manager %}
+      <div style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--eo-border)">
+        <div style="font-size:.65rem;font-weight:700;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Project Manager</div>
+        <a href="{% url 'staff_detail' project.project_manager.pk %}" style="display:flex;align-items:center;gap:10px;text-decoration:none">
+          {% if project.project_manager.avatar %}
+            <img src="{{ project.project_manager.avatar.url }}" style="width:36px;height:36px;border-radius:50%;object-fit:cover"/>
+          {% else %}
+            <div style="width:36px;height:36px;border-radius:50%;background:{{ project.cover_color }};color:#fff;font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center">{{ project.project_manager.initials }}</div>
+          {% endif %}
+          <div>
+            <div style="font-size:.87rem;font-weight:600;color:var(--eo-text)">{{ project.project_manager.full_name }}</div>
+            {% if project.project_manager.staffprofile.position %}
+            <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ project.project_manager.staffprofile.position.title }}</div>
+            {% endif %}
+          </div>
+        </a>
+      </div>
+      {% endif %}
+
+      <div style="display:flex;flex-direction:column;gap:8px">
+        {% for member in team_members %}
+        {% if member != project.project_manager %}
+        <a href="{% url 'staff_detail' member.pk %}" style="display:flex;align-items:center;gap:10px;text-decoration:none;padding:5px;border-radius:8px;transition:background .1s"
+           onmouseover="this.style.background='var(--eo-bg)'" onmouseout="this.style.background=''">
+          {% if member.avatar %}
+            <img src="{{ member.avatar.url }}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;flex-shrink:0"/>
+          {% else %}
+            <div style="width:30px;height:30px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.68rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ member.initials }}</div>
+          {% endif %}
+          <div style="min-width:0">
+            <div style="font-size:.84rem;font-weight:600;color:var(--eo-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ member.full_name }}</div>
+            {% if member.staffprofile.position %}
+            <div style="font-size:.7rem;color:var(--eo-text-muted)">{{ member.staffprofile.position.title }}</div>
+            {% endif %}
+          </div>
+        </a>
+        {% endif %}
+        {% empty %}
+        <p style="font-size:.82rem;color:var(--eo-text-muted)">No team members assigned.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="eo-card">
+      <h2 class="eo-card-title" style="margin-bottom:14px">Key Dates</h2>
+      <div style="display:flex;flex-direction:column;gap:10px;font-size:.84rem">
+        {% if project.start_date %}
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--eo-text-muted)"><i class="bi bi-play-circle me-1"></i> Start</span>
+          <span style="font-weight:600;color:var(--eo-text)">{{ project.start_date|date:"N j, Y" }}</span>
+        </div>
+        {% endif %}
+        {% if project.end_date %}
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--eo-text-muted)"><i class="bi bi-calendar-check me-1"></i> Deadline</span>
+          <span style="font-weight:600;color:{% if is_overdue %}var(--eo-danger){% else %}var(--eo-text){% endif %}">
+            {{ project.end_date|date:"N j, Y" }}
+          </span>
+        </div>
+        {% endif %}
+        {% if project.completed_at %}
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--eo-text-muted)"><i class="bi bi-trophy me-1"></i> Completed</span>
+          <span style="font-weight:600;color:var(--eo-success)">{{ project.completed_at|date:"N j, Y" }}</span>
+        </div>
+        {% endif %}
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--eo-text-muted)"><i class="bi bi-clock-history me-1"></i> Last updated</span>
+          <span style="font-weight:600;color:var(--eo-text)">{{ project.updated_at|naturaltime }}</span>
+        </div>
+        {% if project_tags %}
+        <div style="padding-top:10px;border-top:1px solid var(--eo-border)">
+          <div style="font-size:.72rem;color:var(--eo-text-muted);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Tags</div>
+          <div style="display:flex;flex-wrap:wrap;gap:5px">
+            {% for tag in project_tags %}
+            <span style="padding:2px 8px;background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:12px;font-size:.72rem;color:var(--eo-text-muted)">{{ tag }}</span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">Risks</h2>
+          <p class="eo-card-subtitle">{{ active_risks.count }} open · {{ resolved_risks.count }} resolved</p>
+        </div>
+        {% if is_member %}
+        <button onclick="openModal('riskModal')" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-plus"></i> Log
+        </button>
+        {% endif %}
+      </div>
+
+      {% if active_risks %}
+      <div style="display:flex;flex-direction:column;gap:8px">
+        {% for risk in active_risks %}
+        <div style="padding:12px;background:var(--eo-bg);border-radius:8px;border-left:3px solid
+          {% if risk.level == 'critical' %}#db2777
+          {% elif risk.level == 'high' %}#ef4444
+          {% elif risk.level == 'medium' %}#f59e0b
+          {% else %}#10b981{% endif %}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:5px">
+            <span style="font-size:.85rem;font-weight:600;color:var(--eo-text)">{{ risk.title }}</span>
+            <span style="font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:4px;flex-shrink:0" class="risk-{{ risk.level }}">
+              {{ risk.get_level_display }}
+            </span>
+          </div>
+          <p style="font-size:.77rem;color:var(--eo-text-muted);margin:0 0 6px;line-height:1.5">{{ risk.description|truncatechars:80 }}</p>
+          {% if risk.mitigation %}
+          <p style="font-size:.73rem;color:var(--eo-text-muted);margin:0;font-style:italic">
+            <i class="bi bi-shield-check me-1" style="color:var(--eo-success)"></i>{{ risk.mitigation|truncatechars:60 }}
+          </p>
+          {% endif %}
+          {% if is_member %}
+          <form method="post" action="{% url 'project_risk' project.pk %}" style="margin-top:8px">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="resolve"/>
+            <input type="hidden" name="risk_id" value="{{ risk.id }}"/>
+            <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm"
+                    style="font-size:.72rem;padding:3px 10px">
+              <i class="bi bi-check2"></i> Mark Resolved
+            </button>
+          </form>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:24px;color:var(--eo-text-muted)">
+        <i class="bi bi-shield-check" style="font-size:1.6rem;display:block;margin-bottom:6px;color:var(--eo-success)"></i>
+        <p style="font-size:.82rem">No open risks. Great work!</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="proj-modal-backdrop" id="updateModal">
+  <div class="proj-modal">
+    <div class="proj-modal-head">
+      <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">Post Project Update</div>
+      <button onclick="closeModal('updateModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div class="proj-modal-body">
+      <form method="post" action="{% url 'project_update' project.pk %}">
+        {% csrf_token %}
+        <div class="eo-form-group">
+          <label class="eo-form-label">Title <span style="color:var(--eo-text-muted);font-weight:400">(optional)</span></label>
+          <input type="text" name="title" class="eo-form-control" placeholder="e.g. Week 3 progress report"/>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Update *</label>
+          <textarea name="content" class="eo-form-control" rows="4" required
+                    placeholder="What has been accomplished? Any blockers?"></textarea>
+        </div>
+        <div class="row g-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Progress (%)</label>
+            <input type="range" name="progress_pct" min="0" max="100" step="5"
+                   value="{{ project.progress_pct }}" id="progressRange" class="eo-form-control" style="padding:0"/>
+            <div style="text-align:center;font-size:.85rem;font-weight:700;color:var(--eo-accent);margin-top:4px" id="progressVal">
+              {{ project.progress_pct }}%
+            </div>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">New Status</label>
+            <select name="status" class="eo-form-select">
+              {% for val, label in status_choices %}
+              <option value="{{ val }}" {% if project.status == val %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button type="submit" class="eo-btn eo-btn-primary flex-grow-1"><i class="bi bi-send"></i> Post Update</button>
+          <button type="button" onclick="closeModal('updateModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="proj-modal-backdrop" id="milestoneModal">
+  <div class="proj-modal">
+    <div class="proj-modal-head">
+      <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">Add Milestone</div>
+      <button onclick="closeModal('milestoneModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div class="proj-modal-body">
+      <form method="post" action="{% url 'project_milestone' project.pk %}">
+        {% csrf_token %}
+        <div class="eo-form-group">
+          <label class="eo-form-label">Milestone Name *</label>
+          <input type="text" name="name" class="eo-form-control" required
+                 placeholder="e.g. Design Phase Complete"/>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Description <span style="color:var(--eo-text-muted);font-weight:400">(optional)</span></label>
+          <textarea name="description" class="eo-form-control" rows="2"
+                    placeholder="What must be achieved at this milestone?"></textarea>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Due Date *</label>
+          <input type="date" name="due_date" class="eo-form-control" required/>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button type="submit" class="eo-btn eo-btn-primary flex-grow-1"><i class="bi bi-flag-fill"></i> Add Milestone</button>
+          <button type="button" onclick="closeModal('milestoneModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="proj-modal-backdrop" id="riskModal">
+  <div class="proj-modal">
+    <div class="proj-modal-head">
+      <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">Log a Risk</div>
+      <button onclick="closeModal('riskModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div class="proj-modal-body">
+      <form method="post" action="{% url 'project_risk' project.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add"/>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Risk Title *</label>
+          <input type="text" name="title" class="eo-form-control" required
+                 placeholder="e.g. Key vendor delay"/>
+        </div>
+        <div class="row g-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Risk Level *</label>
+            <select name="level" class="eo-form-select">
+              {% for val, label in risk_levels %}
+              <option value="{{ val }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Risk Owner</label>
+            <select name="owner_id" class="eo-form-select">
+              <option value="">— Unassigned —</option>
+              {% for staff in staff_list %}
+              <option value="{{ staff.id }}">{{ staff.full_name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="eo-form-group mt-2">
+          <label class="eo-form-label">Description *</label>
+          <textarea name="description" class="eo-form-control" rows="2" required
+                    placeholder="Describe the risk and potential impact"></textarea>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Mitigation Plan <span style="color:var(--eo-text-muted);font-weight:400">(optional)</span></label>
+          <textarea name="mitigation" class="eo-form-control" rows="2"
+                    placeholder="How will this risk be mitigated or managed?"></textarea>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button type="submit" class="eo-btn eo-btn-primary flex-grow-1"><i class="bi bi-shield-exclamation"></i> Log Risk</button>
+          <button type="button" onclick="closeModal('riskModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+document.querySelectorAll('.proj-modal-backdrop').forEach(function(el) {
+  el.addEventListener('click', function(e) {
+    if (e.target === el) el.classList.remove('open');
+  });
+});
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.proj-modal-backdrop.open').forEach(function(el) {
+      el.classList.remove('open');
+    });
+  }
+});
+
+var rangeEl = document.getElementById('progressRange');
+var valEl = document.getElementById('progressVal');
+if (rangeEl) {
+  rangeEl.addEventListener('input', function() {
+    valEl.textContent = this.value + '%';
+  });
+}
+</script>
+{% endblock %}

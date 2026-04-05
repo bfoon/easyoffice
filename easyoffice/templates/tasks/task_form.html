@@ -1,0 +1,104 @@
+{% extends 'base.html' %}
+{% block title %}{% if mode == 'create' %}New Task{% else %}Edit Task{% endif %}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'task_list' %}">Tasks</a> / {% if mode == 'create' %}New Task{% else %}Edit{% endif %}{% endblock %}
+{% block content %}
+<div class="eo-page-header">
+  <h1 class="eo-page-title">{% if mode == 'create' %}Create New Task{% else %}Edit Task{% endif %}</h1>
+</div>
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <div class="eo-card">
+      <form method="post">
+        {% csrf_token %}
+        <div class="row g-3">
+          <div class="col-12">
+            <label class="eo-form-label">Task Title *</label>
+            <input type="text" name="title" class="eo-form-control" required placeholder="What needs to be done?"
+                   value="{{ task.title|default:'' }}"/>
+          </div>
+          <div class="col-12">
+            <label class="eo-form-label">Description</label>
+            <textarea name="description" class="eo-form-control" rows="4" placeholder="Provide details, context, or instructions...">{{ task.description|default:'' }}</textarea>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Assign To *</label>
+            <select name="assigned_to" class="eo-form-select" required>
+              <option value="">Select staff member...</option>
+              {% for user in staff_list %}
+              <option value="{{ user.id }}" {% if task.assigned_to_id == user.id %}selected{% endif %}>
+                {{ user.full_name }}{% if user.staff_profile and user.staff_profile.position %} — {{ user.staff_profile.position }}{% endif %}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Priority</label>
+            <select name="priority" class="eo-form-select">
+              {% for val, label in priority_choices %}
+              <option value="{{ val }}" {% if task.priority == val %}selected{% elif not task and val == 'medium' %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% if mode == 'edit' %}
+          <div class="col-sm-6">
+            <label class="eo-form-label">Status</label>
+            <select name="status" class="eo-form-select">
+              {% for val, label in status_choices %}
+              <option value="{{ val }}" {% if task.status == val %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Progress (%)</label>
+            <input type="number" name="progress_pct" class="eo-form-control" min="0" max="100" value="{{ task.progress_pct|default:0 }}"/>
+          </div>
+          {% endif %}
+          <div class="col-sm-6">
+            <label class="eo-form-label">Due Date</label>
+            <input type="datetime-local" name="due_date" class="eo-form-control"
+                   value="{{ task.due_date|date:'Y-m-d\\TH:i'|default:'' }}"/>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Estimated Hours</label>
+            <input type="number" name="estimated_hours" class="eo-form-control" step="0.5" min="0"
+                   placeholder="e.g. 4.5" value="{{ task.estimated_hours|default:'' }}"/>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Category</label>
+            <select name="category" class="eo-form-select">
+              <option value="">No category</option>
+              {% for cat in categories %}
+              <option value="{{ cat.id }}" {% if task.category_id == cat.id %}selected{% endif %}>{{ cat.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Link to Project</label>
+            <select name="project" class="eo-form-select">
+              <option value="">No project</option>
+              {% for proj in projects %}
+              <option value="{{ proj.id }}" {% if task.project_id == proj.id %}selected{% endif %}>[{{ proj.code }}] {{ proj.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-12">
+            <label class="eo-form-label">Collaborators</label>
+            <select name="collaborators" class="eo-form-select" multiple style="height:120px">
+              {% for user in staff_list %}
+              <option value="{{ user.id }}" {% if user in task.collaborators.all %}selected{% endif %}>{{ user.full_name }}</option>
+              {% endfor %}
+            </select>
+            <div class="eo-form-hint">Hold Ctrl/Cmd to select multiple collaborators</div>
+          </div>
+        </div>
+        <div class="d-flex gap-3 mt-4">
+          <button type="submit" class="eo-btn eo-btn-primary">
+            <i class="bi bi-check-lg"></i> {% if mode == 'create' %}Create Task{% else %}Save Changes{% endif %}
+          </button>
+          <a href="{% url 'task_list' %}" class="eo-btn eo-btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

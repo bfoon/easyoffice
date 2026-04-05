@@ -1,0 +1,307 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Leave Requests{% endblock %}
+{% block breadcrumb %}<a href="{% url 'staff_directory' %}">Staff</a> / Leave Requests{% endblock %}
+{% block content %}
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Leave Requests</h1>
+    <p class="eo-page-subtitle">Submit and track your leave applications</p>
+  </div>
+</div>
+
+<!-- Leave Balance Summary -->
+{% if leave_types_with_balance %}
+<div class="row g-3 mb-4">
+  {% for item in leave_types_with_balance %}
+  {% if item.balance and item.lt.days_per_year > 0 %}
+  <div class="col-sm-6 col-lg-3">
+    <div class="eo-card" style="padding:16px 20px">
+      <div style="font-size:.75rem;font-weight:600;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">
+        {{ item.lt.name }} — {{ current_year }}
+      </div>
+      <!-- Progress bar -->
+      {% with used_pct=item.balance.days_used|floatformat:0 %}
+      <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:8px">
+        <span style="font-size:1.6rem;font-weight:800;color:var(--eo-text)">{{ item.balance.days_remaining }}</span>
+        <span style="font-size:.82rem;color:var(--eo-text-muted)">/ {{ item.balance.days_entitled }}d remaining</span>
+      </div>
+      {% endwith %}
+      <div class="eo-progress" style="height:6px;margin-bottom:8px">
+        {% if item.balance.days_entitled > 0 %}
+        {% widthratio item.balance.days_used item.balance.days_entitled 100 as used_pct %}
+        <div class="eo-progress-bar {% if used_pct > 80 %}danger{% elif used_pct > 50 %}warning{% endif %}"
+             style="width:{{ used_pct }}%"></div>
+        {% endif %}
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--eo-text-muted)">
+        <span>Used: <strong style="color:var(--eo-text)">{{ item.balance.days_used }}d</strong></span>
+        {% if item.balance.days_carried_forward > 0 %}
+        <span>Carried: <strong style="color:var(--eo-accent)">+{{ item.balance.days_carried_forward }}d</strong></span>
+        {% endif %}
+        <span>{% if item.lt.is_paid %}
+          <span style="color:var(--eo-success);font-weight:600">Paid</span>
+        {% else %}
+          <span style="color:var(--eo-text-muted)">Unpaid</span>
+        {% endif %}</span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="row g-4">
+
+  <!-- Request Form -->
+  <div class="col-lg-5">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">New Leave Request</h2>
+          <p class="eo-card-subtitle">Submit a request for approval</p>
+        </div>
+        <i class="bi bi-calendar-plus" style="font-size:1.4rem;color:var(--eo-accent)"></i>
+      </div>
+
+      <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Leave Type *</label>
+          <select name="leave_type" class="eo-form-select" required id="leaveType">
+            <option value="">Select leave type...</option>
+            {% for item in leave_types_with_balance %}
+            <option value="{{ item.lt.id }}"
+                    data-days="{{ item.lt.days_per_year }}"
+                    data-paid="{{ item.lt.is_paid }}"
+                    data-remaining="{% if item.balance %}{{ item.balance.days_remaining }}{% else %}0{% endif %}">
+              {{ item.lt.name }}
+              {% if item.lt.days_per_year %} ({{ item.lt.days_per_year }} days/yr){% endif %}
+              {% if not item.lt.is_paid %} — Unpaid{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Leave type info pill -->
+        <div id="leaveInfo" style="display:none;margin-bottom:16px;padding:10px 14px;background:#eff6ff;border-radius:var(--eo-radius-sm);border:1px solid #bfdbfe">
+          <div style="font-size:.8rem;color:#1d4ed8" id="leaveInfoText"></div>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-6">
+            <label class="eo-form-label">Start Date *</label>
+            <input type="date" name="start_date" class="eo-form-control" required id="startDate"
+                   min="{% now 'Y-m-d' %}"/>
+          </div>
+          <div class="col-6">
+            <label class="eo-form-label">End Date *</label>
+            <input type="date" name="end_date" class="eo-form-control" required id="endDate"
+                   min="{% now 'Y-m-d' %}"/>
+          </div>
+        </div>
+
+        <!-- Days counter -->
+        <div id="daysCounter" style="display:none;margin:12px 0;padding:10px 14px;background:var(--eo-bg);border-radius:var(--eo-radius-sm)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <span style="font-size:1.4rem;font-weight:800;color:var(--eo-accent)" id="daysCount">0</span>
+              <span style="font-size:.82rem;color:var(--eo-text-muted);margin-left:6px">working day(s) requested</span>
+            </div>
+            <div id="balanceWarning" style="display:none;font-size:.72rem;color:#92400e;background:#fef3c7;padding:3px 8px;border-radius:4px">
+              <i class="bi bi-exclamation-triangle-fill"></i> Exceeds balance
+            </div>
+          </div>
+        </div>
+
+        <div class="eo-form-group mt-3">
+          <label class="eo-form-label">Reason *</label>
+          <textarea name="reason" class="eo-form-control" rows="3" required
+                    placeholder="Briefly explain the reason for your leave request..."></textarea>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">
+            Supporting Document
+            <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span>
+          </label>
+          <input type="file" name="supporting_document" class="eo-form-control"
+                 accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"/>
+          <div class="eo-form-hint">Medical certificate, approval letter, etc.</div>
+        </div>
+
+        <button type="submit" class="eo-btn eo-btn-primary w-100">
+          <i class="bi bi-send"></i> Submit Leave Request
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- My Requests -->
+  <div class="col-lg-7">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">My Leave History</h2>
+          <p class="eo-card-subtitle">All your leave requests — {{ current_year }}</p>
+        </div>
+      </div>
+
+      {% if my_requests %}
+      <div style="display:flex;flex-direction:column;gap:10px">
+        {% for lr in my_requests %}
+        <div style="border:1px solid var(--eo-border);border-radius:var(--eo-radius-sm);padding:16px;
+          {% if lr.status == 'approved' %}border-left:4px solid var(--eo-success)
+          {% elif lr.status == 'rejected' %}border-left:4px solid var(--eo-danger)
+          {% elif lr.status == 'pending' %}border-left:4px solid var(--eo-warning)
+          {% else %}border-left:4px solid var(--eo-text-light){% endif %}">
+
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+            <div style="flex:1;min-width:0">
+
+              <!-- Header row -->
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+                <span style="font-size:.95rem;font-weight:700;color:var(--eo-text)">{{ lr.leave_type.name }}</span>
+                <span style="display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:20px;font-size:.72rem;font-weight:600;
+                  {% if lr.status == 'approved' %}background:#d1fae5;color:#065f46
+                  {% elif lr.status == 'rejected' %}background:#fee2e2;color:#991b1b
+                  {% elif lr.status == 'pending' %}background:#fef3c7;color:#92400e
+                  {% else %}background:#f1f5f9;color:#64748b{% endif %}">
+                  {% if lr.status == 'approved' %}<i class="bi bi-check-circle-fill"></i>
+                  {% elif lr.status == 'rejected' %}<i class="bi bi-x-circle-fill"></i>
+                  {% elif lr.status == 'pending' %}<i class="bi bi-hourglass-split"></i>
+                  {% else %}<i class="bi bi-dash-circle"></i>{% endif %}
+                  {{ lr.get_status_display }}
+                </span>
+                {% if lr.leave_type.is_paid %}
+                <span style="font-size:.7rem;color:var(--eo-success);font-weight:600">Paid</span>
+                {% else %}
+                <span style="font-size:.7rem;color:var(--eo-text-muted);font-weight:600">Unpaid</span>
+                {% endif %}
+              </div>
+
+              <!-- Details -->
+              <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:.8rem;color:var(--eo-text-muted)">
+                <span><i class="bi bi-calendar3 me-1"></i>{{ lr.start_date|date:"N j" }} — {{ lr.end_date|date:"N j, Y" }}</span>
+                <span><i class="bi bi-clock me-1"></i>{{ lr.days_requested }} day{{ lr.days_requested|pluralize }}</span>
+                <span><i class="bi bi-send me-1"></i>{{ lr.created_at|date:"N j, Y" }}</span>
+              </div>
+
+              {% if lr.reason %}
+              <div style="margin-top:8px;font-size:.82rem;color:var(--eo-text-muted);font-style:italic">
+                "{{ lr.reason|truncatechars:120 }}"
+              </div>
+              {% endif %}
+
+              {% if lr.approval_notes %}
+              <div style="margin-top:8px;padding:8px 12px;background:var(--eo-bg);border-radius:6px;font-size:.8rem">
+                <span style="font-weight:600;color:var(--eo-text)">
+                  <i class="bi bi-person-check me-1"></i>{{ lr.approved_by.full_name }}:
+                </span>
+                <span style="color:var(--eo-text-muted)"> {{ lr.approval_notes }}</span>
+              </div>
+              {% endif %}
+
+              {% if lr.supporting_document %}
+              <div style="margin-top:8px">
+                <a href="{{ lr.supporting_document.url }}" target="_blank"
+                   class="eo-btn eo-btn-secondary eo-btn-sm">
+                  <i class="bi bi-paperclip"></i> Document
+                </a>
+              </div>
+              {% endif %}
+            </div>
+
+            <!-- Cancel for pending requests -->
+            {% if lr.status == 'pending' %}
+            <form method="post" style="flex-shrink:0">
+              {% csrf_token %}
+              <input type="hidden" name="cancel_id" value="{{ lr.id }}"/>
+              <button type="submit" class="eo-btn eo-btn-sm"
+                      data-confirm="Cancel this leave request? This cannot be undone."
+                      style="background:transparent;color:var(--eo-danger);border:1px solid var(--eo-danger)">
+                <i class="bi bi-x-circle"></i> Cancel
+              </button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:56px 24px;color:var(--eo-text-muted)">
+        <i class="bi bi-calendar-x" style="font-size:2.5rem;display:block;margin-bottom:12px;color:var(--eo-text-light)"></i>
+        <p style="font-size:.9rem;font-weight:500;color:var(--eo-text);margin-bottom:4px">No leave requests yet</p>
+        <p style="font-size:.82rem">Use the form on the left to submit your first request.</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var leaveType  = document.getElementById('leaveType');
+var startDate  = document.getElementById('startDate');
+var endDate    = document.getElementById('endDate');
+var counter    = document.getElementById('daysCounter');
+var daysCount  = document.getElementById('daysCount');
+var leaveInfo  = document.getElementById('leaveInfo');
+var leaveInfoT = document.getElementById('leaveInfoText');
+var balanceWarn = document.getElementById('balanceWarning');
+var currentRemaining = 0;
+
+leaveType.addEventListener('change', function() {
+  var opt = this.options[this.selectedIndex];
+  if (opt.value) {
+    var days = opt.getAttribute('data-days');
+    var paid = opt.getAttribute('data-paid');
+    currentRemaining = parseInt(opt.getAttribute('data-remaining') || '0');
+    var info = (paid === 'True' ? '✓ Paid leave' : '⚠ Unpaid leave');
+    if (days && parseInt(days) > 0) info += '  ·  Entitlement: ' + days + ' days/year  ·  Remaining: ' + currentRemaining + ' day(s)';
+    leaveInfoT.textContent = info;
+    leaveInfo.style.display = '';
+  } else {
+    leaveInfo.style.display = 'none';
+    currentRemaining = 0;
+  }
+  calcDays();
+});
+
+function calcDays() {
+  var s = startDate.value, e = endDate.value;
+  if (!s || !e) { counter.style.display = 'none'; return; }
+  var sd = new Date(s), ed = new Date(e);
+  if (ed < sd) { endDate.value = s; ed = sd; }
+  var days = 0;
+  var cur = new Date(sd);
+  while (cur <= ed) {
+    var d = cur.getDay();
+    if (d !== 0 && d !== 6) days++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  daysCount.textContent = days;
+  counter.style.display = days > 0 ? '' : 'none';
+  // Balance warning
+  var opt = leaveType.options[leaveType.selectedIndex];
+  var maxDays = opt ? parseInt(opt.getAttribute('data-days') || '0') : 0;
+  if (maxDays > 0 && days > currentRemaining && currentRemaining >= 0) {
+    balanceWarn.style.display = '';
+  } else {
+    balanceWarn.style.display = 'none';
+  }
+}
+
+startDate.addEventListener('change', function() {
+  if (endDate.value && endDate.value < this.value) endDate.value = this.value;
+  endDate.min = this.value;
+  calcDays();
+});
+endDate.addEventListener('change', calcDays);
+</script>
+{% endblock %}

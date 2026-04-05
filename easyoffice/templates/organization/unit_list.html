@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Units{% endblock %}
+{% block breadcrumb %}<a href="{% url 'organization:org_chart' %}">Organization</a> / Units{% endblock %}
+{% block content %}
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Units</h1>
+    <p class="eo-page-subtitle">{{ units.count }} unit{{ units.count|pluralize }} across all departments</p>
+  </div>
+  {% if request.user.is_superuser %}
+  <a href="{% url 'admin:organization_unit_add' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-plus"></i> Add Unit
+  </a>
+  {% endif %}
+</div>
+
+<!-- Filter bar -->
+<div class="eo-card mb-4">
+  <form method="get" class="row g-3 align-items-end">
+    <div class="col-sm-6 col-lg-4">
+      <label class="eo-form-label">Search</label>
+      <div style="position:relative">
+        <i class="bi bi-search" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--eo-text-light)"></i>
+        <input type="text" name="q" class="eo-form-control" style="padding-left:36px"
+               placeholder="Unit name or code..." value="{{ request.GET.q }}"/>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-4">
+      <label class="eo-form-label">Department</label>
+      <select name="dept" class="eo-form-select">
+        <option value="">All Departments</option>
+        {% for dept in departments %}
+        <option value="{{ dept.id }}" {% if request.GET.dept == dept.id|stringformat:'s' %}selected{% endif %}>
+          {{ dept.name }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto d-flex gap-2">
+      <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
+      <a href="{% url 'organization:unit_list' %}" class="eo-btn eo-btn-secondary">Reset</a>
+    </div>
+  </form>
+</div>
+
+<!-- Group by department -->
+{% regroup units by department as dept_groups %}
+
+{% for group in dept_groups %}
+<div style="margin-bottom:32px">
+  <!-- Department heading -->
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+    <div style="width:10px;height:10px;border-radius:50%;background:{{ group.grouper.color|default:'var(--eo-accent)' }}"></div>
+    <h2 style="font-size:1rem;font-weight:700;color:var(--eo-text);margin:0">{{ group.grouper.name }}</h2>
+    <span style="font-size:.75rem;color:var(--eo-text-muted)">{{ group.list|length }} unit{{ group.list|length|pluralize }}</span>
+    <div style="flex:1;height:1px;background:var(--eo-border)"></div>
+    <a href="{% url 'staff_directory' %}?dept={{ group.grouper.id }}" class="eo-btn eo-btn-secondary eo-btn-sm">
+      <i class="bi bi-person-lines-fill"></i> All Staff
+    </a>
+  </div>
+
+  <div class="row g-3">
+    {% for unit in group.list %}
+    <div class="col-sm-6 col-xl-4">
+      <div class="eo-card" style="border-left:4px solid {{ unit.color|default:group.grouper.color|default:'var(--eo-accent)' }};height:100%">
+
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px">
+          <div>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+              <h3 style="font-size:.95rem;font-weight:700;color:var(--eo-text);margin:0">{{ unit.name }}</h3>
+              <span style="font-size:.68rem;font-weight:700;color:var(--eo-text-muted);background:var(--eo-bg);padding:2px 7px;border-radius:4px;font-family:var(--eo-mono)">
+                {{ unit.code }}
+              </span>
+            </div>
+            <span style="font-size:.78rem;color:{{ group.grouper.color|default:'var(--eo-accent)' }}">
+              <i class="{{ group.grouper.icon|default:'bi-building' }}"></i> {{ group.grouper.name }}
+            </span>
+          </div>
+          <!-- Member count badge -->
+          <div style="display:flex;flex-direction:column;align-items:center;padding:8px 12px;background:{{ unit.color|default:'var(--eo-accent)' }}15;border-radius:var(--eo-radius-sm);min-width:56px;flex-shrink:0">
+            <span style="font-size:1.4rem;font-weight:800;color:{{ unit.color|default:'var(--eo-accent)' }};line-height:1">{{ unit.member_count }}</span>
+            <span style="font-size:.65rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Staff</span>
+          </div>
+        </div>
+
+        {% if unit.description %}
+        <p style="font-size:.82rem;color:var(--eo-text-muted);margin-bottom:14px;line-height:1.6">
+          {{ unit.description|truncatechars:90 }}
+        </p>
+        {% endif %}
+
+        <!-- Head of unit -->
+        {% if unit.head_of_unit %}
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--eo-bg);border-radius:var(--eo-radius-sm);margin-bottom:14px">
+          {% if unit.head_of_unit.avatar %}
+            <img src="{{ unit.head_of_unit.avatar.url }}" style="width:28px;height:28px;border-radius:50%;object-fit:cover"/>
+          {% else %}
+            <div style="width:28px;height:28px;border-radius:50%;background:{{ unit.color|default:'var(--eo-accent)' }};color:#fff;font-size:.65rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+              {{ unit.head_of_unit.initials }}
+            </div>
+          {% endif %}
+          <div>
+            <div style="font-size:.65rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Head of Unit</div>
+            <a href="{% url 'staff_detail' unit.head_of_unit.pk %}" style="font-size:.82rem;font-weight:600;color:var(--eo-text);text-decoration:none">
+              {{ unit.head_of_unit.full_name }}
+            </a>
+          </div>
+        </div>
+        {% endif %}
+
+        <!-- Staff avatars preview -->
+        {% with members=unit.staffprofile_set.all %}
+        {% if members %}
+        <div style="display:flex;align-items:center;margin-bottom:14px">
+          <div style="display:flex;margin-right:8px">
+            {% for sp in members %}
+            {% if forloop.counter <= 5 %}
+            {% if sp.user.avatar %}
+              <img src="{{ sp.user.avatar.url }}"
+                   title="{{ sp.user.full_name }}"
+                   style="width:28px;height:28px;border-radius:50%;object-fit:cover;border:2px solid var(--eo-surface);margin-left:{% if not forloop.first %}-8px{% else %}0{% endif %};position:relative;z-index:{{ forloop.revcounter }}"/>
+            {% else %}
+              <div title="{{ sp.user.full_name }}"
+                   style="width:28px;height:28px;border-radius:50%;background:{{ unit.color|default:'var(--eo-accent)' }};color:#fff;font-size:.6rem;font-weight:700;display:flex;align-items:center;justify-content:center;border:2px solid var(--eo-surface);margin-left:{% if not forloop.first %}-8px{% else %}0{% endif %};position:relative;z-index:{{ forloop.revcounter }}">
+                {{ sp.user.initials }}
+              </div>
+            {% endif %}
+            {% endif %}
+            {% endfor %}
+          </div>
+          {% if members.count > 5 %}
+          <span style="font-size:.75rem;color:var(--eo-text-muted)">+{{ members.count|add:"-5" }} more</span>
+          {% endif %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <!-- Actions -->
+        <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">
+          <a href="{% url 'staff_directory' %}?unit={{ unit.id }}" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-people"></i> View Staff
+          </a>
+          <a href="{% url 'task_list' %}?unit={{ unit.id }}" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-check2-square"></i> Tasks
+          </a>
+          {% if request.user.is_superuser %}
+          <a href="{% url 'admin:organization_unit_change' unit.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm ms-auto">
+            <i class="bi bi-pencil"></i>
+          </a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% empty %}
+<div class="eo-card" style="text-align:center;padding:64px">
+  <i class="bi bi-diagram-3" style="font-size:3rem;color:var(--eo-text-light);display:block;margin-bottom:16px"></i>
+  <h3 style="font-size:1.1rem;font-weight:600">No units found</h3>
+  <p style="color:var(--eo-text-muted);font-size:.88rem">Add units via the admin panel or run the setup command.</p>
+</div>
+{% endfor %}
+
+{% endblock %}

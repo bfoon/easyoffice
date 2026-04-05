@@ -1,0 +1,222 @@
+{% extends 'base.html' %}
+{% load humanize %}
+{% block title %}Dashboard{% endblock %}
+{% block breadcrumb %}<span>Dashboard</span>{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">
+      Good {% now "G" as hour %}{% if hour < 12 %}morning{% elif hour < 17 %}afternoon{% else %}evening{% endif %}, {{ request.user.first_name|default:request.user.username }} 👋
+    </h1>
+    <p class="eo-page-subtitle">{% now "l, N j, Y" %} — Here's what's happening today</p>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="{% url 'task_create' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-plus"></i> New Task
+    </a>
+    <a href="{% url 'ticket_create' %}" class="eo-btn eo-btn-primary">
+      <i class="bi bi-headset"></i> IT Support
+    </a>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-sm-6 col-lg-3">
+    <div class="eo-stat eo-stat-info">
+      <div class="eo-stat-label">My Tasks</div>
+      <div class="eo-stat-value">{{ my_tasks_total }}</div>
+      <div class="eo-stat-change">{{ my_tasks_in_progress }} in progress</div>
+      <i class="bi bi-check2-square eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-sm-6 col-lg-3">
+    <div class="eo-stat eo-stat-warning">
+      <div class="eo-stat-label">Due Today</div>
+      <div class="eo-stat-value">{{ my_tasks_due_today }}</div>
+      <div class="eo-stat-change">tasks need attention</div>
+      <i class="bi bi-clock eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-sm-6 col-lg-3">
+    <div class="eo-stat eo-stat-danger">
+      <div class="eo-stat-label">Overdue</div>
+      <div class="eo-stat-value">{{ my_tasks_overdue }}</div>
+      <div class="eo-stat-change">tasks past due date</div>
+      <i class="bi bi-exclamation-triangle eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-sm-6 col-lg-3">
+    <div class="eo-stat eo-stat-success">
+      <div class="eo-stat-label">Active Projects</div>
+      <div class="eo-stat-value">{{ my_projects_count }}</div>
+      <div class="eo-stat-change">projects you're on</div>
+      <i class="bi bi-kanban eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">My Active Tasks</h2>
+          <p class="eo-card-subtitle">
+            {{ my_tasks_todo }} to do · {{ my_tasks_in_progress }} in progress{% if my_tasks_review %} · {{ my_tasks_review }} in review{% endif %}
+          </p>
+        </div>
+        <a href="{% url 'task_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">View all <i class="bi bi-arrow-right"></i></a>
+      </div>
+
+      {% if recent_tasks %}
+      <div class="d-flex flex-column gap-2">
+        {% for task in recent_tasks %}
+        <a href="{% url 'task_detail' task.pk %}" style="text-decoration:none">
+          <div class="eo-task-card {% if task.is_overdue %}overdue{% endif %}">
+            <div class="d-flex align-items-start justify-content-between gap-3">
+              <div style="min-width:0">
+                <div class="eo-task-title">{{ task.title|truncatechars:70 }}</div>
+                {% if task.description %}
+                <div style="font-size:.8rem;color:var(--eo-text-muted);margin-top:2px">
+                  {{ task.description|truncatechars:80 }}
+                </div>
+                {% endif %}
+              </div>
+              <span class="eo-status eo-status-{{ task.status }} flex-shrink-0">{{ task.get_status_display }}</span>
+            </div>
+
+            <div class="eo-task-meta">
+              <span class="eo-priority eo-priority-{{ task.priority }}">
+                <i class="bi bi-flag-fill"></i>{{ task.get_priority_display }}
+              </span>
+
+              {% if task.due_date %}
+              <span class="eo-task-due {% if task.is_overdue %}overdue{% endif %}">
+                <i class="bi bi-calendar3"></i> {{ task.due_date|date:"N j" }}
+              </span>
+              {% endif %}
+
+              {% if task.assigned_by %}
+              <span style="font-size:.75rem;color:var(--eo-text-muted)">
+                from {{ task.assigned_by.full_name }}
+              </span>
+              {% endif %}
+
+              {% if task.progress_pct > 0 %}
+              <div style="flex:1;min-width:60px">
+                <div class="eo-progress">
+                  <div class="eo-progress-bar {% if task.progress_pct == 100 %}success{% elif task.progress_pct < 30 %}danger{% endif %}"
+                       style="width:{{ task.progress_pct }}%"></div>
+                </div>
+              </div>
+              <span style="font-size:.72rem;color:var(--eo-text-muted)">{{ task.progress_pct }}%</span>
+              {% endif %}
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:40px;color:var(--eo-text-muted)">
+        <i class="bi bi-check2-circle" style="font-size:2.5rem;display:block;margin-bottom:12px;color:var(--eo-success)"></i>
+        <p style="font-size:.9rem">You're all caught up! No active tasks right now.</p>
+        <a href="{% url 'task_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">Browse all tasks</a>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-lg-4 d-flex flex-column gap-4">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">My Projects</h2>
+        <a href="{% url 'project_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">All</a>
+      </div>
+
+      {% for project in my_projects %}
+      <a href="{% url 'project_detail' project.pk %}" style="text-decoration:none">
+        <div style="padding:12px 0;border-bottom:1px solid var(--eo-border)">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+            <div style="width:10px;height:10px;border-radius:50%;background:{{ project.cover_color }};flex-shrink:0"></div>
+            <span style="font-size:.87rem;font-weight:600;color:var(--eo-text)">{{ project.name|truncatechars:30 }}</span>
+            <span class="eo-status eo-status-{{ project.status }} ms-auto">{{ project.get_status_display }}</span>
+          </div>
+          <div class="eo-progress">
+            <div class="eo-progress-bar {% if project.progress_pct > 80 %}success{% elif project.progress_pct < 30 %}danger{% endif %}"
+                 style="width:{{ project.progress_pct }}%"></div>
+          </div>
+          <span style="font-size:.72rem;color:var(--eo-text-muted)">{{ project.progress_pct }}% complete</span>
+        </div>
+      </a>
+      {% empty %}
+      <p style="font-size:.87rem;color:var(--eo-text-muted);text-align:center;padding:16px 0">
+        Not assigned to any active projects.
+      </p>
+      {% endfor %}
+    </div>
+
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Leave Snapshot</h2>
+      </div>
+      <div class="d-flex flex-column gap-2">
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Pending</span>
+          <strong>{{ my_pending_leave_requests }}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Approved</span>
+          <strong>{{ my_approved_leave_requests }}</strong>
+        </div>
+        <a href="{% url 'leave_requests' %}" class="eo-btn eo-btn-secondary eo-btn-sm mt-2">
+          <i class="bi bi-calendar-check"></i> Manage Leave
+        </a>
+      </div>
+    </div>
+
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Notifications</h2>
+      </div>
+      {% if recent_notifications %}
+        {% for note in recent_notifications %}
+        <a href="{{ note.link|default:'#' }}" style="text-decoration:none">
+          <div style="padding:10px 0;border-bottom:1px solid var(--eo-border)">
+            <div style="font-size:.84rem;font-weight:600;color:var(--eo-text)">{{ note.title }}</div>
+            <div style="font-size:.75rem;color:var(--eo-text-muted)">{{ note.message|truncatechars:80 }}</div>
+          </div>
+        </a>
+        {% endfor %}
+      {% else %}
+        <p style="font-size:.87rem;color:var(--eo-text-muted);text-align:center;padding:12px 0">
+          No unread notifications.
+        </p>
+      {% endif %}
+    </div>
+
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Quick Actions</h2>
+      </div>
+      <div class="d-grid gap-2">
+        <a href="{% url 'task_create' %}" class="eo-btn eo-btn-secondary">
+          <i class="bi bi-plus-circle"></i> Create Task
+        </a>
+        <a href="{% url 'leave_requests' %}" class="eo-btn eo-btn-secondary">
+          <i class="bi bi-calendar-check"></i> Request Leave
+        </a>
+        <a href="{% url 'ticket_create' %}" class="eo-btn eo-btn-secondary">
+          <i class="bi bi-headset"></i> IT Support Ticket
+        </a>
+        <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-secondary">
+          <i class="bi bi-cloud-upload"></i> Upload File
+        </a>
+        <a href="{% url 'purchase_request' %}" class="eo-btn eo-btn-secondary">
+          <i class="bi bi-bag-plus"></i> Purchase Request
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

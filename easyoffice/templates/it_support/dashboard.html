@@ -1,0 +1,364 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}IT Support{% endblock %}
+{% block breadcrumb %}<span>IT Support</span>{% endblock %}
+
+{% block content %}
+{% if is_it %}
+<!--{# ══════════════════════════════════════════════════════
+   IT STAFF DASHBOARD
+══════════════════════════════════════════════════════ #} -->
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">IT Support Console</h1>
+    <p class="eo-page-subtitle">Manage tickets, equipment, and user requests</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a href="{% url 'ticket_list' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-list-ul"></i> All Tickets
+    </a>
+    <a href="{% url 'equipment_list' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-pc-display"></i> Equipment
+    </a>
+  </div>
+</div>
+
+<!-- Stats -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-info">
+      <div class="eo-stat-label">Open</div>
+      <div class="eo-stat-value">{{ open_count }}</div>
+      <i class="bi bi-inbox eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat" style="border-left-color:#8b5cf6">
+      <div class="eo-stat-label">In Progress</div>
+      <div class="eo-stat-value">{{ in_progress_count }}</div>
+      <i class="bi bi-hourglass-split eo-stat-icon" style="color:#8b5cf6"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-warning">
+      <div class="eo-stat-label">Pending Info</div>
+      <div class="eo-stat-value">{{ pending_count }}</div>
+      <i class="bi bi-question-circle eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-success">
+      <div class="eo-stat-label">Resolved Today</div>
+      <div class="eo-stat-value">{{ resolved_today }}</div>
+      <i class="bi bi-check2-circle eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
+{% if critical_count %}
+<div class="eo-card mb-4" style="border-left:4px solid var(--eo-danger);background:#fff5f5">
+  <div style="display:flex;align-items:center;gap:10px;color:#991b1b">
+    <i class="bi bi-exclamation-triangle-fill" style="font-size:1.1rem"></i>
+    <span style="font-weight:600">{{ critical_count }} critical ticket{{ critical_count|pluralize }} require immediate attention.</span>
+    <a href="{% url 'ticket_list' %}?priority=critical" class="eo-btn eo-btn-danger eo-btn-sm" style="margin-left:auto">View Critical</a>
+  </div>
+</div>
+{% endif %}
+
+<div class="row g-4">
+
+  <!-- Open Tickets -->
+  <div class="col-lg-8">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">Active Tickets</h2>
+          <p class="eo-card-subtitle">Open, in-progress and pending tickets</p>
+        </div>
+        <a href="{% url 'ticket_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">View All</a>
+      </div>
+
+      {% if open_tickets %}
+      <div style="display:flex;flex-direction:column;gap:0">
+        {% for ticket in open_tickets %}
+        <a href="{% url 'ticket_detail' ticket.pk %}" style="text-decoration:none;display:block;padding:12px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
+          <div style="display:flex;align-items:flex-start;gap:12px">
+            <!-- Priority dot -->
+            <div style="width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:5px;background:{{ ticket.priority_color }}"></div>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px">
+                <span style="font-size:.72rem;font-weight:700;color:var(--eo-text-muted);font-family:var(--eo-mono)">{{ ticket.ticket_number }}</span>
+                <span style="font-size:.88rem;font-weight:600;color:var(--eo-text)">{{ ticket.title|truncatechars:55 }}</span>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:.75rem;color:var(--eo-text-muted)">
+                <span><i class="bi bi-person me-1"></i>{{ ticket.requested_by.full_name }}</span>
+                <span><i class="bi bi-tag me-1"></i>{{ ticket.get_request_type_display }}</span>
+                <span><i class="bi bi-clock me-1"></i>{{ ticket.created_at|naturaltime }}</span>
+                {% if ticket.assigned_to %}
+                <span><i class="bi bi-person-check me-1" style="color:var(--eo-success)"></i>{{ ticket.assigned_to.full_name }}</span>
+                {% else %}
+                <span style="color:var(--eo-warning)"><i class="bi bi-exclamation-circle me-1"></i>Unassigned</span>
+                {% endif %}
+              </div>
+            </div>
+            <div style="flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:5px">
+              <span style="font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:4px;
+                {% if ticket.priority == 'critical' %}background:#fee2e2;color:#991b1b
+                {% elif ticket.priority == 'high' %}background:#fef3c7;color:#92400e
+                {% elif ticket.priority == 'normal' %}background:#dbeafe;color:#1e40af
+                {% else %}background:#f1f5f9;color:#64748b{% endif %}">
+                {{ ticket.get_priority_display }}
+              </span>
+              <span style="font-size:.7rem;font-weight:600;padding:2px 8px;border-radius:4px;
+                {% if ticket.status == 'open' %}background:#dbeafe;color:#1e40af
+                {% elif ticket.status == 'in_progress' %}background:#ede9fe;color:#5b21b6
+                {% else %}background:#fef3c7;color:#92400e{% endif %}">
+                {{ ticket.get_status_display }}
+              </span>
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:40px;color:var(--eo-text-muted)">
+        <i class="bi bi-check2-all" style="font-size:2rem;display:block;margin-bottom:10px;color:var(--eo-success)"></i>
+        <p style="font-size:.88rem">All clear — no open tickets right now.</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Right column -->
+  <div class="col-lg-4 d-flex flex-column gap-4">
+
+    <!-- My Assigned -->
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">My Queue</h2>
+        <span style="font-size:.78rem;color:var(--eo-text-muted)">{{ my_assigned|length }} assigned to me</span>
+      </div>
+      {% if my_assigned %}
+      <div style="display:flex;flex-direction:column;gap:8px">
+        {% for ticket in my_assigned %}
+        <a href="{% url 'ticket_detail' ticket.pk %}" style="text-decoration:none;display:flex;align-items:center;gap:10px;padding:8px;background:var(--eo-bg);border-radius:8px;transition:background .1s"
+           onmouseover="this.style.background='var(--eo-border)'" onmouseout="this.style.background='var(--eo-bg)'">
+          <div style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:{{ ticket.priority_color }}"></div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.83rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ ticket.title }}</div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ ticket.ticket_number }} · {{ ticket.created_at|naturaltime }}</div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p style="font-size:.82rem;color:var(--eo-text-muted);text-align:center;padding:16px 0">No tickets assigned to you.</p>
+      {% endif %}
+    </div>
+
+    <!-- Equipment Summary -->
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Equipment</h2>
+        <a href="{% url 'equipment_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">Manage</a>
+      </div>
+      <div class="row g-2" style="margin-bottom:14px">
+        <div class="col-4" style="text-align:center">
+          <div style="font-size:1.4rem;font-weight:800;color:var(--eo-success)">{{ equipment_stats.available }}</div>
+          <div style="font-size:.72rem;color:var(--eo-text-muted)">Available</div>
+        </div>
+        <div class="col-4" style="text-align:center">
+          <div style="font-size:1.4rem;font-weight:800;color:var(--eo-accent)">{{ equipment_stats.issued }}</div>
+          <div style="font-size:.72rem;color:var(--eo-text-muted)">Issued</div>
+        </div>
+        <div class="col-4" style="text-align:center">
+          <div style="font-size:1.4rem;font-weight:800;color:var(--eo-warning)">{{ equipment_stats.maintenance }}</div>
+          <div style="font-size:.72rem;color:var(--eo-text-muted)">Maintenance</div>
+        </div>
+      </div>
+      {% for item in all_equipment|slice:":6" %}
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
+        <div style="min-width:0">
+          <div style="font-size:.82rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ item.name }}</div>
+          <div style="font-size:.7rem;color:var(--eo-text-muted)">{{ item.asset_tag }}{% if item.current_user %} · {{ item.current_user.full_name }}{% endif %}</div>
+        </div>
+        <span style="font-size:.68rem;font-weight:600;padding:2px 7px;border-radius:4px;flex-shrink:0;margin-left:8px;background:{{ item.status_color }}18;color:{{ item.status_color }}">
+          {{ item.get_status_display }}
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+
+  </div>
+</div>
+
+{% else %}
+ ══════════════════════════════════════════════════════
+   REGULAR STAFF DASHBOARD
+══════════════════════════════════════════════════════
+
+<div class=" eo-page-header">
+  <div>
+    <h1 class="eo-page-title">IT Support</h1>
+    <p class="eo-page-subtitle">Submit requests, track your tickets, and view your equipment</p>
+  </div>
+  <a href="{% url 'ticket_create' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-plus-lg"></i> New Request
+  </a>
+</div>
+
+<!-- User stats -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-info">
+      <div class="eo-stat-label">Open Tickets</div>
+      <div class="eo-stat-value">{{ open_count }}</div>
+      <i class="bi bi-ticket eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-success">
+      <div class="eo-stat-label">Resolved</div>
+      <div class="eo-stat-value">{{ resolved_count }}</div>
+      <i class="bi bi-check2-circle eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat">
+      <div class="eo-stat-label">My Equipment</div>
+      <div class="eo-stat-value">{{ my_equipment|length }}</div>
+      <i class="bi bi-pc-display eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat">
+      <div class="eo-stat-label">Total Requests</div>
+      <div class="eo-stat-value">{{ my_tickets|length }}</div>
+      <i class="bi bi-list-check eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+
+  <!-- Quick Submit -->
+  <div class="col-lg-4">
+    <div class="eo-card" style="border-top:4px solid var(--eo-accent)">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">Quick Request</h2>
+          <p class="eo-card-subtitle">Select a common request type</p>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        {% for val, label in type_choices %}
+        <a href="{% url 'ticket_create' %}?type={{ val }}"
+           style="display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--eo-border);border-radius:8px;text-decoration:none;color:var(--eo-text);transition:border-color .12s,background .12s"
+           onmouseover="this.style.borderColor='var(--eo-accent)';this.style.background='var(--eo-bg)'"
+           onmouseout="this.style.borderColor='var(--eo-border)';this.style.background=''">
+          <div style="width:32px;height:32px;border-radius:8px;background:var(--eo-accent)14;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <i class="bi {% if val == 'create_user' %}bi-person-plus
+              {% elif val == 'reset_password' %}bi-key
+              {% elif val == 'issue_equipment' %}bi-laptop
+              {% elif val == 'return_equipment' %}bi-arrow-return-left
+              {% elif val == 'create_email' %}bi-envelope-plus
+              {% elif val == 'software_install' %}bi-app-indicator
+              {% elif val == 'technical_support' %}bi-tools
+              {% elif val == 'network_access' %}bi-wifi
+              {% else %}bi-question-circle{% endif %}"
+              style="color:var(--eo-accent)"></i>
+          </div>
+          <span style="font-size:.85rem;font-weight:500">{{ label }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- My Tickets -->
+  <div class="col-lg-8">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">My Tickets</h2>
+          <p class="eo-card-subtitle">Your recent requests</p>
+        </div>
+        <a href="{% url 'ticket_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">View All</a>
+      </div>
+
+      {% if my_tickets %}
+      <div style="display:flex;flex-direction:column;gap:0">
+        {% for ticket in my_tickets %}
+        <a href="{% url 'ticket_detail' ticket.pk %}" style="text-decoration:none;display:block;padding:12px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                <span style="font-size:.7rem;font-weight:700;color:var(--eo-text-muted);font-family:var(--eo-mono)">{{ ticket.ticket_number }}</span>
+                <span style="font-size:.88rem;font-weight:600;color:var(--eo-text)">{{ ticket.title|truncatechars:50 }}</span>
+              </div>
+              <div style="display:flex;gap:12px;font-size:.74rem;color:var(--eo-text-muted);flex-wrap:wrap">
+                <span><i class="bi bi-tag me-1"></i>{{ ticket.get_request_type_display }}</span>
+                <span><i class="bi bi-clock me-1"></i>{{ ticket.created_at|naturaltime }}</span>
+                {% if ticket.assigned_to %}
+                <span><i class="bi bi-person-check me-1" style="color:var(--eo-success)"></i>{{ ticket.assigned_to.full_name }}</span>
+                {% endif %}
+              </div>
+            </div>
+            <div style="flex-shrink:0">
+              <span style="font-size:.72rem;font-weight:700;padding:3px 9px;border-radius:12px;
+                {% if ticket.status == 'open' %}background:#dbeafe;color:#1e40af
+                {% elif ticket.status == 'in_progress' %}background:#ede9fe;color:#5b21b6
+                {% elif ticket.status == 'pending_info' %}background:#fef3c7;color:#92400e
+                {% elif ticket.status == 'resolved' %}background:#d1fae5;color:#065f46
+                {% elif ticket.status == 'closed' %}background:#f1f5f9;color:#64748b
+                {% else %}background:#fee2e2;color:#991b1b{% endif %}">
+                {{ ticket.get_status_display }}
+              </span>
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:48px 24px;color:var(--eo-text-muted)">
+        <i class="bi bi-ticket" style="font-size:2rem;display:block;margin-bottom:10px;opacity:.4"></i>
+        <p style="font-size:.88rem">No requests yet. Use the quick links to get started.</p>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- My Equipment -->
+    {% if my_equipment %}
+    <div class="eo-card mt-4">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">My Equipment</h2>
+        <span style="font-size:.78rem;color:var(--eo-text-muted)">{{ my_equipment|length }} item{{ my_equipment|length|pluralize }}</span>
+      </div>
+      <table class="eo-table">
+        <thead>
+          <tr><th>Asset</th><th>Category</th><th>Make / Model</th><th>Issued</th></tr>
+        </thead>
+        <tbody>
+          {% for item in my_equipment %}
+          <tr>
+            <td>
+              <div style="font-weight:600;font-size:.88rem">{{ item.name }}</div>
+              <div style="font-size:.73rem;color:var(--eo-text-muted);font-family:var(--eo-mono)">{{ item.asset_tag }}</div>
+            </td>
+            <td style="font-size:.84rem;color:var(--eo-text-muted)">{{ item.category }}</td>
+            <td style="font-size:.84rem;color:var(--eo-text-muted)">{{ item.make }} {{ item.model }}</td>
+            <td style="font-size:.82rem;color:var(--eo-text-muted)">
+              {% if item.issued_date %}{{ item.issued_date|date:"N j, Y" }}{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+{% endif %}
+{% endblock %}

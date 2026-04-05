@@ -1,0 +1,1138 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}File Manager{% endblock %}
+{% block breadcrumb %}<span>File Manager</span>{% endblock %}
+
+{% block content %}
+<style>
+/* ── Layout ── */
+.fm-layout {
+  display: flex;
+  gap: 0;
+  height: calc(100vh - 148px);
+  min-height: 540px;
+  border: 1px solid var(--eo-border);
+  border-radius: var(--eo-radius);
+  overflow: hidden;
+  background: var(--eo-surface);
+}
+
+/* ── Sidebar ── */
+.fm-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--eo-border);
+  background: var(--eo-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.fm-sidebar-section { padding: 10px 10px 4px; }
+.fm-sidebar-label {
+  font-size: .66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--eo-text-muted);
+  padding: 8px 8px 4px;
+}
+.fm-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  text-decoration: none;
+  font-size: .84rem;
+  color: var(--eo-text-muted);
+  transition: background .12s, color .12s;
+  cursor: pointer;
+}
+.fm-nav-item:hover { background: var(--eo-surface); color: var(--eo-text); }
+.fm-nav-item.active { background: var(--eo-accent)14; color: var(--eo-accent); font-weight: 600; }
+.fm-nav-item i { font-size: .9rem; width: 16px; text-align: center; }
+.fm-nav-badge {
+  margin-left: auto;
+  font-size: .68rem; font-weight: 700;
+  background: var(--eo-bg);
+  border: 1px solid var(--eo-border);
+  border-radius: 10px;
+  padding: 1px 7px;
+  color: var(--eo-text-muted);
+}
+.fm-nav-item.active .fm-nav-badge { background: var(--eo-accent)20; border-color: var(--eo-accent)40; color: var(--eo-accent); }
+.fm-folders-list { flex: 1; overflow-y: auto; padding: 4px 10px 12px; }
+.fm-folder-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: .81rem;
+  color: var(--eo-text-muted);
+  transition: background .1s, color .1s;
+}
+.fm-folder-nav-item:hover { background: var(--eo-surface); color: var(--eo-text); }
+.fm-folder-nav-item.active { background: var(--eo-accent)12; color: var(--eo-accent); font-weight: 600; }
+.fm-folder-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+/* ── Main panel ── */
+.fm-main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+
+/* Toolbar */
+.fm-toolbar {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--eo-border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  background: var(--eo-surface);
+}
+.fm-search {
+  flex: 1; min-width: 180px; max-width: 320px; position: relative;
+}
+.fm-search input {
+  width: 100%;
+  padding: 7px 12px 7px 32px;
+  border: 1px solid var(--eo-border);
+  border-radius: 8px;
+  background: var(--eo-bg);
+  color: var(--eo-text);
+  font-size: .84rem;
+  outline: none;
+  transition: border-color .15s;
+}
+.fm-search input:focus { border-color: var(--eo-accent); }
+.fm-search i { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--eo-text-light); font-size: .8rem; }
+.fm-sort select {
+  padding: 6px 10px;
+  border: 1px solid var(--eo-border);
+  border-radius: 8px;
+  background: var(--eo-bg);
+  color: var(--eo-text);
+  font-size: .82rem;
+  outline: none;
+  cursor: pointer;
+}
+.view-toggle-btn {
+  width: 32px; height: 32px;
+  border: 1px solid var(--eo-border);
+  background: var(--eo-bg);
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: .85rem; color: var(--eo-text-muted);
+  transition: background .12s, color .12s;
+}
+.view-toggle-btn:hover, .view-toggle-btn.active { background: var(--eo-accent); color: #fff; border-color: var(--eo-accent); }
+
+/* Breadcrumb */
+.fm-breadcrumb {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--eo-border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .8rem;
+  color: var(--eo-text-muted);
+  flex-shrink: 0;
+  background: var(--eo-bg);
+}
+.fm-breadcrumb a { color: var(--eo-text-muted); text-decoration: none; transition: color .1s; }
+.fm-breadcrumb a:hover { color: var(--eo-accent); }
+.fm-breadcrumb .sep { font-size: .7rem; }
+
+/* Content area */
+.fm-content { flex: 1; overflow-y: auto; padding: 16px; }
+
+/* ── Grid view ── */
+.fm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.fm-folder-card, .fm-file-card {
+  border: 1px solid var(--eo-border);
+  border-radius: 10px;
+  padding: 16px 12px 12px;
+  background: var(--eo-surface);
+  cursor: pointer;
+  transition: box-shadow .15s, transform .15s, border-color .15s;
+  position: relative;
+  overflow: hidden;
+  text-decoration: none;
+  display: block;
+}
+.fm-folder-card:hover, .fm-file-card:hover {
+  box-shadow: 0 4px 20px rgba(0,0,0,.1);
+  transform: translateY(-2px);
+  border-color: var(--eo-accent)40;
+}
+.fm-card-icon {
+  font-size: 2.4rem;
+  margin-bottom: 10px;
+  display: block;
+  line-height: 1;
+}
+.fm-card-name {
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--eo-text);
+  word-break: break-word;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.fm-card-meta {
+  font-size: .7rem;
+  color: var(--eo-text-muted);
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.fm-card-actions {
+  position: absolute;
+  top: 6px; right: 6px;
+  opacity: 0;
+  transition: opacity .12s;
+  display: flex;
+  gap: 3px;
+}
+.fm-folder-card:hover .fm-card-actions,
+.fm-file-card:hover .fm-card-actions { opacity: 1; }
+.fm-action-btn {
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--eo-border);
+  background: var(--eo-surface);
+  display: flex; align-items: center; justify-content: center;
+  font-size: .75rem;
+  color: var(--eo-text-muted);
+  cursor: pointer;
+  transition: background .1s, color .1s;
+}
+.fm-action-btn:hover { background: var(--eo-accent); color: #fff; border-color: var(--eo-accent); }
+.fm-action-btn.danger:hover { background: var(--eo-danger); border-color: var(--eo-danger); }
+.fm-vis-badge {
+  position: absolute;
+  top: 6px; left: 6px;
+  font-size: .6rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.vis-private  { background: #f1f5f9; color: #64748b; }
+.vis-office   { background: #dbeafe; color: #1d4ed8; }
+.vis-unit     { background: #d1fae5; color: #065f46; }
+.vis-department { background: #fef3c7; color: #92400e; }
+.vis-shared_with { background: #ede9fe; color: #5b21b6; }
+
+/* ── List view ── */
+.fm-list { display: flex; flex-direction: column; gap: 0; }
+.fm-list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  text-decoration: none;
+  transition: background .1s, border-color .1s;
+  position: relative;
+}
+.fm-list-row:hover { background: var(--eo-bg); border-color: var(--eo-border); }
+.fm-list-row:hover .fm-card-actions { opacity: 1; }
+.fm-list-icon { width: 36px; flex-shrink: 0; font-size: 1.5rem; display: flex; align-items: center; }
+.fm-list-name { flex: 1; min-width: 0; }
+.fm-list-name-text {
+  font-size: .88rem; font-weight: 600; color: var(--eo-text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fm-list-meta-text {
+  font-size: .73rem; color: var(--eo-text-muted); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fm-list-col { flex-shrink: 0; font-size: .8rem; color: var(--eo-text-muted); }
+
+/* ── Empty state ── */
+.fm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 64px 32px;
+  text-align: center;
+  color: var(--eo-text-muted);
+}
+
+/* ── Modal ── */
+.fm-modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 1050;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none;
+  transition: opacity .18s;
+}
+.fm-modal-backdrop.open { opacity: 1; pointer-events: all; }
+.fm-modal {
+  background: var(--eo-surface);
+  border-radius: var(--eo-radius);
+  border: 1px solid var(--eo-border);
+  width: 520px; max-width: 96vw; max-height: 90vh; overflow-y: auto;
+  box-shadow: 0 24px 64px rgba(0,0,0,.18);
+  transform: translateY(14px);
+  transition: transform .18s;
+}
+.fm-modal-backdrop.open .fm-modal { transform: translateY(0); }
+.fm-modal-head {
+  padding: 18px 22px 14px;
+  display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid var(--eo-border);
+}
+.fm-modal-body { padding: 20px 22px; }
+
+/* Drag & drop zone */
+.fm-dropzone {
+  border: 2px dashed var(--eo-border);
+  border-radius: 10px;
+  padding: 32px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+  position: relative;
+}
+.fm-dropzone:hover, .fm-dropzone.dragging {
+  border-color: var(--eo-accent);
+  background: var(--eo-accent)06;
+}
+.fm-dropzone input[type="file"] {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer;
+}
+.fm-dropzone-icon { font-size: 2.2rem; color: var(--eo-text-light); margin-bottom: 10px; }
+.fm-selected-file {
+  display: none;
+  padding: 10px 14px;
+  background: var(--eo-bg);
+  border-radius: 8px;
+  border: 1px solid var(--eo-border);
+  margin-top: 10px;
+  font-size: .83rem;
+  font-weight: 600;
+  color: var(--eo-text);
+}
+</style>
+
+<!-- ══ STATS BAR ══ -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-info">
+      <div class="eo-stat-label">Total Files</div>
+      <div class="eo-stat-value">{{ total_file_count }}</div>
+      <i class="bi bi-files eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-success">
+      <div class="eo-stat-label">My Uploads</div>
+      <div class="eo-stat-value">{{ my_file_count }}</div>
+      <i class="bi bi-cloud-upload eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-warning">
+      <div class="eo-stat-label">My Storage</div>
+      <div class="eo-stat-value" style="font-size:1.1rem">
+        {% if my_total_size > 1048576 %}
+          {{ my_total_size|filesizeformat }}
+        {% elif my_total_size > 1024 %}
+          {{ my_total_size|filesizeformat }}
+        {% else %}
+          {{ my_total_size }} B
+        {% endif %}
+      </div>
+      <i class="bi bi-hdd eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat">
+      <div class="eo-stat-label">Shared with Me</div>
+      <div class="eo-stat-value">{{ shared_count }}</div>
+      <i class="bi bi-people eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MAIN LAYOUT ══ -->
+<div class="fm-layout">
+
+  <!-- ─── SIDEBAR ─── -->
+  <aside class="fm-sidebar">
+    <div class="fm-sidebar-section">
+      <div class="fm-sidebar-label">Browse</div>
+      <a href="{% url 'file_manager' %}"
+         class="fm-nav-item {% if not filter_mode and not type_cat %}active{% endif %}">
+        <i class="bi bi-grid-3x3-gap"></i> All Files
+        <span class="fm-nav-badge">{{ total_file_count }}</span>
+      </a>
+      <a href="?filter=mine"
+         class="fm-nav-item {% if filter_mode == 'mine' %}active{% endif %}">
+        <i class="bi bi-person"></i> My Files
+        <span class="fm-nav-badge">{{ my_file_count }}</span>
+      </a>
+      <a href="?filter=shared"
+         class="fm-nav-item {% if filter_mode == 'shared' %}active{% endif %}">
+        <i class="bi bi-share"></i> Shared with Me
+        <span class="fm-nav-badge">{{ shared_count }}</span>
+      </a>
+      <a href="?filter=office"
+         class="fm-nav-item {% if filter_mode == 'office' %}active{% endif %}">
+        <i class="bi bi-building"></i> Office-wide
+        <span class="fm-nav-badge">{{ office_count }}</span>
+      </a>
+      <a href="?filter=recent"
+         class="fm-nav-item {% if filter_mode == 'recent' %}active{% endif %}">
+        <i class="bi bi-clock-history"></i> Recent
+      </a>
+    </div>
+
+    <div class="fm-sidebar-section" style="padding-top:4px">
+      <div class="fm-sidebar-label">By Type</div>
+      {% for cat_key, cat_label, cat_icon in type_categories %}
+      <a href="?type={{ cat_key }}"
+         class="fm-nav-item {% if type_cat == cat_key %}active{% endif %}">
+        <i class="bi {{ cat_icon }}"></i> {{ cat_label }}
+      </a>
+      {% endfor %}
+    </div>
+
+    <!-- Folders -->
+    <div class="fm-sidebar-section" style="padding-bottom:0">
+      <div class="fm-sidebar-label" style="display:flex;align-items:center;justify-content:space-between">
+        Folders
+        <button onclick="openModal('newFolderModal')"
+                style="background:none;border:none;cursor:pointer;color:var(--eo-text-muted);font-size:.9rem;padding:0 2px"
+                title="New folder">
+          <i class="bi bi-plus-lg"></i>
+        </button>
+      </div>
+    </div>
+    <div class="fm-folders-list">
+      {% for folder in all_folders %}
+      {% if not folder.parent %}
+      <a href="?folder={{ folder.id }}"
+         class="fm-folder-nav-item {% if current_folder.id == folder.id %}active{% endif %}">
+        <span class="fm-folder-dot" style="background:{{ folder.color }}"></span>
+        {{ folder.name|truncatechars:20 }}
+      </a>
+      {% endif %}
+      {% empty %}
+      <div style="font-size:.75rem;color:var(--eo-text-muted);padding:8px;font-style:italic">No folders yet</div>
+      {% endfor %}
+    </div>
+  </aside>
+
+  <!-- ─── MAIN ─── -->
+  <main class="fm-main">
+
+    <!-- Toolbar -->
+    <div class="fm-toolbar">
+      <!-- Search -->
+      <form method="get" class="fm-search">
+        {% if filter_mode %}<input type="hidden" name="filter" value="{{ filter_mode }}"/>{% endif %}
+        {% if type_cat %}<input type="hidden" name="type" value="{{ type_cat }}"/>{% endif %}
+        {% if folder_id %}<input type="hidden" name="folder" value="{{ folder_id }}"/>{% endif %}
+        <i class="bi bi-search"></i>
+        <input type="text" name="q" value="{{ q }}" placeholder="Search files…" autocomplete="off"/>
+      </form>
+
+      <!-- Sort -->
+      <div class="fm-sort">
+        <form method="get" id="sortForm">
+          {% if q %}<input type="hidden" name="q" value="{{ q }}"/>{% endif %}
+          {% if filter_mode %}<input type="hidden" name="filter" value="{{ filter_mode }}"/>{% endif %}
+          {% if type_cat %}<input type="hidden" name="type" value="{{ type_cat }}"/>{% endif %}
+          {% if folder_id %}<input type="hidden" name="folder" value="{{ folder_id }}"/>{% endif %}
+          <select name="sort" onchange="this.form.submit()">
+            <option value="-created_at" {% if sort == '-created_at' %}selected{% endif %}>Newest first</option>
+            <option value="created_at" {% if sort == 'created_at' %}selected{% endif %}>Oldest first</option>
+            <option value="name" {% if sort == 'name' %}selected{% endif %}>Name A–Z</option>
+            <option value="-name" {% if sort == '-name' %}selected{% endif %}>Name Z–A</option>
+            <option value="-file_size" {% if sort == '-file_size' %}selected{% endif %}>Largest first</option>
+            <option value="file_size" {% if sort == 'file_size' %}selected{% endif %}>Smallest first</option>
+            <option value="-download_count" {% if sort == '-download_count' %}selected{% endif %}>Most downloaded</option>
+          </select>
+        </form>
+      </div>
+
+      <!-- View toggle -->
+      <div style="display:flex;gap:4px">
+        <button class="view-toggle-btn" id="btnGrid" title="Grid view" onclick="setView('grid')">
+          <i class="bi bi-grid-3x3-gap"></i>
+        </button>
+        <button class="view-toggle-btn" id="btnList" title="List view" onclick="setView('list')">
+          <i class="bi bi-list-ul"></i>
+        </button>
+      </div>
+
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="eo-btn eo-btn-secondary eo-btn-sm" onclick="openModal('newFolderModal')">
+          <i class="bi bi-folder-plus"></i> New Folder
+        </button>
+        <button class="eo-btn eo-btn-primary eo-btn-sm" onclick="openModal('uploadModal')">
+          <i class="bi bi-cloud-upload"></i> Upload
+        </button>
+      </div>
+    </div>
+
+    <!-- Breadcrumb -->
+    <div class="fm-breadcrumb">
+      <i class="bi bi-hdd" style="color:var(--eo-accent)"></i>
+      <a href="{% url 'file_manager' %}">My Drive</a>
+      {% for ancestor in folder_ancestors %}
+      <i class="bi bi-chevron-right sep"></i>
+      <a href="?folder={{ ancestor.id }}">{{ ancestor.name }}</a>
+      {% endfor %}
+      {% if current_folder %}
+      <i class="bi bi-chevron-right sep"></i>
+      <span style="color:var(--eo-text);font-weight:600">{{ current_folder.name }}</span>
+      {% endif %}
+      {% if q %}
+      <span style="margin-left:4px;color:var(--eo-accent)">· Results for "{{ q }}"</span>
+      {% endif %}
+    </div>
+
+    <!-- Content -->
+    <div class="fm-content">
+
+      <!-- Active filter chip -->
+      {% if filter_mode or type_cat or q %}
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+        <span style="font-size:.75rem;color:var(--eo-text-muted)">Showing:</span>
+        {% if filter_mode %}
+        <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:var(--eo-accent)12;border:1px solid var(--eo-accent)30;border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-accent)">
+          {{ filter_mode|capfirst }}
+          <a href="{% url 'file_manager' %}{% if type_cat %}?type={{ type_cat }}{% endif %}" style="color:inherit;line-height:1;margin-left:2px">×</a>
+        </span>
+        {% endif %}
+        {% if type_cat %}
+        <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:var(--eo-accent)12;border:1px solid var(--eo-accent)30;border-radius:20px;font-size:.75px;font-weight:600;color:var(--eo-accent)">
+          {{ type_cat|capfirst }}
+          <a href="{% url 'file_manager' %}{% if filter_mode %}?filter={{ filter_mode }}{% endif %}" style="color:inherit;line-height:1;margin-left:2px">×</a>
+        </span>
+        {% endif %}
+        {% if q %}
+        <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:var(--eo-accent)12;border:1px solid var(--eo-accent)30;border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-accent)">
+          "{{ q }}"
+          <a href="{% url 'file_manager' %}" style="color:inherit;line-height:1;margin-left:2px">×</a>
+        </span>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% if not files and not folders %}
+      <!-- ─── EMPTY STATE ─── -->
+      <div class="fm-empty">
+        <i class="bi bi-folder2-open" style="font-size:3rem;color:var(--eo-text-light);margin-bottom:14px;display:block"></i>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text);margin-bottom:6px">
+          {% if q %}No results for "{{ q }}"{% elif current_folder %}This folder is empty{% else %}No files yet{% endif %}
+        </div>
+        <p style="font-size:.85rem;color:var(--eo-text-muted);margin-bottom:20px;max-width:300px">
+          {% if q %}Try a different search term or browse by category.
+          {% else %}Upload your first file or create a folder to organise your documents.{% endif %}
+        </p>
+        {% if not q %}
+        <button class="eo-btn eo-btn-primary" onclick="openModal('uploadModal')">
+          <i class="bi bi-cloud-upload"></i> Upload a File
+        </button>
+        {% endif %}
+      </div>
+      {% else %}
+
+      <!-- ─── GRID VIEW ─── -->
+      <div id="viewGrid">
+
+        <!-- Folders row -->
+        {% if folders %}
+        <div style="font-size:.75rem;font-weight:700;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Folders</div>
+        <div class="fm-grid" style="margin-bottom:20px">
+          {% for folder in folders %}
+          <div style="position:relative">
+            <a href="?folder={{ folder.id }}" class="fm-folder-card" style="border-left:4px solid {{ folder.color }}">
+              <i class="bi bi-folder-fill fm-card-icon" style="color:{{ folder.color }}"></i>
+              <div class="fm-card-name">{{ folder.name }}</div>
+              <div class="fm-card-meta">
+                <i class="bi bi-file2"></i>
+                {{ folder.file_count }} file{{ folder.file_count|pluralize }}
+                &nbsp;·&nbsp;
+                <span style="text-transform:capitalize">{{ folder.visibility }}</span>
+              </div>
+            </a>
+            <div class="fm-card-actions">
+              {% if folder.owner == request.user %}
+              <button class="fm-action-btn" title="Share"
+                      onclick="event.preventDefault();openShareModal('{{ folder.id }}','{{ folder.name|escapejs }}','{{ folder.visibility }}','folder')">
+                <i class="bi bi-share"></i>
+              </button>
+              <form method="post" action="{% url 'folder_delete' folder.id %}" style="display:inline"
+                    onsubmit="return confirm('Delete folder {{ folder.name|escapejs }}? Files inside will be moved to root.')">
+                {% csrf_token %}
+                <button class="fm-action-btn danger" type="submit" title="Delete folder">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- Files grid -->
+        {% if files %}
+        {% if folders %}<div style="font-size:.75rem;font-weight:700;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Files</div>{% endif %}
+        <div class="fm-grid">
+          {% for file in files %}
+          <div style="position:relative">
+            <a href="{% url 'file_download' file.pk %}" class="fm-file-card" title="{{ file.name }}">
+              <span class="fm-vis-badge vis-{{ file.visibility }}">{{ file.get_visibility_display }}</span>
+              <i class="bi {{ file.icon_class }} fm-card-icon" style="color:{{ file.icon_color }};margin-top:18px"></i>
+              <div class="fm-card-name">{{ file.name }}</div>
+              <div class="fm-card-meta">
+                {{ file.size_display }}
+                {% if file.download_count %}· <i class="bi bi-download" style="font-size:.65rem"></i> {{ file.download_count }}{% endif %}
+              </div>
+              <div class="fm-card-meta" style="margin-top:2px">
+                {{ file.created_at|date:"N j, Y" }}
+              </div>
+            </a>
+            <div class="fm-card-actions">
+              <a href="{% url 'file_download' file.pk %}" class="fm-action-btn" title="Download">
+                <i class="bi bi-download"></i>
+              </a>
+              {% if file.uploaded_by == request.user %}
+              <button class="fm-action-btn" title="Share"
+                      onclick="event.preventDefault();openShareModal('{{ file.id }}','{{ file.name|escapejs }}','{{ file.visibility }}')">
+                <i class="bi bi-share"></i>
+              </button>
+              <form method="post" action="{% url 'file_delete' file.pk %}" style="display:inline"
+                    onsubmit="return confirm('Delete {{ file.name|escapejs }}? This cannot be undone.')">
+                {% csrf_token %}
+                <button class="fm-action-btn danger" type="submit" title="Delete">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+      </div><!-- /viewGrid -->
+
+      <!-- ─── LIST VIEW ─── -->
+      <div id="viewList" style="display:none">
+        <div class="eo-card" style="padding:0;overflow:hidden">
+          <table class="eo-table" style="margin:0">
+            <thead>
+              <tr>
+                <th style="padding-left:14px">Name</th>
+                <th>Uploader</th>
+                <th>Folder</th>
+                <th>Size</th>
+                <th>Visibility</th>
+                <th>Uploaded</th>
+                <th>Downloads</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for folder in folders %}
+              <tr>
+                <td>
+                  <a href="?folder={{ folder.id }}" style="display:flex;align-items:center;gap:10px;text-decoration:none">
+                    <i class="bi bi-folder-fill" style="font-size:1.2rem;color:{{ folder.color }};flex-shrink:0"></i>
+                    <div>
+                      <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">{{ folder.name }}</div>
+                      <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ folder.file_count }} file{{ folder.file_count|pluralize }}</div>
+                    </div>
+                  </a>
+                </td>
+                <td style="font-size:.82rem;color:var(--eo-text-muted)">{{ folder.owner.full_name }}</td>
+                <td style="font-size:.82rem;color:var(--eo-text-muted)">—</td>
+                <td>—</td>
+                <td>
+                  <span class="fm-vis-badge vis-{{ folder.visibility }}">{{ folder.get_visibility_display }}</span>
+                </td>
+                <td style="font-size:.8rem;color:var(--eo-text-muted)">{{ folder.created_at|date:"N j, Y" }}</td>
+                <td>—</td>
+                <td>
+                  {% if folder.owner == request.user %}
+                  <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Share"
+                          onclick="openShareModal('{{ folder.id }}','{{ folder.name|escapejs }}','{{ folder.visibility }}','folder')">
+                    <i class="bi bi-share"></i>
+                  </button>
+                  <form method="post" action="{% url 'folder_delete' folder.id %}" style="display:inline"
+                        onsubmit="return confirm('Delete folder?')">
+                    {% csrf_token %}
+                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" type="submit" title="Delete">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </form>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+
+              {% for file in files %}
+              <tr>
+                <td>
+                  <a href="{% url 'file_download' file.pk %}" style="display:flex;align-items:center;gap:10px;text-decoration:none">
+                    <i class="bi {{ file.icon_class }}" style="font-size:1.3rem;color:{{ file.icon_color }};flex-shrink:0"></i>
+                    <div>
+                      <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">{{ file.name }}</div>
+                      {% if file.description %}
+                      <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ file.description|truncatechars:40 }}</div>
+                      {% endif %}
+                      {% if file.tag_list %}
+                      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:2px">
+                        {% for tag in file.tag_list %}
+                        <span style="padding:1px 6px;background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:4px;font-size:.65rem;color:var(--eo-text-muted)">{{ tag }}</span>
+                        {% endfor %}
+                      </div>
+                      {% endif %}
+                    </div>
+                  </a>
+                </td>
+                <td>
+                  <a href="{% url 'staff_detail' file.uploaded_by.pk %}" style="font-size:.82rem;color:var(--eo-text-muted);text-decoration:none;font-weight:600">
+                    {{ file.uploaded_by.full_name }}
+                  </a>
+                </td>
+                <td style="font-size:.8rem;color:var(--eo-text-muted)">
+                  {% if file.folder %}<a href="?folder={{ file.folder.id }}" style="color:var(--eo-text-muted)">{{ file.folder.name }}</a>{% else %}—{% endif %}
+                </td>
+                <td style="font-size:.82rem;color:var(--eo-text-muted);white-space:nowrap">{{ file.size_display }}</td>
+                <td>
+                  <span class="fm-vis-badge vis-{{ file.visibility }}">{{ file.get_visibility_display }}</span>
+                </td>
+                <td style="font-size:.8rem;color:var(--eo-text-muted);white-space:nowrap">{{ file.created_at|date:"N j, Y" }}</td>
+                <td style="font-size:.82rem;color:var(--eo-text-muted);text-align:center">{{ file.download_count }}</td>
+                <td>
+                  <div style="display:flex;gap:5px;justify-content:flex-end">
+                    <a href="{% url 'file_download' file.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Download">
+                      <i class="bi bi-download"></i>
+                    </a>
+                    {% if file.uploaded_by == request.user %}
+                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Share"
+                            onclick="openShareModal('{{ file.id }}','{{ file.name|escapejs }}','{{ file.visibility }}')">
+                      <i class="bi bi-share"></i>
+                    </button>
+                    <form method="post" action="{% url 'file_delete' file.pk %}" style="display:inline"
+                          onsubmit="return confirm('Delete {{ file.name|escapejs }}?')">
+                      {% csrf_token %}
+                      <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" type="submit"
+                              style="color:var(--eo-danger);border-color:var(--eo-danger)" title="Delete">
+                        <i class="bi bi-trash"></i>
+                      </button>
+                    </form>
+                    {% endif %}
+                  </div>
+                </td>
+              </tr>
+              {% empty %}
+              {% if not folders %}
+              <tr><td colspan="8" style="text-align:center;padding:32px;color:var(--eo-text-muted)">No files found</td></tr>
+              {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div><!-- /viewList -->
+
+      {% endif %}
+    </div><!-- /fm-content -->
+  </main>
+</div><!-- /fm-layout -->
+
+<!-- ══════════════════════════════════
+     UPLOAD MODAL
+══════════════════════════════════ -->
+<div class="fm-modal-backdrop" id="uploadModal">
+  <div class="fm-modal">
+    <div class="fm-modal-head">
+      <div>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">Upload File</div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px">Max file size depends on your server configuration</div>
+      </div>
+      <button onclick="closeModal('uploadModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="fm-modal-body">
+      <form method="post" action="{% url 'file_upload' %}" enctype="multipart/form-data">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
+        {% if current_folder %}
+        <input type="hidden" name="folder_id" value="{{ current_folder.id }}"/>
+        {% endif %}
+
+        <!-- Drop zone -->
+        <div class="fm-dropzone" id="dropZone">
+          <input type="file" name="file" id="fileInput" onchange="handleFileChange(this)"/>
+          <i class="bi bi-cloud-upload fm-dropzone-icon"></i>
+          <div style="font-size:.9rem;font-weight:600;color:var(--eo-text);margin-bottom:4px">Drop a file here or click to browse</div>
+          <div style="font-size:.78rem;color:var(--eo-text-muted)">PDF, Word, Excel, Images, ZIP and more</div>
+        </div>
+        <div class="fm-selected-file" id="selectedFile">
+          <i class="bi bi-file-earmark me-2"></i><span id="selectedFileName"></span>
+          <span id="selectedFileSize" style="color:var(--eo-text-muted);font-weight:400;margin-left:8px"></span>
+        </div>
+
+        <div class="eo-form-group mt-3">
+          <label class="eo-form-label">Display Name <span style="color:var(--eo-text-muted);font-weight:400">(leave blank to use filename)</span></label>
+          <input type="text" name="name" class="eo-form-control" placeholder="Optional friendly name"/>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Visibility *</label>
+            <select name="visibility" class="eo-form-select">
+              {% for val, label in visibility_choices %}
+              <option value="{{ val }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Folder</label>
+            <select name="folder_id" class="eo-form-select" {% if current_folder %}disabled{% endif %}>
+              <option value="">— Root —</option>
+              {% for folder in all_folders %}
+              <option value="{{ folder.id }}" {% if current_folder.id == folder.id %}selected{% endif %}>{{ folder.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="eo-form-group mt-3">
+          <label class="eo-form-label">Description <span style="color:var(--eo-text-muted);font-weight:400">(optional)</span></label>
+          <textarea name="description" class="eo-form-control" rows="2" placeholder="What is this file about?"></textarea>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Tags <span style="color:var(--eo-text-muted);font-weight:400">(comma-separated)</span></label>
+          <input type="text" name="tags" class="eo-form-control" placeholder="e.g. policy, 2025, hr"/>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button type="submit" class="eo-btn eo-btn-primary flex-grow-1" id="uploadBtn" disabled>
+            <i class="bi bi-cloud-upload"></i> Upload File
+          </button>
+          <button type="button" onclick="closeModal('uploadModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     NEW FOLDER MODAL
+══════════════════════════════════ -->
+<div class="fm-modal-backdrop" id="newFolderModal">
+  <div class="fm-modal" style="width:420px">
+    <div class="fm-modal-head">
+      <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">New Folder</div>
+      <button onclick="closeModal('newFolderModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="fm-modal-body">
+      <form method="post" action="{% url 'folder_create' %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
+        {% if current_folder %}
+        <input type="hidden" name="parent_id" value="{{ current_folder.id }}"/>
+        {% endif %}
+        <div class="eo-form-group">
+          <label class="eo-form-label">Folder Name *</label>
+          <input type="text" name="name" class="eo-form-control" placeholder="e.g. HR Policies 2025" required autofocus/>
+        </div>
+        <div class="row g-3">
+          <div class="col-sm-8">
+            <label class="eo-form-label">Visibility</label>
+            <select name="visibility" class="eo-form-select">
+              <option value="private">Private (only me)</option>
+              <option value="unit">Unit</option>
+              <option value="department">Department</option>
+              <option value="office">Office-wide</option>
+            </select>
+          </div>
+          <div class="col-sm-4">
+            <label class="eo-form-label">Colour</label>
+            <input type="color" name="color" value="#f59e0b" class="eo-form-control" style="height:40px;cursor:pointer"/>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button type="submit" class="eo-btn eo-btn-primary flex-grow-1">
+            <i class="bi bi-folder-plus"></i> Create Folder
+          </button>
+          <button type="button" onclick="closeModal('newFolderModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     SHARE MODAL
+══════════════════════════════════ -->
+<div class="fm-modal-backdrop" id="shareModal">
+  <div class="fm-modal" style="width:500px">
+    <div class="fm-modal-head">
+      <div>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">Share File</div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px" id="shareModalFileName"></div>
+      </div>
+      <button onclick="closeModal('shareModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="fm-modal-body">
+      <form method="post" id="shareForm">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Who can access this file?</label>
+          <div style="display:flex;flex-direction:column;gap:8px">
+
+            <label style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s" class="vis-opt" id="opt-private">
+              <input type="radio" name="visibility" value="private" style="margin-top:3px;flex-shrink:0" onchange="onVisChange(this)"/>
+              <div>
+                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)"><i class="bi bi-lock me-1"></i> Only Me</div>
+                <div style="font-size:.75rem;color:var(--eo-text-muted)">Only you can see and download this file</div>
+              </div>
+            </label>
+
+            <label style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s" class="vis-opt" id="opt-shared_with">
+              <input type="radio" name="visibility" value="shared_with" style="margin-top:3px;flex-shrink:0" onchange="onVisChange(this)"/>
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)"><i class="bi bi-people me-1"></i> Specific People</div>
+                <div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:8px">Choose individual staff members</div>
+                <div id="peoplePicker" style="display:none">
+                  <div style="position:relative;margin-bottom:8px">
+                    <i class="bi bi-search" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:.75rem;color:var(--eo-text-muted)"></i>
+                    <input type="text" id="peopleSearch" placeholder="Search staff…"
+                           style="width:100%;padding:6px 10px 6px 28px;border:1px solid var(--eo-border);border-radius:7px;background:var(--eo-bg);color:var(--eo-text);font-size:.82rem;outline:none"
+                           oninput="filterPeople(this.value)"/>
+                  </div>
+                  <div style="max-height:180px;overflow-y:auto;border:1px solid var(--eo-border);border-radius:8px" id="peopleList">
+                    {% for staff in all_staff %}
+                    <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;transition:background .1s"
+                           onmouseover="this.style.background='var(--eo-bg)'" onmouseout="this.style.background=''"
+                           data-name="{{ staff.full_name|lower }}">
+                      <input type="checkbox" name="shared_with" value="{{ staff.id }}" style="flex-shrink:0" onchange="countSelected()"/>
+                      {% if staff.avatar %}
+                        <img src="{{ staff.avatar.url }}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0"/>
+                      {% else %}
+                        <div style="width:28px;height:28px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.65rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ staff.initials }}</div>
+                      {% endif %}
+                      <div style="min-width:0">
+                        <div style="font-size:.84rem;font-weight:600;color:var(--eo-text)">{{ staff.full_name }}</div>
+                        {% if staff.staffprofile.position %}<div style="font-size:.72rem;color:var(--eo-text-muted)">{{ staff.staffprofile.position.title }}</div>{% endif %}
+                      </div>
+                    </label>
+                    {% empty %}
+                    <div style="padding:16px;text-align:center;font-size:.82rem;color:var(--eo-text-muted)">No staff available</div>
+                    {% endfor %}
+                  </div>
+                  <div style="margin-top:6px;font-size:.72rem;color:var(--eo-text-muted)">
+                    <span id="selectedCount">0</span> person(s) selected
+                  </div>
+                </div>
+              </div>
+            </label>
+
+            <label style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s" class="vis-opt" id="opt-unit">
+              <input type="radio" name="visibility" value="unit" style="margin-top:3px;flex-shrink:0" onchange="onVisChange(this)"/>
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)"><i class="bi bi-diagram-3 me-1"></i> Entire Unit</div>
+                <div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:8px">Everyone in a specific unit</div>
+                <div id="unitPicker" style="display:none">
+                  <select name="unit_id" class="eo-form-select" style="font-size:.82rem">
+                    <option value="">— Select unit —</option>
+                    {% for unit in all_units %}
+                    <option value="{{ unit.id }}">{{ unit.name }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+              </div>
+            </label>
+
+            <label style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s" class="vis-opt" id="opt-department">
+              <input type="radio" name="visibility" value="department" style="margin-top:3px;flex-shrink:0" onchange="onVisChange(this)"/>
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)"><i class="bi bi-building me-1"></i> Entire Department</div>
+                <div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:8px">Everyone in a specific department</div>
+                <div id="deptPicker" style="display:none">
+                  <select name="dept_id" class="eo-form-select" style="font-size:.82rem">
+                    <option value="">— Select department —</option>
+                    {% for dept in all_departments %}
+                    <option value="{{ dept.id }}">{{ dept.name }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+              </div>
+            </label>
+
+            <label style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s" class="vis-opt" id="opt-office">
+              <input type="radio" name="visibility" value="office" style="margin-top:3px;flex-shrink:0" onchange="onVisChange(this)"/>
+              <div>
+                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)"><i class="bi bi-globe me-1"></i> Everyone in the Office</div>
+                <div style="font-size:.75rem;color:var(--eo-text-muted)">All active staff can see and download</div>
+              </div>
+            </label>
+
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button type="submit" class="eo-btn eo-btn-primary flex-grow-1">
+            <i class="bi bi-share"></i> Update Sharing
+          </button>
+          <button type="button" onclick="closeModal('shareModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock content %}
+
+{% block extra_js %}
+<script>
+// ── Share modal ──
+function openShareModal(id, name, currentVisibility, type) {
+  type = type || 'file';
+  // Set form action based on type
+  var baseUrl = type === 'folder' ? '/files/folder/' : '/files/';
+  document.getElementById('shareForm').action = baseUrl + id + '/share/';
+  // File name display
+  document.getElementById('shareModalFileName').textContent = name;
+  // "Specific People" row — folders don't support it
+  var sharedWithOpt = document.getElementById('opt-shared_with');
+  if (sharedWithOpt) sharedWithOpt.style.display = type === 'folder' ? 'none' : '';
+  // Reset all radio borders
+  document.querySelectorAll('.vis-opt').forEach(function(el) {
+    el.style.borderColor = 'var(--eo-border)';
+  });
+  // Pre-select current visibility (fall back to private if shared_with and it's a folder)
+  var vis = (type === 'folder' && currentVisibility === 'shared_with') ? 'private' : currentVisibility;
+  var radio = document.querySelector('input[name="visibility"][value="' + vis + '"]');
+  if (radio) {
+    radio.checked = true;
+    radio.closest('.vis-opt').style.borderColor = 'var(--eo-accent)';
+  }
+  showSubPickers(vis);
+  // Reset people checkboxes
+  document.querySelectorAll('#peopleList input[type="checkbox"]').forEach(function(cb) { cb.checked = false; });
+  countSelected();
+  openModal('shareModal');
+}
+
+function onVisChange(radio) {
+  document.querySelectorAll('.vis-opt').forEach(function(el) {
+    el.style.borderColor = 'var(--eo-border)';
+  });
+  radio.closest('.vis-opt').style.borderColor = 'var(--eo-accent)';
+  showSubPickers(radio.value);
+}
+
+function showSubPickers(vis) {
+  document.getElementById('peoplePicker').style.display = vis === 'shared_with' ? '' : 'none';
+  document.getElementById('unitPicker').style.display   = vis === 'unit'        ? '' : 'none';
+  document.getElementById('deptPicker').style.display   = vis === 'department'  ? '' : 'none';
+}
+
+function filterPeople(q) {
+  q = q.toLowerCase();
+  document.querySelectorAll('#peopleList label').forEach(function(el) {
+    el.style.display = el.dataset.name.includes(q) ? '' : 'none';
+  });
+}
+
+function countSelected() {
+  var n = document.querySelectorAll('#peopleList input[type="checkbox"]:checked').length;
+  document.getElementById('selectedCount').textContent = n;
+}
+
+
+var VIEW_KEY = 'eo_fm_view';
+function setView(v) {
+  document.getElementById('viewGrid').style.display = v === 'grid' ? '' : 'none';
+  document.getElementById('viewList').style.display = v === 'list' ? '' : 'none';
+  document.getElementById('btnGrid').classList.toggle('active', v === 'grid');
+  document.getElementById('btnList').classList.toggle('active', v === 'list');
+  localStorage.setItem(VIEW_KEY, v);
+}
+(function() {
+  var saved = localStorage.getItem(VIEW_KEY) || 'grid';
+  setView(saved);
+})();
+
+// ── Modals ──
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.fm-modal-backdrop').forEach(function(el) {
+  el.addEventListener('click', function(e) { if (e.target === el) el.classList.remove('open'); });
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') document.querySelectorAll('.fm-modal-backdrop.open').forEach(function(el) { el.classList.remove('open'); });
+});
+
+// ── File input ──
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
+}
+function handleFileChange(input) {
+  var f = input.files[0];
+  var sel = document.getElementById('selectedFile');
+  var uploadBtn = document.getElementById('uploadBtn');
+  if (f) {
+    document.getElementById('selectedFileName').textContent = f.name;
+    document.getElementById('selectedFileSize').textContent = formatBytes(f.size);
+    sel.style.display = 'flex';
+    uploadBtn.disabled = false;
+  } else {
+    sel.style.display = 'none';
+    uploadBtn.disabled = true;
+  }
+}
+
+// Drag & drop
+var dropZone = document.getElementById('dropZone');
+if (dropZone) {
+  ['dragenter','dragover'].forEach(function(evt) {
+    dropZone.addEventListener(evt, function(e) { e.preventDefault(); dropZone.classList.add('dragging'); });
+  });
+  ['dragleave','drop'].forEach(function(evt) {
+    dropZone.addEventListener(evt, function(e) { e.preventDefault(); dropZone.classList.remove('dragging'); });
+  });
+  dropZone.addEventListener('drop', function(e) {
+    var dt = e.dataTransfer;
+    if (dt.files.length) {
+      document.getElementById('fileInput').files = dt.files;
+      handleFileChange(document.getElementById('fileInput'));
+    }
+  });
+}
+</script>
+{% endblock %}

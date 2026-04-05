@@ -1,0 +1,407 @@
+{% extends 'base.html' %}
+{% load humanize %}
+{% block title %}{{ task.title }}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'task_list' %}">Tasks</a> / {{ task.title|truncatechars:30 }}{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="eo-card">
+      <div class="d-flex align-items-start justify-content-between gap-3 mb-4">
+        <div>
+          <h1 style="font-size:1.4rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">{{ task.title }}</h1>
+          <div class="d-flex flex-wrap gap-2">
+            <span class="eo-status eo-status-{{ task.status }}">{{ task.get_status_display }}</span>
+            <span class="eo-priority eo-priority-{{ task.priority }}"><i class="bi bi-flag-fill"></i> {{ task.get_priority_display }}</span>
+            {% if task.is_overdue %}
+            <span class="eo-status" style="background:#fee2e2;color:#991b1b">
+              <i class="bi bi-alarm"></i> Overdue
+            </span>
+            {% endif %}
+            {% if is_supervisor_monitor %}
+            <span class="eo-status" style="background:#dbeafe;color:#1d4ed8">
+              <i class="bi bi-eye"></i> Supervisor Monitoring
+            </span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="d-flex gap-2">
+          {% if can_full_edit_task %}
+          <a href="{% url 'task_edit' task.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-pencil"></i> Full Edit
+          </a>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if task.description %}
+      <div style="background:var(--eo-bg);border-radius:var(--eo-radius-sm);padding:16px;margin-bottom:20px;font-size:.9rem;line-height:1.7">
+        {{ task.description|linebreaks }}
+      </div>
+      {% endif %}
+
+      <div class="mb-4">
+        <div class="d-flex justify-content-between mb-2">
+          <span style="font-size:.83rem;font-weight:600">Progress</span>
+          <span style="font-size:.83rem;font-weight:700;color:var(--eo-accent)">{{ task.progress_pct|default:0 }}%</span>
+        </div>
+        <div class="eo-progress" style="height:10px">
+          <div class="eo-progress-bar {% if task.progress_pct == 100 %}success{% elif task.progress_pct < 30 %}danger{% endif %}"
+               style="width:{{ task.progress_pct|default:0 }}%"></div>
+        </div>
+      </div>
+
+      {% if can_update_task_progress %}
+      <div class="eo-card" style="background:var(--eo-bg);border:1px solid var(--eo-border);margin-bottom:20px">
+        <div class="eo-card-header" style="padding-bottom:10px">
+          <div>
+            <h2 class="eo-card-title" style="font-size:1rem">Quick Update</h2>
+            <p class="eo-card-subtitle">Change status and progress without opening the full edit page.</p>
+          </div>
+        </div>
+
+        <form method="post" action="{% url 'task_quick_update' task.pk %}" id="quickUpdateForm">
+          {% csrf_token %}
+          <div class="row g-3">
+            <div class="col-md-5">
+              <label class="eo-form-label">Status</label>
+              <select name="status" class="eo-form-select">
+                <option value="todo" {% if task.status == 'todo' %}selected{% endif %}>To Do</option>
+                <option value="in_progress" {% if task.status == 'in_progress' %}selected{% endif %}>In Progress</option>
+                <option value="review" {% if task.status == 'review' %}selected{% endif %}>In Review</option>
+                <option value="done" {% if task.status == 'done' %}selected{% endif %}>Done</option>
+                <option value="blocked" {% if task.status == 'blocked' %}selected{% endif %}>Blocked</option>
+                <option value="cancelled" {% if task.status == 'cancelled' %}selected{% endif %}>Cancelled</option>
+              </select>
+            </div>
+
+            <div class="col-md-4">
+              <label class="eo-form-label">Progress (%)</label>
+              <input type="number"
+                     name="progress_pct"
+                     class="eo-form-control"
+                     min="0"
+                     max="100"
+                     step="1"
+                     value="{{ task.progress_pct|default:0 }}">
+            </div>
+
+            <div class="col-md-3 d-flex align-items-end">
+              <button type="submit" class="eo-btn eo-btn-primary w-100">
+                <i class="bi bi-check2-circle"></i> Update
+              </button>
+            </div>
+          </div>
+        </form>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+          <form method="post" action="{% url 'task_quick_update' task.pk %}" class="m-0 quick-status-form">
+            {% csrf_token %}
+            <input type="hidden" name="status" value="todo">
+            <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm {% if task.status == 'todo' %}active{% endif %}">
+              To Do
+            </button>
+          </form>
+
+          <form method="post" action="{% url 'task_quick_update' task.pk %}" class="m-0 quick-status-form">
+            {% csrf_token %}
+            <input type="hidden" name="status" value="in_progress">
+            <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm {% if task.status == 'in_progress' %}active{% endif %}">
+              In Progress
+            </button>
+          </form>
+
+          <form method="post" action="{% url 'task_quick_update' task.pk %}" class="m-0 quick-status-form">
+            {% csrf_token %}
+            <input type="hidden" name="status" value="review">
+            <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm {% if task.status == 'review' %}active{% endif %}">
+              Review
+            </button>
+          </form>
+
+          <form method="post" action="{% url 'task_quick_update' task.pk %}" class="m-0 quick-status-form">
+            {% csrf_token %}
+            <input type="hidden" name="status" value="done">
+            <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm {% if task.status == 'done' %}active{% endif %}">
+              Done
+            </button>
+          </form>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if subtasks %}
+      <div class="mb-4">
+        <h3 style="font-size:.9rem;font-weight:700;margin-bottom:12px">Subtasks ({{ subtasks.count }})</h3>
+        {% for sub in subtasks %}
+        <a href="{% url 'task_detail' sub.pk %}" class="d-flex align-items-center gap-3 p-2" style="text-decoration:none;border-radius:6px;transition:.15s">
+          <i class="bi bi-{% if sub.status == 'done' %}check-circle-fill text-success{% else %}circle text-muted{% endif %}"></i>
+          <span style="font-size:.87rem;color:var(--eo-text)">{{ sub.title }}</span>
+          <span class="eo-status eo-status-{{ sub.status }} ms-auto">{{ sub.get_status_display }}</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <div>
+        <h3 style="font-size:.9rem;font-weight:700;margin-bottom:16px">Comments ({{ comments.count }})</h3>
+        <div class="d-flex flex-column gap-3 mb-4">
+          {% for comment in comments %}
+          <div class="d-flex gap-3">
+            {% if comment.author.avatar %}
+            <img src="{{ comment.author.avatar.url }}" class="eo-avatar-sm" alt=""/>
+            {% else %}
+            <div class="eo-avatar-initials-sm">{{ comment.author.initials }}</div>
+            {% endif %}
+            <div style="flex:1">
+              <div style="display:flex;gap:10px;align-items:baseline;margin-bottom:6px">
+                <span style="font-size:.85rem;font-weight:600">{{ comment.author.full_name }}</span>
+                <span style="font-size:.73rem;color:var(--eo-text-muted)">{{ comment.created_at|naturaltime }}</span>
+              </div>
+              <div style="background:var(--eo-bg);border-radius:var(--eo-radius-sm);padding:12px 14px;font-size:.87rem;line-height:1.6">
+                {{ comment.content|linebreaks }}
+              </div>
+            </div>
+          </div>
+          {% empty %}
+          <p style="color:var(--eo-text-muted);font-size:.87rem">No comments yet.</p>
+          {% endfor %}
+        </div>
+
+        {% if can_comment %}
+        <form method="post" action="{% url 'task_comment' task.pk %}">
+          {% csrf_token %}
+          <div class="d-flex gap-3">
+            {% if request.user.avatar %}
+            <img src="{{ request.user.avatar.url }}" class="eo-avatar-sm" alt=""/>
+            {% else %}
+            <div class="eo-avatar-initials-sm">{{ request.user.initials }}</div>
+            {% endif %}
+            <div style="flex:1">
+              <textarea name="content" class="eo-form-control" rows="3" placeholder="Add a comment..."></textarea>
+              <div class="mt-2">
+                <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm">
+                  <i class="bi bi-chat-dots"></i> Comment
+                </button>
+              </div>
+            </div>
+          </div>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if attachments %}
+    <div class="eo-card mt-4">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Attachments ({{ attachments.count }})</h2>
+      </div>
+      {% for att in attachments %}
+      <div class="d-flex align-items-center gap-3 py-2 border-bottom">
+        <i class="bi bi-paperclip" style="color:var(--eo-text-muted)"></i>
+        <a href="{{ att.file.url }}" target="_blank" style="flex:1;font-size:.87rem;color:var(--eo-accent)">
+          {{ att.file_name }}
+        </a>
+        <span style="font-size:.75rem;color:var(--eo-text-muted)">{{ att.uploaded_by.full_name }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-4 d-flex flex-column gap-4">
+    <div class="eo-card">
+      <h2 class="eo-card-title mb-3">Task Details</h2>
+      <div class="d-flex flex-column gap-3" style="font-size:.86rem">
+        <div class="d-flex justify-content-between">
+          <span style="color:var(--eo-text-muted)">Assigned to</span>
+          <div class="d-flex align-items-center gap-2">
+            {% if task.assigned_to.avatar %}
+            <img src="{{ task.assigned_to.avatar.url }}" class="eo-avatar-sm" alt=""/>
+            {% else %}
+            <div class="eo-avatar-initials-sm">{{ task.assigned_to.initials }}</div>
+            {% endif %}
+            <a href="{% url 'staff_detail' task.assigned_to.pk %}" style="color:var(--eo-text);font-weight:600">
+              {{ task.assigned_to.full_name }}
+            </a>
+          </div>
+        </div>
+
+        {% if task.assigned_by %}
+        <div class="d-flex justify-content-between">
+          <span style="color:var(--eo-text-muted)">Assigned by</span>
+          <span style="font-weight:500">{{ task.assigned_by.full_name }}</span>
+        </div>
+        {% endif %}
+
+        {% if task.due_date %}
+        <div class="d-flex justify-content-between">
+          <span style="color:var(--eo-text-muted)">Due date</span>
+          <span class="{% if task.is_overdue %}text-danger fw-bold{% endif %}">
+            {{ task.due_date|date:"N j, Y" }}
+          </span>
+        </div>
+        {% endif %}
+
+        {% if task.estimated_hours %}
+        <div class="d-flex justify-content-between">
+          <span style="color:var(--eo-text-muted)">Estimated</span>
+          <span>{{ task.estimated_hours }}h</span>
+        </div>
+        {% endif %}
+
+        {% if task.actual_hours %}
+        <div class="d-flex justify-content-between">
+          <span style="color:var(--eo-text-muted)">Time logged</span>
+          <span style="font-weight:600;color:var(--eo-accent)">{{ task.actual_hours }}h</span>
+        </div>
+        {% endif %}
+
+        <div class="d-flex justify-content-between">
+          <span style="color:var(--eo-text-muted)">Created</span>
+          <span>{{ task.created_at|date:"N j, Y" }}</span>
+        </div>
+
+        {% if task.project %}
+        <div class="d-flex justify-content-between">
+          <span style="color:var(--eo-text-muted)">Project</span>
+          <a href="{% url 'project_detail' task.project.pk %}" style="color:var(--eo-accent);font-weight:600">
+            {{ task.project.code }}
+          </a>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if task.collaborators.exists %}
+    <div class="eo-card">
+      <h2 class="eo-card-title mb-3">Collaborators</h2>
+      <div class="d-flex flex-wrap gap-2">
+        {% for c in task.collaborators.all %}
+        <a href="{% url 'staff_detail' c.pk %}" class="d-flex align-items-center gap-2" style="text-decoration:none;background:var(--eo-bg);border-radius:20px;padding:5px 10px">
+          {% if c.avatar %}
+          <img src="{{ c.avatar.url }}" class="eo-avatar-sm" alt=""/>
+          {% else %}
+          <div class="eo-avatar-initials-sm">{{ c.initials }}</div>
+          {% endif %}
+          <span style="font-size:.8rem;font-weight:600;color:var(--eo-text)">{{ c.full_name }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if can_reassign_task %}
+    <div class="eo-card">
+      <h2 class="eo-card-title mb-3">Reassign Task</h2>
+      <form method="post" action="{% url 'task_reassign' task.pk %}">
+        {% csrf_token %}
+        <div class="eo-form-group">
+          <label class="eo-form-label">Reassign to</label>
+          <select name="to_user" class="eo-form-select" required>
+            <option value="">Select person...</option>
+            {% for s in staff_list %}
+            <option value="{{ s.id }}">{{ s.full_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Type</label>
+          <select name="is_full" class="eo-form-select">
+            <option value="true">Full Reassignment</option>
+            <option value="false">Partial Delegation</option>
+          </select>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Notes</label>
+          <textarea name="notes" class="eo-form-control" rows="2" placeholder="Optional notes..."></textarea>
+        </div>
+        <button type="submit" class="eo-btn eo-btn-secondary w-100">
+          <i class="bi bi-arrow-right-circle"></i> Reassign
+        </button>
+      </form>
+    </div>
+    {% endif %}
+
+    {% if can_log_time %}
+    <div class="eo-card">
+      <h2 class="eo-card-title mb-3">Log Time</h2>
+      <form method="post" action="{% url 'task_timelog' task.pk %}">
+        {% csrf_token %}
+        <div class="row g-2">
+          <div class="col-6">
+            <label class="eo-form-label">Hours</label>
+            <input type="number" name="hours" class="eo-form-control" step="0.25" min="0.25" placeholder="1.5" required/>
+          </div>
+          <div class="col-6">
+            <label class="eo-form-label">Date</label>
+            <input type="date" name="date" class="eo-form-control" value="{% now 'Y-m-d' %}" required/>
+          </div>
+          <div class="col-12">
+            <input type="text" name="description" class="eo-form-control" placeholder="What did you work on?"/>
+          </div>
+        </div>
+        <button type="submit" class="eo-btn eo-btn-secondary w-100 mt-2">
+          <i class="bi bi-clock"></i> Log Time
+        </button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+(function () {
+  const quickUpdateForm = document.getElementById('quickUpdateForm');
+  if (quickUpdateForm) {
+    quickUpdateForm.addEventListener('submit', function (e) {
+      e.preventDefault();
+
+      fetch(quickUpdateForm.action, {
+        method: 'POST',
+        body: new FormData(quickUpdateForm),
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest'
+        }
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.status === 'ok') {
+          window.location.reload();
+        } else {
+          alert(data.message || 'Could not update task.');
+        }
+      })
+      .catch(() => {
+        alert('Could not update task.');
+      });
+    });
+  }
+
+  document.querySelectorAll('.quick-status-form').forEach(function(form) {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+
+      fetch(form.action, {
+        method: 'POST',
+        body: new FormData(form),
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest'
+        }
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.status === 'ok') {
+          window.location.reload();
+        } else {
+          alert(data.message || 'Could not update task status.');
+        }
+      })
+      .catch(() => {
+        alert('Could not update task status.');
+      });
+    });
+  });
+})();
+</script>
+{% endblock %}

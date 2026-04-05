@@ -1,0 +1,525 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ staff_user.full_name }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'staff_directory' %}">Staff Directory</a> / {{ staff_user.full_name }}
+{% endblock %}
+{% block content %}
+
+<div class="row g-4">
+
+  <!-- ═══════════════════════════════════════════════
+       LEFT COLUMN — Profile + Info
+       ═══════════════════════════════════════════════ -->
+  <div class="col-lg-4">
+
+    <!-- Main profile card -->
+    <div class="eo-card" style="text-align:center;padding:32px 24px">
+      <div style="position:relative;display:inline-block;margin-bottom:16px">
+        {% if staff_user.avatar %}
+          <img src="{{ staff_user.avatar.url }}" alt="{{ staff_user.full_name }}"
+               style="width:96px;height:96px;border-radius:50%;object-fit:cover;border:4px solid var(--eo-border)"/>
+        {% else %}
+          <div style="width:96px;height:96px;border-radius:50%;background:{{ profile.department.color|default:'var(--eo-accent)' }};color:#fff;font-size:2rem;font-weight:700;display:flex;align-items:center;justify-content:center;border:4px solid var(--eo-border);margin:0 auto">
+            {{ staff_user.initials }}
+          </div>
+        {% endif %}
+        <span style="position:absolute;bottom:4px;right:4px;width:18px;height:18px;border-radius:50%;border:3px solid var(--eo-surface);background:{% if staff_user.is_online %}var(--eo-success){% else %}var(--eo-text-light){% endif %}"></span>
+      </div>
+
+      <h2 style="font-size:1.25rem;font-weight:700;color:var(--eo-text);margin-bottom:4px">{{ staff_user.full_name }}</h2>
+
+      {% if profile.position %}
+      <p style="font-size:.88rem;color:var(--eo-text-muted);margin-bottom:12px">{{ profile.position.title }}</p>
+      {% endif %}
+
+      {% if profile.department %}
+      <span style="display:inline-flex;align-items:center;gap:6px;padding:4px 14px;border-radius:20px;font-size:.78rem;font-weight:600;background:{{ profile.department.color|default:'var(--eo-accent)' }}20;color:{{ profile.department.color|default:'var(--eo-accent)' }};margin-bottom:16px">
+        <i class="{{ profile.department.icon|default:'bi-building' }}"></i>
+        {{ profile.department.name }}
+      </span>
+      {% endif %}
+
+      <!-- Status badge -->
+      <div style="margin-bottom:20px">
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:600;padding:4px 12px;border-radius:20px;
+          {% if staff_user.is_online %}background:#d1fae5;color:#065f46{% else %}background:#f1f5f9;color:#64748b{% endif %}">
+          <span style="width:7px;height:7px;border-radius:50%;background:{% if staff_user.is_online %}var(--eo-success){% else %}#94a3b8{% endif %}"></span>
+          {% if staff_user.is_online %}Online{% else %}{{ staff_user.get_status_display }}{% endif %}
+        </span>
+        {% if staff_user.last_seen %}
+        <div style="font-size:.72rem;color:var(--eo-text-light);margin-top:6px">
+          Last seen {{ staff_user.last_seen|naturaltime }}
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Action buttons -->
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+        <a href="mailto:{{ staff_user.email }}" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-envelope"></i> Email
+        </a>
+        {% if staff_user != request.user %}
+        <a href="{% url 'direct_message' staff_user.pk %}" class="eo-btn eo-btn-primary eo-btn-sm">
+          <i class="bi bi-chat-dots"></i> Message
+        </a>
+        {% endif %}
+        {% if request.user.is_superuser or request.user == staff_user %}
+        <a href="{% url 'admin:core_user_change' staff_user.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-pencil"></i> Edit
+        </a>
+        {% endif %}
+        {% if viewer_can_approve and staff_user != request.user %}
+        <a href="{% url 'leave_approval' %}?staff={{ staff_user.pk }}" class="eo-btn eo-btn-warning eo-btn-sm">
+          <i class="bi bi-calendar-check"></i>
+          Approve Leaves
+          {% if pending_leaves %}
+          <span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:#fff;color:var(--eo-warning);font-size:.65rem;font-weight:800;margin-left:2px">
+            {{ pending_leaves|length }}
+          </span>
+          {% endif %}
+        </a>
+        {% endif %}
+      </div>
+
+      {% if staff_user.bio %}
+      <div style="margin-top:20px;padding-top:20px;border-top:1px solid var(--eo-border);text-align:left;font-size:.85rem;color:var(--eo-text-muted);line-height:1.7">
+        {{ staff_user.bio }}
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Contact & Info -->
+    <div class="eo-card mt-4">
+      <h3 style="font-size:.9rem;font-weight:700;margin-bottom:16px">Contact &amp; Information</h3>
+      <div style="display:flex;flex-direction:column;gap:12px;font-size:.85rem">
+
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <i class="bi bi-envelope" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Email</div>
+            <a href="mailto:{{ staff_user.email }}" style="color:var(--eo-accent)">{{ staff_user.email }}</a>
+          </div>
+        </div>
+
+        {% if staff_user.phone %}
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <i class="bi bi-telephone" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Phone</div>
+            <span>{{ staff_user.phone }}</span>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if profile.office_extension %}
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <i class="bi bi-telephone-inbound" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Extension</div>
+            <span>{{ profile.office_extension }}</span>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if staff_user.employee_id %}
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <i class="bi bi-person-badge" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Employee ID</div>
+            <span style="font-family:var(--eo-mono)">{{ staff_user.employee_id }}</span>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if profile.contract_type %}
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <i class="bi bi-file-text" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Contract</div>
+            <span>{{ profile.get_contract_type_display }}</span>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if profile.contract_start %}
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <i class="bi bi-calendar3" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Years of Service</div>
+            <span>Since {{ profile.contract_start }}
+              <span style="color:var(--eo-text-muted)">({{ profile.years_of_service }} yrs)</span>
+            </span>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if profile.supervisor %}
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <i class="bi bi-person-up" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Supervisor</div>
+            <a href="{% url 'staff_detail' profile.supervisor.pk %}" style="color:var(--eo-accent);font-weight:600">
+              {{ profile.supervisor.full_name }}
+            </a>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if profile.unit %}
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <i class="bi bi-people" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Unit</div>
+            <span>{{ profile.unit.name }}</span>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if profile.location %}
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <i class="bi bi-geo-alt" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Location</div>
+            <span>{{ profile.location }}</span>
+          </div>
+        </div>
+        {% endif %}
+
+      </div>
+    </div>
+
+    <!-- Skills -->
+    {% if staff_skills %}
+    <div class="eo-card mt-4">
+      <h3 style="font-size:.9rem;font-weight:700;margin-bottom:12px">Skills</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        {% for skill in staff_skills %}
+        <span style="padding:3px 10px;background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:20px;font-size:.78rem;color:var(--eo-text-muted)">
+          {{ skill }}
+        </span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Supervisees (if this person is a supervisor) -->
+    {% if profile.is_supervisor_role %}
+    <div class="eo-card mt-4">
+      <h3 style="font-size:.9rem;font-weight:700;margin-bottom:12px">
+        <i class="bi bi-diagram-3 me-1" style="color:var(--eo-accent)"></i> Direct Reports
+      </h3>
+      {% with profile.supervisees_list as supervisees %}
+      {% if supervisees %}
+      <div style="display:flex;flex-direction:column;gap:8px">
+        {% for s in supervisees %}
+        <a href="{% url 'staff_detail' s.pk %}" style="text-decoration:none;display:flex;align-items:center;gap:10px;padding:8px;background:var(--eo-bg);border-radius:var(--eo-radius-sm)">
+          {% if s.avatar %}
+            <img src="{{ s.avatar.url }}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0"/>
+          {% else %}
+            <div style="width:32px;height:32px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.75rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ s.initials }}</div>
+          {% endif %}
+          <div>
+            <div style="font-size:.85rem;font-weight:600;color:var(--eo-text)">{{ s.full_name }}</div>
+            {% if s.staffprofile.position %}
+            <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ s.staffprofile.position.title }}</div>
+            {% endif %}
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p style="font-size:.82rem;color:var(--eo-text-muted)">No direct reports assigned.</p>
+      {% endif %}
+      {% endwith %}
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       RIGHT COLUMN — Activity, Tasks, Leaves
+       ═══════════════════════════════════════════════ -->
+  <div class="col-lg-8 d-flex flex-column gap-4">
+
+    <!-- Stats row -->
+    <div class="row g-3">
+      <div class="col-4">
+        <div class="eo-stat eo-stat-info">
+          <div class="eo-stat-label">Active Tasks</div>
+          <div class="eo-stat-value">{{ recent_tasks|length }}</div>
+          <i class="bi bi-check2-square eo-stat-icon"></i>
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="eo-stat eo-stat-success">
+          <div class="eo-stat-label">Projects</div>
+          <div class="eo-stat-value">{{ active_projects|length }}</div>
+          <i class="bi bi-kanban eo-stat-icon"></i>
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="eo-stat eo-stat-warning">
+          <div class="eo-stat-label">Leave Days</div>
+          {% with total=leave_requests|length %}
+          <div class="eo-stat-value">{{ total }}</div>
+          {% endwith %}
+          <i class="bi bi-calendar-check eo-stat-icon"></i>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Inline Pending Leave Approval (supervisors only) ─── -->
+    {% if viewer_can_approve and pending_leaves %}
+    <div class="eo-card" style="border-left:4px solid var(--eo-warning)">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-hourglass-split me-1" style="color:var(--eo-warning)"></i>
+            Pending Leave Requests
+          </h2>
+          <p class="eo-card-subtitle">{{ pending_leaves|length }} request{{ pending_leaves|length|pluralize }} awaiting your decision</p>
+        </div>
+        <a href="{% url 'leave_approval' %}?staff={{ staff_user.pk }}" class="eo-btn eo-btn-warning eo-btn-sm">
+          Full Approval View
+        </a>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        {% for lr in pending_leaves %}
+        <div style="padding:14px;background:var(--eo-bg);border-radius:var(--eo-radius-sm);border:1px solid var(--eo-border)">
+          <div class="row g-3 align-items-center">
+            <div class="col-sm-5">
+              <div style="font-weight:600;font-size:.9rem;color:var(--eo-text);margin-bottom:4px">
+                {{ lr.leave_type.name }}
+                {% if lr.leave_type.is_paid %}
+                <span style="font-size:.7rem;color:var(--eo-success);font-weight:600;margin-left:4px">Paid</span>
+                {% endif %}
+              </div>
+              <div style="font-size:.8rem;color:var(--eo-text-muted)">
+                <i class="bi bi-calendar3 me-1"></i>
+                {{ lr.start_date|date:"N j" }} — {{ lr.end_date|date:"N j, Y" }}
+                &nbsp;·&nbsp; <strong>{{ lr.days_requested }}d</strong>
+              </div>
+              <div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:3px">
+                <i class="bi bi-clock me-1"></i>Applied {{ lr.created_at|naturaltime }}
+              </div>
+              {% if lr.reason %}
+              <div style="margin-top:6px;font-size:.78rem;color:var(--eo-text-muted);font-style:italic">
+                "{{ lr.reason|truncatechars:80 }}"
+              </div>
+              {% endif %}
+            </div>
+            <div class="col-sm-7">
+              <form method="post" action="{% url 'leave_approval' %}">
+                {% csrf_token %}
+                <input type="hidden" name="leave_id" value="{{ lr.id }}"/>
+                <input type="hidden" name="next" value="{{ request.path }}"/>
+                <div class="row g-2">
+                  <div class="col-12">
+                    <input type="text" name="notes" class="eo-form-control eo-form-control-sm"
+                           placeholder="Optional note for {{ staff_user.first_name }}..."/>
+                  </div>
+                  <div class="col-6">
+                    <button type="submit" name="action" value="approve" class="eo-btn eo-btn-success eo-btn-sm w-100">
+                      <i class="bi bi-check-lg"></i> Approve
+                    </button>
+                  </div>
+                  <div class="col-6">
+                    <button type="submit" name="action" value="reject" class="eo-btn eo-btn-danger eo-btn-sm w-100"
+                            data-confirm="Reject this leave request?">
+                      <i class="bi bi-x-lg"></i> Reject
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Active Tasks -->
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">Active Tasks</h2>
+          <p class="eo-card-subtitle">Currently assigned work</p>
+        </div>
+        {% if request.user == profile.supervisor or request.user.is_superuser %}
+        <a href="{% url 'task_create' %}?assigned_to={{ staff_user.pk }}" class="eo-btn eo-btn-primary eo-btn-sm">
+          <i class="bi bi-plus"></i> Assign Task
+        </a>
+        {% endif %}
+      </div>
+      {% if recent_tasks %}
+      <div style="display:flex;flex-direction:column;gap:8px">
+        {% for task in recent_tasks %}
+        <a href="{% url 'task_detail' task.pk %}" style="text-decoration:none">
+          <div class="eo-task-card {% if task.is_overdue %}overdue{% endif %}">
+            <div style="display:flex;justify-content:space-between;align-items:start;gap:12px">
+              <div style="min-width:0">
+                <div class="eo-task-title">{{ task.title|truncatechars:60 }}</div>
+                {% if task.due_date %}
+                <div class="eo-task-due {% if task.is_overdue %}overdue{% endif %} mt-1">
+                  <i class="bi bi-calendar3"></i> Due {{ task.due_date|date:"N j, Y" }}
+                </div>
+                {% endif %}
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">
+                <span class="eo-status eo-status-{{ task.status }}">{{ task.get_status_display }}</span>
+                <span class="eo-priority eo-priority-{{ task.priority }}">
+                  <i class="bi bi-flag-fill"></i> {{ task.get_priority_display }}
+                </span>
+              </div>
+            </div>
+            {% if task.progress_pct > 0 %}
+            <div class="eo-progress mt-2">
+              <div class="eo-progress-bar {% if task.progress_pct == 100 %}success{% endif %}"
+                   style="width:{{ task.progress_pct }}%"></div>
+            </div>
+            {% endif %}
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:32px;color:var(--eo-text-muted)">
+        <i class="bi bi-check2-circle" style="font-size:2rem;display:block;margin-bottom:8px;color:var(--eo-success)"></i>
+        <p style="font-size:.87rem">No active tasks assigned.</p>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Active Projects -->
+    {% if active_projects %}
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Active Projects</h2>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        {% for project in active_projects %}
+        <a href="{% url 'project_detail' project.pk %}" style="text-decoration:none">
+          <div style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--eo-bg);border-radius:var(--eo-radius-sm);transition:.15s">
+            <div style="width:10px;height:10px;border-radius:50%;background:{{ project.cover_color|default:'var(--eo-accent)' }};flex-shrink:0"></div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:.88rem;font-weight:600;color:var(--eo-text)">{{ project.name|truncatechars:40 }}</div>
+              <div style="font-size:.75rem;color:var(--eo-text-muted)">[{{ project.code }}]</div>
+            </div>
+            <div style="width:120px">
+              <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                <span style="font-size:.72rem;color:var(--eo-text-muted)">Progress</span>
+                <span style="font-size:.72rem;font-weight:700">{{ project.progress_pct }}%</span>
+              </div>
+              <div class="eo-progress">
+                <div class="eo-progress-bar" style="width:{{ project.progress_pct }}%"></div>
+              </div>
+            </div>
+            <span class="eo-status eo-status-{{ project.status }}">{{ project.get_status_display }}</span>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Leave Balance Summary -->
+    {% if leave_balances %}
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Leave Balances</h2>
+        <span style="font-size:.78rem;color:var(--eo-text-muted)">{{ leave_balances.0.year|default:"Current year" }}</span>
+      </div>
+      <div class="row g-3">
+        {% for b in leave_balances %}
+        {% if b.leave_type.days_per_year > 0 %}
+        <div class="col-sm-6">
+          <div style="padding:12px 14px;background:var(--eo-bg);border-radius:var(--eo-radius-sm)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <span style="font-size:.8rem;font-weight:600;color:var(--eo-text)">{{ b.leave_type.name }}</span>
+              <span style="font-size:.72rem;color:var(--eo-text-muted)">{{ b.days_used }}/{{ b.days_entitled }}d used</span>
+            </div>
+            <div class="eo-progress" style="height:5px;margin-bottom:4px">
+              {% if b.days_entitled > 0 %}
+              {% widthratio b.days_used b.days_entitled 100 as pct %}
+              <div class="eo-progress-bar {% if pct > 80 %}danger{% elif pct > 50 %}warning{% endif %}"
+                   style="width:{{ pct }}%"></div>
+              {% endif %}
+            </div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted)">
+              <span style="color:var(--eo-success);font-weight:600">{{ b.days_remaining }}d remaining</span>
+              {% if b.days_carried_forward > 0 %}
+              &nbsp;· +{{ b.days_carried_forward }}d carried
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Leave History -->
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Leave History</h2>
+        {% if staff_user == request.user %}
+        <a href="{% url 'leave_requests' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-plus"></i> Request Leave
+        </a>
+        {% endif %}
+      </div>
+      {% if leave_requests %}
+      <table class="eo-table">
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Dates</th>
+            <th>Days</th>
+            <th>Status</th>
+            <th>Decided By</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for lr in leave_requests %}
+          <tr>
+            <td style="font-size:.85rem;font-weight:500">{{ lr.leave_type.name }}</td>
+            <td style="font-size:.8rem;color:var(--eo-text-muted)">
+              {{ lr.start_date|date:"N j" }} — {{ lr.end_date|date:"N j, Y" }}
+            </td>
+            <td style="font-size:.85rem">{{ lr.days_requested }}d</td>
+            <td>
+              <span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:.72rem;font-weight:600;
+                {% if lr.status == 'approved' %}background:#d1fae5;color:#065f46
+                {% elif lr.status == 'rejected' %}background:#fee2e2;color:#991b1b
+                {% elif lr.status == 'pending' %}background:#fef3c7;color:#92400e
+                {% else %}background:#f1f5f9;color:#64748b{% endif %}">
+                {% if lr.status == 'approved' %}<i class="bi bi-check-circle-fill"></i>
+                {% elif lr.status == 'rejected' %}<i class="bi bi-x-circle-fill"></i>
+                {% elif lr.status == 'pending' %}<i class="bi bi-hourglass-split"></i>
+                {% else %}<i class="bi bi-dash-circle"></i>{% endif %}
+                {{ lr.get_status_display }}
+              </span>
+            </td>
+            <td style="font-size:.8rem;color:var(--eo-text-muted)">
+              {% if lr.approved_by %}
+                <a href="{% url 'staff_detail' lr.approved_by.pk %}" style="color:var(--eo-text-muted);text-decoration:none">
+                  {{ lr.approved_by.full_name }}
+                </a>
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p style="color:var(--eo-text-muted);font-size:.87rem;text-align:center;padding:24px 0">No leave records found.</p>
+      {% endif %}
+    </div>
+
+  </div><!-- end right col -->
+</div>
+{% endblock %}

@@ -1,0 +1,201 @@
+{% extends 'base.html' %}
+{% load humanize %}
+{% block title %}Projects{% endblock %}
+{% block breadcrumb %}<span>Projects</span>{% endblock %}
+{% block content %}
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Projects</h1>
+    <p class="eo-page-subtitle">Manage and track all office initiatives</p>
+  </div>
+  <a href="{% url 'project_create' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-plus-lg"></i> New Project
+  </a>
+</div>
+
+<!-- Stats -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-info">
+      <div class="eo-stat-label">My Projects</div>
+      <div class="eo-stat-value">{{ my_count }}</div>
+      <i class="bi bi-kanban eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-success">
+      <div class="eo-stat-label">Active</div>
+      <div class="eo-stat-value">{{ active_count }}</div>
+      <i class="bi bi-play-circle eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat">
+      <div class="eo-stat-label">Completed</div>
+      <div class="eo-stat-value">{{ completed_count }}</div>
+      <i class="bi bi-check2-circle eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat">
+      <div class="eo-stat-label">Showing</div>
+      <div class="eo-stat-value">{{ total_count }}</div>
+      <i class="bi bi-filter eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="eo-card mb-4">
+  <form method="get" class="row g-3 align-items-end">
+    <!-- View toggle -->
+    <div class="col-auto">
+      <div style="display:flex;border:1px solid var(--eo-border);border-radius:8px;overflow:hidden">
+        <a href="?view=my{% if q %}&q={{ q }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+           style="padding:7px 14px;font-size:.82rem;font-weight:600;text-decoration:none;
+             {% if view == 'my' %}background:var(--eo-accent);color:#fff{% else %}color:var(--eo-text-muted){% endif %}">
+          My Projects
+        </a>
+        <a href="?view=all{% if q %}&q={{ q }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+           style="padding:7px 14px;font-size:.82rem;font-weight:600;text-decoration:none;border-left:1px solid var(--eo-border);
+             {% if view == 'all' %}background:var(--eo-accent);color:#fff{% else %}color:var(--eo-text-muted){% endif %}">
+          All Projects
+        </a>
+      </div>
+    </div>
+    <input type="hidden" name="view" value="{{ view }}"/>
+    <div class="col-sm-4">
+      <label class="eo-form-label">Search</label>
+      <div style="position:relative">
+        <i class="bi bi-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--eo-text-light);font-size:.8rem"></i>
+        <input type="text" name="q" class="eo-form-control" style="padding-left:32px"
+               placeholder="Name, code or description..." value="{{ q }}"/>
+      </div>
+    </div>
+    <div class="col-sm-2">
+      <label class="eo-form-label">Status</label>
+      <select name="status" class="eo-form-select">
+        <option value="">All Status</option>
+        {% for val, label in status_choices %}
+        <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-sm-2">
+      <label class="eo-form-label">Priority</label>
+      <select name="priority" class="eo-form-select">
+        <option value="">All Priorities</option>
+        {% for val, label in priority_choices %}
+        <option value="{{ val }}" {% if priority_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto d-flex gap-2">
+      <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
+      <a href="?view={{ view }}" class="eo-btn eo-btn-secondary">Reset</a>
+    </div>
+  </form>
+</div>
+
+<!-- Project Grid -->
+<div class="row g-4">
+  {% for project in projects %}
+  <div class="col-sm-6 col-xl-4">
+    <a href="{% url 'project_detail' project.pk %}" style="text-decoration:none;display:block;height:100%">
+      <div class="eo-card" style="height:100%;border-top:4px solid {{ project.cover_color }};transition:box-shadow .18s,transform .18s;cursor:pointer"
+           onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 8px 28px rgba(0,0,0,.12)'"
+           onmouseout="this.style.transform='';this.style.boxShadow=''">
+
+        <!-- Header -->
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+          <div style="min-width:0;flex:1;padding-right:10px">
+            <div style="font-size:.7rem;font-weight:700;color:var(--eo-text-muted);letter-spacing:.05em;margin-bottom:4px">
+              {{ project.code }}
+              {% if project.department %}· {{ project.department.name }}{% endif %}
+            </div>
+            <h3 style="font-size:.97rem;font-weight:700;color:var(--eo-text);margin:0;line-height:1.35">
+              {{ project.name|truncatechars:50 }}
+            </h3>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0">
+            <span class="eo-status eo-status-{{ project.status }}">{{ project.get_status_display }}</span>
+            <span style="font-size:.7rem;font-weight:600;padding:2px 8px;border-radius:4px;
+              {% if project.priority == 'critical' %}background:#fee2e2;color:#991b1b
+              {% elif project.priority == 'high' %}background:#fef3c7;color:#92400e
+              {% elif project.priority == 'medium' %}background:#dbeafe;color:#1e40af
+              {% else %}background:#f1f5f9;color:#64748b{% endif %}">
+              {{ project.get_priority_display }}
+            </span>
+          </div>
+        </div>
+
+        {% if project.description %}
+        <p style="font-size:.81rem;color:var(--eo-text-muted);margin-bottom:14px;line-height:1.55;
+                  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
+          {{ project.description }}
+        </p>
+        {% endif %}
+
+        <!-- Progress -->
+        <div style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+            <span style="font-size:.74rem;color:var(--eo-text-muted)">Progress</span>
+            <span style="font-size:.78rem;font-weight:700;color:var(--eo-text)">{{ project.progress_pct }}%</span>
+          </div>
+          <div class="eo-progress" style="height:6px">
+            <div class="eo-progress-bar
+              {% if project.progress_pct == 100 %}success
+              {% elif project.progress_pct < 25 and project.status == 'active' %}danger{% endif %}"
+              style="width:{{ project.progress_pct }}%"></div>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:.78rem;color:var(--eo-text-muted);padding-top:12px;border-top:1px solid var(--eo-border)">
+          <div style="display:flex;align-items:center;gap:7px">
+            {% if project.project_manager %}
+              {% if project.project_manager.avatar %}
+                <img src="{{ project.project_manager.avatar.url }}"
+                     style="width:24px;height:24px;border-radius:50%;object-fit:cover"/>
+              {% else %}
+                <div style="width:24px;height:24px;border-radius:50%;background:{{ project.cover_color }};color:#fff;font-size:.6rem;font-weight:700;display:flex;align-items:center;justify-content:center">
+                  {{ project.project_manager.initials }}
+                </div>
+              {% endif %}
+              <span>{{ project.project_manager.full_name }}</span>
+            {% else %}
+              <span style="font-style:italic">No PM assigned</span>
+            {% endif %}
+          </div>
+          {% if project.end_date %}
+          <span style="display:flex;align-items:center;gap:5px">
+            <i class="bi bi-calendar3"></i>
+            {{ project.end_date|date:"N j, Y" }}
+          </span>
+          {% endif %}
+        </div>
+      </div>
+    </a>
+  </div>
+  {% empty %}
+  <div class="col-12">
+    <div class="eo-card" style="text-align:center;padding:72px 32px">
+      <i class="bi bi-kanban" style="font-size:3rem;color:var(--eo-text-light);display:block;margin-bottom:16px"></i>
+      <h3 style="font-size:1.1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No projects found</h3>
+      <p style="color:var(--eo-text-muted);font-size:.88rem;margin-bottom:20px">
+        {% if q or status_filter %}Try adjusting your filters.{% else %}Create your first project to get started.{% endif %}
+      </p>
+      {% if not q and not status_filter %}
+      <a href="{% url 'project_create' %}" class="eo-btn eo-btn-primary">
+        <i class="bi bi-plus"></i> Create Project
+      </a>
+      {% else %}
+      <a href="?view={{ view }}" class="eo-btn eo-btn-secondary">Clear Filters</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% endblock %}

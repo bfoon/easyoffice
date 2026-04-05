@@ -1,0 +1,307 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ ticket.ticket_number }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'it_dashboard' %}">IT Support</a> /
+  <a href="{% url 'ticket_list' %}">Tickets</a> / {{ ticket.ticket_number }}
+{% endblock %}
+
+{% block content %}
+<!-- Header -->
+<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:24px;flex-wrap:wrap">
+  <div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <span style="font-family:var(--eo-mono);font-size:.85rem;font-weight:700;color:var(--eo-text-muted)">{{ ticket.ticket_number }}</span>
+      <span style="font-size:.72rem;font-weight:700;padding:3px 10px;border-radius:12px;
+        {% if ticket.status == 'open' %}background:#dbeafe;color:#1e40af
+        {% elif ticket.status == 'in_progress' %}background:#ede9fe;color:#5b21b6
+        {% elif ticket.status == 'pending_info' %}background:#fef3c7;color:#92400e
+        {% elif ticket.status == 'resolved' %}background:#d1fae5;color:#065f46
+        {% elif ticket.status == 'closed' %}background:#f1f5f9;color:#64748b
+        {% else %}background:#fee2e2;color:#991b1b{% endif %}">
+        {{ ticket.get_status_display }}
+      </span>
+      <span style="font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:4px;
+        {% if ticket.priority == 'critical' %}background:#fee2e2;color:#991b1b
+        {% elif ticket.priority == 'high' %}background:#fef3c7;color:#92400e
+        {% elif ticket.priority == 'normal' %}background:#dbeafe;color:#1e40af
+        {% else %}background:#f1f5f9;color:#64748b{% endif %}">
+        {{ ticket.get_priority_display }}
+      </span>
+    </div>
+    <h1 style="font-size:1.3rem;font-weight:800;color:var(--eo-text);margin:0">{{ ticket.title }}</h1>
+  </div>
+  <div style="display:flex;gap:8px;flex-shrink:0">
+    {% if ticket.is_open and ticket.requested_by == request.user %}
+    <a href="{% url 'ticket_create' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+      <i class="bi bi-plus"></i> New Request
+    </a>
+    {% endif %}
+    <a href="{% url 'ticket_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+      <i class="bi bi-arrow-left"></i> Back
+    </a>
+  </div>
+</div>
+
+<div class="row g-4">
+
+  <!-- ─── LEFT: Description + Comments ─── -->
+  <div class="col-lg-8 d-flex flex-column gap-4">
+
+    <!-- Description -->
+    <div class="eo-card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+        {% if ticket.requested_by.avatar %}
+          <img src="{{ ticket.requested_by.avatar.url }}" style="width:38px;height:38px;border-radius:50%;object-fit:cover"/>
+        {% else %}
+          <div style="width:38px;height:38px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.85rem;font-weight:700;display:flex;align-items:center;justify-content:center">{{ ticket.requested_by.initials }}</div>
+        {% endif %}
+        <div>
+          <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">{{ ticket.requested_by.full_name }}</div>
+          <div style="font-size:.74rem;color:var(--eo-text-muted)">Opened {{ ticket.created_at|naturaltime }} · {{ ticket.get_request_type_display }}</div>
+        </div>
+        {% if ticket.attachment %}
+        <a href="{{ ticket.attachment.url }}" target="_blank" class="eo-btn eo-btn-secondary eo-btn-sm" style="margin-left:auto">
+          <i class="bi bi-paperclip"></i> Attachment
+        </a>
+        {% endif %}
+      </div>
+      <div style="background:var(--eo-bg);border-radius:8px;padding:16px;font-size:.88rem;color:var(--eo-text);line-height:1.7;white-space:pre-wrap">{{ ticket.description }}</div>
+    </div>
+
+    <!-- Resolution (if resolved) -->
+    {% if ticket.resolution %}
+    <div class="eo-card" style="border-left:4px solid var(--eo-success)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <i class="bi bi-check-circle-fill" style="color:var(--eo-success);font-size:1.1rem"></i>
+        <span style="font-size:.9rem;font-weight:700;color:var(--eo-text)">Resolution</span>
+        {% if ticket.resolved_at %}
+        <span style="font-size:.74rem;color:var(--eo-text-muted);margin-left:auto">{{ ticket.resolved_at|naturaltime }}</span>
+        {% endif %}
+      </div>
+      <div style="font-size:.87rem;color:var(--eo-text);line-height:1.65">{{ ticket.resolution }}</div>
+    </div>
+    {% endif %}
+
+    <!-- Comments thread -->
+    <div class="eo-card">
+      <h2 class="eo-card-title" style="margin-bottom:16px">
+        <i class="bi bi-chat-square-text me-1" style="color:var(--eo-accent)"></i>
+        Discussion
+        <span style="font-size:.78rem;font-weight:400;color:var(--eo-text-muted);margin-left:6px">{{ comments|length }} message{{ comments|length|pluralize }}</span>
+      </h2>
+
+      {% if comments %}
+      <div style="display:flex;flex-direction:column;gap:0;margin-bottom:20px">
+        {% for comment in comments %}
+        <div style="display:flex;gap:11px;padding:12px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}
+          {% if comment.is_internal %}background:#fffbeb;border-radius:6px;padding:10px;margin-bottom:4px{% endif %}">
+          {% if comment.author.avatar %}
+            <img src="{{ comment.author.avatar.url }}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;margin-top:2px"/>
+          {% else %}
+            <div style="width:32px;height:32px;border-radius:50%;background:{% if comment.is_internal %}#f59e0b{% else %}var(--eo-accent){% endif %};color:#fff;font-size:.7rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px">{{ comment.author.initials }}</div>
+          {% endif %}
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
+              <span style="font-size:.87rem;font-weight:700;color:var(--eo-text)">{{ comment.author.full_name }}</span>
+              {% if comment.is_internal %}
+              <span style="font-size:.65rem;font-weight:700;padding:1px 6px;background:#fef3c7;color:#92400e;border-radius:4px;text-transform:uppercase">Internal Note</span>
+              {% endif %}
+              <span style="font-size:.72rem;color:var(--eo-text-muted)">{{ comment.created_at|naturaltime }}</span>
+            </div>
+            <div style="font-size:.85rem;color:var(--eo-text);line-height:1.6;white-space:pre-wrap">{{ comment.content }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:24px;color:var(--eo-text-muted);margin-bottom:16px">
+        <i class="bi bi-chat-square-dots" style="font-size:1.6rem;display:block;margin-bottom:8px;opacity:.4"></i>
+        <p style="font-size:.84rem">No messages yet. Add a reply below.</p>
+      </div>
+      {% endif %}
+
+      <!-- Reply form -->
+      {% if ticket.status not in 'closed,cancelled' %}
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="comment"/>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          {% if request.user.avatar %}
+            <img src="{{ request.user.avatar.url }}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;margin-top:6px"/>
+          {% else %}
+            <div style="width:32px;height:32px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.7rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:6px">{{ request.user.initials }}</div>
+          {% endif %}
+          <div style="flex:1">
+            <textarea name="content" class="eo-form-control" rows="3"
+                      placeholder="Add a reply or ask for more information..."></textarea>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap">
+              <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm">
+                <i class="bi bi-send"></i> Send Reply
+              </button>
+              {% if is_it %}
+              <label style="display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--eo-text-muted);cursor:pointer;margin-left:4px">
+                <input type="checkbox" name="is_internal" style="width:15px;height:15px"/>
+                Internal note (IT only)
+              </label>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </form>
+      {% endif %}
+    </div>
+
+    <!-- Requester: close ticket -->
+    {% if ticket.status == 'resolved' and ticket.requested_by == request.user %}
+    <div class="eo-card" style="border:1px dashed var(--eo-success)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:.9rem;font-weight:700;color:var(--eo-text);margin-bottom:3px">
+            <i class="bi bi-check-circle me-1" style="color:var(--eo-success)"></i>
+            Is your issue resolved?
+          </div>
+          <p style="font-size:.82rem;color:var(--eo-text-muted);margin:0">Close the ticket to confirm everything is working.</p>
+        </div>
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="close"/>
+          <button type="submit" class="eo-btn eo-btn-success">
+            <i class="bi bi-check2-all"></i> Yes, Close Ticket
+          </button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- ─── RIGHT: Info + IT Actions ─── -->
+  <div class="col-lg-4 d-flex flex-column gap-4">
+
+    <!-- Ticket Info -->
+    <div class="eo-card">
+      <h2 class="eo-card-title" style="margin-bottom:14px">Ticket Details</h2>
+      <div style="display:flex;flex-direction:column;gap:12px;font-size:.84rem">
+
+        <div style="display:flex;gap:12px">
+          <i class="bi bi-person" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.68rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Requested By</div>
+            <a href="{% url 'staff_detail' ticket.requested_by.pk %}" style="color:var(--eo-accent);font-weight:600">{{ ticket.requested_by.full_name }}</a>
+          </div>
+        </div>
+
+        {% if ticket.assigned_to %}
+        <div style="display:flex;gap:12px">
+          <i class="bi bi-person-check" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.68rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Assigned To</div>
+            <span style="font-weight:600;color:var(--eo-text)">{{ ticket.assigned_to.full_name }}</span>
+          </div>
+        </div>
+        {% endif %}
+
+        <div style="display:flex;gap:12px">
+          <i class="bi bi-tag" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.68rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Type</div>
+            <span>{{ ticket.get_request_type_display }}</span>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px">
+          <i class="bi bi-clock" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.68rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">SLA</div>
+            <span>{{ ticket.sla_hours }}h response target</span>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px">
+          <i class="bi bi-calendar3" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.68rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Opened</div>
+            <span>{{ ticket.created_at|date:"N j, Y H:i" }}</span>
+          </div>
+        </div>
+
+        {% if ticket.resolved_at %}
+        <div style="display:flex;gap:12px">
+          <i class="bi bi-check2" style="color:var(--eo-success);width:16px;flex-shrink:0;margin-top:2px"></i>
+          <div>
+            <div style="font-size:.68rem;color:var(--eo-text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Resolved</div>
+            <span style="color:var(--eo-success)">{{ ticket.resolved_at|date:"N j, Y H:i" }}</span>
+          </div>
+        </div>
+        {% endif %}
+
+      </div>
+    </div>
+
+    <!-- IT Actions -->
+    {% if is_it %}
+    <div class="eo-card" style="border-top:3px solid var(--eo-accent)">
+      <h2 class="eo-card-title" style="margin-bottom:14px">IT Actions</h2>
+
+      <!-- Assign -->
+      {% if ticket.is_open %}
+      <div class="eo-form-group">
+        <label class="eo-form-label">Assign To</label>
+        <form method="post" style="display:flex;gap:6px">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="assign"/>
+          <select name="assignee_id" class="eo-form-select" style="flex:1">
+            <option value="">— Self assign —</option>
+            {% for staff in staff_list %}
+            <option value="{{ staff.id }}" {% if ticket.assigned_to == staff %}selected{% endif %}>{{ staff.full_name }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm">
+            <i class="bi bi-person-check"></i>
+          </button>
+        </form>
+      </div>
+      {% endif %}
+
+      <!-- Update Status -->
+      <div class="eo-form-group">
+        <label class="eo-form-label">Update Status</label>
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="status"/>
+          <select name="status" class="eo-form-select" style="margin-bottom:8px"
+                  onchange="document.getElementById('resolutionField').style.display=this.value==='resolved'?'':'none'">
+            {% for val, label in status_choices %}
+            <option value="{{ val }}" {% if ticket.status == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <div id="resolutionField" style="display:{% if ticket.status == 'resolved' %}''{% else %}none{% endif %}">
+            <textarea name="resolution" class="eo-form-control" rows="3"
+                      placeholder="Describe how this was resolved..."
+                      style="margin-bottom:8px">{{ ticket.resolution }}</textarea>
+          </div>
+          <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm w-100">
+            <i class="bi bi-arrow-clockwise"></i> Update
+          </button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Show resolution textarea when status = resolved
+var statusSel = document.querySelector('select[name="status"]');
+if (statusSel) {
+  statusSel.addEventListener('change', function() {
+    document.getElementById('resolutionField').style.display = this.value === 'resolved' ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

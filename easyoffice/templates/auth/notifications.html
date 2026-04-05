@@ -1,0 +1,275 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Notifications{% endblock %}
+{% block breadcrumb %}<span>Notifications</span>{% endblock %}
+
+{% block content %}
+<style>
+.notif-tab {
+  display:inline-flex;align-items:center;gap:6px;
+  padding:5px 14px;border-radius:20px;
+  border:1.5px solid var(--eo-border);background:var(--eo-surface);
+  color:var(--eo-text-muted);font-size:.78rem;font-weight:600;
+  cursor:pointer;white-space:nowrap;flex-shrink:0;transition:all .14s;
+}
+.notif-tab:hover { border-color:var(--eo-accent);color:var(--eo-accent); }
+.notif-tab.active { background:var(--eo-accent);border-color:var(--eo-accent);color:#fff; }
+
+.notif-row {
+  display:flex;align-items:flex-start;gap:14px;
+  padding:15px 20px;
+  border-bottom:1px solid var(--eo-border);
+  transition:background .1s;
+  cursor:pointer;
+  position:relative;
+}
+.notif-row:last-child { border-bottom:none; }
+.notif-row.is-unread { background:var(--eo-accent)04; }
+.notif-row:hover { background:var(--eo-bg); }
+.notif-row.hid { display:none; }
+
+.notif-dot {
+  width:8px;height:8px;border-radius:50%;
+  background:var(--eo-accent);flex-shrink:0;margin-top:6px;
+}
+.notif-ico {
+  width:38px;height:38px;border-radius:10px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:.9rem;flex-shrink:0;
+}
+.notif-title { font-size:.88rem;font-weight:700;color:var(--eo-text);margin-bottom:3px;line-height:1.3; }
+.notif-msg   { font-size:.8rem;color:var(--eo-text-muted);line-height:1.55; }
+.notif-time  { font-size:.72rem;color:var(--eo-text-muted);white-space:nowrap;flex-shrink:0;margin-top:2px; }
+</style>
+
+<!-- HEADER -->
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Notifications</h1>
+    <p class="eo-page-subtitle">{{ notifications|length }} notification{{ notifications|length|pluralize }}</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <button type="button" class="eo-btn eo-btn-secondary" id="markAllBtn">
+      <i class="bi bi-check2-all"></i> Mark All Read
+    </button>
+    <a href="{% url 'user_settings' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-gear"></i> Settings
+    </a>
+  </div>
+</div>
+
+<!-- TYPE FILTER TABS -->
+<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:20px;scrollbar-width:none">
+  <button class="notif-tab active" onclick="filterType(this,'')" data-type="">All</button>
+  <button class="notif-tab" onclick="filterType(this,'task')"     data-type="task"><i class="bi bi-check2-square"></i> Tasks</button>
+  <button class="notif-tab" onclick="filterType(this,'project')"  data-type="project"><i class="bi bi-kanban"></i> Projects</button>
+  <button class="notif-tab" onclick="filterType(this,'message')"  data-type="message"><i class="bi bi-chat-dots"></i> Messages</button>
+  <button class="notif-tab" onclick="filterType(this,'leave')"    data-type="leave"><i class="bi bi-calendar-check"></i> Leave</button>
+  <button class="notif-tab" onclick="filterType(this,'it')"       data-type="it"><i class="bi bi-tools"></i> IT</button>
+  <button class="notif-tab" onclick="filterType(this,'finance')"  data-type="finance"><i class="bi bi-cash"></i> Finance</button>
+  <button class="notif-tab" onclick="filterType(this,'system')"   data-type="system"><i class="bi bi-cpu"></i> System</button>
+</div>
+
+{% if notifications %}
+
+<!-- ── UNREAD ── -->
+{% with unread_count=notifications|length %}
+
+<div id="unreadBlock">
+  <div style="font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--eo-text-muted);margin-bottom:10px;display:flex;align-items:center;gap:8px">
+    Unread
+    <span id="unreadBadge" style="display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;border-radius:10px;background:var(--eo-accent);color:#fff;font-size:.65rem;font-weight:800;padding:0 5px"></span>
+  </div>
+  <div class="eo-card" style="padding:0;overflow:hidden;margin-bottom:24px">
+    {% for notif in notifications %}
+    {% if not notif.is_read %}
+    <div class="notif-row is-unread" data-type="{{ notif.notification_type }}" data-id="{{ notif.id }}"
+         onclick="openNotif(this,'{{ notif.link|escapejs }}','{{ notif.id }}')"
+         style="border-left:3px solid var(--eo-accent)">
+
+      <!-- Unread dot -->
+      <span class="notif-dot unread-ind"></span>
+
+      <!-- Type icon -->
+      <div class="notif-ico" style="
+        {% if notif.notification_type == 'task' %}background:#dbeafe;color:#1d4ed8
+        {% elif notif.notification_type == 'project' %}background:#ede9fe;color:#5b21b6
+        {% elif notif.notification_type == 'message' %}background:#d1fae5;color:#065f46
+        {% elif notif.notification_type == 'leave' %}background:#fef3c7;color:#92400e
+        {% elif notif.notification_type == 'finance' %}background:#d1fae5;color:#065f46
+        {% elif notif.notification_type == 'it' %}background:#f1f5f9;color:#475569
+        {% else %}background:#f3f4f6;color:#6b7280{% endif %}">
+        <i class="bi {% if notif.notification_type == 'task' %}bi-check2-square
+          {% elif notif.notification_type == 'project' %}bi-kanban
+          {% elif notif.notification_type == 'message' %}bi-chat-dots-fill
+          {% elif notif.notification_type == 'leave' %}bi-calendar-check
+          {% elif notif.notification_type == 'finance' %}bi-cash-coin
+          {% elif notif.notification_type == 'it' %}bi-tools
+          {% elif notif.notification_type == 'appraisal' %}bi-star
+          {% else %}bi-bell-fill{% endif %}"></i>
+      </div>
+
+      <!-- Content -->
+      <div style="flex:1;min-width:0">
+        <div class="notif-title">{{ notif.title }}</div>
+        <div class="notif-msg">{{ notif.message }}</div>
+        {% if notif.sender %}
+        <div style="margin-top:5px;display:flex;align-items:center;gap:6px">
+          {% if notif.sender.avatar %}
+            <img src="{{ notif.sender.avatar.url }}" style="width:16px;height:16px;border-radius:50%;object-fit:cover"/>
+          {% else %}
+            <div style="width:16px;height:16px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.45rem;font-weight:700;display:flex;align-items:center;justify-content:center">{{ notif.sender.initials }}</div>
+          {% endif %}
+          <span style="font-size:.72rem;color:var(--eo-text-muted)">{{ notif.sender.full_name }}</span>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Time -->
+      <div class="notif-time">{{ notif.created_at|naturaltime }}</div>
+    </div>
+    {% endif %}
+    {% endfor %}
+
+    <div id="allReadMsg" style="display:none;padding:32px;text-align:center;color:var(--eo-text-muted)">
+      <i class="bi bi-check2-all" style="font-size:2rem;display:block;margin-bottom:8px;color:var(--eo-success)"></i>
+      <p style="font-size:.86rem">All caught up!</p>
+    </div>
+  </div>
+</div>
+
+<!-- ── READ / EARLIER ── -->
+<div>
+  <div style="font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--eo-text-muted);margin-bottom:10px">Earlier</div>
+  <div class="eo-card" style="padding:0;overflow:hidden">
+    {% for notif in notifications %}
+    {% if notif.is_read %}
+    <div class="notif-row" data-type="{{ notif.notification_type }}" data-id="{{ notif.id }}"
+         onclick="openNotif(this,'{{ notif.link|escapejs }}','{{ notif.id }}')">
+
+      <!-- Spacer (no unread dot) -->
+      <span style="width:8px;flex-shrink:0"></span>
+
+      <!-- Type icon (muted) -->
+      <div class="notif-ico" style="opacity:.55;
+        {% if notif.notification_type == 'task' %}background:#dbeafe;color:#1d4ed8
+        {% elif notif.notification_type == 'project' %}background:#ede9fe;color:#5b21b6
+        {% elif notif.notification_type == 'message' %}background:#d1fae5;color:#065f46
+        {% elif notif.notification_type == 'leave' %}background:#fef3c7;color:#92400e
+        {% elif notif.notification_type == 'finance' %}background:#d1fae5;color:#065f46
+        {% elif notif.notification_type == 'it' %}background:#f1f5f9;color:#475569
+        {% else %}background:#f3f4f6;color:#6b7280{% endif %}">
+        <i class="bi {% if notif.notification_type == 'task' %}bi-check2-square
+          {% elif notif.notification_type == 'project' %}bi-kanban
+          {% elif notif.notification_type == 'message' %}bi-chat-dots-fill
+          {% elif notif.notification_type == 'leave' %}bi-calendar-check
+          {% elif notif.notification_type == 'finance' %}bi-cash-coin
+          {% elif notif.notification_type == 'it' %}bi-tools
+          {% elif notif.notification_type == 'appraisal' %}bi-star
+          {% else %}bi-bell{% endif %}"></i>
+      </div>
+
+      <div style="flex:1;min-width:0">
+        <div style="font-size:.87rem;font-weight:600;color:var(--eo-text-muted)">{{ notif.title }}</div>
+        <div class="notif-msg">{{ notif.message }}</div>
+        {% if notif.read_at %}
+        <div style="font-size:.7rem;color:var(--eo-text-light);margin-top:3px">Read {{ notif.read_at|naturaltime }}</div>
+        {% endif %}
+      </div>
+
+      <div class="notif-time">{{ notif.created_at|naturaltime }}</div>
+    </div>
+    {% endif %}
+    {% endfor %}
+
+    <!-- If all notifications are unread, this block is empty -->
+    {% with read_exists=False %}{% endwith %}
+    <div id="noReadMsg" style="padding:32px;text-align:center;color:var(--eo-text-muted);font-size:.85rem">
+      No earlier notifications.
+    </div>
+  </div>
+</div>
+
+{% endwith %}
+
+{% else %}
+<div class="eo-card" style="padding:72px 32px;text-align:center">
+  <i class="bi bi-bell-slash" style="font-size:3rem;color:var(--eo-text-light);display:block;margin-bottom:16px"></i>
+  <h3 style="font-size:1.1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No notifications</h3>
+  <p style="color:var(--eo-text-muted);font-size:.87rem">When tasks, messages or approvals arrive, you'll see them here.</p>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Filter tabs
+function filterType(btn, type) {
+  document.querySelectorAll('.notif-tab').forEach(function(t){ t.classList.toggle('active', t === btn); });
+  document.querySelectorAll('.notif-row').forEach(function(r){
+    r.classList.toggle('hid', type !== '' && r.dataset.type !== type);
+  });
+}
+
+// Open notification (mark read + navigate)
+function openNotif(row, link, id) {
+  // Mark as read visually
+  row.classList.remove('is-unread');
+  row.style.borderLeft = '';
+  var dot = row.querySelector('.unread-ind');
+  if (dot) dot.style.visibility = 'hidden';
+
+  // Persist read state
+  fetch('{% url "mark_notifications_read" %}', {
+    method:'POST',
+    headers:{'X-CSRFToken':'{{ csrf_token }}','Content-Type':'application/json'},
+    body:JSON.stringify({})
+  }).catch(function(){});
+
+  // Navigate if there's a link
+  if (link && link !== '' && link !== 'None') {
+    window.location = link;
+  }
+
+  updateUnreadBadge();
+}
+
+// Mark all read
+document.getElementById('markAllBtn').addEventListener('click', function() {
+  fetch('{% url "mark_notifications_read" %}', {
+    method:'POST',
+    headers:{'X-CSRFToken':'{{ csrf_token }}','Content-Type':'application/json'},
+    body:JSON.stringify({})
+  }).then(function(){
+    document.querySelectorAll('.notif-row.is-unread').forEach(function(r){
+      r.classList.remove('is-unread');
+      r.style.borderLeft = '';
+      var dot = r.querySelector('.unread-ind');
+      if (dot) dot.style.visibility = 'hidden';
+    });
+    updateUnreadBadge();
+    var allReadMsg = document.getElementById('allReadMsg');
+    if (allReadMsg) allReadMsg.style.display = '';
+  });
+});
+
+// Update unread badge count
+function updateUnreadBadge() {
+  var count = document.querySelectorAll('.notif-row.is-unread:not(.hid)').length;
+  var badge = document.getElementById('unreadBadge');
+  if (badge) {
+    badge.textContent = count;
+    badge.style.display = count > 0 ? '' : 'none';
+  }
+}
+updateUnreadBadge();
+
+// Hide "No earlier" if there are read items
+(function() {
+  var hasRead = document.querySelectorAll('.notif-row:not(.is-unread)').length > 0;
+  var noReadMsg = document.getElementById('noReadMsg');
+  if (noReadMsg) noReadMsg.style.display = hasRead ? 'none' : '';
+})();
+</script>
+{% endblock %}

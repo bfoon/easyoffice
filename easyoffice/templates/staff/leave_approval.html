@@ -1,0 +1,267 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Leave Approvals{% endblock %}
+{% block breadcrumb %}<a href="{% url 'staff_directory' %}">Staff</a> / Leave Approvals{% endblock %}
+{% block content %}
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">
+      Leave Approvals
+      {% if filtered_staff %}— {{ filtered_staff.full_name }}{% endif %}
+    </h1>
+    <p class="eo-page-subtitle">
+      {% if is_superuser_approver %}
+        You are reviewing as <strong>Administrator</strong> — all staff visible.
+      {% else %}
+        You are reviewing as <strong>Supervisor</strong> — showing your direct reports only.
+      {% endif %}
+    </p>
+  </div>
+  {% if filtered_staff %}
+  <a href="{% url 'leave_approval' %}" class="eo-btn eo-btn-secondary">
+    <i class="bi bi-arrow-left"></i> All Pending
+  </a>
+  {% endif %}
+</div>
+
+<!-- Summary banner -->
+{% if pending_requests %}
+<div class="eo-card mb-4" style="border-left:4px solid var(--eo-warning);background:#fffbeb">
+  <div style="display:flex;align-items:center;gap:10px;color:#92400e;font-size:.88rem">
+    <i class="bi bi-exclamation-triangle-fill" style="font-size:1.2rem"></i>
+    <span>
+      <strong>{{ pending_requests|length }}</strong>
+      leave request{{ pending_requests|length|pluralize }} awaiting your decision.
+    </span>
+  </div>
+</div>
+{% endif %}
+
+<!-- Pending Requests -->
+<div style="display:flex;flex-direction:column;gap:16px">
+  {% for lr in pending_requests %}
+  <div class="eo-card" style="border-left:4px solid var(--eo-warning)">
+    <div class="row g-4 align-items-start">
+
+      <!-- Staff info column -->
+      <div class="col-md-4">
+        <div style="display:flex;align-items:center;gap:14px">
+          {% if lr.staff.avatar %}
+            <img src="{{ lr.staff.avatar.url }}"
+                 style="width:54px;height:54px;border-radius:50%;object-fit:cover;flex-shrink:0"/>
+          {% else %}
+            <div style="width:54px;height:54px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:1.1rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+              {{ lr.staff.initials }}
+            </div>
+          {% endif %}
+          <div>
+            <a href="{% url 'staff_detail' lr.staff.pk %}"
+               style="font-size:1rem;font-weight:700;color:var(--eo-text);text-decoration:none;display:block;margin-bottom:2px">
+              {{ lr.staff.full_name }}
+            </a>
+            {% if lr.staff.staffprofile %}
+            <div style="font-size:.78rem;color:var(--eo-text-muted);line-height:1.5">
+              {% if lr.staff.staffprofile.position %}
+                <div>{{ lr.staff.staffprofile.position.title }}</div>
+              {% endif %}
+              {% if lr.staff.staffprofile.unit %}
+                <div><i class="bi bi-people" style="font-size:.7rem"></i> {{ lr.staff.staffprofile.unit.name }}</div>
+              {% endif %}
+              {% if lr.staff.staffprofile.department %}
+                <div><i class="bi bi-building" style="font-size:.7rem"></i> {{ lr.staff.staffprofile.department.name }}</div>
+              {% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- Quick stats for this staff's leave this year -->
+        <div style="margin-top:14px;padding:10px 12px;background:var(--eo-bg);border-radius:var(--eo-radius-sm);font-size:.78rem;color:var(--eo-text-muted)">
+          <div style="font-weight:600;color:var(--eo-text);margin-bottom:6px;font-size:.8rem">
+            {{ lr.leave_type.name }} — {{ lr.start_date.year }} Balance
+          </div>
+          {% with lr.staff.leave_balances.all as balances %}
+          {% for b in balances %}
+            {% if b.leave_type_id == lr.leave_type_id and b.year == lr.start_date.year %}
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+              <span>Entitled</span><strong style="color:var(--eo-text)">{{ b.days_entitled }}d</strong>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+              <span>Used</span><strong style="color:var(--eo-danger)">{{ b.days_used }}d</strong>
+            </div>
+            <div style="display:flex;justify-content:space-between">
+              <span>Remaining</span>
+              <strong style="color:{% if b.days_remaining >= lr.days_requested %}var(--eo-success){% else %}var(--eo-warning){% endif %}">
+                {{ b.days_remaining }}d
+              </strong>
+            </div>
+            {% if b.days_remaining < lr.days_requested %}
+            <div style="margin-top:6px;padding:4px 8px;background:#fef3c7;border-radius:4px;color:#92400e;font-size:.72rem">
+              <i class="bi bi-exclamation-triangle-fill"></i>
+              Requesting more than remaining balance
+            </div>
+            {% endif %}
+            {% endif %}
+          {% endfor %}
+          {% endwith %}
+        </div>
+      </div>
+
+      <!-- Leave details column -->
+      <div class="col-md-4">
+        <div style="display:flex;flex-direction:column;gap:9px;font-size:.85rem">
+
+          <!-- Leave type badge -->
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="padding:4px 14px;background:#fef3c7;color:#92400e;border-radius:20px;font-size:.8rem;font-weight:600">
+              {{ lr.leave_type.name }}
+            </span>
+            {% if lr.leave_type.is_paid %}
+            <span style="font-size:.72rem;color:var(--eo-success);font-weight:600;display:flex;align-items:center;gap:3px">
+              <i class="bi bi-check-circle-fill"></i> Paid
+            </span>
+            {% else %}
+            <span style="font-size:.72rem;color:var(--eo-text-muted);font-weight:600">Unpaid</span>
+            {% endif %}
+          </div>
+
+          <div style="display:flex;align-items:center;gap:8px;color:var(--eo-text-muted)">
+            <i class="bi bi-calendar3" style="width:16px;flex-shrink:0"></i>
+            <span>{{ lr.start_date|date:"N j, Y" }} — {{ lr.end_date|date:"N j, Y" }}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;color:var(--eo-text-muted)">
+            <i class="bi bi-clock" style="width:16px;flex-shrink:0"></i>
+            <span>
+              <strong style="color:var(--eo-text);font-size:.95rem">{{ lr.days_requested }}</strong>
+              day{{ lr.days_requested|pluralize }} requested
+            </span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;color:var(--eo-text-muted)">
+            <i class="bi bi-send" style="width:16px;flex-shrink:0"></i>
+            <span>Applied {{ lr.created_at|naturaltime }}</span>
+          </div>
+
+          {% if lr.reason %}
+          <div style="margin-top:4px;padding:10px 12px;background:var(--eo-bg);border-radius:var(--eo-radius-sm);font-style:italic;color:var(--eo-text-muted);font-size:.83rem;line-height:1.6;border-left:3px solid var(--eo-border)">
+            "{{ lr.reason }}"
+          </div>
+          {% endif %}
+
+          {% if lr.supporting_document %}
+          <a href="{{ lr.supporting_document.url }}" target="_blank"
+             class="eo-btn eo-btn-secondary eo-btn-sm" style="align-self:flex-start;margin-top:4px">
+            <i class="bi bi-paperclip"></i> View Supporting Document
+          </a>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Action column -->
+      <div class="col-md-4">
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="leave_id" value="{{ lr.id }}"/>
+          <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
+
+          <div class="eo-form-group">
+            <label class="eo-form-label">Decision Notes <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span></label>
+            <textarea name="notes" class="eo-form-control" rows="3"
+                      placeholder="Add a comment for {{ lr.staff.first_name }}..."></textarea>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <button type="submit" name="action" value="approve" class="eo-btn eo-btn-success w-100">
+              <i class="bi bi-check-lg"></i> Approve Leave
+            </button>
+            <button type="submit" name="action" value="reject" class="eo-btn eo-btn-danger w-100"
+                    data-confirm="Reject {{ lr.staff.first_name }}'s leave request?">
+              <i class="bi bi-x-lg"></i> Reject
+            </button>
+          </div>
+
+          <div style="margin-top:12px;padding:8px 10px;background:var(--eo-bg);border-radius:var(--eo-radius-sm);font-size:.72rem;color:var(--eo-text-muted);display:flex;align-items:center;gap:6px">
+            <i class="bi bi-shield-check"></i>
+            You are approving as {{ request.user.full_name }}
+          </div>
+        </form>
+      </div>
+
+    </div>
+  </div>
+
+  {% empty %}
+  <div class="eo-card" style="text-align:center;padding:72px 32px">
+    <i class="bi bi-check2-circle" style="font-size:3.5rem;color:var(--eo-success);display:block;margin-bottom:16px"></i>
+    <h3 style="font-size:1.15rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">All caught up!</h3>
+    <p style="color:var(--eo-text-muted);font-size:.88rem">
+      {% if filtered_staff %}
+        No pending leave requests from {{ filtered_staff.first_name }}.
+      {% else %}
+        No pending leave requests from your team at this time.
+      {% endif %}
+    </p>
+    {% if filtered_staff %}
+    <a href="{% url 'leave_approval' %}" class="eo-btn eo-btn-secondary mt-3">View All Pending</a>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Recent Decisions -->
+{% if recent_decisions %}
+<div class="eo-card mt-5">
+  <div class="eo-card-header" style="margin-bottom:0;padding-bottom:0">
+    <h2 class="eo-card-title">Recent Decisions</h2>
+    <span style="font-size:.78rem;color:var(--eo-text-muted)">Last 20 actions</span>
+  </div>
+  <table class="eo-table">
+    <thead>
+      <tr>
+        <th>Staff Member</th>
+        <th>Leave Type</th>
+        <th>Period</th>
+        <th>Days</th>
+        <th>Decision</th>
+        <th>Decided By</th>
+        <th>Date</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lr in recent_decisions %}
+      <tr>
+        <td>
+          <a href="{% url 'staff_detail' lr.staff.pk %}"
+             style="font-weight:600;color:var(--eo-text);text-decoration:none;font-size:.88rem">
+            {{ lr.staff.full_name }}
+          </a>
+        </td>
+        <td style="font-size:.85rem">{{ lr.leave_type.name }}</td>
+        <td style="font-size:.8rem;color:var(--eo-text-muted)">
+          {{ lr.start_date|date:"N j" }} — {{ lr.end_date|date:"N j, Y" }}
+        </td>
+        <td style="font-size:.85rem;font-weight:600">{{ lr.days_requested }}d</td>
+        <td>
+          <span style="display:inline-flex;align-items:center;gap:4px;padding:3px 11px;border-radius:20px;font-size:.72rem;font-weight:600;
+            {% if lr.status == 'approved' %}background:#d1fae5;color:#065f46
+            {% elif lr.status == 'rejected' %}background:#fee2e2;color:#991b1b
+            {% else %}background:#f1f5f9;color:#64748b{% endif %}">
+            {% if lr.status == 'approved' %}<i class="bi bi-check-circle-fill"></i>
+            {% else %}<i class="bi bi-x-circle-fill"></i>{% endif %}
+            {{ lr.get_status_display }}
+          </span>
+        </td>
+        <td style="font-size:.82rem;color:var(--eo-text-muted)">
+          {{ lr.approved_by.full_name|default:"—" }}
+        </td>
+        <td style="font-size:.8rem;color:var(--eo-text-muted)">
+          {{ lr.approval_date|date:"N j, Y"|default:"—" }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% endblock %}

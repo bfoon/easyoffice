@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Budgets — FY{{ year }}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'finance_dashboard' %}">Finance</a> / Budgets{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Budgets</h1>
+    <p class="eo-page-subtitle">FY{{ year }} &mdash; ${{ grand_total|floatformat:0|intcomma }} allocated &mdash; ${{ grand_spent|floatformat:0|intcomma }} spent</p>
+  </div>
+  <a href="{% url 'finance_dashboard' %}" class="eo-btn eo-btn-secondary">
+    <i class="bi bi-arrow-left"></i> Dashboard
+  </a>
+</div>
+
+<!-- Filter bar -->
+<div class="eo-card mb-4">
+  <form method="get" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+    <div>
+      <label class="eo-form-label">Fiscal Year</label>
+      <select name="year" class="eo-form-select" onchange="this.form.submit()">
+        {% for y in year_range %}
+        <option value="{{ y }}" {% if y == year %}selected{% endif %}>FY{{ y }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="eo-form-label">Status</label>
+      <select name="status" class="eo-form-select" onchange="this.form.submit()">
+        <option value="">All Status</option>
+        {% for val, label in status_choices %}
+        <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% if status_filter %}
+    <a href="?year={{ year }}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-x-circle"></i> Reset
+    </a>
+    {% endif %}
+  </form>
+</div>
+
+<!-- Summary row -->
+{% if budgets %}
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="eo-stat eo-stat-info">
+      <div class="eo-stat-label">Total Allocated</div>
+      <div class="eo-stat-value">${{ grand_total|floatformat:0|intcomma }}</div>
+      <i class="bi bi-wallet2 eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="eo-stat eo-stat-danger">
+      <div class="eo-stat-label">Total Spent</div>
+      <div class="eo-stat-value">${{ grand_spent|floatformat:0|intcomma }}</div>
+      <i class="bi bi-graph-down-arrow eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="eo-stat eo-stat-success">
+      <div class="eo-stat-label">Total Balance</div>
+      <div class="eo-stat-value">${{ grand_total|floatformat:0|intcomma }}</div>
+      <i class="bi bi-safe eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
+<!-- Budget cards -->
+<div class="row g-4">
+  {% for b in budgets %}
+  <div class="col-md-6 col-xl-4">
+    <div class="eo-card" style="height:100%;border-top:4px solid {{ b.status_color }}">
+
+      <!-- Header -->
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px">
+        <div style="min-width:0">
+          <div style="font-size:.95rem;font-weight:800;color:var(--eo-text);margin-bottom:4px;
+                      overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ b.name }}</div>
+          <div style="font-size:.74rem;color:var(--eo-text-muted)">
+            FY{{ b.fiscal_year }}
+            {% if b.department %} · {{ b.department.name }}{% endif %}
+            {% if b.unit %} · {{ b.unit.name }}{% endif %}
+          </div>
+        </div>
+        <span style="font-size:.68rem;font-weight:700;padding:3px 10px;border-radius:20px;flex-shrink:0;
+          background:{{ b.status_color }}18;color:{{ b.status_color }}">
+          {{ b.get_status_display }}
+        </span>
+      </div>
+
+      <!-- Amount + pct -->
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:10px">
+        <div>
+          <div style="font-size:.67rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:2px">Total Budget</div>
+          <div style="font-size:1.45rem;font-weight:800;color:var(--eo-text)">${{ b.total_amount|floatformat:0|intcomma }}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:.67rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:2px">Used</div>
+          <div style="font-size:1.45rem;font-weight:800;
+            color:{% if b.utilization_pct > 85 %}var(--eo-danger){% elif b.utilization_pct > 65 %}var(--eo-warning){% else %}var(--eo-success){% endif %}">
+            {{ b.utilization_pct }}%
+          </div>
+        </div>
+      </div>
+
+      <!-- Progress -->
+      <div style="height:8px;background:var(--eo-bg);border-radius:5px;overflow:hidden;margin-bottom:14px">
+        <div style="height:100%;border-radius:5px;width:{{ b.utilization_pct }}%;
+          background:{% if b.utilization_pct > 85 %}var(--eo-danger){% elif b.utilization_pct > 65 %}var(--eo-warning){% else %}var(--eo-accent){% endif %}">
+        </div>
+      </div>
+
+      <!-- 3-col stats -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;
+                  padding-top:12px;border-top:1px solid var(--eo-border)">
+        <div style="text-align:center">
+          <div style="font-size:.67rem;color:var(--eo-text-muted);margin-bottom:3px">Spent</div>
+          <div style="font-size:.84rem;font-weight:700;color:var(--eo-text)">${{ b.spent_amount|floatformat:0|intcomma }}</div>
+        </div>
+        <div style="text-align:center;border-left:1px solid var(--eo-border);border-right:1px solid var(--eo-border)">
+          <div style="font-size:.67rem;color:var(--eo-text-muted);margin-bottom:3px">Allocated</div>
+          <div style="font-size:.84rem;font-weight:700;color:var(--eo-text)">${{ b.allocated_amount|floatformat:0|intcomma }}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:.67rem;color:var(--eo-text-muted);margin-bottom:3px">Balance</div>
+          <div style="font-size:.84rem;font-weight:700;color:var(--eo-success)">${{ b.balance|floatformat:0|intcomma }}</div>
+        </div>
+      </div>
+
+      {% if b.approved_by %}
+      <div style="margin-top:12px;font-size:.72rem;color:var(--eo-text-muted)">
+        <i class="bi bi-person-check me-1"></i>Approved by {{ b.approved_by.full_name }}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="eo-card" style="text-align:center;padding:72px 32px">
+  <i class="bi bi-wallet2" style="font-size:3rem;display:block;margin-bottom:16px;opacity:.25;color:var(--eo-text-light)"></i>
+  <div style="font-size:1.1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No budgets found for FY{{ year }}</div>
+  <p style="color:var(--eo-text-muted);font-size:.87rem">Try a different year or status filter.</p>
+</div>
+{% endif %}
+{% endblock %}

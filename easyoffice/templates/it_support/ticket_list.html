@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Tickets{% endblock %}
+{% block breadcrumb %}<a href="{% url 'it_dashboard' %}">IT Support</a> / Tickets{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">{% if is_it %}All Tickets{% else %}My Tickets{% endif %}</h1>
+    <p class="eo-page-subtitle">{{ total }} ticket{{ total|pluralize }} found</p>
+  </div>
+  <a href="{% url 'ticket_create' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-plus-lg"></i> New Request
+  </a>
+</div>
+
+<!-- Filters -->
+<div class="eo-card mb-4">
+  <form method="get" class="row g-3 align-items-end">
+    <div class="col-sm-4">
+      <label class="eo-form-label">Search</label>
+      <div style="position:relative">
+        <i class="bi bi-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--eo-text-light);font-size:.8rem"></i>
+        <input type="text" name="q" class="eo-form-control" style="padding-left:32px"
+               value="{{ q }}" placeholder="Ticket number or title..."/>
+      </div>
+    </div>
+    <div class="col-sm-2">
+      <label class="eo-form-label">Status</label>
+      <select name="status" class="eo-form-select">
+        <option value="">All Status</option>
+        {% for val, label in status_choices %}
+        <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-sm-3">
+      <label class="eo-form-label">Type</label>
+      <select name="type" class="eo-form-select">
+        <option value="">All Types</option>
+        {% for val, label in type_choices %}
+        <option value="{{ val }}" {% if type_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-sm-2">
+      <label class="eo-form-label">Priority</label>
+      <select name="priority" class="eo-form-select">
+        <option value="">All</option>
+        {% for val, label in priority_choices %}
+        <option value="{{ val }}" {% if priority_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto d-flex gap-2">
+      <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
+      <a href="{% url 'ticket_list' %}" class="eo-btn eo-btn-secondary">Reset</a>
+    </div>
+  </form>
+</div>
+
+<!-- Table -->
+<div class="eo-card" style="padding:0;overflow:hidden">
+  <table class="eo-table">
+    <thead>
+      <tr>
+        <th style="padding-left:16px">Ticket</th>
+        <th>Type</th>
+        {% if is_it %}<th>Requested By</th>{% endif %}
+        <th>Priority</th>
+        <th>Status</th>
+        {% if is_it %}<th>Assigned To</th>{% endif %}
+        <th>Raised</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ticket in tickets %}
+      <tr style="cursor:pointer" onclick="window.location='{% url 'ticket_detail' ticket.pk %}'">
+        <td style="padding-left:16px">
+          <div style="font-family:var(--eo-mono);font-size:.78rem;font-weight:700;color:var(--eo-text-muted);margin-bottom:2px">{{ ticket.ticket_number }}</div>
+          <div style="font-size:.87rem;font-weight:600;color:var(--eo-text)">{{ ticket.title|truncatechars:52 }}</div>
+        </td>
+        <td style="font-size:.82rem;color:var(--eo-text-muted)">{{ ticket.get_request_type_display }}</td>
+        {% if is_it %}
+        <td>
+          <div style="display:flex;align-items:center;gap:8px">
+            {% if ticket.requested_by.avatar %}
+              <img src="{{ ticket.requested_by.avatar.url }}" style="width:26px;height:26px;border-radius:50%;object-fit:cover"/>
+            {% else %}
+              <div style="width:26px;height:26px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.6rem;font-weight:700;display:flex;align-items:center;justify-content:center">{{ ticket.requested_by.initials }}</div>
+            {% endif %}
+            <span style="font-size:.83rem;font-weight:500;color:var(--eo-text)">{{ ticket.requested_by.full_name }}</span>
+          </div>
+        </td>
+        {% endif %}
+        <td>
+          <span style="font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:4px;
+            {% if ticket.priority == 'critical' %}background:#fee2e2;color:#991b1b
+            {% elif ticket.priority == 'high' %}background:#fef3c7;color:#92400e
+            {% elif ticket.priority == 'normal' %}background:#dbeafe;color:#1e40af
+            {% else %}background:#f1f5f9;color:#64748b{% endif %}">
+            {{ ticket.get_priority_display }}
+          </span>
+        </td>
+        <td>
+          <span style="font-size:.72rem;font-weight:700;padding:3px 9px;border-radius:12px;
+            {% if ticket.status == 'open' %}background:#dbeafe;color:#1e40af
+            {% elif ticket.status == 'in_progress' %}background:#ede9fe;color:#5b21b6
+            {% elif ticket.status == 'pending_info' %}background:#fef3c7;color:#92400e
+            {% elif ticket.status == 'resolved' %}background:#d1fae5;color:#065f46
+            {% elif ticket.status == 'closed' %}background:#f1f5f9;color:#64748b
+            {% else %}background:#fee2e2;color:#991b1b{% endif %}">
+            {{ ticket.get_status_display }}
+          </span>
+        </td>
+        {% if is_it %}
+        <td style="font-size:.82rem;color:var(--eo-text-muted)">
+          {{ ticket.assigned_to.full_name|default:"—" }}
+        </td>
+        {% endif %}
+        <td style="font-size:.78rem;color:var(--eo-text-muted);white-space:nowrap">
+          {{ ticket.created_at|naturaltime }}
+        </td>
+        <td>
+          <a href="{% url 'ticket_detail' ticket.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" onclick="event.stopPropagation()">
+            <i class="bi bi-arrow-right"></i>
+          </a>
+        </td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="{% if is_it %}8{% else %}6{% endif %}" style="text-align:center;padding:48px;color:var(--eo-text-muted)">
+          <i class="bi bi-inbox" style="font-size:2rem;display:block;margin-bottom:10px;opacity:.4"></i>
+          No tickets found. <a href="{% url 'ticket_create' %}" style="color:var(--eo-accent)">Submit a new request.</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

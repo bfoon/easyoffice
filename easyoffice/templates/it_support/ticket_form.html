@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}New IT Request{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'it_dashboard' %}">IT Support</a> /
+  <a href="{% url 'ticket_list' %}">Tickets</a> / New Request
+{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">New IT Request</h1>
+    <p class="eo-page-subtitle">Submit a request to the IT team — we'll get back to you as soon as possible</p>
+  </div>
+</div>
+
+<div class="row g-4 justify-content-center">
+  <div class="col-lg-7">
+    <div class="eo-card">
+      <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+
+        <!-- Request Type -->
+        <div class="eo-form-group">
+          <label class="eo-form-label">Request Type *</label>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px" id="typeGrid">
+            {% for val, label in type_choices %}
+            <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:2px solid var(--eo-border);border-radius:9px;cursor:pointer;transition:border-color .15s" class="type-opt">
+              <input type="radio" name="request_type" value="{{ val }}" required
+                     {% if request.GET.type == val %}checked{% endif %}
+                     style="flex-shrink:0" onchange="onTypeChange()"/>
+              <div>
+                <div style="font-size:.8rem;font-weight:600;color:var(--eo-text)">
+                  <i class="bi {% if val == 'create_user' %}bi-person-plus
+                    {% elif val == 'reset_password' %}bi-key
+                    {% elif val == 'issue_equipment' %}bi-laptop
+                    {% elif val == 'return_equipment' %}bi-arrow-return-left
+                    {% elif val == 'create_email' %}bi-envelope-plus
+                    {% elif val == 'software_install' %}bi-app-indicator
+                    {% elif val == 'technical_support' %}bi-tools
+                    {% elif val == 'network_access' %}bi-wifi
+                    {% else %}bi-question-circle{% endif %} me-1" style="color:var(--eo-accent)"></i>
+                  {{ label }}
+                </div>
+              </div>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Priority -->
+        <div class="eo-form-group">
+          <label class="eo-form-label">Priority *</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            {% for val, label in priority_choices %}
+            <label style="display:flex;align-items:center;gap:7px;padding:8px 16px;border:2px solid var(--eo-border);border-radius:8px;cursor:pointer;transition:border-color .15s" class="prio-opt">
+              <input type="radio" name="priority" value="{{ val }}" {% if val == 'normal' %}checked{% endif %}
+                     style="flex-shrink:0" onchange="onPrioChange()"/>
+              <span style="font-size:.83rem;font-weight:600;
+                {% if val == 'critical' %}color:#991b1b
+                {% elif val == 'high' %}color:#92400e
+                {% elif val == 'normal' %}color:#1e40af
+                {% else %}color:#64748b{% endif %}">
+                {% if val == 'critical' %}🔴{% elif val == 'high' %}🟠{% elif val == 'normal' %}🔵{% else %}⚪{% endif %}
+                {{ label }}
+              </span>
+            </label>
+            {% endfor %}
+          </div>
+          <div id="slaHint" style="margin-top:6px;font-size:.75rem;color:var(--eo-text-muted)">
+            Expected response time: <strong id="slaText">within 24 hours</strong>
+          </div>
+        </div>
+
+        <!-- Title -->
+        <div class="eo-form-group">
+          <label class="eo-form-label">Subject / Title *</label>
+          <input type="text" name="title" class="eo-form-control" required
+                 placeholder="Brief one-line summary of the issue or request"/>
+        </div>
+
+        <!-- Description -->
+        <div class="eo-form-group">
+          <label class="eo-form-label">Description *</label>
+          <textarea name="description" class="eo-form-control" rows="5" required
+                    placeholder="Please provide as much detail as possible:
+– What do you need?
+– What system or device is affected?
+– When did the issue start?
+– Any error messages?"></textarea>
+        </div>
+
+        <!-- Attachment -->
+        <div class="eo-form-group">
+          <label class="eo-form-label">Attachment <span style="color:var(--eo-text-muted);font-weight:400">(optional)</span></label>
+          <input type="file" name="attachment" class="eo-form-control"
+                 accept=".pdf,.png,.jpg,.jpeg,.gif,.doc,.docx,.txt,.log,.zip"/>
+          <div class="eo-form-hint">Screenshots, error logs, or supporting documents (max 10 MB)</div>
+        </div>
+
+        <div style="display:flex;gap:10px;padding-top:4px">
+          <button type="submit" class="eo-btn eo-btn-primary" style="min-width:140px">
+            <i class="bi bi-send"></i> Submit Request
+          </button>
+          <a href="{% url 'it_dashboard' %}" class="eo-btn eo-btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Info panel -->
+  <div class="col-lg-4">
+    <div class="eo-card" style="border-top:4px solid var(--eo-accent)">
+      <h3 style="font-size:.9rem;font-weight:700;color:var(--eo-text);margin-bottom:14px">
+        <i class="bi bi-info-circle me-1" style="color:var(--eo-accent)"></i> What to expect
+      </h3>
+      <div style="display:flex;flex-direction:column;gap:12px;font-size:.83rem">
+        <div style="display:flex;gap:12px">
+          <div style="width:26px;height:26px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.72rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">1</div>
+          <div><strong style="color:var(--eo-text)">Submit your request</strong><br/><span style="color:var(--eo-text-muted)">You'll receive a ticket number immediately.</span></div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div style="width:26px;height:26px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.72rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">2</div>
+          <div><strong style="color:var(--eo-text)">IT team picks it up</strong><br/><span style="color:var(--eo-text-muted)">An IT staff member will be assigned and may ask follow-up questions.</span></div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div style="width:26px;height:26px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.72rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">3</div>
+          <div><strong style="color:var(--eo-text)">Resolution &amp; close</strong><br/><span style="color:var(--eo-text-muted)">Once resolved, you can confirm and close the ticket.</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="eo-card mt-4">
+      <h3 style="font-size:.9rem;font-weight:700;color:var(--eo-text);margin-bottom:12px">SLA Response Times</h3>
+      <div style="display:flex;flex-direction:column;gap:8px;font-size:.82rem">
+        <div style="display:flex;justify-content:space-between"><span style="color:#991b1b;font-weight:600">🔴 Critical</span><span style="color:var(--eo-text-muted)">Within 4 hours</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="color:#92400e;font-weight:600">🟠 High</span><span style="color:var(--eo-text-muted)">Within 8 hours</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="color:#1e40af;font-weight:600">🔵 Normal</span><span style="color:var(--eo-text-muted)">Within 24 hours</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="color:#64748b;font-weight:600">⚪ Low</span><span style="color:var(--eo-text-muted)">Within 72 hours</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var slaTimes = { critical: '4 hours', high: '8 hours', normal: '24 hours', low: '72 hours' };
+
+function onTypeChange() {
+  document.querySelectorAll('.type-opt').forEach(function(el) {
+    el.style.borderColor = el.querySelector('input').checked ? 'var(--eo-accent)' : 'var(--eo-border)';
+  });
+}
+function onPrioChange() {
+  var selected = '';
+  document.querySelectorAll('.prio-opt input').forEach(function(inp) {
+    inp.closest('.prio-opt').style.borderColor = inp.checked ? 'var(--eo-accent)' : 'var(--eo-border)';
+    if (inp.checked) selected = inp.value;
+  });
+  document.getElementById('slaText').textContent = 'within ' + (slaTimes[selected] || '24 hours');
+}
+
+// Init checked states
+onTypeChange(); onPrioChange();
+</script>
+{% endblock %}

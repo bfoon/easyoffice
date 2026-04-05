@@ -1,0 +1,145 @@
+{% extends 'dashboard/staff_dashboard.html' %}
+{% load humanize %}
+{% block title %}Unit Dashboard{% endblock %}
+
+{% block content %}
+{{ block.super }}
+
+{% if team_count %}
+<div class="row g-4 mt-1">
+  <div class="col-12">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">Unit Overview</h2>
+          <p class="eo-card-subtitle">
+            {{ team_count }} team member{{ team_count|pluralize }} ·
+            {{ team_tasks_overdue }} overdue task{{ team_tasks_overdue|pluralize }} ·
+            {{ team_pending_leave_requests }} pending leave request{{ team_pending_leave_requests|pluralize }}
+          </p>
+        </div>
+        <div class="d-flex gap-2">
+          <a href="{% url 'staff_directory' %}" class="eo-btn eo-btn-secondary eo-btn-sm">View Team</a>
+          <a href="{% url 'leave_approval' %}" class="eo-btn eo-btn-secondary eo-btn-sm">Leave Approvals</a>
+        </div>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-md-3">
+          <div class="eo-stat eo-stat-primary">
+            <div class="eo-stat-label">Team Size</div>
+            <div class="eo-stat-value">{{ team_count }}</div>
+            <i class="bi bi-people eo-stat-icon"></i>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="eo-stat eo-stat-warning">
+            <div class="eo-stat-label">Due Today</div>
+            <div class="eo-stat-value">{{ team_tasks_due_today }}</div>
+            <i class="bi bi-clock eo-stat-icon"></i>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="eo-stat eo-stat-danger">
+            <div class="eo-stat-label">Overdue Tasks</div>
+            <div class="eo-stat-value">{{ team_tasks_overdue }}</div>
+            <i class="bi bi-exclamation-triangle eo-stat-icon"></i>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="eo-stat eo-stat-info">
+            <div class="eo-stat-label">Pending Leave</div>
+            <div class="eo-stat-value">{{ team_pending_leave_requests }}</div>
+            <i class="bi bi-calendar-check eo-stat-icon"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">Team Task Watch</h2>
+          <p class="eo-card-subtitle">Recent task activity across your supervisees</p>
+        </div>
+        <a href="{% url 'task_list' %}?view=team" class="eo-btn eo-btn-secondary eo-btn-sm">Team Tasks</a>
+      </div>
+
+      {% if team_recent_tasks %}
+      <div class="d-flex flex-column gap-2">
+        {% for task in team_recent_tasks %}
+        <a href="{% url 'task_detail' task.pk %}" style="text-decoration:none">
+          <div class="eo-task-card {% if task.is_overdue %}overdue{% endif %}">
+            <div class="d-flex align-items-start justify-content-between gap-3">
+              <div style="min-width:0">
+                <div class="eo-task-title">{{ task.title|truncatechars:70 }}</div>
+                <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px">
+                  Assigned to {{ task.assigned_to.full_name }}
+                  {% if task.project %} · {{ task.project.name|truncatechars:25 }}{% endif %}
+                </div>
+              </div>
+              <span class="eo-status eo-status-{{ task.status }}">{{ task.get_status_display }}</span>
+            </div>
+
+            <div class="eo-task-meta">
+              <span class="eo-priority eo-priority-{{ task.priority }}">
+                <i class="bi bi-flag-fill"></i>{{ task.get_priority_display }}
+              </span>
+              {% if task.due_date %}
+              <span class="eo-task-due {% if task.is_overdue %}overdue{% endif %}">
+                <i class="bi bi-calendar3"></i> {{ task.due_date|date:"N j" }}
+              </span>
+              {% endif %}
+              {% if task.progress_pct > 0 %}
+              <div style="flex:1;min-width:60px">
+                <div class="eo-progress">
+                  <div class="eo-progress-bar" style="width:{{ task.progress_pct }}%"></div>
+                </div>
+              </div>
+              <span style="font-size:.72rem;color:var(--eo-text-muted)">{{ task.progress_pct }}%</span>
+              {% endif %}
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p style="color:var(--eo-text-muted)">No recent team tasks to monitor.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">Recent Leave Requests</h2>
+          <p class="eo-card-subtitle">Latest leave activity from your team</p>
+        </div>
+        <a href="{% url 'leave_approval' %}" class="eo-btn eo-btn-secondary eo-btn-sm">Open</a>
+      </div>
+
+      {% if team_recent_leave_requests %}
+      {% for lr in team_recent_leave_requests %}
+      <div style="padding:12px 0;border-bottom:1px solid var(--eo-border)">
+        <div style="display:flex;justify-content:space-between;gap:10px">
+          <div>
+            <div style="font-size:.87rem;font-weight:700;color:var(--eo-text)">{{ lr.staff.full_name }}</div>
+            <div style="font-size:.75rem;color:var(--eo-text-muted)">
+              {{ lr.leave_type.name }} · {{ lr.start_date|date:"N j" }} - {{ lr.end_date|date:"N j, Y" }}
+            </div>
+          </div>
+          <span class="eo-status eo-status-{{ lr.status }}">{{ lr.get_status_display }}</span>
+        </div>
+      </div>
+      {% endfor %}
+      {% else %}
+      <p style="color:var(--eo-text-muted)">No recent leave requests from your team.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

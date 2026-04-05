@@ -1,0 +1,1331 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Org Chart{% endblock %}
+{% block breadcrumb %}<span>Organization</span>{% endblock %}
+
+{% block content %}
+<style>
+/* ══════════════════════════════════════
+   ORG CHART — SHARED
+══════════════════════════════════════ */
+.org-wrap {
+  overflow: auto;
+  background: var(--eo-bg);
+  border: 1px solid var(--eo-border);
+  border-radius: var(--eo-radius);
+  position: relative;
+}
+.org-inner {
+  min-width: 720px;
+  padding: 32px 24px 48px;
+  transform-origin: top center;
+  transition: transform .2s ease;
+}
+
+/* ── View toggle ── */
+.view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border: 1px solid var(--eo-border);
+  background: var(--eo-surface);
+  color: var(--eo-text-muted);
+  font-size: .82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.view-btn:first-child { border-radius: 8px 0 0 8px; }
+.view-btn:last-child  { border-radius: 0 8px 8px 0; border-left: 0; }
+.view-btn.active { background: var(--eo-accent); color: #fff; border-color: var(--eo-accent); }
+
+/* ── Zoom controls ── */
+.zoom-bar {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  display: flex;
+  gap: 4px;
+  z-index: 10;
+}
+.zoom-btn {
+  width: 30px; height: 30px;
+  border: 1px solid var(--eo-border);
+  background: var(--eo-surface);
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  font-size: .9rem;
+  color: var(--eo-text-muted);
+  transition: background .1s, color .1s;
+}
+.zoom-btn:hover { background: var(--eo-accent); color: #fff; border-color: var(--eo-accent); }
+
+/* ══════════════════════════════════════
+   TREE VIEW — CSS ORG CHART
+══════════════════════════════════════ */
+.oc-tree {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.oc-tree ul {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  position: relative;
+  padding-top: 28px;
+}
+/* Vertical line from parent to the horizontal bar */
+.oc-tree ul::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  height: 28px;
+  background: var(--eo-border);
+}
+.oc-tree li {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  padding: 0 10px;
+  list-style: none;
+}
+/* Horizontal bar + left/right extensions connecting siblings */
+.oc-tree li::before,
+.oc-tree li::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  border-top: 2px solid var(--eo-border);
+  width: 50%;
+  height: 0;
+}
+.oc-tree li::before { right: 50%; }
+.oc-tree li::after  { left: 50%; }
+/* Only-child: no horizontal bar needed */
+.oc-tree li:only-child::before,
+.oc-tree li:only-child::after { border-top: none; }
+/* First and last child clean up the outer edges */
+.oc-tree li:first-child::before { border-top: none; }
+.oc-tree li:last-child::after   { border-top: none; }
+/* Vertical drop from horizontal bar to the node */
+.oc-tree .oc-connector {
+  width: 2px;
+  height: 20px;
+  background: var(--eo-border);
+  flex-shrink: 0;
+}
+/* Unit rows — slightly different: no drop line needed when leaf */
+.oc-tree .oc-units-row {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  position: relative;
+  padding-top: 24px;
+  margin-top: 0;
+}
+.oc-tree .oc-units-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  height: 24px;
+  background: var(--eo-border);
+}
+/* When there are multiple units in a row, draw a horizontal bar across them */
+.oc-tree .oc-units-row.multi::before { display: none; }
+.oc-tree .oc-units-row.multi::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: calc(50% / var(--unit-count, 2));
+  right: calc(50% / var(--unit-count, 2));
+  height: 2px;
+  background: var(--eo-border);
+}
+
+/* ══════════════════════════════════════
+   ORG NODES
+══════════════════════════════════════ */
+
+/* Root node */
+.oc-root {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 28px;
+  background: var(--eo-primary, var(--eo-accent));
+  color: #fff;
+  border-radius: var(--eo-radius);
+  font-size: .95rem;
+  font-weight: 800;
+  letter-spacing: .02em;
+  box-shadow: 0 8px 32px rgba(0,0,0,.14);
+  min-width: 200px;
+  justify-content: center;
+  text-align: center;
+}
+
+/* Department node (L1 / L2) */
+.oc-dept-node {
+  width: 220px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--eo-surface);
+  border: 1px solid var(--eo-border);
+  box-shadow: 0 4px 16px rgba(0,0,0,.06);
+  transition: box-shadow .18s, transform .18s;
+  cursor: pointer;
+  position: relative;
+}
+.oc-dept-node:hover {
+  box-shadow: 0 10px 32px rgba(0,0,0,.12);
+  transform: translateY(-3px);
+}
+.oc-dept-node.l2 { width: 190px; }
+
+.oc-dept-head {
+  padding: 12px 14px;
+  color: #fff;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.oc-dept-head-icon {
+  width: 36px; height: 36px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: .95rem;
+  flex-shrink: 0;
+}
+.oc-dept-head-text { flex: 1; min-width: 0; }
+.oc-dept-name {
+  font-size: .88rem;
+  font-weight: 800;
+  line-height: 1.2;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.oc-dept-code {
+  font-size: .65rem;
+  opacity: .75;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.oc-dept-badge {
+  font-size: .6rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255,255,255,.22);
+  flex-shrink: 0;
+}
+
+/* Department head person */
+.oc-dept-person {
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--eo-border);
+  background: var(--eo-bg);
+}
+.oc-dept-person-avatar {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.oc-dept-person-initials {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: .6rem;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.oc-dept-person-info { flex: 1; min-width: 0; }
+.oc-dept-person-label {
+  font-size: .6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--eo-text-muted);
+}
+.oc-dept-person-name {
+  font-size: .75rem;
+  font-weight: 600;
+  color: var(--eo-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Department stats row */
+.oc-dept-stats {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  font-size: .72rem;
+  color: var(--eo-text-muted);
+}
+.oc-dept-stat {
+  flex: 1;
+  text-align: center;
+  padding: 8px 6px;
+  border-right: 1px solid var(--eo-border);
+}
+.oc-dept-stat:last-child { border-right: none; }
+.oc-dept-stat strong { display: block; font-size: .92rem; font-weight: 800; color: var(--eo-text); }
+
+/* Unit node */
+.oc-unit-node {
+  width: 170px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--eo-surface);
+  border: 1px solid var(--eo-border);
+  box-shadow: 0 2px 10px rgba(0,0,0,.04);
+  transition: box-shadow .15s, transform .15s;
+  cursor: pointer;
+}
+.oc-unit-node:hover {
+  box-shadow: 0 6px 20px rgba(0,0,0,.1);
+  transform: translateY(-2px);
+}
+.oc-unit-head-bar {
+  height: 4px;
+}
+.oc-unit-body {
+  padding: 9px 11px;
+}
+.oc-unit-name {
+  font-size: .8rem;
+  font-weight: 700;
+  color: var(--eo-text);
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.oc-unit-code { font-size: .65rem; color: var(--eo-text-muted); margin-bottom: 6px; }
+.oc-unit-person {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--eo-border);
+  margin-top: 4px;
+}
+.oc-unit-count {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.oc-unit-count-badge {
+  font-size: .68rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 12px;
+  background: var(--eo-bg);
+  border: 1px solid var(--eo-border);
+  color: var(--eo-text-muted);
+}
+
+/* Member drawer */
+.oc-members-drawer {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height .28s ease;
+  border-top: 1px solid var(--eo-border);
+}
+.oc-member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--eo-border);
+  text-decoration: none;
+  transition: background .1s;
+}
+.oc-member-row:hover { background: var(--eo-bg); }
+.oc-member-row:last-child { border-bottom: none; }
+.oc-member-avatar {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.oc-member-initials {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: .55rem;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.oc-online-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* ── Highlight search results ── */
+.oc-highlight .oc-dept-node,
+.oc-highlight .oc-unit-node {
+  opacity: .22;
+  transition: opacity .25s;
+}
+.oc-highlight .oc-dept-node.matched,
+.oc-highlight .oc-unit-node.matched {
+  opacity: 1;
+  box-shadow: 0 0 0 3px var(--eo-accent), 0 8px 28px rgba(0,0,0,.14);
+}
+
+/* ══════════════════════════════════════
+   BOARD VIEW (improved)
+══════════════════════════════════════ */
+.bd-section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 24px 14px;
+  border-bottom: 1px solid var(--eo-border);
+}
+.bd-level-pill {
+  font-size: .68rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 20px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.bd-dept-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+  padding: 20px;
+}
+.bd-dept-card {
+  border-radius: var(--eo-radius);
+  overflow: hidden;
+  background: var(--eo-surface);
+  border: 1px solid var(--eo-border);
+  box-shadow: 0 4px 16px rgba(0,0,0,.05);
+  transition: box-shadow .18s;
+}
+.bd-dept-card:hover { box-shadow: 0 8px 28px rgba(0,0,0,.1); }
+.bd-unit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  padding: 12px;
+}
+.bd-unit-card {
+  border-radius: 8px;
+  border: 1px solid var(--eo-border);
+  overflow: hidden;
+  background: var(--eo-bg);
+  transition: box-shadow .15s;
+}
+.bd-unit-card:hover { box-shadow: 0 4px 14px rgba(0,0,0,.08); }
+.drag-handle { cursor: grab; }
+.drag-handle:active { cursor: grabbing; }
+.dragging { opacity: .5; }
+.drop-target { outline: 2px dashed var(--eo-accent); outline-offset: 3px; border-radius: 8px; }
+</style>
+
+<!-- ══ HEADER ══ -->
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Organization Chart</h1>
+    <p class="eo-page-subtitle">{{ level_1_departments.count }} executive office{{ level_1_departments.count|pluralize }} · {{ level_2_departments.count }} department{{ level_2_departments.count|pluralize }}</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    {% if request.user.is_superuser %}
+    <button class="eo-btn eo-btn-secondary eo-btn-sm" onclick="saveOrgChartLayout()">
+      <i class="bi bi-floppy"></i> Save
+    </button>
+    {% endif %}
+    <button class="eo-btn eo-btn-secondary eo-btn-sm" onclick="printOrgChart()">
+      <i class="bi bi-printer"></i> Print
+    </button>
+    <a href="{% url 'organization:department_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+      <i class="bi bi-building"></i> Departments
+    </a>
+  </div>
+</div>
+
+<!-- ══ STATS + CONTROLS ══ -->
+<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px">
+  <!-- Stats pills -->
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:8px">
+      <i class="bi bi-briefcase-fill" style="color:var(--eo-accent);font-size:.85rem"></i>
+      <div>
+        <div style="font-size:.7rem;color:var(--eo-text-muted);font-weight:600">L1 Offices</div>
+        <div style="font-size:.95rem;font-weight:800;color:var(--eo-text)">{{ level_1_departments.count }}</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:8px">
+      <i class="bi bi-building" style="color:#7c3aed;font-size:.85rem"></i>
+      <div>
+        <div style="font-size:.7rem;color:var(--eo-text-muted);font-weight:600">L2 Depts</div>
+        <div style="font-size:.95rem;font-weight:800;color:var(--eo-text)">{{ level_2_departments.count }}</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:8px">
+      <i class="bi bi-people-fill" style="color:var(--eo-success);font-size:.85rem"></i>
+      <div>
+        <div style="font-size:.7rem;color:var(--eo-text-muted);font-weight:600">Total Staff</div>
+        <div style="font-size:.95rem;font-weight:800;color:var(--eo-text)" id="totalStaff">—</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:8px">
+      <span style="width:8px;height:8px;border-radius:50%;background:var(--eo-success);display:inline-block"></span>
+      <div>
+        <div style="font-size:.7rem;color:var(--eo-text-muted);font-weight:600">Online</div>
+        <div style="font-size:.95rem;font-weight:800;color:var(--eo-success)" id="onlineCount">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div style="display:flex;gap:8px;align-items:center">
+    <!-- Search -->
+    <div style="position:relative">
+      <i class="bi bi-search" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.78rem"></i>
+      <input type="text" id="orgSearch" placeholder="Search people, units..."
+             style="padding:7px 12px 7px 30px;border:1px solid var(--eo-border);border-radius:8px;background:var(--eo-surface);color:var(--eo-text);font-size:.82rem;outline:none;width:200px"
+             oninput="searchOrg(this.value)"/>
+    </div>
+    <!-- View toggle -->
+    <div style="display:flex">
+      <button class="view-btn active" id="btnTree" onclick="setView('tree')">
+        <i class="bi bi-diagram-3"></i> Tree
+      </button>
+      <button class="view-btn" id="btnBoard" onclick="setView('board')">
+        <i class="bi bi-grid-3x3-gap"></i> Board
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     TREE VIEW
+══════════════════════════════════ -->
+<div id="viewTree">
+  <div class="org-wrap" style="min-height:400px">
+    <!-- Zoom controls -->
+    <div class="zoom-bar">
+      <button class="zoom-btn" onclick="zoom(0.1)" title="Zoom in"><i class="bi bi-plus-lg"></i></button>
+      <button class="zoom-btn" onclick="zoom(-0.1)" title="Zoom out"><i class="bi bi-dash-lg"></i></button>
+      <button class="zoom-btn" onclick="resetZoom()" title="Reset zoom"><i class="bi bi-arrows-angle-contract"></i></button>
+    </div>
+
+    <div class="org-inner" id="orgInner">
+      <div class="oc-tree">
+
+        <!-- Root node -->
+        <div class="oc-root">
+          <i class="bi bi-grid-3x3-gap-fill"></i>
+          <span id="rootName">EasyOffice</span>
+        </div>
+
+        {% if level_1_departments %}
+        <!-- Vertical stem down from root -->
+        <div style="width:2px;height:28px;background:var(--eo-border);margin:0 auto"></div>
+
+        <!-- ── LEVEL 1 ROW ── -->
+        <ul>
+          {% for dept in level_1_departments %}
+          <li>
+            <div style="width:2px;height:20px;background:var(--eo-border);margin:0 auto"></div>
+
+            <!-- L1 Department Node -->
+            <div class="oc-dept-node" onclick="toggleDeptMembers(this, '{{ dept.id }}')"
+                 data-dept-id="{{ dept.id }}" data-search="{{ dept.name|lower }} {{ dept.code|lower }}">
+              <div class="oc-dept-head" style="background:{{ dept.color|default:'var(--eo-accent)' }}">
+                <div class="oc-dept-head-icon">
+                  <i class="{{ dept.icon|default:'bi-building' }}"></i>
+                </div>
+                <div class="oc-dept-head-text">
+                  <div class="oc-dept-name">{{ dept.name }}</div>
+                  <div class="oc-dept-code">{{ dept.code }}</div>
+                </div>
+                <span class="oc-dept-badge">L1</span>
+              </div>
+              {% if dept.head %}
+              <div class="oc-dept-person">
+                {% if dept.head.avatar %}
+                  <img src="{{ dept.head.avatar.url }}" class="oc-dept-person-avatar"/>
+                {% else %}
+                  <div class="oc-dept-person-initials" style="background:{{ dept.color|default:'var(--eo-accent)' }}">{{ dept.head.initials }}</div>
+                {% endif %}
+                <div class="oc-dept-person-info">
+                  <div class="oc-dept-person-label">Head</div>
+                  <div class="oc-dept-person-name">{{ dept.head.full_name }}</div>
+                </div>
+              </div>
+              {% endif %}
+              <div class="oc-dept-stats">
+                <div class="oc-dept-stat">
+                  <strong>{{ dept.units.count }}</strong>
+                  Unit{{ dept.units.count|pluralize }}
+                </div>
+                <div class="oc-dept-stat">
+                  <strong id="dcount-{{ dept.id }}">—</strong>
+                  Staff
+                </div>
+              </div>
+            </div>
+
+            <!-- Units of this L1 dept -->
+            <ul class="oc-tree-unit-ul" data-dept-id="{{ dept.id }}">
+              {% for unit in dept.units.all %}
+              <li class="oc-tree-unit-li" draggable="true" data-unit-id="{{ unit.id }}" data-dept-id="{{ dept.id }}">
+                <div style="width:2px;height:20px;background:var(--eo-border);margin:0 auto"></div>
+                <div class="oc-unit-node" data-unit-id="{{ unit.id }}"
+                     data-search="{{ unit.name|lower }} {{ unit.code|lower }}"
+                     onclick="toggleUnitMembers('umem-{{ unit.id }}', this)">
+                  <div class="oc-unit-head-bar" style="background:{{ unit.color|default:dept.color|default:'var(--eo-accent)' }}"></div>
+                  <div class="oc-unit-body">
+                    <div class="oc-unit-count">
+                      <div style="font-size:.6rem;color:var(--eo-text-muted);font-weight:700;text-transform:uppercase;display:flex;align-items:center;gap:4px">
+                        <i class="bi bi-grip-vertical" style="cursor:grab;color:var(--eo-text-light);font-size:.75rem" title="Drag to move unit"></i>Unit
+                      </div>
+                      <span class="oc-unit-count-badge">{{ unit.member_count }} staff</span>
+                    </div>
+                    <div class="oc-unit-name">{{ unit.name }}</div>
+                    <div class="oc-unit-code">{{ unit.code }}</div>
+                    {% if unit.head_of_unit %}
+                    <div class="oc-unit-person">
+                      {% if unit.head_of_unit.avatar %}
+                        <img src="{{ unit.head_of_unit.avatar.url }}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;flex-shrink:0"/>
+                      {% else %}
+                        <div style="width:18px;height:18px;border-radius:50%;background:{{ unit.color|default:dept.color|default:'var(--eo-accent)' }};color:#fff;font-size:.5rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ unit.head_of_unit.initials }}</div>
+                      {% endif %}
+                      <span style="font-size:.7rem;color:var(--eo-text-muted)">{{ unit.head_of_unit.full_name }}</span>
+                    </div>
+                    {% endif %}
+                  </div>
+                  <div class="oc-members-drawer" id="umem-{{ unit.id }}">
+                    {% for sp in unit.staffprofile_set.all %}
+                    <a href="{% url 'staff_detail' sp.user.pk %}" class="oc-member-row">
+                      {% if sp.user.avatar %}
+                        <img src="{{ sp.user.avatar.url }}" class="oc-member-avatar"/>
+                      {% else %}
+                        <div class="oc-member-initials" style="background:{{ unit.color|default:dept.color|default:'var(--eo-accent)' }}">{{ sp.user.initials }}</div>
+                      {% endif %}
+                      <div style="flex:1;min-width:0">
+                        <div style="font-size:.75rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ sp.user.full_name }}</div>
+                        {% if sp.position %}<div style="font-size:.64rem;color:var(--eo-text-muted)">{{ sp.position.title }}</div>{% endif %}
+                      </div>
+                      <span class="oc-online-dot" style="background:{% if sp.user.is_online %}var(--eo-success){% else %}var(--eo-text-light){% endif %}"></span>
+                    </a>
+                    {% empty %}
+                    <div style="padding:10px 12px;font-size:.75rem;color:var(--eo-text-muted);font-style:italic">No staff assigned</div>
+                    {% endfor %}
+                  </div>
+                </div>
+              </li>
+              {% empty %}
+              <li class="oc-tree-unit-empty-drop" style="list-style:none">
+                <div style="width:2px;height:20px;background:var(--eo-border);margin:0 auto"></div>
+                <div style="width:170px;padding:14px 10px;border:2px dashed var(--eo-border);border-radius:10px;text-align:center;font-size:.72rem;color:var(--eo-text-muted)">
+                  Drop units here
+                </div>
+              </li>
+              {% endfor %}
+            </ul>
+
+          </li>
+          {% endfor %}
+        </ul>
+
+        {% endif %}{# /level_1_departments #}
+
+        <!-- ── LEVEL 2 ROW (always shown, all L2 depts) ── -->
+        {% if level_2_departments %}
+
+        <!-- Connector stem down to L2 label -->
+        <div style="width:2px;height:28px;background:var(--eo-border);margin:0 auto"></div>
+        <div style="display:inline-flex;align-items:center;gap:8px;padding:5px 16px;border-radius:20px;background:var(--eo-surface);border:1px solid var(--eo-border);font-size:.72rem;font-weight:700;color:#5b21b6;margin:0 auto 0;letter-spacing:.04em">
+          <i class="bi bi-diagram-2"></i> Level 2 Departments
+        </div>
+        <div style="width:2px;height:20px;background:var(--eo-border);margin:0 auto"></div>
+
+        <ul>
+          {% for dept in level_2_departments %}
+          <li>
+            <div style="width:2px;height:20px;background:var(--eo-border);margin:0 auto"></div>
+
+            <!-- L2 Department Node -->
+            <div class="oc-dept-node l2" onclick="toggleDeptMembers(this, 'l2-{{ dept.id }}')"
+                 data-dept-id="{{ dept.id }}" data-search="{{ dept.name|lower }} {{ dept.code|lower }}">
+              <div class="oc-dept-head" style="background:{{ dept.color|default:'#7c3aed' }}">
+                <div class="oc-dept-head-icon" style="width:30px;height:30px">
+                  <i class="{{ dept.icon|default:'bi-diagram-2' }}" style="font-size:.85rem"></i>
+                </div>
+                <div class="oc-dept-head-text">
+                  <div class="oc-dept-name">{{ dept.name }}</div>
+                  <div class="oc-dept-code">
+                    {{ dept.code }}{% if dept.parent %} · ↑ {{ dept.parent.name }}{% endif %}
+                  </div>
+                </div>
+                <span class="oc-dept-badge">L2</span>
+              </div>
+              {% if dept.head %}
+              <div class="oc-dept-person">
+                {% if dept.head.avatar %}
+                  <img src="{{ dept.head.avatar.url }}" class="oc-dept-person-avatar"/>
+                {% else %}
+                  <div class="oc-dept-person-initials" style="background:{{ dept.color|default:'#7c3aed' }}">{{ dept.head.initials }}</div>
+                {% endif %}
+                <div class="oc-dept-person-info">
+                  <div class="oc-dept-person-label">Head</div>
+                  <div class="oc-dept-person-name">{{ dept.head.full_name }}</div>
+                </div>
+              </div>
+              {% endif %}
+              <div class="oc-dept-stats">
+                <div class="oc-dept-stat">
+                  <strong>{{ dept.units.count }}</strong>
+                  Unit{{ dept.units.count|pluralize }}
+                </div>
+                <div class="oc-dept-stat">
+                  <strong id="dcount-l2-{{ dept.id }}">—</strong>
+                  Staff
+                </div>
+              </div>
+            </div>
+
+            <!-- Units of this L2 dept -->
+            <ul class="oc-tree-unit-ul" data-dept-id="{{ dept.id }}">
+              {% for unit in dept.units.all %}
+              <li class="oc-tree-unit-li" draggable="true" data-unit-id="{{ unit.id }}" data-dept-id="{{ dept.id }}">
+                <div style="width:2px;height:20px;background:var(--eo-border);margin:0 auto"></div>
+                <div class="oc-unit-node" data-unit-id="{{ unit.id }}"
+                     data-search="{{ unit.name|lower }} {{ unit.code|lower }}"
+                     onclick="toggleUnitMembers('umem2-{{ unit.id }}', this)">
+                  <div class="oc-unit-head-bar" style="background:{{ unit.color|default:dept.color|default:'#7c3aed' }}"></div>
+                  <div class="oc-unit-body">
+                    <div class="oc-unit-count">
+                      <div style="font-size:.6rem;color:var(--eo-text-muted);font-weight:700;text-transform:uppercase;display:flex;align-items:center;gap:4px">
+                        <i class="bi bi-grip-vertical" style="cursor:grab;color:var(--eo-text-light);font-size:.75rem" title="Drag to move unit"></i>Unit
+                      </div>
+                      <span class="oc-unit-count-badge">{{ unit.member_count }} staff</span>
+                    </div>
+                    <div class="oc-unit-name">{{ unit.name }}</div>
+                    <div class="oc-unit-code">{{ unit.code }}</div>
+                    {% if unit.head_of_unit %}
+                    <div class="oc-unit-person">
+                      {% if unit.head_of_unit.avatar %}
+                        <img src="{{ unit.head_of_unit.avatar.url }}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;flex-shrink:0"/>
+                      {% else %}
+                        <div style="width:18px;height:18px;border-radius:50%;background:{{ unit.color|default:dept.color|default:'#7c3aed' }};color:#fff;font-size:.5rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ unit.head_of_unit.initials }}</div>
+                      {% endif %}
+                      <span style="font-size:.7rem;color:var(--eo-text-muted)">{{ unit.head_of_unit.full_name }}</span>
+                    </div>
+                    {% endif %}
+                  </div>
+                  <div class="oc-members-drawer" id="umem2-{{ unit.id }}">
+                    {% for sp in unit.staffprofile_set.all %}
+                    <a href="{% url 'staff_detail' sp.user.pk %}" class="oc-member-row">
+                      {% if sp.user.avatar %}
+                        <img src="{{ sp.user.avatar.url }}" class="oc-member-avatar"/>
+                      {% else %}
+                        <div class="oc-member-initials" style="background:{{ unit.color|default:dept.color|default:'#7c3aed' }}">{{ sp.user.initials }}</div>
+                      {% endif %}
+                      <div style="flex:1;min-width:0">
+                        <div style="font-size:.75rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ sp.user.full_name }}</div>
+                        {% if sp.position %}<div style="font-size:.64rem;color:var(--eo-text-muted)">{{ sp.position.title }}</div>{% endif %}
+                      </div>
+                      <span class="oc-online-dot" style="background:{% if sp.user.is_online %}var(--eo-success){% else %}var(--eo-text-light){% endif %}"></span>
+                    </a>
+                    {% empty %}
+                    <div style="padding:10px 12px;font-size:.75rem;color:var(--eo-text-muted);font-style:italic">No staff assigned</div>
+                    {% endfor %}
+                  </div>
+                </div>
+              </li>
+              {% empty %}
+              <li class="oc-tree-unit-empty-drop" style="list-style:none">
+                <div style="width:2px;height:20px;background:var(--eo-border);margin:0 auto"></div>
+                <div style="width:170px;padding:14px 10px;border:2px dashed var(--eo-border);border-radius:10px;text-align:center;font-size:.72rem;color:var(--eo-text-muted)">
+                  Drop units here
+                </div>
+              </li>
+              {% endfor %}
+            </ul>
+
+            <!-- L2 member drawer (dept-level staff) -->
+            <div class="oc-members-drawer" id="l2-{{ dept.id }}" style="margin-top:8px;width:190px;border-radius:10px;overflow:hidden;border:1px solid var(--eo-border);background:var(--eo-surface)">
+            </div>
+
+          </li>
+          {% endfor %}
+        </ul>
+
+        {% endif %}{# /level_2_departments #}
+
+        {% if not level_1_departments and not level_2_departments %}
+        <div style="text-align:center;padding:48px;color:var(--eo-text-muted)">
+          <i class="bi bi-diagram-3" style="font-size:2.5rem;display:block;margin-bottom:12px;opacity:.3"></i>
+          <p>No departments configured yet.</p>
+        </div>
+        {% endif %}
+
+      </div><!-- /.oc-tree -->
+    </div><!-- /#orgInner -->
+  </div><!-- /.org-wrap -->
+
+  <!-- Legend -->
+  <div style="display:flex;align-items:center;flex-wrap:wrap;gap:16px;margin-top:12px;padding:10px 16px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:var(--eo-radius);font-size:.78rem;color:var(--eo-text-muted)">
+    <span style="font-weight:700;color:var(--eo-text)">Legend</span>
+    <span style="display:flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#1d4ed8;display:inline-block"></span> L1 Office</span>
+    <span style="display:flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#7c3aed;display:inline-block"></span> L2 Department</span>
+    <span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:var(--eo-success);display:inline-block"></span> Online</span>
+    <span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:var(--eo-text-light);display:inline-block"></span> Offline</span>
+    <span style="margin-left:auto;display:flex;align-items:center;gap:5px"><i class="bi bi-hand-index"></i> Click node to expand · <i class="bi bi-grip-vertical"></i> Drag grip to move units</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     BOARD VIEW (Drag-and-drop layout)
+══════════════════════════════════ -->
+<div id="viewBoard" style="display:none">
+
+  <!-- LEVEL 1 -->
+  <div class="eo-card mb-4" style="padding:0;overflow:hidden">
+    <div class="bd-section-header">
+      <div>
+        <div style="font-size:.98rem;font-weight:800;color:var(--eo-text)">Level 1 — Executive Offices</div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px">{{ level_1_departments.count }} top-level management structure{{ level_1_departments.count|pluralize }}</div>
+      </div>
+      <span class="bd-level-pill" style="background:#dbeafe;color:#1d4ed8">L1 Offices</span>
+    </div>
+
+    <div class="bd-dept-grid org-board-dropzone" id="level1Board" data-level-board="1">
+      {% for dept in level_1_departments %}
+      <div class="bd-dept-card org-dept-card-wrap" data-dept-id="{{ dept.id }}" data-level="1">
+        <!-- Dept header -->
+        <div style="display:flex;align-items:center;gap:10px;padding:14px 16px;color:#fff;background:{{ dept.color|default:'var(--eo-accent)' }};border-left:none">
+          {% if request.user.is_superuser %}
+          <span class="drag-handle" draggable="true" data-drag-type="department" style="opacity:.6">
+            <i class="bi bi-grip-vertical"></i>
+          </span>
+          {% endif %}
+          <i class="{{ dept.icon|default:'bi-building' }}" style="font-size:1.1rem"></i>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.9rem;font-weight:800">{{ dept.name }}</div>
+            <div style="font-size:.67rem;opacity:.8">{{ dept.code }} · {{ dept.units.count }} unit{{ dept.units.count|pluralize }}</div>
+          </div>
+          <span style="font-size:.62rem;font-weight:700;padding:2px 8px;border-radius:20px;background:rgba(255,255,255,.2)">L1</span>
+        </div>
+
+        {% if dept.head %}
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--eo-bg);border-bottom:1px solid var(--eo-border)">
+          {% if dept.head.avatar %}
+            <img src="{{ dept.head.avatar.url }}" style="width:28px;height:28px;border-radius:50%;object-fit:cover"/>
+          {% else %}
+            <div style="width:28px;height:28px;border-radius:50%;background:{{ dept.color|default:'var(--eo-accent)' }};color:#fff;font-size:.64rem;font-weight:700;display:flex;align-items:center;justify-content:center">{{ dept.head.initials }}</div>
+          {% endif %}
+          <div>
+            <div style="font-size:.62rem;color:var(--eo-text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em">Dept Head</div>
+            <a href="{% url 'staff_detail' dept.head.pk %}" style="font-size:.8rem;font-weight:600;color:var(--eo-text);text-decoration:none">{{ dept.head.full_name }}</a>
+          </div>
+        </div>
+        {% endif %}
+
+        <!-- Units -->
+        <div class="bd-unit-grid unit-dropzone" data-department-id="{{ dept.id }}">
+          {% for unit in dept.units.all %}
+          <div class="bd-unit-card unit-item" data-unit-id="{{ unit.id }}" data-department-id="{{ dept.id }}">
+            <div style="height:3px;background:{{ unit.color|default:dept.color|default:'var(--eo-accent)' }}"></div>
+            <div style="padding:10px 12px">
+              {% if request.user.is_superuser %}
+              <span class="drag-handle" draggable="true" data-drag-type="unit" style="float:right;opacity:.5;margin-left:6px">
+                <i class="bi bi-grip-vertical" style="font-size:.8rem"></i>
+              </span>
+              {% endif %}
+              <div style="font-size:.83rem;font-weight:700;color:var(--eo-text);margin-bottom:2px">{{ unit.name }}</div>
+              <div style="font-size:.67rem;color:var(--eo-text-muted);margin-bottom:8px">{{ unit.code }}</div>
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                {% if unit.head_of_unit %}
+                <div style="display:flex;align-items:center;gap:6px">
+                  {% if unit.head_of_unit.avatar %}
+                    <img src="{{ unit.head_of_unit.avatar.url }}" style="width:18px;height:18px;border-radius:50%;object-fit:cover"/>
+                  {% else %}
+                    <div style="width:18px;height:18px;border-radius:50%;background:{{ unit.color|default:dept.color|default:'var(--eo-accent)' }};color:#fff;font-size:.5rem;font-weight:700;display:flex;align-items:center;justify-content:center">{{ unit.head_of_unit.initials }}</div>
+                  {% endif %}
+                  <span style="font-size:.7rem;color:var(--eo-text-muted)">{{ unit.head_of_unit.full_name }}</span>
+                </div>
+                {% else %}<div></div>{% endif %}
+                <span style="font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:12px;background:var(--eo-surface);border:1px solid var(--eo-border);color:var(--eo-text-muted)">
+                  {{ unit.member_count }}
+                </span>
+              </div>
+            </div>
+          </div>
+          {% empty %}
+          <div style="padding:16px;text-align:center;font-size:.78rem;color:var(--eo-text-muted);font-style:italic;grid-column:1/-1">No units</div>
+          {% endfor %}
+        </div>
+      </div>
+      {% empty %}
+      <div style="grid-column:1/-1;text-align:center;padding:32px;color:var(--eo-text-muted)">No level 1 offices configured.</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- LEVEL 2 -->
+  {% if level_2_departments %}
+  <div class="eo-card" style="padding:0;overflow:hidden">
+    <div class="bd-section-header">
+      <div>
+        <div style="font-size:.98rem;font-weight:800;color:var(--eo-text)">Level 2 — Departments</div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px">{{ level_2_departments.count }} department{{ level_2_departments.count|pluralize }} reporting to executive offices</div>
+      </div>
+      <span class="bd-level-pill" style="background:#ede9fe;color:#5b21b6">L2 Depts</span>
+    </div>
+
+    <div class="bd-dept-grid org-board-dropzone" id="level2Board" data-level-board="2">
+      {% for dept in level_2_departments %}
+      <div class="bd-dept-card org-dept-card-wrap" data-dept-id="{{ dept.id }}" data-level="2" data-parent-id="{{ dept.parent_id|default:'' }}">
+        <div style="display:flex;align-items:center;gap:10px;padding:14px 16px;color:#fff;background:{{ dept.color|default:'var(--eo-accent)' }}">
+          {% if request.user.is_superuser %}
+          <span class="drag-handle" draggable="true" data-drag-type="department" style="opacity:.6">
+            <i class="bi bi-grip-vertical"></i>
+          </span>
+          {% endif %}
+          <i class="{{ dept.icon|default:'bi-diagram-2' }}" style="font-size:1.1rem"></i>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.9rem;font-weight:800">{{ dept.name }}</div>
+            <div style="font-size:.67rem;opacity:.8">
+              {{ dept.code }}{% if dept.parent %} · ↑ {{ dept.parent.name }}{% endif %}
+            </div>
+          </div>
+          <span style="font-size:.62rem;font-weight:700;padding:2px 8px;border-radius:20px;background:rgba(255,255,255,.2)">L2</span>
+        </div>
+
+        {% if dept.head %}
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--eo-bg);border-bottom:1px solid var(--eo-border)">
+          {% if dept.head.avatar %}
+            <img src="{{ dept.head.avatar.url }}" style="width:28px;height:28px;border-radius:50%;object-fit:cover"/>
+          {% else %}
+            <div style="width:28px;height:28px;border-radius:50%;background:{{ dept.color|default:'var(--eo-accent)' }};color:#fff;font-size:.64rem;font-weight:700;display:flex;align-items:center;justify-content:center">{{ dept.head.initials }}</div>
+          {% endif %}
+          <div>
+            <div style="font-size:.62rem;color:var(--eo-text-muted);font-weight:700;text-transform:uppercase">Dept Head</div>
+            <a href="{% url 'staff_detail' dept.head.pk %}" style="font-size:.8rem;font-weight:600;color:var(--eo-text);text-decoration:none">{{ dept.head.full_name }}</a>
+          </div>
+        </div>
+        {% endif %}
+
+        <div class="bd-unit-grid unit-dropzone" data-department-id="{{ dept.id }}">
+          {% for unit in dept.units.all %}
+          <div class="bd-unit-card unit-item" data-unit-id="{{ unit.id }}" data-department-id="{{ dept.id }}">
+            <div style="height:3px;background:{{ unit.color|default:dept.color|default:'var(--eo-accent)' }}"></div>
+            <div style="padding:10px 12px">
+              <div style="font-size:.83rem;font-weight:700;color:var(--eo-text);margin-bottom:2px">{{ unit.name }}</div>
+              <div style="font-size:.67rem;color:var(--eo-text-muted);margin-bottom:8px">{{ unit.code }}</div>
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                {% if unit.head_of_unit %}
+                <div style="display:flex;align-items:center;gap:6px">
+                  {% if unit.head_of_unit.avatar %}
+                    <img src="{{ unit.head_of_unit.avatar.url }}" style="width:18px;height:18px;border-radius:50%;object-fit:cover"/>
+                  {% else %}
+                    <div style="width:18px;height:18px;border-radius:50%;background:{{ unit.color|default:dept.color|default:'var(--eo-accent)' }};color:#fff;font-size:.5rem;font-weight:700;display:flex;align-items:center;justify-content:center">{{ unit.head_of_unit.initials }}</div>
+                  {% endif %}
+                  <span style="font-size:.7rem;color:var(--eo-text-muted)">{{ unit.head_of_unit.full_name }}</span>
+                </div>
+                {% else %}<div></div>{% endif %}
+                <span style="font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:12px;background:var(--eo-surface);border:1px solid var(--eo-border);color:var(--eo-text-muted)">
+                  {{ unit.member_count }}
+                </span>
+              </div>
+            </div>
+          </div>
+          {% empty %}
+          <div style="padding:16px;text-align:center;font-size:.78rem;color:var(--eo-text-muted);font-style:italic;grid-column:1/-1">No units</div>
+          {% endfor %}
+        </div>
+      </div>
+      {% empty %}
+      <div style="grid-column:1/-1;text-align:center;padding:32px;color:var(--eo-text-muted)">No level 2 departments configured.</div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+</div><!-- /#viewBoard -->
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// ── View toggle ──
+var currentView = localStorage.getItem('eo_org_view') || 'tree';
+function setView(v) {
+  currentView = v;
+  document.getElementById('viewTree').style.display  = v === 'tree'  ? '' : 'none';
+  document.getElementById('viewBoard').style.display = v === 'board' ? '' : 'none';
+  document.getElementById('btnTree').classList.toggle('active',  v === 'tree');
+  document.getElementById('btnBoard').classList.toggle('active', v === 'board');
+  localStorage.setItem('eo_org_view', v);
+}
+setView(currentView);
+
+// ── Zoom ──
+var scale = 1;
+var inner = document.getElementById('orgInner');
+function zoom(delta) {
+  scale = Math.min(1.6, Math.max(0.4, scale + delta));
+  inner.style.transform = 'scale(' + scale + ')';
+}
+function resetZoom() { scale = 1; inner.style.transform = ''; }
+
+// ── Node expand/collapse ──
+function toggleUnitMembers(drawerId, nodeEl) {
+  var drawer = document.getElementById(drawerId);
+  if (!drawer) return;
+  var isOpen = drawer.style.maxHeight && drawer.style.maxHeight !== '0px';
+  drawer.style.maxHeight = isOpen ? '0px' : '600px';
+  nodeEl.querySelector('.oc-unit-count-badge').style.background = isOpen ? '' : 'var(--eo-accent)12';
+}
+
+function toggleDeptMembers(nodeEl, deptId) {
+  var drawer = document.getElementById('dmem-' + deptId);
+  if (!drawer) return;
+  var isOpen = drawer.style.maxHeight && drawer.style.maxHeight !== '0px';
+  drawer.style.maxHeight = isOpen ? '0px' : '600px';
+}
+
+// ── Staff counts from DOM ──
+// Each dcount element sits inside the dept node which is inside the <li>
+// that also contains all the child unit <li>s with .oc-member-row links.
+(function recalcCounts() {
+  // Total + online
+  var allMembers = document.querySelectorAll('.oc-member-row');
+  var onlineMembers = document.querySelectorAll('.oc-online-dot[style*="success"]');
+  var totalEl = document.getElementById('totalStaff');
+  var onlineEl = document.getElementById('onlineCount');
+  if (totalEl) totalEl.textContent = allMembers.length;
+  if (onlineEl) onlineEl.textContent = onlineMembers.length;
+
+  // Per-dept: walk up from the dcount <strong> to the nearest <li>
+  // which contains the full subtree (dept node + child unit lis).
+  document.querySelectorAll('[id^="dcount-"]').forEach(function(el) {
+    var li = el.closest('li');
+    var count = li ? li.querySelectorAll('.oc-member-row').length : 0;
+    el.textContent = count;
+  });
+})();
+
+// ── Legend drag note ──
+document.querySelector('.org-wrap + div span:last-child') && (function() {
+  var legend = document.querySelector('#viewTree .org-wrap ~ div span:last-child');
+  if (legend) legend.innerHTML = '';
+})();
+
+// ── Search ──
+function searchOrg(q) {
+  var tree = document.getElementById('viewTree');
+  q = q.trim().toLowerCase();
+  if (!q) {
+    tree.classList.remove('oc-highlight');
+    document.querySelectorAll('.oc-dept-node, .oc-unit-node').forEach(function(n) {
+      n.classList.remove('matched');
+    });
+    return;
+  }
+  tree.classList.add('oc-highlight');
+  document.querySelectorAll('.oc-dept-node, .oc-unit-node').forEach(function(n) {
+    var text = (n.dataset.search || n.textContent || '').toLowerCase();
+    var memberNames = Array.from(n.querySelectorAll('.oc-member-row')).map(function(m) {
+      return m.textContent.toLowerCase();
+    }).join(' ');
+    var matched = text.includes(q) || memberNames.includes(q);
+    n.classList.toggle('matched', matched);
+    if (matched) {
+      var drawer = n.querySelector('.oc-members-drawer');
+      if (drawer) drawer.style.maxHeight = '600px';
+    }
+  });
+}
+
+// ── Print ──
+function printOrgChart() {
+  var prev = currentView;
+  setView('tree');
+  window.print();
+  setView(prev);
+}
+
+// ════════════════════════════════
+// DRAG & DROP — TREE VIEW (units between depts)
+// ════════════════════════════════
+var draggedTreeUnit = null;
+
+// Make all .oc-tree-unit-li elements draggable
+document.querySelectorAll('.oc-tree-unit-li').forEach(function(li) {
+  li.addEventListener('dragstart', function(e) {
+    draggedTreeUnit = li;
+    li.style.opacity = '.45';
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', li.dataset.unitId);
+    e.stopPropagation(); // don't bubble to board drag handlers
+  });
+  li.addEventListener('dragend', function() {
+    li.style.opacity = '';
+    draggedTreeUnit = null;
+    document.querySelectorAll('.oc-tree-unit-ul').forEach(function(ul) {
+      ul.style.outline = '';
+      ul.style.background = '';
+    });
+    // Recompute counts after move
+    recalcCounts();
+  });
+});
+
+// Make all .oc-tree-unit-ul elements drop targets
+document.querySelectorAll('.oc-tree-unit-ul').forEach(function(ul) {
+  ul.addEventListener('dragover', function(e) {
+    if (!draggedTreeUnit) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    ul.style.outline = '2px dashed var(--eo-accent)';
+    ul.style.borderRadius = '8px';
+    ul.style.background = 'var(--eo-accent)08';
+  });
+  ul.addEventListener('dragleave', function(e) {
+    // Only clear if leaving to outside the ul
+    if (!ul.contains(e.relatedTarget)) {
+      ul.style.outline = '';
+      ul.style.background = '';
+    }
+  });
+  ul.addEventListener('drop', function(e) {
+    if (!draggedTreeUnit || draggedTreeUnit.closest('.oc-tree-unit-ul') === ul) {
+      ul.style.outline = '';
+      ul.style.background = '';
+      return;
+    }
+    e.preventDefault();
+    ul.style.outline = '';
+    ul.style.background = '';
+
+    // Remove the "empty drop zone" placeholder if present
+    var emptyPlaceholder = ul.querySelector('.oc-tree-unit-empty-drop');
+    if (emptyPlaceholder) emptyPlaceholder.remove();
+
+    // Move the dragged <li> into this ul
+    ul.appendChild(draggedTreeUnit);
+    draggedTreeUnit.dataset.deptId = ul.dataset.deptId;
+
+    // If the source ul is now empty, add a placeholder back
+    var sourceLi = document.querySelectorAll('.oc-tree-unit-li[data-dept-id]');
+    document.querySelectorAll('.oc-tree-unit-ul').forEach(function(srcUl) {
+      if (srcUl === ul) return;
+      var remaining = srcUl.querySelectorAll('.oc-tree-unit-li');
+      if (remaining.length === 0 && !srcUl.querySelector('.oc-tree-unit-empty-drop')) {
+        var ph = document.createElement('li');
+        ph.className = 'oc-tree-unit-empty-drop';
+        ph.style.listStyle = 'none';
+        ph.innerHTML = '<div style="width:2px;height:20px;background:var(--eo-border);margin:0 auto"></div>' +
+          '<div style="width:170px;padding:14px 10px;border:2px dashed var(--eo-border);border-radius:10px;text-align:center;font-size:.72rem;color:var(--eo-text-muted)">Drop units here</div>';
+        srcUl.appendChild(ph);
+      }
+    });
+
+    // Update the dept unit count badges in the header stats
+    document.querySelectorAll('.oc-tree-unit-ul').forEach(function(u) {
+      var dId = u.dataset.deptId;
+      var countEl = u.closest('li') ? u.closest('li').querySelector('.oc-dept-stat strong:first-child') : null;
+      var unitCount = u.querySelectorAll('.oc-tree-unit-li').length;
+      if (countEl) countEl.textContent = unitCount;
+    });
+  });
+});
+
+// Recompute counts function (also used after drops)
+function recalcCounts() {
+  document.querySelectorAll('[id^="dcount-"]').forEach(function(el) {
+    var li = el.closest('li');
+    var count = li ? li.querySelectorAll('.oc-member-row').length : 0;
+    el.textContent = count;
+  });
+}
+
+// ════════════════════════════════
+// DRAG & DROP — BOARD VIEW
+// ════════════════════════════════
+var draggedDept = null;
+var draggedUnit = null;
+
+function getCookie(name) {
+  var v = document.cookie.match('(^|;) ?' + name + '=([^;]*)(;|$)');
+  return v ? v[2] : null;
+}
+var csrftoken = getCookie('csrftoken');
+
+function clearDropTargets() {
+  document.querySelectorAll('.drop-target').forEach(function(el) { el.classList.remove('drop-target'); });
+}
+
+// Dept drag
+document.querySelectorAll('.drag-handle[data-drag-type="department"]').forEach(function(h) {
+  h.addEventListener('dragstart', function(e) {
+    draggedDept = h.closest('.org-dept-card-wrap');
+    if (draggedDept) draggedDept.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  h.addEventListener('dragend', function() {
+    if (draggedDept) draggedDept.classList.remove('dragging');
+    draggedDept = null;
+    clearDropTargets();
+  });
+});
+
+// Unit drag
+document.querySelectorAll('.drag-handle[data-drag-type="unit"]').forEach(function(h) {
+  h.addEventListener('dragstart', function(e) {
+    draggedUnit = h.closest('.unit-item');
+    if (draggedUnit) draggedUnit.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.stopPropagation();
+  });
+  h.addEventListener('dragend', function() {
+    if (draggedUnit) draggedUnit.classList.remove('dragging');
+    draggedUnit = null;
+    clearDropTargets();
+  });
+});
+
+// Dept drop on boards
+document.querySelectorAll('.org-board-dropzone').forEach(function(board) {
+  board.addEventListener('dragover', function(e) {
+    if (!draggedDept) return;
+    e.preventDefault(); board.classList.add('drop-target');
+  });
+  board.addEventListener('dragleave', function() { board.classList.remove('drop-target'); });
+  board.addEventListener('drop', function(e) {
+    if (!draggedDept) return;
+    e.preventDefault(); board.classList.remove('drop-target');
+    if (e.target === board) board.appendChild(draggedDept);
+    draggedDept.dataset.level = board.dataset.levelBoard;
+    if (board.dataset.levelBoard === '1') draggedDept.dataset.parentId = '';
+  });
+});
+
+// Dept reorder within board
+document.querySelectorAll('.org-dept-card-wrap').forEach(function(card) {
+  card.addEventListener('dragover', function(e) {
+    if (!draggedDept || draggedDept === card) return;
+    e.preventDefault(); card.classList.add('drop-target');
+  });
+  card.addEventListener('dragleave', function() { card.classList.remove('drop-target'); });
+  card.addEventListener('drop', function(e) {
+    if (!draggedDept || draggedDept === card) return;
+    e.preventDefault(); card.classList.remove('drop-target');
+    var cards = Array.from(card.parentNode.querySelectorAll('.org-dept-card-wrap'));
+    if (cards.indexOf(draggedDept) < cards.indexOf(card)) card.after(draggedDept);
+    else card.before(draggedDept);
+    draggedDept.dataset.level = card.parentNode.dataset.levelBoard;
+  });
+});
+
+// Unit drop on unit zones
+document.querySelectorAll('.unit-dropzone').forEach(function(zone) {
+  zone.addEventListener('dragover', function(e) {
+    if (!draggedUnit) return;
+    e.preventDefault(); zone.classList.add('drop-target');
+  });
+  zone.addEventListener('dragleave', function() { zone.classList.remove('drop-target'); });
+  zone.addEventListener('drop', function(e) {
+    if (!draggedUnit) return;
+    e.preventDefault(); zone.classList.remove('drop-target');
+    zone.appendChild(draggedUnit);
+    draggedUnit.dataset.departmentId = zone.dataset.departmentId;
+  });
+});
+
+// Unit reorder
+document.querySelectorAll('.unit-item').forEach(function(item) {
+  item.addEventListener('dragover', function(e) {
+    if (!draggedUnit || draggedUnit === item) return;
+    e.preventDefault(); item.classList.add('drop-target');
+    e.stopPropagation();
+  });
+  item.addEventListener('dragleave', function() { item.classList.remove('drop-target'); });
+  item.addEventListener('drop', function(e) {
+    if (!draggedUnit || draggedUnit === item) return;
+    e.preventDefault(); e.stopPropagation(); item.classList.remove('drop-target');
+    var siblings = Array.from(item.parentNode.querySelectorAll(':scope > .unit-item'));
+    if (siblings.indexOf(draggedUnit) < siblings.indexOf(item)) item.after(draggedUnit);
+    else item.before(draggedUnit);
+  });
+});
+
+// ── Save layout ──
+function buildOrgChartPayload() {
+  var departments = Array.from(document.querySelectorAll('.org-dept-card-wrap')).map(function(c, i) {
+    return {
+      id: c.dataset.deptId,
+      management_level: parseInt(c.dataset.level || '2'),
+      parent_id: c.dataset.parentId || null,
+      sort_order: i
+    };
+  });
+  var units = Array.from(document.querySelectorAll('.unit-item')).map(function(u, i) {
+    var zone = u.closest('.unit-dropzone');
+    return {
+      id: u.dataset.unitId,
+      department_id: zone ? zone.dataset.departmentId : u.dataset.departmentId,
+      sort_order: i
+    };
+  });
+  return { departments: departments, units: units };
+}
+
+function saveOrgChartLayout() {
+  fetch("{% url 'organization:org_chart_save_layout' %}", {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+    body: JSON.stringify(buildOrgChartPayload())
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (!d.ok) { alert(d.error || 'Could not save.'); return; }
+    // Show subtle success toast
+    var t = document.createElement('div');
+    t.textContent = '✓ Arrangement saved';
+    Object.assign(t.style, { position:'fixed', bottom:'24px', right:'24px', padding:'12px 20px', background:'var(--eo-success)', color:'#fff', borderRadius:'8px', fontWeight:'600', zIndex:'9999', fontSize:'.88rem', boxShadow:'0 8px 24px rgba(0,0,0,.15)' });
+    document.body.appendChild(t);
+    setTimeout(function() { t.style.opacity = '0'; t.style.transition = 'opacity .4s'; setTimeout(function() { t.remove(); }, 400); }, 2200);
+  })
+  .catch(function() { alert('Could not save arrangement.'); });
+}
+</script>
+{% endblock %}

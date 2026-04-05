@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Appraisal Detail{% endblock %}
+{% block breadcrumb %}<a href="{% url 'hr_dashboard' %}">HR Dashboard</a> / <a href="{% url 'appraisal_list' %}">Appraisals</a> / Detail{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">{{ appraisal.staff.full_name }} — {{ appraisal.year }} Appraisal</h1>
+    <p class="eo-page-subtitle">Status: {{ appraisal.get_status_display }}</p>
+  </div>
+  <span class="eo-status eo-status-{{ appraisal.status }}">{{ appraisal.get_status_display }}</span>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-4">
+    <div class="eo-card">
+      <h2 class="eo-card-title" style="margin-bottom:14px">Summary</h2>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div><strong>Staff:</strong> {{ appraisal.staff.full_name }}</div>
+        <div><strong>Supervisor:</strong> {% if appraisal.supervisor %}{{ appraisal.supervisor.full_name }}{% else %}—{% endif %}</div>
+        <div><strong>Period:</strong> {{ appraisal.period_start }} to {{ appraisal.period_end }}</div>
+        <div><strong>Overall Rating:</strong> {% if appraisal.overall_rating %}{{ appraisal.get_overall_rating_display }}{% else %}—{% endif %}</div>
+      </div>
+    </div>
+
+    <div class="eo-card mt-4">
+      <h2 class="eo-card-title" style="margin-bottom:14px">KPIs</h2>
+      {% for kpi in kpis %}
+      <div style="padding:10px 0;border-bottom:1px solid var(--eo-border)">
+        <div style="font-weight:700;color:var(--eo-text)">{{ kpi.name }}</div>
+        <div style="font-size:.76rem;color:var(--eo-text-muted)">Weight: {{ kpi.weight }}%</div>
+        <div style="font-size:.8rem;margin-top:4px"><strong>Target:</strong> {{ kpi.target }}</div>
+        {% if kpi.achievement %}<div style="font-size:.8rem"><strong>Achievement:</strong> {{ kpi.achievement }}</div>{% endif %}
+      </div>
+      {% empty %}
+      <p style="color:var(--eo-text-muted)">No KPIs defined.</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="eo-card">
+      <h2 class="eo-card-title" style="margin-bottom:14px">Self Review</h2>
+      {% if can_self_review %}
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="self_submit">
+        <div class="eo-form-group">
+          <label class="eo-form-label">Achievements</label>
+          <textarea name="self_achievements" class="eo-form-control" rows="4">{{ appraisal.self_achievements }}</textarea>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Challenges</label>
+          <textarea name="self_challenges" class="eo-form-control" rows="3">{{ appraisal.self_challenges }}</textarea>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Goals</label>
+          <textarea name="self_goals" class="eo-form-control" rows="3">{{ appraisal.self_goals }}</textarea>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Self Rating</label>
+          <select name="self_rating" class="eo-form-select">
+            <option value="">Select rating</option>
+            {% for value,label in appraisal.Rating.choices %}
+            <option value="{{ value }}" {% if appraisal.self_rating == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-send"></i> Submit Self Review</button>
+      </form>
+      {% else %}
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div><strong>Achievements:</strong><br>{{ appraisal.self_achievements|default:"—" }}</div>
+        <div><strong>Challenges:</strong><br>{{ appraisal.self_challenges|default:"—" }}</div>
+        <div><strong>Goals:</strong><br>{{ appraisal.self_goals|default:"—" }}</div>
+        <div><strong>Self Rating:</strong> {% if appraisal.self_rating %}{{ appraisal.get_self_rating_display }}{% else %}—{% endif %}</div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="eo-card mt-4">
+      <h2 class="eo-card-title" style="margin-bottom:14px">Supervisor Review</h2>
+      {% if can_supervisor_review %}
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="supervisor_submit">
+        <div class="eo-form-group">
+          <label class="eo-form-label">Supervisor Comments</label>
+          <textarea name="supervisor_comments" class="eo-form-control" rows="4">{{ appraisal.supervisor_comments }}</textarea>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Areas of Improvement</label>
+          <textarea name="areas_of_improvement" class="eo-form-control" rows="3">{{ appraisal.areas_of_improvement }}</textarea>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Training Recommended</label>
+          <textarea name="training_recommended" class="eo-form-control" rows="3">{{ appraisal.training_recommended }}</textarea>
+        </div>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="eo-form-label">Supervisor Rating</label>
+            <select name="supervisor_rating" class="eo-form-select">
+              <option value="">Select rating</option>
+              {% for value,label in appraisal.Rating.choices %}
+              <option value="{{ value }}" {% if appraisal.supervisor_rating == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="eo-form-label">Overall Rating</label>
+            <select name="overall_rating" class="eo-form-select">
+              <option value="">Select rating</option>
+              {% for value,label in appraisal.Rating.choices %}
+              <option value="{{ value }}" {% if appraisal.overall_rating == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-send"></i> Submit Supervisor Review</button>
+      </form>
+      {% else %}
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div><strong>Comments:</strong><br>{{ appraisal.supervisor_comments|default:"—" }}</div>
+        <div><strong>Areas of Improvement:</strong><br>{{ appraisal.areas_of_improvement|default:"—" }}</div>
+        <div><strong>Training Recommended:</strong><br>{{ appraisal.training_recommended|default:"—" }}</div>
+        <div><strong>Supervisor Rating:</strong> {% if appraisal.supervisor_rating %}{{ appraisal.get_supervisor_rating_display }}{% else %}—{% endif %}</div>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if can_hr_review %}
+    <div class="eo-card mt-4">
+      <h2 class="eo-card-title" style="margin-bottom:14px">HR Final Review</h2>
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="hr_finalize">
+        <div class="eo-form-group">
+          <label class="eo-form-label">HR Comments</label>
+          <textarea name="hr_comments" class="eo-form-control" rows="4">{{ appraisal.hr_comments }}</textarea>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Final Overall Rating</label>
+          <select name="overall_rating" class="eo-form-select">
+            <option value="">Select rating</option>
+            {% for value,label in appraisal.Rating.choices %}
+            <option value="{{ value }}" {% if appraisal.overall_rating == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-check2-circle"></i> Finalize Appraisal</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

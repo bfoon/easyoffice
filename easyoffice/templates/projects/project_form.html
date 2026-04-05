@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{% if mode == 'edit' %}Edit {{ project.name }}{% else %}New Project{% endif %}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'project_list' %}">Projects</a> /
+  {% if mode == 'edit' %}<a href="{% url 'project_detail' project.pk %}">{{ project.name }}</a> / Edit
+  {% else %}New Project{% endif %}
+{% endblock %}
+{% block content %}
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">{% if mode == 'edit' %}Edit Project{% else %}New Project{% endif %}</h1>
+    <p class="eo-page-subtitle">{% if mode == 'edit' %}Update project details and team{% else %}Define scope, assign team, and set targets{% endif %}</p>
+  </div>
+</div>
+
+<form method="post" id="projectForm">
+  {% csrf_token %}
+  <div class="row g-4">
+
+    <!-- ── LEFT ── -->
+    <div class="col-lg-8">
+
+      <!-- Basic Info -->
+      <div class="eo-card mb-4">
+        <div class="eo-card-header">
+          <h2 class="eo-card-title">Project Information</h2>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Project Name *</label>
+          <input type="text" name="name" class="eo-form-control" required
+                 value="{{ project.name|default:'' }}" placeholder="e.g. Office Renovation 2025"/>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-sm-4">
+            <label class="eo-form-label">
+              Project Code
+              {% if mode == 'create' %}
+              <span style="font-size:.68rem;font-weight:400;color:var(--eo-text-muted)">(auto-generated if blank)</span>
+              {% endif %}
+            </label>
+            <input type="text" name="code" class="eo-form-control"
+                   value="{{ project.code|default:'' }}"
+                   placeholder="e.g. PRJ-2025"
+                   {% if mode == 'edit' %}readonly style="background:var(--eo-bg);color:var(--eo-text-muted)"{% endif %}/>
+          </div>
+          <div class="col-sm-4">
+            <label class="eo-form-label">Status</label>
+            <select name="status" class="eo-form-select">
+              {% for val, label in status_choices %}
+              <option value="{{ val }}" {% if project.status == val or val == 'planning' and not project %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-sm-4">
+            <label class="eo-form-label">Priority</label>
+            <select name="priority" class="eo-form-select">
+              {% for val, label in priority_choices %}
+              <option value="{{ val }}" {% if project.priority == val or val == 'medium' and not project %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="eo-form-group mt-3">
+          <label class="eo-form-label">Description</label>
+          <textarea name="description" class="eo-form-control" rows="4"
+                    placeholder="Describe the project goals, scope and expected outcomes...">{{ project.description|default:'' }}</textarea>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Start Date</label>
+            <input type="date" name="start_date" class="eo-form-control"
+                   value="{{ project.start_date|date:'Y-m-d'|default:'' }}"/>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">End Date (Deadline)</label>
+            <input type="date" name="end_date" class="eo-form-control"
+                   value="{{ project.end_date|date:'Y-m-d'|default:'' }}"/>
+          </div>
+        </div>
+
+        <div class="row g-3 mt-1">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Budget (USD)</label>
+            <div style="position:relative">
+              <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.9rem">$</span>
+              <input type="number" name="budget" class="eo-form-control" style="padding-left:24px"
+                     value="{{ project.budget|default:'' }}" placeholder="0.00" step="0.01" min="0"/>
+            </div>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Tags <span style="font-weight:400;color:var(--eo-text-muted)">(comma-separated)</span></label>
+            <input type="text" name="tags" class="eo-form-control"
+                   value="{{ project.tags|default:'' }}" placeholder="e.g. infrastructure, 2025, hr"/>
+          </div>
+        </div>
+
+        <div class="row g-3 mt-1">
+          <div class="col-sm-4">
+            <label class="eo-form-label">Cover Color</label>
+            <div style="display:flex;align-items:center;gap:10px">
+              <input type="color" name="cover_color" id="coverColor"
+                     value="{{ project.cover_color|default:'#1e3a5f' }}"
+                     style="height:40px;width:60px;cursor:pointer;border:1px solid var(--eo-border);border-radius:8px;padding:3px"/>
+              <div id="colorPreview" style="flex:1;height:40px;border-radius:8px;background:{{ project.cover_color|default:'#1e3a5f' }}"></div>
+            </div>
+          </div>
+          <div class="col-sm-4" style="display:flex;align-items:flex-end">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 0">
+              <input type="checkbox" name="is_public"
+                     {% if project.is_public or not project %}checked{% endif %}
+                     style="width:18px;height:18px;cursor:pointer"/>
+              <div>
+                <div style="font-size:.88rem;font-weight:600;color:var(--eo-text)">Public project</div>
+                <div style="font-size:.72rem;color:var(--eo-text-muted)">Visible to all staff</div>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Team Members -->
+      <div class="eo-card">
+        <div class="eo-card-header">
+          <div>
+            <h2 class="eo-card-title">Team Members</h2>
+            <p class="eo-card-subtitle">Select staff to include in this project</p>
+          </div>
+        </div>
+
+        <div style="position:relative;margin-bottom:12px">
+          <i class="bi bi-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.8rem"></i>
+          <input type="text" id="memberSearch" placeholder="Filter team members..."
+                 style="width:100%;padding:8px 12px 8px 32px;border:1px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);font-size:.84rem;outline:none"/>
+        </div>
+
+        <div style="max-height:260px;overflow-y:auto;border:1px solid var(--eo-border);border-radius:10px" id="memberList">
+          {% for staff in staff_list %}
+          <label style="display:flex;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--eo-border);transition:background .1s"
+                 onmouseover="this.style.background='var(--eo-bg)'" onmouseout="this.style.background=''"
+                 data-name="{{ staff.full_name|lower }}">
+            <input type="checkbox" name="team_members" value="{{ staff.id }}" style="flex-shrink:0"
+                   {% if project and staff in project.team_members.all %}checked{% endif %}/>
+            {% if staff.avatar %}
+              <img src="{{ staff.avatar.url }}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0"/>
+            {% else %}
+              <div style="width:32px;height:32px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.72rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ staff.initials }}</div>
+            {% endif %}
+            <div style="min-width:0">
+              <div style="font-size:.87rem;font-weight:600;color:var(--eo-text)">{{ staff.full_name }}</div>
+              {% if staff.staffprofile.position %}
+              <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ staff.staffprofile.position.title }}</div>
+              {% endif %}
+            </div>
+          </label>
+          {% empty %}
+          <div style="padding:24px;text-align:center;color:var(--eo-text-muted);font-size:.85rem">No active staff found</div>
+          {% endfor %}
+        </div>
+        <div style="margin-top:8px;font-size:.75rem;color:var(--eo-text-muted)">
+          <span id="memberCount">0</span> member(s) selected
+        </div>
+      </div>
+    </div>
+
+    <!-- ── RIGHT ── -->
+    <div class="col-lg-4">
+
+      <!-- Project Manager -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title" style="margin-bottom:14px">Project Manager</h2>
+        <select name="project_manager" class="eo-form-select">
+          <option value="">— Assign a manager —</option>
+          {% for staff in staff_list %}
+          <option value="{{ staff.id }}"
+                  {% if project.project_manager == staff %}selected
+                  {% elif not project and staff == request.user %}selected{% endif %}>
+            {{ staff.full_name }}
+          </option>
+          {% endfor %}
+        </select>
+        <div style="margin-top:10px;font-size:.75rem;color:var(--eo-text-muted)">
+          <i class="bi bi-info-circle me-1"></i>
+          The project manager can edit the project and post updates.
+        </div>
+      </div>
+
+      <!-- Department -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title" style="margin-bottom:14px">Department</h2>
+        <select name="dept_id" class="eo-form-select">
+          <option value="">— None —</option>
+          {% for dept in departments %}
+          <option value="{{ dept.id }}"
+                  {% if project.department == dept %}selected{% endif %}>
+            {{ dept.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Preview card -->
+      <div class="eo-card" style="border-top:4px solid" id="previewCard">
+        <div style="font-size:.72rem;font-weight:700;color:var(--eo-text-muted);letter-spacing:.05em;margin-bottom:6px">PREVIEW</div>
+        <div style="font-size:.95rem;font-weight:700;color:var(--eo-text);margin-bottom:8px" id="previewName">Project Name</div>
+        <div class="eo-progress" style="height:6px;margin-bottom:8px">
+          <div class="eo-progress-bar" style="width:0%"></div>
+        </div>
+        <div style="font-size:.75rem;color:var(--eo-text-muted)">Appears on the projects board</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div style="display:flex;gap:10px;margin-top:24px;padding-top:20px;border-top:1px solid var(--eo-border)">
+    <button type="submit" class="eo-btn eo-btn-primary" style="min-width:140px">
+      <i class="bi bi-{% if mode == 'edit' %}floppy{% else %}plus-circle{% endif %}"></i>
+      {% if mode == 'edit' %}Save Changes{% else %}Create Project{% endif %}
+    </button>
+    <a href="{% if mode == 'edit' %}{% url 'project_detail' project.pk %}{% else %}{% url 'project_list' %}{% endif %}"
+       class="eo-btn eo-btn-secondary">Cancel</a>
+  </div>
+</form>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Live color preview
+var colorInput = document.getElementById('coverColor');
+var colorPreview = document.getElementById('colorPreview');
+var previewCard = document.getElementById('previewCard');
+colorInput.addEventListener('input', function() {
+  var c = this.value;
+  colorPreview.style.background = c;
+  previewCard.style.borderTopColor = c;
+});
+previewCard.style.borderTopColor = colorInput.value;
+
+// Live name preview
+document.querySelector('input[name="name"]').addEventListener('input', function() {
+  document.getElementById('previewName').textContent = this.value || 'Project Name';
+});
+
+// Member search + count
+document.getElementById('memberSearch').addEventListener('input', function() {
+  var q = this.value.toLowerCase();
+  document.querySelectorAll('#memberList label').forEach(function(el) {
+    el.style.display = el.dataset.name.includes(q) ? '' : 'none';
+  });
+});
+function updateCount() {
+  var n = document.querySelectorAll('#memberList input[type="checkbox"]:checked').length;
+  document.getElementById('memberCount').textContent = n;
+}
+document.querySelectorAll('#memberList input[type="checkbox"]').forEach(function(cb) {
+  cb.addEventListener('change', updateCount);
+});
+updateCount();
+</script>
+{% endblock %}

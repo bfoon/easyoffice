@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Attendance{% endblock %}
+{% block breadcrumb %}<a href="{% url 'hr_dashboard' %}">HR Dashboard</a> / Attendance{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Staff Attendance</h1>
+    <p class="eo-page-subtitle">HR can mark attendance for all active staff by date.</p>
+  </div>
+</div>
+
+<div class="eo-card mb-4">
+  <form method="get" class="row g-3 align-items-end">
+    <div class="col-md-3">
+      <label class="eo-form-label">Attendance Date</label>
+      <input type="date" name="date" class="eo-form-control" value="{{ selected_date|date:'Y-m-d' }}">
+    </div>
+    <div class="col-md-5">
+      <label class="eo-form-label">Search Staff</label>
+      <input type="text" name="q" class="eo-form-control" value="{{ q }}" placeholder="Search by name, email or username">
+    </div>
+    <div class="col-auto d-flex gap-2">
+      <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
+      <a href="{% url 'attendance' %}" class="eo-btn eo-btn-secondary">Reset</a>
+    </div>
+  </form>
+  <a href="{% url 'attendance_sheet' %}?date={{ selected_date|date:'Y-m-d' }}" class="eo-btn eo-btn-secondary">
+  <i class="bi bi-file-earmark-text"></i> Generate Sheet
+</a>
+</div>
+
+<div class="eo-card mb-4">
+  <div class="row g-3">
+   <div class="col-6 col-lg-3">
+  <div class="eo-stat eo-stat-primary">
+    <div class="eo-stat-label">Records</div>
+    <div class="eo-stat-value">{{ summary_count }}</div>
+  </div>
+</div>
+<div class="col-6 col-lg-3">
+  <div class="eo-stat eo-stat-success">
+    <div class="eo-stat-label">Present</div>
+    <div class="eo-stat-value">{{ present_count }}</div>
+  </div>
+</div>
+<div class="col-6 col-lg-3">
+  <div class="eo-stat eo-stat-warning">
+    <div class="eo-stat-label">Late</div>
+    <div class="eo-stat-value">{{ late_count }}</div>
+  </div>
+</div>
+<div class="col-6 col-lg-3">
+  <div class="eo-stat eo-stat-danger">
+    <div class="eo-stat-label">Absent</div>
+    <div class="eo-stat-value">{{ absent_count }}</div>
+  </div>
+</div>
+    <div class="col-6 col-lg-3">
+  <div class="eo-stat eo-stat-info">
+    <div class="eo-stat-label">On Leave</div>
+    <div class="eo-stat-value">{{ leave_count }}</div>
+  </div>
+</div>
+  </div>
+</div>
+
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="date" value="{{ selected_date|date:'Y-m-d' }}">
+
+  <div class="eo-card">
+    <div class="eo-card-header">
+      <div>
+        <h2 class="eo-card-title">Attendance Register</h2>
+        <p class="eo-card-subtitle">{{ selected_date }}</p>
+      </div>
+      <button type="submit" class="eo-btn eo-btn-primary">
+        <i class="bi bi-save"></i> Save Attendance
+      </button>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead>
+          <tr>
+            <th>Staff</th>
+            <th>Status</th>
+            <th>Check In</th>
+            <th>Check Out</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+         {% for row in staff_rows %}
+        <tr>
+          <td>
+            <div style="font-weight:700;color:var(--eo-text)">{{ row.staff.full_name }}</div>
+            <div style="font-size:.74rem;color:var(--eo-text-muted)">{{ row.staff.email }}</div>
+            {% if row.leave_request %}
+            <div style="font-size:.72rem;color:var(--eo-info);margin-top:4px">
+              <i class="bi bi-calendar-event"></i>
+              Approved leave: {{ row.leave_request.leave_type.name }}
+              ({{ row.leave_request.start_date }} to {{ row.leave_request.end_date }})
+            </div>
+            {% endif %}
+          </td>
+
+          <td style="min-width:180px">
+            <select name="status_{{ row.staff.id }}" class="eo-form-select">
+              {% for value, label in attendance_statuses %}
+              <option value="{{ value }}"
+                {% if row.record and row.record.status == value %}selected
+                {% elif row.derived_leave_record and value == 'leave' %}selected
+                {% elif not row.record and not row.derived_leave_record and value == 'present' %}selected
+                {% endif %}>
+                {{ label }}
+              </option>
+              {% endfor %}
+            </select>
+          </td>
+
+          <td style="min-width:140px">
+            <input type="time" name="check_in_{{ row.staff.id }}" class="eo-form-control"
+                   value="{% if row.record and row.record.check_in %}{{ row.record.check_in|time:'H:i' }}{% endif %}">
+          </td>
+
+          <td style="min-width:140px">
+            <input type="time" name="check_out_{{ row.staff.id }}" class="eo-form-control"
+                   value="{% if row.record and row.record.check_out %}{{ row.record.check_out|time:'H:i' }}{% endif %}">
+          </td>
+
+          <td>
+            <input type="text" name="notes_{{ row.staff.id }}" class="eo-form-control"
+                   value="{% if row.record %}{{ row.record.notes }}{% elif row.derived_leave_record %}{{ row.derived_leave_record.notes }}{% endif %}"
+                   placeholder="Optional note">
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="5" style="text-align:center;color:var(--eo-text-muted);padding:32px">No staff found.</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</form>
+{% endblock %}

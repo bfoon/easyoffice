@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Equipment{% endblock %}
+{% block breadcrumb %}<a href="{% url 'it_dashboard' %}">IT Support</a> / Equipment{% endblock %}
+
+{% block content %}
+<style>
+.eq-modal-backdrop {
+  position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1050;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .18s;
+}
+.eq-modal-backdrop.open { opacity:1;pointer-events:all; }
+.eq-modal {
+  background:var(--eo-surface);border-radius:var(--eo-radius);
+  border:1px solid var(--eo-border);width:440px;max-width:96vw;
+  max-height:88vh;overflow-y:auto;
+  box-shadow:0 24px 64px rgba(0,0,0,.18);
+  transform:translateY(14px);transition:transform .18s;
+}
+.eq-modal-backdrop.open .eq-modal { transform:translateY(0); }
+.eq-modal-head {
+  padding:16px 20px 12px;
+  display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--eo-border);
+}
+.eq-modal-body { padding:18px 20px; }
+</style>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Equipment Inventory</h1>
+    <p class="eo-page-subtitle">{{ stats.total }} assets · manage issuance and returns</p>
+  </div>
+</div>
+
+<!-- Stats -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-success">
+      <div class="eo-stat-label">Available</div>
+      <div class="eo-stat-value">{{ stats.available }}</div>
+      <i class="bi bi-check2-circle eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-info">
+      <div class="eo-stat-label">Issued</div>
+      <div class="eo-stat-value">{{ stats.issued }}</div>
+      <i class="bi bi-person-check eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-warning">
+      <div class="eo-stat-label">Maintenance</div>
+      <div class="eo-stat-value">{{ stats.maintenance }}</div>
+      <i class="bi bi-tools eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat">
+      <div class="eo-stat-label">Total Assets</div>
+      <div class="eo-stat-value">{{ stats.total }}</div>
+      <i class="bi bi-pc-display eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="eo-card mb-4">
+  <form method="get" class="row g-3 align-items-end">
+    <div class="col-sm-4">
+      <label class="eo-form-label">Search</label>
+      <div style="position:relative">
+        <i class="bi bi-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--eo-text-light);font-size:.8rem"></i>
+        <input type="text" name="q" class="eo-form-control" style="padding-left:32px"
+               value="{{ q }}" placeholder="Asset tag, name or serial..."/>
+      </div>
+    </div>
+    <div class="col-sm-2">
+      <label class="eo-form-label">Status</label>
+      <select name="status" class="eo-form-select">
+        <option value="">All Status</option>
+        {% for val, label in status_choices %}
+        <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-sm-3">
+      <label class="eo-form-label">Category</label>
+      <select name="category" class="eo-form-select">
+        <option value="">All Categories</option>
+        {% for cat in categories %}
+        <option {% if category_filter == cat %}selected{% endif %}>{{ cat }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto d-flex gap-2">
+      <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
+      <a href="{% url 'equipment_list' %}" class="eo-btn eo-btn-secondary">Reset</a>
+    </div>
+  </form>
+</div>
+
+<!-- Table -->
+<div class="eo-card" style="padding:0;overflow:hidden">
+  <table class="eo-table">
+    <thead>
+      <tr>
+        <th style="padding-left:16px">Asset</th>
+        <th>Category</th>
+        <th>Make / Model</th>
+        <th>Serial</th>
+        <th>Status</th>
+        <th>Issued To</th>
+        <th>Issued Date</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in equipment %}
+      <tr>
+        <td style="padding-left:16px">
+          <div style="font-family:var(--eo-mono);font-size:.75rem;font-weight:700;color:var(--eo-text-muted);margin-bottom:2px">{{ item.asset_tag }}</div>
+          <div style="font-size:.87rem;font-weight:600;color:var(--eo-text)">{{ item.name }}</div>
+        </td>
+        <td style="font-size:.82rem;color:var(--eo-text-muted)">{{ item.category }}</td>
+        <td style="font-size:.82rem;color:var(--eo-text-muted)">
+          {% if item.make or item.model %}{{ item.make }} {{ item.model }}{% else %}—{% endif %}
+        </td>
+        <td style="font-size:.78rem;color:var(--eo-text-muted);font-family:var(--eo-mono)">
+          {{ item.serial_number|default:"—" }}
+        </td>
+        <td>
+          <span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:12px;background:{{ item.status_color }}18;color:{{ item.status_color }}">
+            {{ item.get_status_display }}
+          </span>
+        </td>
+        <td>
+          {% if item.current_user %}
+          <a href="{% url 'staff_detail' item.current_user.pk %}" style="font-size:.83rem;font-weight:600;color:var(--eo-text);text-decoration:none">
+            {{ item.current_user.full_name }}
+          </a>
+          {% else %}
+          <span style="font-size:.82rem;color:var(--eo-text-muted)">—</span>
+          {% endif %}
+        </td>
+        <td style="font-size:.8rem;color:var(--eo-text-muted)">
+          {% if item.issued_date %}{{ item.issued_date|date:"N j, Y" }}{% else %}—{% endif %}
+        </td>
+        <td>
+          <div style="display:flex;gap:5px">
+            {% if item.status == 'available' %}
+            <button class="eo-btn eo-btn-primary eo-btn-sm"
+                    onclick="openIssueModal('{{ item.id }}','{{ item.name|escapejs }}')">
+              <i class="bi bi-person-plus"></i> Issue
+            </button>
+            {% elif item.status == 'issued' %}
+            <form method="post" action="{% url 'equipment_action' item.pk %}"
+                  onsubmit="return confirm('Return {{ item.name|escapejs }} from {{ item.current_user.full_name|escapejs }}?')">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="return"/>
+              <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
+              <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm">
+                <i class="bi bi-arrow-return-left"></i> Return
+              </button>
+            </form>
+            {% endif %}
+            <!-- Status change dropdown -->
+            <form method="post" action="{% url 'equipment_action' item.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="status"/>
+              <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
+              <select name="status" class="eo-form-select" style="font-size:.75rem;padding:4px 8px;height:auto"
+                      onchange="if(this.value!='') this.form.submit()">
+                <option value="">Status…</option>
+                {% for val, label in status_choices %}
+                {% if val != item.status %}
+                <option value="{{ val }}">→ {{ label }}</option>
+                {% endif %}
+                {% endfor %}
+              </select>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="8" style="text-align:center;padding:48px;color:var(--eo-text-muted)">
+          <i class="bi bi-pc-display" style="font-size:2rem;display:block;margin-bottom:10px;opacity:.4"></i>
+          No equipment found.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Issue Modal -->
+<div class="eq-modal-backdrop" id="issueModal">
+  <div class="eq-modal">
+    <div class="eq-modal-head">
+      <div>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">Issue Equipment</div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px" id="issueModalEquipName"></div>
+      </div>
+      <button onclick="closeIssueModal()" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="eq-modal-body">
+      <form method="post" id="issueForm">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="issue"/>
+        <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Issue To *</label>
+          <div style="position:relative;margin-bottom:8px">
+            <i class="bi bi-search" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:.75rem;color:var(--eo-text-muted)"></i>
+            <input type="text" id="staffSearch" placeholder="Search staff..." autocomplete="off"
+                   style="width:100%;padding:7px 10px 7px 28px;border:1px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);font-size:.83rem;outline:none"
+                   oninput="filterStaff(this.value)"/>
+          </div>
+          <select name="user_id" class="eo-form-select" id="staffSelect" size="7" required
+                  style="height:auto;min-height:160px">
+            {% for staff in staff_list %}
+            <option value="{{ staff.id }}" data-name="{{ staff.full_name|lower }}">{{ staff.full_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button type="submit" class="eo-btn eo-btn-primary flex-grow-1">
+            <i class="bi bi-person-plus"></i> Issue Equipment
+          </button>
+          <button type="button" onclick="closeIssueModal()" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function openIssueModal(equipId, equipName) {
+  document.getElementById('issueForm').action = '/it/equipment/' + equipId + '/action/';
+  document.getElementById('issueModalEquipName').textContent = equipName;
+  document.getElementById('staffSearch').value = '';
+  filterStaff('');
+  document.getElementById('issueModal').classList.add('open');
+}
+function closeIssueModal() {
+  document.getElementById('issueModal').classList.remove('open');
+}
+document.getElementById('issueModal').addEventListener('click', function(e) {
+  if (e.target === this) closeIssueModal();
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeIssueModal();
+});
+
+function filterStaff(q) {
+  q = q.toLowerCase();
+  var sel = document.getElementById('staffSelect');
+  Array.from(sel.options).forEach(function(opt) {
+    opt.style.display = opt.dataset.name.includes(q) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

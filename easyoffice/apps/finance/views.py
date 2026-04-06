@@ -399,24 +399,26 @@ class PurchaseRequestView(LoginRequiredMixin, View):
         return redirect('purchase_request')
 
 
-class PurchaseRequestDetailView(LoginRequiredMixin, DetailView):
-    model = PurchaseRequest
+class PurchaseRequestDetailView(LoginRequiredMixin, TemplateView):
     template_name = 'finance/purchase_detail.html'
-    context_object_name = 'purchase'
-
-    def dispatch(self, request, *args, **kwargs):
-        purchase = self.get_object()
-        if not _can_view_purchase(request.user, purchase):
-            return HttpResponseForbidden('You do not have permission to view this purchase request.')
-        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        purchase = self.object
-        ctx['is_finance'] = _is_finance(self.request.user)
-        ctx['is_ceo'] = _is_ceo(self.request.user)
-        ctx['can_edit_purchase'] = _can_edit_purchase(self.request.user, purchase)
-        ctx['payments'] = purchase.payments.select_related('paid_by', 'budget', 'employee').order_by('-payment_date', '-created_at')
+
+        purchase = get_object_or_404(PurchaseRequest, pk=self.kwargs['pk'])
+
+        ctx.update({
+            'purchase': purchase,
+            'payments': Payment.objects.filter(purchase_request=purchase).order_by('-payment_date'),
+
+            # ✅ FIX: pass choices here
+            'status_choices': PurchaseRequest.Status.choices,
+
+            'is_ceo': _is_ceo(self.request.user),
+            'is_finance': _is_finance(self.request.user),
+            'can_edit_purchase': purchase.requested_by == self.request.user and purchase.status in ['draft', 'rejected'],
+        })
+
         return ctx
 
 

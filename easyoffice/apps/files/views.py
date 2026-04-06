@@ -130,17 +130,122 @@ def _notify_signer(signer, base_url):
         pass
 
 
+def _get_sig_font_path(font_name='Dancing Script'):
+    """
+    Download and cache the TTF for the requested signature font.
+    Falls back through a chain of system fonts if download fails.
+    Returns the local path, or None if all attempts fail.
+    """
+    import urllib.request
+
+    # Map UI font names → (cache filename, GitHub raw URL)
+    _REGISTRY = {
+        'Dancing Script': (
+            '_eo_DancingScript_Bold.ttf',
+            'https://github.com/googlefonts/dancing-script/raw/main/fonts/ttf/DancingScript-Bold.ttf',
+        ),
+        'Caveat': (
+            '_eo_Caveat_Bold.ttf',
+            'https://github.com/googlefonts/caveat/raw/main/fonts/ttf/Caveat-Bold.ttf',
+        ),
+        'Pacifico': (
+            '_eo_Pacifico_Regular.ttf',
+            'https://github.com/google/fonts/raw/main/ofl/pacifico/Pacifico-Regular.ttf',
+        ),
+        'Great Vibes': (
+            '_eo_GreatVibes_Regular.ttf',
+            'https://github.com/google/fonts/raw/main/ofl/greatvibes/GreatVibes-Regular.ttf',
+        ),
+    }
+
+    cache_file, url = _REGISTRY.get(font_name, _REGISTRY['Dancing Script'])
+    cache_path = os.path.join(tempfile.gettempdir(), cache_file)
+
+    if os.path.exists(cache_path):
+        return cache_path
+
+    try:
+        urllib.request.urlretrieve(url, cache_path)
+        return cache_path
+    except Exception:
+        pass
+
+    # System font fallbacks (common on Ubuntu/Debian servers)
+    for p in [
+        '/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf',
+        '/usr/share/fonts/truetype/freefont/FreeSerifItalic.ttf',
+        '/usr/share/fonts/truetype/urw-base35/URWBookman-LightItalic.ttf',
+    ]:
+        if os.path.exists(p):
+            return p
+
+    return None
+
+
+def _typed_sig_to_image(text, width_pt, height_pt, font_name='Dancing Script', dpi=150):
+    """
+    Renders a typed signature as a transparent-background PNG using PIL.
+    Returns BytesIO of PNG or None on failure.
+    font_name is a hint only — we always use the best available font.
+    """
+    from PIL import ImageFont, ImageDraw
+    w_px = max(10, int(width_pt  * dpi / 72))
+    h_px = max(10, int(height_pt * dpi / 72))
+
+    font_path  = _get_sig_font_path(font_name)
+    font_size  = max(12, int(h_px * 0.60))
+    pil_font   = None
+
+    if font_path:
+        for attempt in range(3):
+            try:
+                pil_font = ImageFont.truetype(font_path, font_size)
+                break
+            except Exception:
+                font_size = max(8, font_size - 4)
+
+    if pil_font is None:
+        return None   # caller will fall back to reportlab text
+
+    img  = Image.new('RGBA', (w_px, h_px), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+    ink  = (16, 69, 197, 240)   # dark DocuSign blue, slight transparency
+
+    # Centre the text
+    try:
+        bbox = draw.textbbox((0, 0), text, font=pil_font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    except AttributeError:
+        tw, th = draw.textsize(text, font=pil_font)   # PIL < 9.2
+
+    # Scale down if text wider than image
+    if tw > w_px - 8:
+        scale = (w_px - 8) / tw
+        new_size = max(8, int(font_size * scale))
+        try:
+            pil_font = ImageFont.truetype(font_path, new_size)
+            bbox = draw.textbbox((0, 0), text, font=pil_font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        except Exception:
+            pass
+
+    x = max(4, (w_px - tw) // 2)
+    y = max(0, (h_px - th) // 2 - int(h_px * 0.05))  # slight upward nudge
+    draw.text((x, y), text, fill=ink, font=pil_font)
+
+    buf = BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    return buf
+
+
 def _embed_signatures_in_pdf(sig_req):
     """
-    Burns every filled SignatureField into the PDF with a DocuSign-style visual:
-
-      ┌──────────────────────────────────────┐  ← light-blue field background
-      │   [signature image  OR  typed text]  │  ← signature area (≈75% of height)
-      ├──────────────────────────────────────┤  ← solid blue separator line
-      │ ✓ John Doe                  15 Jan 25│  ← label strip with name + date
-      └──────────────────────────────────────┘
-
-    Date / text fields get the same frame with a label at the bottom.
+    Burns every filled SignatureField into the PDF with:
+      • DocuSign-style signature field rendering (image or typed text)
+      • Tamper-evident header strip on every page  (document ID, title)
+      • Tamper-evident footer strip on every page  (SHA-256 hash, timestamp)
 
     Requirements: pip install reportlab
     """
@@ -148,10 +253,11 @@ def _embed_signatures_in_pdf(sig_req):
         from reportlab.pdfgen import canvas as rl_canvas
         from reportlab.lib.utils import ImageReader
     except ImportError:
-        return None   # signing still completes; PDF is just unchanged
+        return None
 
     import base64
     from collections import defaultdict
+    from datetime import datetime as _dt
 
     document = sig_req.document
     if not document or not getattr(document, 'file', None):
@@ -164,155 +270,218 @@ def _embed_signatures_in_pdf(sig_req):
         .exclude(value='')
         .select_related('signer')
     )
-    if not fields:
-        return None
-
-    try:
-        pdf_bytes = document.file.open('rb').read()
-        reader = PdfReader(BytesIO(pdf_bytes))
-    except Exception:
-        return None
-
-    # ── Colour palette (DocuSign-inspired) ───────────────────────────────────
-    # All values are (R, G, B) floats 0-1
-    DS_BLUE       = (0.098, 0.376, 0.875)   # #1960DF  border / line / label mark
-    DS_BLUE_LIGHT = (0.918, 0.937, 0.992)   # #EAEFfd  signature field background
-    DS_DATE_BG    = (0.953, 0.961, 0.996)   # #F3F5FE  date / text field background
-    DS_INK        = (0.063, 0.271, 0.773)   # #1045C5  signature ink (slightly darker)
-    DS_LABEL      = (0.373, 0.420, 0.510)   # #5F6B82  label strip text
-    DS_CHECK      = (0.063, 0.271, 0.773)   # same blue for the ✓ mark
-
-    def _rgb(tup):
-        return tup   # just a readability alias
-
+    # We still add header/footer even if no fields
     fields_by_page = defaultdict(list)
     for f in fields:
         fields_by_page[f.page].append(f)
+
+    try:
+        pdf_bytes = document.file.open('rb').read()
+        reader    = PdfReader(BytesIO(pdf_bytes))
+    except Exception:
+        return None
+
+    # ── Colour palette ────────────────────────────────────────────────────────
+    DS_BLUE        = (0.098, 0.376, 0.875)   # #1960DF
+    DS_BLUE_LIGHT  = (0.918, 0.937, 0.992)   # field background
+    DS_DATE_BG     = (0.953, 0.961, 0.996)
+    DS_INK         = (0.063, 0.271, 0.773)   # #1045C5
+    DS_LABEL       = (0.373, 0.420, 0.510)
+    DS_CHECK       = (0.063, 0.271, 0.773)
+
+    # ── Header / footer metadata ──────────────────────────────────────────────
+    doc_hash   = (document.file_hash or 'N/A')
+    short_hash = doc_hash[:16] + '…' if len(doc_hash) > 16 else doc_hash
+    full_hash  = doc_hash
+    signed_at  = _dt.now().strftime('%d %b %Y %H:%M UTC')
+    req_id     = str(sig_req.id)[:8].upper()
+    doc_title  = (sig_req.title or document.name or '')[:60]
+    STRIP_H    = 18.0   # height of header/footer strip in PDF points
 
     writer = PdfWriter()
 
     for page_idx in range(len(reader.pages)):
         page     = reader.pages[page_idx]
         page_num = page_idx + 1
-        page_w   = float(page.mediabox.width)    # PDF points (72 pt = 1 inch)
+        page_w   = float(page.mediabox.width)
         page_h   = float(page.mediabox.height)
-
-        page_fields = fields_by_page.get(page_num, [])
-        if not page_fields:
-            writer.add_page(page)
-            continue
+        total_pg = len(reader.pages)
 
         overlay_buf = BytesIO()
         c = rl_canvas.Canvas(overlay_buf, pagesize=(page_w, page_h))
 
-        for field in page_fields:
+        # ══════════════════════════════════════════════════════════════════════
+        # HEADER STRIP  (top of page)
+        # ══════════════════════════════════════════════════════════════════════
+        hdr_y = page_h - STRIP_H   # bottom-left Y of header strip
+
+        # Background
+        c.setFillColorRGB(0.937, 0.953, 1.0)     # very light blue-white
+        c.setStrokeColorRGB(*DS_BLUE)
+        c.setLineWidth(0.4)
+        c.rect(0, hdr_y, page_w, STRIP_H, stroke=0, fill=1)
+
+        # Bottom border line of header
+        c.setStrokeColorRGB(*DS_BLUE)
+        c.setLineWidth(0.8)
+        c.line(0, hdr_y, page_w, hdr_y)
+
+        # Left: shield icon placeholder + "EasyOffice · Signed Document"
+        lbl_y = hdr_y + STRIP_H * 0.28
+        c.setFont('Helvetica-Bold', 6.5)
+        c.setFillColorRGB(*DS_BLUE)
+        c.drawString(5, lbl_y, '\u26BF EasyOffice')   # ⚿ lock-like char
+
+        c.setFont('Helvetica', 6.0)
+        c.setFillColorRGB(*DS_LABEL)
+        c.drawString(52, lbl_y, f'\u00B7  {doc_title}')
+
+        # Right: "Page N / Total · Req: XXXXXXXX"
+        c.setFont('Helvetica', 6.0)
+        c.setFillColorRGB(*DS_LABEL)
+        right_text = f'Req: {req_id}   \u2022   Page {page_num} / {total_pg}'
+        c.drawRightString(page_w - 5, lbl_y, right_text)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # FOOTER STRIP  (bottom of page)
+        # ══════════════════════════════════════════════════════════════════════
+        ftr_y = 0.0
+
+        # Background
+        c.setFillColorRGB(0.937, 0.953, 1.0)
+        c.rect(0, ftr_y, page_w, STRIP_H, stroke=0, fill=1)
+
+        # Top border line of footer
+        c.setStrokeColorRGB(*DS_BLUE)
+        c.setLineWidth(0.8)
+        c.line(0, STRIP_H, page_w, STRIP_H)
+
+        ftr_lbl_y = ftr_y + STRIP_H * 0.28
+
+        # Left: hash
+        c.setFont('Helvetica-Bold', 5.5)
+        c.setFillColorRGB(*DS_BLUE)
+        c.drawString(5, ftr_lbl_y, 'SHA-256:')
+        c.setFont('Courier', 5.5)
+        c.setFillColorRGB(0.2, 0.2, 0.2)
+        c.drawString(35, ftr_lbl_y, full_hash[:48] + ('…' if len(full_hash) > 48 else ''))
+
+        # Right: signed-at timestamp
+        c.setFont('Helvetica', 5.5)
+        c.setFillColorRGB(*DS_LABEL)
+        c.drawRightString(page_w - 5, ftr_lbl_y, f'Electronically signed \u00B7 {signed_at}')
+
+        # ══════════════════════════════════════════════════════════════════════
+        # SIGNATURE FIELDS
+        # ══════════════════════════════════════════════════════════════════════
+        for field in fields_by_page.get(page_num, []):
             value = field.value.strip()
             if not value:
                 continue
 
-            # ── Coordinate conversion (% → pt, flip Y axis) ─────────────────
+            # Coordinate conversion (% → pt, flip Y axis)
             fx = (field.x_pct      / 100.0) * page_w
             fw = (field.width_pct  / 100.0) * page_w
             fh = (field.height_pct / 100.0) * page_h
-            # PDF Y origin is bottom-left; browser Y origin is top-left
             fy = page_h * (1.0 - (field.y_pct + field.height_pct) / 100.0)
 
             is_sig  = field.field_type in ('signature', 'initials')
             is_date = field.field_type == 'date'
-            # is_text: everything else
 
-            # ── Label strip height ───────────────────────────────────────────
-            # Reserve the bottom 24 % of the field for "✓ Name  |  Date" text.
-            # Minimum 9 pt so it is always readable; skip strip if field < 20 pt.
             label_h = max(9.0, min(fh * 0.24, 16.0)) if fh >= 20 else 0.0
-            sig_h   = fh - label_h          # height of the signature content area
-            sig_y   = fy + label_h          # bottom-left Y of content area
+            sig_h   = fh - label_h
+            sig_y   = fy + label_h
 
-            # ── 1. Background rectangle ──────────────────────────────────────
+            # ── Background + border ──────────────────────────────────────────
             bg = DS_BLUE_LIGHT if is_sig else DS_DATE_BG
             c.setFillColorRGB(*bg)
             c.setStrokeColorRGB(*DS_BLUE)
             c.setLineWidth(0.6)
             c.roundRect(fx, fy, fw, fh, radius=2, stroke=1, fill=1)
 
-            # ── 2. Separator line between content and label strip ────────────
             if label_h:
                 c.setStrokeColorRGB(*DS_BLUE)
                 c.setLineWidth(1.0)
                 c.line(fx + 2, fy + label_h, fx + fw - 2, fy + label_h)
 
-            # ── 3a. Drawn / uploaded signature (base64 PNG data-URI) ─────────
+            # ── Drawn / uploaded (base64 PNG) ────────────────────────────────
             if is_sig and value.startswith('data:image'):
                 try:
-                    _, b64  = value.split(',', 1)
-                    raw     = base64.b64decode(b64)
-                    img     = Image.open(BytesIO(raw)).convert('RGBA')
-
-                    # Flatten transparency: make transparent pixels white so the
-                    # signature looks clean on any background.
+                    _, b64 = value.split(',', 1)
+                    raw    = base64.b64decode(b64)
+                    img    = Image.open(BytesIO(raw)).convert('RGBA')
                     bg_img = Image.new('RGBA', img.size, (255, 255, 255, 255))
                     bg_img.paste(img, mask=img)
-                    bg_img  = bg_img.convert('RGB')
-
+                    bg_img = bg_img.convert('RGB')
                     img_buf = BytesIO()
                     bg_img.save(img_buf, format='PNG')
                     img_buf.seek(0)
-
-                    pad = 5   # inner padding so signature doesn't touch the border
+                    pad = 5
                     c.drawImage(
                         ImageReader(img_buf),
-                        fx + pad,
-                        sig_y + pad,
-                        width  = fw - pad * 2,
-                        height = sig_h - pad * 2,
-                        preserveAspectRatio = True,
-                        anchor = 'c',        # centre within the given box
-                        mask   = 'auto',
+                        fx + pad, sig_y + pad,
+                        width=fw - pad * 2, height=sig_h - pad * 2,
+                        preserveAspectRatio=True, anchor='c', mask='auto',
                     )
                 except Exception:
                     pass
 
-            # ── 3b. Typed signature ──────────────────────────────────────────
+            # ── Typed signature — render as PIL image for cursive font ────────
             elif is_sig:
-                # Use the largest font that fits vertically; clamp to 30 pt.
-                font_size = max(8.0, min(sig_h * 0.62, 30.0))
-                c.setFont('Helvetica-BoldOblique', font_size)
-                c.setFillColorRGB(*DS_INK)
+                # Strip font-prefix if present: "font:Dancing Script|John Doe"
+                display_text = value
+                font_hint    = 'Dancing Script'
+                if value.startswith('font:') and '|' in value:
+                    parts        = value.split('|', 1)
+                    font_hint    = parts[0][5:]   # strip "font:"
+                    display_text = parts[1]
 
-                # Clip text horizontally so it never overflows the field.
-                c.saveState()
-                p = c.beginPath()
-                p.rect(fx + 4, sig_y, fw - 8, sig_h)
-                c.clipPath(p, stroke=0, fill=0)
+                img_buf = None
+                try:
+                    img_buf = _typed_sig_to_image(display_text, fw, sig_h, font_name=font_hint)
+                except Exception:
+                    pass
 
-                # Vertically centre the text in the content area.
-                text_y = sig_y + (sig_h - font_size) * 0.40
-                c.drawString(fx + 6, text_y, value)
-                c.restoreState()
+                if img_buf:
+                    pad = 4
+                    c.drawImage(
+                        ImageReader(img_buf),
+                        fx + pad, sig_y + pad,
+                        width=fw - pad * 2, height=sig_h - pad * 2,
+                        preserveAspectRatio=True, anchor='c', mask='auto',
+                    )
+                else:
+                    # Final fallback: reportlab italic
+                    font_size = max(8.0, min(sig_h * 0.62, 30.0))
+                    c.setFont('Helvetica-BoldOblique', font_size)
+                    c.setFillColorRGB(*DS_INK)
+                    c.saveState()
+                    p = c.beginPath()
+                    p.rect(fx + 4, sig_y, fw - 8, sig_h)
+                    c.clipPath(p, stroke=0, fill=0)
+                    c.drawString(fx + 6, sig_y + (sig_h - font_size) * 0.40, display_text)
+                    c.restoreState()
 
-            # ── 3c. Date / text field ────────────────────────────────────────
+            # ── Date / text ──────────────────────────────────────────────────
             else:
                 font_size = max(7.0, min(sig_h * 0.52, 11.0))
                 c.setFont('Helvetica', font_size)
                 c.setFillColorRGB(0.08, 0.08, 0.08)
-
                 c.saveState()
                 p = c.beginPath()
                 p.rect(fx + 3, sig_y, fw - 6, sig_h)
                 c.clipPath(p, stroke=0, fill=0)
-                text_y = sig_y + (sig_h - font_size) * 0.40
-                c.drawString(fx + 5, text_y, value)
+                c.drawString(fx + 5, sig_y + (sig_h - font_size) * 0.40, value)
                 c.restoreState()
 
-            # ── 4. Label strip ───────────────────────────────────────────────
+            # ── Label strip ──────────────────────────────────────────────────
             if label_h:
                 lbl_font = max(5.5, min(label_h * 0.50, 7.5))
                 mid_y    = fy + (label_h - lbl_font) * 0.45
 
-                # Left side: coloured check-mark + signer name / field type
                 c.setFont('Helvetica-Bold', lbl_font)
                 c.setFillColorRGB(*DS_CHECK)
-                c.drawString(fx + 3, mid_y, '\u2713')   # ✓
+                c.drawString(fx + 3, mid_y, '\u2713')
 
                 c.setFont('Helvetica', lbl_font)
                 c.setFillColorRGB(*DS_LABEL)
@@ -325,7 +494,6 @@ def _embed_signatures_in_pdf(sig_req):
                 else:
                     left_label = ' Text'
 
-                # Clip label text to ≈60 % of field width to leave room for date
                 c.saveState()
                 p = c.beginPath()
                 p.rect(fx + 3, fy, fw * 0.62, label_h)
@@ -333,25 +501,23 @@ def _embed_signatures_in_pdf(sig_req):
                 c.drawString(fx + 3 + lbl_font, mid_y, left_label)
                 c.restoreState()
 
-                # Right side: date the field was filled
                 if field.filled_at:
-                    ts = field.filled_at.strftime('%d %b %Y')
                     c.setFont('Helvetica', lbl_font)
                     c.setFillColorRGB(*DS_LABEL)
-                    c.drawRightString(fx + fw - 4, mid_y, ts)
+                    c.drawRightString(fx + fw - 4, mid_y, field.filled_at.strftime('%d %b %Y'))
 
         c.save()
         overlay_buf.seek(0)
         page.merge_page(PdfReader(overlay_buf).pages[0])
         writer.add_page(page)
 
-    # ── Write out the signed PDF ─────────────────────────────────────────────
+    # ── Write signed PDF ──────────────────────────────────────────────────────
     out_buf      = BytesIO()
     writer.write(out_buf)
     signed_bytes = out_buf.getvalue()
 
-    orig_name    = document.name
-    signed_name  = (orig_name[:-4] + '-signed.pdf') if orig_name.lower().endswith('.pdf') else (orig_name + '-signed.pdf')
+    orig_name   = document.name
+    signed_name = (orig_name[:-4] + '-signed.pdf') if orig_name.lower().endswith('.pdf') else (orig_name + '-signed.pdf')
 
     signed_file = SharedFile.objects.create(
         name        = signed_name,
@@ -362,9 +528,9 @@ def _embed_signatures_in_pdf(sig_req):
             f'Signed copy of "{orig_name}" — '
             f'{sig_req.signers.filter(status="signed").count()} signature(s) collected.'
         ),
-        tags        = document.tags,
-        file_size   = len(signed_bytes),
-        file_type   = 'application/pdf',
+        tags      = document.tags,
+        file_size = len(signed_bytes),
+        file_type = 'application/pdf',
     )
     signed_file.file.save(signed_name, ContentFile(signed_bytes), save=True)
 
@@ -374,8 +540,6 @@ def _embed_signatures_in_pdf(sig_req):
     except Exception:
         pass
 
-    # Update the signature request so every download/preview link
-    # now serves the fully-stamped file.
     sig_req.document = signed_file
     sig_req.save(update_fields=['document'])
 
@@ -1450,8 +1614,20 @@ class SavedSignatureAPIView(LoginRequiredMixin, View):
                 'type':       s.sig_type,
                 'is_default': s.is_default,
             }
-            if s.sig_type in ('draw', 'type'):
+            if s.sig_type == 'draw':
                 entry['data'] = s.data
+            elif s.sig_type == 'type':
+                # Parse stored "font:Dancing Script|John Doe" format,
+                # or fall back gracefully for sigs saved before this format.
+                raw = s.data or ''
+                if raw.startswith('font:') and '|' in raw:
+                    parts        = raw.split('|', 1)
+                    entry['font'] = parts[0][5:]   # strip leading "font:"
+                    entry['text'] = parts[1]
+                else:
+                    entry['font'] = 'Dancing Script'
+                    entry['text'] = raw
+                entry['data'] = raw   # keep raw for backward compat
             elif s.image:
                 entry['data'] = request.build_absolute_uri(s.image.url)
             sigs.append(entry)

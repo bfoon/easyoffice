@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>{% if sig_req %}Sign: {{ sig_req.title }}{% else %}Sign Document{% endif %} — EasyOffice</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css"/>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Dancing+Script:wght@600;700&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Dancing+Script:wght@600;700&family=Caveat:wght@600&family=Pacifico&family=Great+Vibes&display=swap" rel="stylesheet"/>
   <style>
   *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
   body { font-family:'Outfit',sans-serif; background:#0f172a; min-height:100vh; color:#e2e8f0; }
@@ -230,7 +230,15 @@
 
         <!-- Type -->
         <div id="tabType" style="display:none">
-          <input type="text" id="typedSig" class="sig-type-input" placeholder="Type your full name"/>
+          <!-- Font style chooser -->
+          <div style="display:flex;gap:5px;margin-bottom:7px;flex-wrap:wrap" id="sigFontBtns">
+            <button type="button" class="sig-font-btn active" data-font="'Dancing Script', cursive" onclick="setSigFont(this)" style="padding:4px 10px;border-radius:6px;border:1.5px solid #3b82f6;background:#3b82f620;color:#fff;cursor:pointer;font-family:'Dancing Script',cursive;font-size:1rem">Script</button>
+            <button type="button" class="sig-font-btn" data-font="'Caveat', cursive" onclick="setSigFont(this)" style="padding:4px 10px;border-radius:6px;border:1.5px solid #334155;background:#0f172a;color:#94a3b8;cursor:pointer;font-family:'Caveat',cursive;font-size:1rem">Casual</button>
+            <button type="button" class="sig-font-btn" data-font="'Pacifico', cursive" onclick="setSigFont(this)" style="padding:4px 10px;border-radius:6px;border:1.5px solid #334155;background:#0f172a;color:#94a3b8;cursor:pointer;font-family:'Pacifico',cursive;font-size:.9rem">Pacifico</button>
+            <button type="button" class="sig-font-btn" data-font="'Great Vibes', cursive" onclick="setSigFont(this)" style="padding:4px 10px;border-radius:6px;border:1.5px solid #334155;background:#0f172a;color:#94a3b8;cursor:pointer;font-family:'Great Vibes',cursive;font-size:1.1rem">Elegant</button>
+          </div>
+          <input type="hidden" id="sigFontChoice" value="'Dancing Script', cursive"/>
+          <input type="text" id="typedSig" class="sig-type-input" placeholder="Type your full name" style="font-family:'Dancing Script',cursive"/>
         </div>
 
         <!-- Upload -->
@@ -595,14 +603,65 @@ function checkSigReady() {
 }
 
 // ════════════════════════════════════════════════
+// FONT CHOOSER (typed tab)
+// ════════════════════════════════════════════════
+var _FONT_CSS_MAP = {
+  'Dancing Script': "'Dancing Script', cursive",
+  'Caveat':         "'Caveat', cursive",
+  'Pacifico':       "'Pacifico', cursive",
+  'Great Vibes':    "'Great Vibes', cursive",
+};
+
+function setSigFont(btn) {
+  var font = btn.dataset.font;
+  document.getElementById('sigFontChoice').value = font;
+  document.getElementById('typedSig').style.fontFamily = font;
+  document.querySelectorAll('.sig-font-btn').forEach(function(b) {
+    var active = b === btn;
+    b.style.borderColor = active ? '#3b82f6' : '#334155';
+    b.style.background  = active ? '#3b82f620' : '#0f172a';
+    b.style.color       = active ? '#fff' : '#94a3b8';
+  });
+}
+
+/** Parse a stored "font:Name|text" string into {font, text}. */
+function parseFontData(raw) {
+  if (raw && raw.startsWith('font:') && raw.indexOf('|') !== -1) {
+    var idx  = raw.indexOf('|');
+    return { font: raw.slice(5, idx), text: raw.slice(idx + 1) };
+  }
+  return { font: 'Dancing Script', text: raw || '' };
+}
+
+/** Build the canonical "font:Name|text" value to store / send. */
+function buildFontData(text) {
+  var fontName = (document.getElementById('sigFontChoice') || {}).value || 'Dancing Script';
+  // Strip CSS family string down to just the font name (strip quotes + fallback)
+  fontName = fontName.replace(/'/g, '').replace(/"/g, '').split(',')[0].trim();
+  return 'font:' + fontName + '|' + text;
+}
+
+/** Activate the font button matching fontName (falls back to first button). */
+function activateFontBtn(fontName) {
+  var matched = false;
+  document.querySelectorAll('.sig-font-btn').forEach(function(b) {
+    // b.dataset.font is a CSS string like "'Dancing Script', cursive"
+    var bName = b.dataset.font.replace(/'/g, '').replace(/"/g, '').split(',')[0].trim();
+    var active = (bName === fontName);
+    if (active) { setSigFont(b); matched = true; }
+  });
+  if (!matched) {
+    var first = document.querySelector('.sig-font-btn');
+    if (first) setSigFont(first);
+  }
+}
+
+// ════════════════════════════════════════════════
 // SAVED SIGNATURES
 // ════════════════════════════════════════════════
 function loadSavedSignatures() {
-  // Only attempt if user appears to be logged in (has a session cookie)
-  // External signers (no account) will get a redirect — catch silently
   fetch(SAVED_SIG_API, {credentials:'same-origin', redirect:'manual'})
     .then(function(r) {
-      // redirect means not logged in — skip silently
       if (r.type === 'opaqueredirect' || r.status === 302 || r.status === 403 || r.status === 401) return null;
       return r.json();
     })
@@ -611,25 +670,47 @@ function loadSavedSignatures() {
       var wrap = document.getElementById('savedSigsWrap');
       var list = document.getElementById('savedSigsList');
       wrap.style.display = '';
+
       data.signatures.forEach(function(sig) {
         var item = document.createElement('div');
         item.className = 'saved-sig-item';
-        item.id = 'ssi-'+sig.id;
+        item.id        = 'ssi-' + sig.id;
+        item.style.cursor = 'pointer';
+
+        // ── Build preview ──────────────────────────────────────────
         var previewHtml = '';
         if (sig.type === 'draw') {
           previewHtml = '<canvas id="ssc-'+sig.id+'" style="max-width:120px;max-height:36px"></canvas>';
         } else if (sig.type === 'type') {
-          previewHtml = '<span style="font-family:\'Dancing Script\',cursive;font-size:1.1rem;color:#1e293b">'+escHtml(sig.data)+'</span>';
+          // sig.font and sig.text are parsed by the server; fall back gracefully
+          var dispFont = _FONT_CSS_MAP[sig.font] || "'Dancing Script', cursive";
+          previewHtml  = '<span style="font-family:'+dispFont+';font-size:1.1rem;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;display:block">'+escHtml(sig.text)+'</span>';
         } else {
-          previewHtml = '<img src="'+sig.data+'" style="max-width:120px;max-height:36px"/>';
+          previewHtml = '<img src="'+escHtml(sig.data||'')+'" style="max-width:120px;max-height:36px"/>';
         }
+
         item.innerHTML =
           '<div class="saved-sig-preview" style="background:#fff">'+previewHtml+'</div>' +
-          '<div style="flex:1;min-width:0"><div style="font-size:.78rem;font-weight:600;color:#cbd5e1">'+escHtml(sig.name)+'</div>' +
-          '<div style="font-size:.68rem;color:#64748b">'+sig.type+'</div></div>' +
-          '<button type="button" style="background:none;border:none;color:#3b82f6;font-size:.72rem;cursor:pointer;font-weight:600;white-space:nowrap" ' +
-            'onclick="applySavedSig(\''+sig.id+'\',\''+sig.type+'\','+JSON.stringify(sig.data)+')">Use</button>';
+          '<div style="flex:1;min-width:0">' +
+            '<div style="font-size:.78rem;font-weight:600;color:#cbd5e1">'+escHtml(sig.name)+'</div>' +
+            '<div style="font-size:.68rem;color:#64748b">'+(sig.type==='type' ? (sig.font||'Script') : sig.type)+'</div>' +
+          '</div>' +
+          '<span style="color:#3b82f6;font-size:.72rem;font-weight:600;white-space:nowrap">Use</span>';
+
+        // ── Make entire card clickable ─────────────────────────────
+        item.addEventListener('click', function() {
+          if (sig.type === 'draw') {
+            applySavedSig(sig.id, 'draw', sig.data);
+          } else if (sig.type === 'type') {
+            applySavedSig(sig.id, 'type', sig.text, sig.font);
+          } else {
+            applySavedSig(sig.id, 'upload', sig.data);
+          }
+        });
+
         list.appendChild(item);
+
+        // Render drawn sig into its mini canvas
         if (sig.type === 'draw') {
           setTimeout(function() {
             var c = document.getElementById('ssc-'+sig.id);
@@ -639,22 +720,80 @@ function loadSavedSignatures() {
             img.src = sig.data;
           }, 100);
         }
-        if (sig.is_default) applySavedSig(sig.id, sig.type, sig.data);
+
+        // Auto-apply default signature
+        if (sig.is_default) {
+          if (sig.type === 'type') {
+            applySavedSig(sig.id, 'type', sig.text, sig.font);
+          } else {
+            applySavedSig(sig.id, sig.type, sig.data);
+          }
+        }
       });
-    }).catch(function(){}); // silent fail for external signers
+    }).catch(function(){});
 }
 
-var selectedSavedSigData = '';
-var selectedSavedSigType = '';
+/**
+ * Apply a saved signature.
+ * @param {string} id   - saved sig UUID
+ * @param {string} type - 'draw' | 'type' | 'upload'
+ * @param {string} data - base64 PNG (draw/upload) OR plain text (type)
+ * @param {string} [font] - font name for typed sigs (e.g. "Dancing Script")
+ */
+function applySavedSig(id, type, data, font) {
+  // Highlight selected card
+  document.querySelectorAll('.saved-sig-item').forEach(function(el) {
+    el.classList.toggle('selected', el.id === 'ssi-'+id);
+  });
 
-function applySavedSig(id, type, data) {
-  document.querySelectorAll('.saved-sig-item').forEach(function(el){ el.classList.toggle('selected', el.id==='ssi-'+id); });
-  selectedSavedSigData = data;
-  selectedSavedSigType = type;
-  // Switch to appropriate tab
-  if (type === 'draw')   { setTab('draw'); clearCanvas(); var img=new Image(); img.onload=function(){ ctx.drawImage(img,0,0,canvas.offsetWidth,canvas.offsetHeight); hasSig=true; canvas.classList.add('has-sig'); checkSigReady(); }; img.src=data; }
-  if (type === 'type')   { setTab('type'); document.getElementById('typedSig').value=data; checkSigReady(); }
-  if (type === 'upload') { setTab('upload'); uploadedImgData=data; checkSigReady(); }
+  if (type === 'draw') {
+    setTab('draw');
+    // Use requestAnimationFrame to ensure the tab is visible before
+    // initialising the canvas (offsetWidth needs a layout pass)
+    requestAnimationFrame(function() {
+      initSigCanvas();
+      clearCanvas();
+      var img = new Image();
+      img.onload = function() {
+        var cssW = parseInt(canvas.style.width,  10) || 320;
+        var cssH = parseInt(canvas.style.height, 10) || 130;
+        ctx.clearRect(0, 0, cssW, cssH);
+        var scale = Math.min((cssW - 10) / img.width, (cssH - 10) / img.height);
+        var dw = img.width  * scale;
+        var dh = img.height * scale;
+        ctx.drawImage(img, (cssW - dw) / 2, (cssH - dh) / 2, dw, dh);
+        hasSig = true;
+        canvas.classList.add('has-sig');
+        checkSigReady();
+      };
+      img.src = data;
+    });
+
+  } else if (type === 'type') {
+    setTab('type');
+    // Restore the font that was used when saving
+    var fontName = font || 'Dancing Script';
+    activateFontBtn(fontName);
+    // Set ONLY the text, not the "font:X|text" prefix
+    document.getElementById('typedSig').value = data;
+    checkSigReady();
+
+  } else if (type === 'upload') {
+    setTab('upload');
+    uploadedImgData = data;
+    requestAnimationFrame(function() {
+      var prev = document.getElementById('uploadPreview');
+      var previewImg = new Image();
+      previewImg.onload = function() {
+        prev.style.display = 'block';
+        prev.width  = previewImg.width;
+        prev.height = previewImg.height;
+        prev.getContext('2d').drawImage(previewImg, 0, 0);
+      };
+      previewImg.src = data;
+    });
+    checkSigReady();
+  }
 }
 
 // ════════════════════════════════════════════════
@@ -668,29 +807,43 @@ document.getElementById('saveForLater').addEventListener('change', function() {
 // ════════════════════════════════════════════════
 // SUBMIT — apply signature to active field or full doc
 // ════════════════════════════════════════════════
-function prepSign() {
-  var data = '';
+function getSignaturePayload() {
+  /** Returns {data, type} ready to send, or null if not ready. */
   var type = currentTab;
+  var data = '';
+
   if (type === 'draw') {
-    if (!hasSig) { alert('Please draw your signature first.'); return false; }
+    if (!hasSig) { alert('Please draw your signature first.'); return null; }
     data = canvas.toDataURL('image/png');
+
   } else if (type === 'type') {
-    data = document.getElementById('typedSig').value.trim();
-    if (!data) { alert('Please type your name.'); return false; }
+    var text = document.getElementById('typedSig').value.trim();
+    if (!text) { alert('Please type your name.'); return null; }
+    // Always build a clean "font:Name|text" — never double-encode
+    data = buildFontData(text);
+
   } else if (type === 'upload') {
     data = uploadedImgData;
-    if (!data) { alert('Please upload a signature image.'); return false; }
+    if (!data) { alert('Please upload a signature image.'); return null; }
   }
+
+  return { data: data, type: type };
+}
+
+function prepSign() {
+  var payload = getSignaturePayload();
+  if (!payload) return false;
 
   // If there's an active field, apply to that field via AJAX first
   if (activeFieldId) {
-    applyToField(activeFieldId, data, type);
+    applyToField(activeFieldId, payload.data, payload.type);
     activeFieldId = null;
-    return false; // don't submit the full form yet
+    return false;
   }
 
-  document.getElementById('sigDataInput').value = data;
-  document.getElementById('sigTypeInput').value  = type;
+  document.getElementById('sigDataInput').value = payload.data;
+  document.getElementById('sigTypeInput').value  = payload.type;
+
   if (document.getElementById('saveForLater').checked) {
     document.getElementById('saveSigInput').value     = '1';
     document.getElementById('saveSigNameInput').value = document.getElementById('saveSigName').value || 'My Signature';
@@ -701,16 +854,14 @@ function prepSign() {
 function applyToField(fieldId, data, type) {
   var url = '/files/sign/' + SIGNER_TOKEN + '/field/' + fieldId + '/';
   fetch(url, {
-    method:'POST',
-    headers:{'Content-Type':'application/json','X-CSRFToken': getCsrf()},
-    body: JSON.stringify({value: data, type: type}),
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRFToken': getCsrf()},
+    body:    JSON.stringify({value: data, type: type}),
   }).then(function(r){ return r.json(); }).then(function(res) {
     if (res.status === 'ok') {
       markFieldFilled(fieldId);
-      // Re-render overlays using the PDF canvas dimensions
       var pdfCv = document.getElementById('pdfCanvas');
       renderFieldOverlays(pdfCv.offsetWidth, pdfCv.offsetHeight);
-      // Reset button label now that no field is active
       document.getElementById('signBtn').innerHTML = '<i class="bi bi-check2-circle"></i> Sign Document';
     }
   });

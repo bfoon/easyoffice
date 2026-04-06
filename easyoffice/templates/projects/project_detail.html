@@ -38,6 +38,26 @@
 }
 .proj-modal-body { padding:20px 22px; }
 
+/* Gantt modal — wide, tall, inner-scroll */
+.gantt-modal-backdrop {
+  position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1060;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .2s;
+  padding:20px;
+}
+.gantt-modal-backdrop.open { opacity:1;pointer-events:all; }
+.gantt-modal {
+  background:var(--eo-surface);border-radius:14px;
+  border:1px solid var(--eo-border);
+  width:92vw;max-width:1200px;
+  height:88vh;
+  display:flex;flex-direction:column;
+  box-shadow:0 32px 80px rgba(0,0,0,.25);
+  transform:translateY(16px) scale(.98);transition:transform .2s;
+  overflow:hidden;
+}
+.gantt-modal-backdrop.open .gantt-modal { transform:translateY(0) scale(1); }
+
 .ms-timeline { position:relative;padding-left:28px; }
 .ms-timeline::before {
   content:'';position:absolute;left:9px;top:0;bottom:0;
@@ -68,6 +88,10 @@
         {% endif %}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start">
+        <button onclick="openGantt()" class="eo-btn eo-btn-sm"
+                style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3)">
+          <i class="bi bi-bar-chart-steps"></i> Gantt Chart
+        </button>
         {% if is_member %}
         <button onclick="openModal('updateModal')" class="eo-btn eo-btn-sm"
                 style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3)">
@@ -365,7 +389,156 @@
       </div>
     </div>
     {% endif %}
-  </div>
+
+    {# ── Finance Section ──────────────────────────────────────────────── #}
+    {% if purchase_requests or project_payments or employee_finance_requests %}
+    <div class="eo-card">
+      <div class="eo-card-header" style="margin-bottom:0">
+        <div>
+          <h2 class="eo-card-title">Finance</h2>
+          <p class="eo-card-subtitle">
+            Purchase requests &amp; payments linked to this project
+          </p>
+        </div>
+        <div style="display:flex;gap:6px">
+          {% if finance_totals.total_spent %}
+          <span style="font-size:.8rem;font-weight:700;color:var(--eo-text);background:var(--eo-bg);border:1px solid var(--eo-border);padding:4px 10px;border-radius:8px">
+            ${{ finance_totals.total_spent|floatformat:0|intcomma }} spent
+          </span>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Tab switcher -->
+      <div style="display:flex;gap:0;border-bottom:1px solid var(--eo-border);margin-bottom:14px;margin-top:14px">
+        <button class="fin-tab active" data-tab="purchases" onclick="switchFinTab(this,'purchases')"
+                style="padding:8px 16px;font-size:.82rem;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2px solid var(--eo-primary);color:var(--eo-primary)">
+          <i class="bi bi-cart3 me-1"></i>Purchase Requests
+          {% if purchase_requests %}<span style="margin-left:5px;background:var(--eo-primary);color:#fff;border-radius:10px;padding:1px 7px;font-size:.7rem">{{ purchase_requests|length }}</span>{% endif %}
+        </button>
+        <button class="fin-tab" data-tab="payments" onclick="switchFinTab(this,'payments')"
+                style="padding:8px 16px;font-size:.82rem;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;color:var(--eo-text-muted)">
+          <i class="bi bi-credit-card me-1"></i>Payments
+          {% if project_payments %}<span style="margin-left:5px;background:var(--eo-border);color:var(--eo-text-muted);border-radius:10px;padding:1px 7px;font-size:.7rem">{{ project_payments|length }}</span>{% endif %}
+        </button>
+        {% if employee_finance_requests %}
+        <button class="fin-tab" data-tab="staff-req" onclick="switchFinTab(this,'staff-req')"
+                style="padding:8px 16px;font-size:.82rem;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;color:var(--eo-text-muted)">
+          <i class="bi bi-person-check me-1"></i>Staff Requests
+          <span style="margin-left:5px;background:var(--eo-border);color:var(--eo-text-muted);border-radius:10px;padding:1px 7px;font-size:.7rem">{{ employee_finance_requests|length }}</span>
+        </button>
+        {% endif %}
+      </div>
+
+      <!-- Purchase Requests tab -->
+      <div id="fin-tab-purchases">
+        {% if purchase_requests %}
+        <div style="display:flex;flex-direction:column;gap:8px">
+          {% for pr in purchase_requests %}
+          <a href="{% url 'purchase_detail' pr.pk %}" style="text-decoration:none;display:block;padding:12px 14px;background:var(--eo-bg);border-radius:10px;border:1px solid var(--eo-border);transition:border-color .12s"
+             onmouseover="this.style.borderColor='var(--eo-primary)40'" onmouseout="this.style.borderColor='var(--eo-border)'">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:.88rem;font-weight:700;color:var(--eo-text);margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pr.title }}</div>
+                <div style="font-size:.74rem;color:var(--eo-text-muted);display:flex;gap:10px;flex-wrap:wrap">
+                  <span><i class="bi bi-person me-1"></i>{{ pr.requested_by.full_name }}</span>
+                  <span><i class="bi bi-calendar3 me-1"></i>{{ pr.created_at|date:"N j, Y" }}</span>
+                  {% if pr.vendor %}<span><i class="bi bi-shop me-1"></i>{{ pr.vendor|truncatechars:20 }}</span>{% endif %}
+                </div>
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0">
+                <span style="font-size:.82rem;font-weight:700;color:var(--eo-text)">${{ pr.estimated_cost|floatformat:0|intcomma }}</span>
+                <span style="font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:12px;background:{{ pr.status_color }}18;color:{{ pr.status_color }}">
+                  {{ pr.get_status_display }}
+                </span>
+              </div>
+            </div>
+          </a>
+          {% endfor %}
+        </div>
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--eo-border);display:flex;justify-content:space-between;font-size:.82rem">
+          <span style="color:var(--eo-text-muted)">{{ purchase_requests|length }} purchase request{{ purchase_requests|length|pluralize }}</span>
+          {% if finance_totals.total_purchase_est %}
+          <span style="font-weight:700;color:var(--eo-text)">Estimated total: ${{ finance_totals.total_purchase_est|floatformat:0|intcomma }}</span>
+          {% endif %}
+        </div>
+        {% else %}
+        <div style="text-align:center;padding:28px;color:var(--eo-text-muted)">
+          <i class="bi bi-cart3" style="font-size:1.6rem;display:block;margin-bottom:8px;opacity:.3"></i>
+          <p style="font-size:.84rem;margin:0">No purchase requests linked to this project.</p>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Payments tab -->
+      <div id="fin-tab-payments" style="display:none">
+        {% if project_payments %}
+        <div style="display:flex;flex-direction:column;gap:6px">
+          {% for pay in project_payments %}
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--eo-bg);border-radius:8px;border:1px solid var(--eo-border)">
+            <div style="width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;
+              {% if pay.direction == 'company_to_vendor' %}background:#fee2e218;color:#ef4444
+              {% elif pay.direction == 'company_to_staff' %}background:#d1fae518;color:#10b981
+              {% else %}background:#dbeafe18;color:#3b82f6{% endif %}">
+              <i class="bi bi-{% if pay.direction == 'company_to_vendor' %}shop{% elif pay.direction == 'company_to_staff' %}person{% else %}arrow-left-right{% endif %}"></i>
+            </div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:.85rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pay.description|truncatechars:50 }}</div>
+              <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:2px">
+                {{ pay.reference }} · {{ pay.payment_date|date:"N j, Y" }} · {{ pay.get_method_display }}
+              </div>
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">${{ pay.amount|floatformat:0|intcomma }}</div>
+              <div style="font-size:.68rem;color:var(--eo-text-muted)">{{ pay.get_payment_type_display }}</div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--eo-border);display:flex;justify-content:space-between;font-size:.82rem">
+          <span style="color:var(--eo-text-muted)">{{ project_payments|length }} payment{{ project_payments|length|pluralize }}</span>
+          {% if finance_totals.total_spent %}
+          <span style="font-weight:700;color:var(--eo-text)">Total paid: ${{ finance_totals.total_spent|floatformat:0|intcomma }}</span>
+          {% endif %}
+        </div>
+        {% else %}
+        <div style="text-align:center;padding:28px;color:var(--eo-text-muted)">
+          <i class="bi bi-credit-card" style="font-size:1.6rem;display:block;margin-bottom:8px;opacity:.3"></i>
+          <p style="font-size:.84rem;margin:0">No payments recorded for this project.</p>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Staff Finance Requests tab -->
+      {% if employee_finance_requests %}
+      <div id="fin-tab-staff-req" style="display:none">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          {% for req in employee_finance_requests %}
+          <div style="display:flex;align-items:center;gap:12px;padding:11px 13px;background:var(--eo-bg);border-radius:9px;border:1px solid var(--eo-border)">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:.86rem;font-weight:600;color:var(--eo-text);margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ req.title }}</div>
+              <div style="font-size:.72rem;color:var(--eo-text-muted);display:flex;gap:10px;flex-wrap:wrap">
+                <span><i class="bi bi-person me-1"></i>{{ req.employee.full_name }}</span>
+                <span style="text-transform:capitalize">{{ req.get_request_type_display }}</span>
+                <span><i class="bi bi-calendar3 me-1"></i>{{ req.created_at|date:"N j, Y" }}</span>
+              </div>
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              <div style="font-size:.88rem;font-weight:700;color:var(--eo-text)">${{ req.amount_requested|floatformat:0|intcomma }}</div>
+              <span style="font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:10px;background:{{ req.status_color }}18;color:{{ req.status_color }}">
+                {{ req.get_status_display }}
+              </span>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+    {% endif %}{# end finance section #}
+
+  </div>{# /col-lg-8 #}
 
   <div class="col-lg-4 d-flex flex-column gap-4">
     <div class="eo-card">
@@ -514,6 +687,77 @@
   </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════════════════
+     GANTT CHART MODAL
+════════════════════════════════════════════════════════════════ -->
+<div class="gantt-modal-backdrop" id="ganttBackdrop">
+  <div class="gantt-modal">
+
+    <!-- Modal header -->
+    <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;
+                border-bottom:1px solid var(--eo-border);flex-shrink:0">
+      <div style="width:14px;height:14px;border-radius:4px;background:{{ project.cover_color }};flex-shrink:0"></div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:.97rem;font-weight:800;color:var(--eo-text)">Gantt Chart — {{ project.name }}</div>
+        <div style="font-size:.74rem;color:var(--eo-text-muted)">
+          {{ project.code }}{% if project.start_date %} &nbsp;·&nbsp; {{ project.start_date|date:"N j, Y" }} → {% if project.end_date %}{{ project.end_date|date:"N j, Y" }}{% else %}No end date{% endif %}{% endif %}
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-shrink:0">
+        <a href="{% url 'project_gantt_pdf' project.pk %}"
+           class="eo-btn eo-btn-primary eo-btn-sm" download>
+          <i class="bi bi-file-earmark-pdf-fill"></i> Download PDF
+        </a>
+        <button onclick="closeGantt()" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Legend strip -->
+    <div style="display:flex;align-items:center;gap:18px;padding:7px 20px;
+                background:var(--eo-bg);border-bottom:1px solid var(--eo-border);flex-shrink:0;flex-wrap:wrap">
+      <span style="font-size:.7rem;font-weight:700;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.05em">Legend:</span>
+      <span style="display:flex;align-items:center;gap:5px;font-size:.74rem;color:var(--eo-text-muted)"><span style="width:10px;height:10px;border-radius:50%;background:#94a3b8;display:inline-block"></span>Pending</span>
+      <span style="display:flex;align-items:center;gap:5px;font-size:.74rem;color:var(--eo-text-muted)"><span style="width:10px;height:10px;border-radius:50%;background:#3b82f6;display:inline-block"></span>In Progress</span>
+      <span style="display:flex;align-items:center;gap:5px;font-size:.74rem;color:var(--eo-text-muted)"><span style="width:10px;height:10px;border-radius:50%;background:#10b981;display:inline-block"></span>Completed</span>
+      <span style="display:flex;align-items:center;gap:5px;font-size:.74rem;color:var(--eo-text-muted)"><span style="width:10px;height:10px;border-radius:50%;background:#ef4444;display:inline-block"></span>Missed</span>
+      <span style="display:flex;align-items:center;gap:5px;font-size:.74rem;color:var(--eo-text-muted)"><span style="width:3px;height:14px;background:#f59e0b;display:inline-block;border-radius:1px"></span>Today</span>
+    </div>
+
+    <!-- Gantt chart scroll area -->
+    <div style="flex:1;overflow:auto;padding:20px;background:var(--eo-bg)" id="ganttScroll">
+      <div id="ganttContainer" style="min-width:800px"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Gantt data (JSON embedded for JS renderer) -->
+<script id="ganttDataScript" type="application/json">
+{
+  "project": {
+    "name":     "{{ project.name|escapejs }}",
+    "code":     "{{ project.code|escapejs }}",
+    "start":    "{{ project.start_date|date:'Y-m-d'|default:'' }}",
+    "end":      "{{ project.end_date|date:'Y-m-d'|default:'' }}",
+    "progress": {{ project.progress_pct }},
+    "color":    "{{ project.cover_color }}"
+  },
+  "milestones": [
+    {% for ms in milestones %}
+    {
+      "name":   "{{ ms.name|escapejs }}",
+      "desc":   "{{ ms.description|escapejs|truncatechars:80 }}",
+      "due":    "{{ ms.due_date|date:'Y-m-d' }}",
+      "status": "{{ ms.status }}",
+      "done_at":"{{ ms.completed_at|date:'Y-m-d'|default:'' }}"
+    }{% if not forloop.last %},{% endif %}
+    {% endfor %}
+  ]
+}
+</script>
+
 <div class="proj-modal-backdrop" id="updateModal">
   <div class="proj-modal">
     <div class="proj-modal-head">
@@ -648,6 +892,7 @@
 
 {% block extra_js %}
 <script>
+// ── Modal helpers ────────────────────────────────────────────────────────────
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
@@ -662,15 +907,264 @@ document.addEventListener('keydown', function(e) {
     document.querySelectorAll('.proj-modal-backdrop.open').forEach(function(el) {
       el.classList.remove('open');
     });
+    closeGantt();
   }
 });
 
 var rangeEl = document.getElementById('progressRange');
-var valEl = document.getElementById('progressVal');
+var valEl   = document.getElementById('progressVal');
 if (rangeEl) {
-  rangeEl.addEventListener('input', function() {
-    valEl.textContent = this.value + '%';
+  rangeEl.addEventListener('input', function() { valEl.textContent = this.value + '%'; });
+}
+
+// ── Finance tab switcher ──────────────────────────────────────────────────────
+function switchFinTab(btn, tabId) {
+  document.querySelectorAll('.fin-tab').forEach(function(b) {
+    b.style.borderBottomColor   = 'transparent';
+    b.style.color               = 'var(--eo-text-muted)';
   });
+  btn.style.borderBottomColor = 'var(--eo-primary)';
+  btn.style.color             = 'var(--eo-primary)';
+
+  ['purchases','payments','staff-req'].forEach(function(t) {
+    var el = document.getElementById('fin-tab-' + t);
+    if (el) el.style.display = t === tabId ? '' : 'none';
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// GANTT CHART
+// ══════════════════════════════════════════════════════════════
+var GANTT_DATA = null;
+var _ganttBuilt = false;
+
+function openGantt() {
+  document.getElementById('ganttBackdrop').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  if (!_ganttBuilt) {
+    try {
+      GANTT_DATA = JSON.parse(document.getElementById('ganttDataScript').textContent);
+    } catch(e) { GANTT_DATA = {project:{},milestones:[]}; }
+    renderGanttSVG();
+    _ganttBuilt = true;
+  }
+}
+
+function closeGantt() {
+  document.getElementById('ganttBackdrop').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+// Close when clicking backdrop (outside the modal card)
+document.getElementById('ganttBackdrop').addEventListener('click', function(e) {
+  if (e.target === this) closeGantt();
+});
+
+// ── SVG Gantt renderer ────────────────────────────────────────────────────────
+function renderGanttSVG() {
+  var data = GANTT_DATA;
+  var container = document.getElementById('ganttContainer');
+
+  // ── Date helpers ──
+  function pd(str) { return str ? new Date(str + 'T00:00:00') : null; }
+  function daysBetween(a, b) { return (b.getTime() - a.getTime()) / 86400000; }
+  function addDays(d, n) { return new Date(d.getTime() + n * 86400000); }
+  function fmtDate(d) { return d.toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'2-digit'}); }
+  function fmtMon(d)  { return d.toLocaleDateString('en-GB', {month:'short',year:'2-digit'}); }
+  function esc(s)     { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  var today = new Date(); today.setHours(0,0,0,0);
+
+  var pStart = pd(data.project.start);
+  var pEnd   = pd(data.project.end);
+
+  // Collect all milestone due dates to determine range
+  var msDates = data.milestones.map(function(m){ return pd(m.due); }).filter(Boolean);
+
+  var allDates = msDates.slice();
+  if (pStart) allDates.push(pStart);
+  if (pEnd)   allDates.push(pEnd);
+  allDates.push(today);
+
+  var tMin = allDates.length ? new Date(Math.min.apply(null, allDates)) : addDays(today, -30);
+  var tMax = allDates.length ? new Date(Math.max.apply(null, allDates)) : addDays(today,  90);
+
+  // Add padding (1 month each side)
+  tMin = new Date(tMin.getFullYear(), tMin.getMonth(), 1);
+  tMax = new Date(tMax.getFullYear(), tMax.getMonth() + 2, 0);
+
+  var totalDays = Math.max(1, daysBetween(tMin, tMax));
+
+  // ── Layout constants ──
+  var LABEL_W   = 200;
+  var CHART_W   = Math.max(700, Math.round(totalDays * 6));  // ~6px per day, min 700
+  var SVG_W     = LABEL_W + CHART_W;
+  var HDR_H     = 56;   // month header
+  var PROJ_ROW  = 28;   // project bar row
+  var ROW_H     = 44;
+  var MS_COUNT  = data.milestones.length;
+  var TOTAL_H   = HDR_H + PROJ_ROW + MS_COUNT * ROW_H + 20;
+  var BAR_R     = 5;    // bar corner radius
+  var DOT_R     = 10;   // milestone marker radius
+
+  // ── Coordinate helpers ──
+  function xOf(date) {
+    return LABEL_W + Math.round(daysBetween(tMin, date) / totalDays * CHART_W);
+  }
+
+  // ── Status colours ──
+  var SC = {
+    pending:     { bar:'#e2e8f0', dot:'#94a3b8', txt:'#64748b', lbl:'Pending' },
+    in_progress: { bar:'#dbeafe', dot:'#3b82f6', txt:'#1e40af', lbl:'In Progress' },
+    completed:   { bar:'#d1fae5', dot:'#10b981', txt:'#065f46', lbl:'Completed' },
+    missed:      { bar:'#fee2e2', dot:'#ef4444', txt:'#991b1b', lbl:'Missed' },
+  };
+  function sc(status) { return SC[status] || SC.pending; }
+
+  var parts = [];
+  parts.push('<svg xmlns="http://www.w3.org/2000/svg" width="'+SVG_W+'" height="'+TOTAL_H+'" viewBox="0 0 '+SVG_W+' '+TOTAL_H+'" style="font-family:system-ui,sans-serif;display:block">');
+
+  // White background
+  parts.push('<rect width="'+SVG_W+'" height="'+TOTAL_H+'" fill="#fff"/>');
+
+  // Chart area background (light)
+  parts.push('<rect x="'+LABEL_W+'" width="'+CHART_W+'" height="'+TOTAL_H+'" fill="#f8fafc"/>');
+
+  // ── Month grid lines + labels ──
+  var cur = new Date(tMin.getFullYear(), tMin.getMonth(), 1);
+  while (cur <= tMax) {
+    var gx = xOf(cur);
+    // Vertical grid line
+    parts.push('<line x1="'+gx+'" y1="'+HDR_H+'" x2="'+gx+'" y2="'+TOTAL_H+'" stroke="#e2e8f0" stroke-width="1"/>');
+    // Month label
+    var ml = fmtMon(cur);
+    parts.push('<text x="'+(gx+4)+'" y="'+(HDR_H-6)+'" font-size="11" fill="#94a3b8" font-weight="600">'+esc(ml)+'</text>');
+    // Advance to next month
+    cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+  }
+
+  // ── Header separator ──
+  parts.push('<rect width="'+SVG_W+'" height="'+HDR_H+'" fill="#f1f5f9" rx="0"/>');
+  parts.push('<line x1="0" y1="'+HDR_H+'" x2="'+SVG_W+'" y2="'+HDR_H+'" stroke="#e2e8f0" stroke-width="1.5"/>');
+
+  // Header left label
+  parts.push('<text x="8" y="'+(HDR_H/2+5)+'" font-size="11" font-weight="700" fill="#64748b" text-transform="uppercase">MILESTONE</text>');
+
+  // ── Project bar row ──
+  var projY = HDR_H;
+  parts.push('<rect width="'+LABEL_W+'" height="'+PROJ_ROW+'" x="0" y="'+projY+'" fill="#f8fafc"/>');
+  parts.push('<text x="8" y="'+(projY+PROJ_ROW/2+4)+'" font-size="11" font-weight="700" fill="#475569">Project Span</text>');
+
+  if (pStart && pEnd) {
+    var psX = xOf(pStart);
+    var peX = xOf(pEnd);
+    var pbW = Math.max(4, peX - psX);
+    var pbY = projY + 6;
+    var pbH = PROJ_ROW - 12;
+    // Background track
+    parts.push('<rect x="'+LABEL_W+'" y="'+pbY+'" width="'+CHART_W+'" height="'+pbH+'" rx="'+BAR_R+'" fill="#e2e8f0"/>');
+    // Full project bar
+    parts.push('<rect x="'+psX+'" y="'+pbY+'" width="'+pbW+'" height="'+pbH+'" rx="'+BAR_R+'" fill="'+data.project.color+'60"/>');
+    // Progress fill
+    var progW = Math.round(pbW * data.project.progress / 100);
+    if (progW > 0) {
+      parts.push('<rect x="'+psX+'" y="'+pbY+'" width="'+progW+'" height="'+pbH+'" rx="'+BAR_R+'" fill="'+data.project.color+'"/>');
+    }
+    // Progress label inside bar
+    parts.push('<text x="'+(psX+6)+'" y="'+(pbY+pbH/2+4)+'" font-size="10" fill="'+data.project.color+'" font-weight="700">'+data.project.progress+'%</text>');
+    // Start / End labels above bar
+    parts.push('<text x="'+psX+'" y="'+(pbY-3)+'" font-size="9" fill="'+data.project.color+'" font-weight="600">'+esc(fmtDate(pStart))+'</text>');
+    parts.push('<text x="'+peX+'" y="'+(pbY-3)+'" font-size="9" fill="'+data.project.color+'" text-anchor="end" font-weight="600">'+esc(fmtDate(pEnd))+'</text>');
+  }
+
+  parts.push('<line x1="0" y1="'+(projY+PROJ_ROW)+'" x2="'+SVG_W+'" y2="'+(projY+PROJ_ROW)+'" stroke="#e2e8f0" stroke-width="1.5"/>');
+
+  // ── Milestone rows ──
+  data.milestones.forEach(function(ms, i) {
+    var rowY = HDR_H + PROJ_ROW + i * ROW_H;
+    var c    = sc(ms.status);
+    var due  = pd(ms.due);
+
+    // Alternating row background
+    if (i % 2 === 1) {
+      parts.push('<rect x="0" y="'+rowY+'" width="'+SVG_W+'" height="'+ROW_H+'" fill="#f8fafc"/>');
+    }
+    // Row separator
+    parts.push('<line x1="0" y1="'+(rowY+ROW_H)+'" x2="'+SVG_W+'" y2="'+(rowY+ROW_H)+'" stroke="#f1f5f9" stroke-width="1"/>');
+
+    // ── Label column ──
+    // Milestone number badge
+    var badgeSize = 16;
+    var badgePad  = 8;
+    parts.push('<rect x="'+badgePad+'" y="'+(rowY+(ROW_H-badgeSize)/2)+'" width="'+badgeSize+'" height="'+badgeSize+'" rx="4" fill="'+c.dot+'"/>');
+    parts.push('<text x="'+(badgePad+badgeSize/2)+'" y="'+(rowY+ROW_H/2+4)+'" font-size="9" text-anchor="middle" fill="white" font-weight="700">'+(i+1)+'</text>');
+
+    // Milestone name
+    var nameMax  = 26;
+    var nameDisp = ms.name.length > nameMax ? ms.name.slice(0, nameMax) + '…' : ms.name;
+    parts.push('<text x="'+(badgePad+badgeSize+6)+'" y="'+(rowY+ROW_H/2-3)+'" font-size="12" font-weight="600" fill="#1e293b">'+esc(nameDisp)+'</text>');
+
+    // Status text under name
+    parts.push('<text x="'+(badgePad+badgeSize+6)+'" y="'+(rowY+ROW_H/2+10)+'" font-size="10" fill="'+c.dot+'">'+esc(c.lbl)+'</text>');
+
+    if (!due) return;
+
+    // ── Timeline bar: track → milestone marker ──
+    var trackY  = rowY + (ROW_H - 8) / 2;
+    var trackH  = 8;
+    var mX      = xOf(due);
+    var trackX  = LABEL_W + 4;
+    var trackW  = Math.max(0, mX - trackX - DOT_R);
+
+    // Background track (full chart width)
+    parts.push('<rect x="'+LABEL_W+'" y="'+trackY+'" width="'+CHART_W+'" height="'+trackH+'" rx="4" fill="#e2e8f0"/>');
+
+    // Coloured progress bar up to marker
+    if (trackW > 0) {
+      parts.push('<rect x="'+trackX+'" y="'+trackY+'" width="'+trackW+'" height="'+trackH+'" rx="4" fill="'+c.bar+'"/>');
+    }
+
+    // Milestone diamond marker
+    var mCY = rowY + ROW_H / 2;
+    var dSz = DOT_R * 0.8;  // half-size of diamond
+    parts.push('<polygon points="'+mX+','+(mCY-DOT_R)+' '+(mX+DOT_R)+','+mCY+' '+mX+','+(mCY+DOT_R)+' '+(mX-DOT_R)+','+mCY+'" fill="'+c.dot+'" stroke="#fff" stroke-width="2"/>');
+
+    // Status icon inside diamond
+    var icon = ms.status==='completed' ? '✓' : ms.status==='missed' ? '✕' : ms.status==='in_progress' ? '▶' : '○';
+    parts.push('<text x="'+mX+'" y="'+(mCY+4)+'" font-size="9" text-anchor="middle" fill="white" font-weight="900">'+icon+'</text>');
+
+    // Due date label above the diamond
+    var dLabel = fmtDate(due);
+    parts.push('<text x="'+mX+'" y="'+(mCY-DOT_R-4)+'" font-size="10" text-anchor="middle" fill="'+c.txt+'" font-weight="700">'+esc(dLabel)+'</text>');
+
+    // Completed-at label below (if done)
+    if (ms.done_at && ms.status === 'completed') {
+      var doneD = pd(ms.done_at);
+      var doneX = xOf(doneD);
+      if (Math.abs(doneX - mX) > 6) {
+        // Show a completion marker
+        parts.push('<circle cx="'+doneX+'" cy="'+mCY+'" r="5" fill="#10b981" stroke="#fff" stroke-width="1.5"/>');
+        parts.push('<text x="'+doneX+'" y="'+(mCY+3)+'" font-size="7" text-anchor="middle" fill="white">✓</text>');
+        parts.push('<text x="'+doneX+'" y="'+(mCY+DOT_R+12)+'" font-size="9" text-anchor="middle" fill="#10b981">'+esc(fmtDate(doneD))+'</text>');
+      }
+    }
+  });
+
+  // ── Today vertical line ──
+  var todayX = xOf(today);
+  if (todayX >= LABEL_W && todayX <= LABEL_W + CHART_W) {
+    parts.push('<line x1="'+todayX+'" y1="'+HDR_H+'" x2="'+todayX+'" y2="'+TOTAL_H+'" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5,4"/>');
+    // Today badge at top
+    parts.push('<rect x="'+(todayX-20)+'" y="'+(HDR_H-18)+'" width="40" height="18" rx="4" fill="#f59e0b"/>');
+    parts.push('<text x="'+todayX+'" y="'+(HDR_H-6)+'" font-size="10" text-anchor="middle" fill="white" font-weight="700">TODAY</text>');
+  }
+
+  // ── Column separator line ──
+  parts.push('<line x1="'+LABEL_W+'" y1="0" x2="'+LABEL_W+'" y2="'+TOTAL_H+'" stroke="#cbd5e1" stroke-width="1.5"/>');
+
+  parts.push('</svg>');
+
+  container.innerHTML = parts.join('');
 }
 </script>
 {% endblock %}

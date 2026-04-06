@@ -10,4 +10,5 @@ urlpatterns = [
     path('<uuid:pk>/milestone/', views.ProjectMilestoneView.as_view(), name='project_milestone'),
     path('<uuid:pk>/milestone/<uuid:mid>/status/', views.MilestoneStatusView.as_view(), name='milestone_status'),
     path('<uuid:pk>/risk/', views.ProjectRiskView.as_view(), name='project_risk'),
+    path('<uuid:pk>/gantt-pdf/', views.ProjectGanttPDFView.as_view(), name='project_gantt_pdf'),
 ]

@@ -1,151 +1,294 @@
 {% extends "base.html" %}
 {% load humanize %}
-{% block title %}Budgets — FY{{ year }}{% endblock %}
-{% block breadcrumb %}<a href="{% url 'finance_dashboard' %}">Finance</a> / Budgets{% endblock %}
+{% block title %}Purchase Requests{% endblock %}
+{% block breadcrumb %}<a href="{% url 'finance_dashboard' %}">Finance</a> / Purchase Requests{% endblock %}
 
 {% block content %}
 <div class="eo-page-header">
   <div>
-    <h1 class="eo-page-title">Budgets</h1>
-    <p class="eo-page-subtitle">FY{{ year }} &mdash; D{{ grand_total|floatformat:0|intcomma }} allocated &mdash; D{{ grand_spent|floatformat:0|intcomma }} spent</p>
+    <h1 class="eo-page-title">{% if edit_obj %}Edit Purchase Request{% else %}Purchase Requests{% endif %}</h1>
+    <p class="eo-page-subtitle">
+      Request purchase of items and services{% if is_ceo %}, approve requests as CEO{% endif %}{% if is_finance %}, and process approved requests{% endif %}
+    </p>
   </div>
-  <a href="{% url 'finance_dashboard' %}" class="eo-btn eo-btn-secondary">
-    <i class="bi bi-arrow-left"></i> Dashboard
-  </a>
-</div>
-
-<!-- Filter bar -->
-<div class="eo-card mb-4">
-  <form method="get" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-    <div>
-      <label class="eo-form-label">Fiscal Year</label>
-      <select name="year" class="eo-form-select" onchange="this.form.submit()">
-        {% for y in year_range %}
-        <option value="{{ y }}" {% if y == year %}selected{% endif %}>FY{{ y }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div>
-      <label class="eo-form-label">Status</label>
-      <select name="status" class="eo-form-select" onchange="this.form.submit()">
-        <option value="">All Status</option>
-        {% for val, label in status_choices %}
-        <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    {% if status_filter %}
-    <a href="?year={{ year }}" class="eo-btn eo-btn-secondary">
-      <i class="bi bi-x-circle"></i> Reset
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a href="{% url 'finance_dashboard' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-arrow-left"></i> Dashboard
     </a>
-    {% endif %}
-  </form>
-</div>
-
-<!-- Summary row -->
-{% if budgets %}
-<div class="row g-3 mb-4">
-  <div class="col-md-4">
-    <div class="eo-stat eo-stat-info">
-      <div class="eo-stat-label">Total Allocated</div>
-      <div class="eo-stat-value">D{{ grand_total|floatformat:0|intcomma }}</div>
-      <i class="bi bi-wallet2 eo-stat-icon"></i>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="eo-stat eo-stat-danger">
-      <div class="eo-stat-label">Total Spent</div>
-      <div class="eo-stat-value">D{{ grand_spent|floatformat:0|intcomma }}</div>
-      <i class="bi bi-graph-down-arrow eo-stat-icon"></i>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="eo-stat eo-stat-success">
-      <div class="eo-stat-label">Total Balance</div>
-      <div class="eo-stat-value">D{{ grand_total|floatformat:0|intcomma }}</div>
-      <i class="bi bi-safe eo-stat-icon"></i>
-    </div>
+    <a href="{% url 'employee_finance_request' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-cash-stack"></i> My Finance Requests
+    </a>
   </div>
 </div>
 
-<!-- Budget cards -->
 <div class="row g-4">
-  {% for b in budgets %}
-  <div class="col-md-6 col-xl-4">
-    <div class="eo-card" style="height:100%;border-top:4px solid {{ b.status_color }}">
 
-      <!-- Header -->
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px">
-        <div style="min-width:0">
-          <div style="font-size:.95rem;font-weight:800;color:var(--eo-text);margin-bottom:4px;
-                      overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ b.name }}</div>
-          <div style="font-size:.74rem;color:var(--eo-text-muted)">
-            FY{{ b.fiscal_year }}
-            {% if b.department %} · {{ b.department.name }}{% endif %}
-            {% if b.unit %} · {{ b.unit.name }}{% endif %}
-          </div>
-        </div>
-        <span style="font-size:.68rem;font-weight:700;padding:3px 10px;border-radius:20px;flex-shrink:0;
-          background:{{ b.status_color }}18;color:{{ b.status_color }}">
-          {{ b.get_status_display }}
-        </span>
-      </div>
-
-      <!-- Amount + pct -->
-      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:10px">
+  <!-- Request form -->
+  <div class="col-lg-5">
+    <div class="eo-card">
+      <div class="eo-card-header" style="margin-bottom:14px">
         <div>
-          <div style="font-size:.67rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:2px">Total Budget</div>
-          <div style="font-size:1.45rem;font-weight:800;color:var(--eo-text)">D{{ b.total_amount|floatformat:0|intcomma }}</div>
+          <h2 class="eo-card-title">{% if edit_obj %}Update Request{% else %}New Purchase Request{% endif %}</h2>
+          <p class="eo-card-subtitle">
+            {% if edit_obj %}
+            Update the request details below
+            {% else %}
+            Submit a purchase request for CEO approval
+            {% endif %}
+          </p>
         </div>
-        <div style="text-align:right">
-          <div style="font-size:.67rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:2px">Used</div>
-          <div style="font-size:1.45rem;font-weight:800;
-            color:{% if b.utilization_pct > 85 %}var(--eo-danger){% elif b.utilization_pct > 65 %}var(--eo-warning){% else %}var(--eo-success){% endif %}">
-            {{ b.utilization_pct }}%
+      </div>
+
+      <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        {% if edit_obj %}
+        <input type="hidden" name="request_id" value="{{ edit_obj.id }}">
+        {% endif %}
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Title *</label>
+          <input type="text" name="title" class="eo-form-control"
+                 value="{% if edit_obj %}{{ edit_obj.title }}{% endif %}"
+                 placeholder="e.g. Laptops for project team" required>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Description *</label>
+          <textarea name="description" rows="3" class="eo-form-control" required
+                    placeholder="Describe what is being purchased and why">{% if edit_obj %}{{ edit_obj.description }}{% endif %}</textarea>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="eo-form-label">Department</label>
+            <select name="department" class="eo-form-select">
+              <option value="">— Select department —</option>
+              {% for d in departments %}
+              <option value="{{ d.id }}"
+                {% if edit_obj and edit_obj.department_id == d.id %}selected{% endif %}>
+                {{ d.name }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="col-md-6">
+            <label class="eo-form-label">Budget</label>
+            <select name="budget" class="eo-form-select">
+              <option value="">— Select budget —</option>
+              {% for b in budgets %}
+              <option value="{{ b.id }}"
+                {% if edit_obj and edit_obj.budget_id == b.id %}selected{% endif %}>
+                {{ b.name }} (FY{{ b.fiscal_year }})
+              </option>
+              {% endfor %}
+            </select>
           </div>
         </div>
+
+        <div class="eo-form-group mt-3">
+          <label class="eo-form-label">Project</label>
+          <select name="project" class="eo-form-select">
+            <option value="">— Select project —</option>
+            {% for p in projects %}
+            <option value="{{ p.id }}"
+              {% if edit_obj and edit_obj.project_id == p.id %}selected{% endif %}>
+              {{ p.name }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="eo-form-label">Estimated Cost *</label>
+            <input type="number" step="0.01" name="estimated_cost" class="eo-form-control"
+                   value="{% if edit_obj %}{{ edit_obj.estimated_cost }}{% endif %}" required>
+          </div>
+
+          <div class="col-md-6">
+            <label class="eo-form-label">Priority</label>
+            <select name="priority" class="eo-form-select">
+              {% for val, label in priority_choices %}
+              <option value="{{ val }}"
+                {% if edit_obj and edit_obj.priority == val %}selected{% elif not edit_obj and val == 'normal' %}selected{% endif %}>
+                {{ label }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="eo-form-group mt-3">
+          <label class="eo-form-label">Justification *</label>
+          <textarea name="justification" rows="3" class="eo-form-control" required
+                    placeholder="Explain why this purchase is needed">{% if edit_obj %}{{ edit_obj.justification }}{% endif %}</textarea>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="eo-form-label">Preferred Vendor</label>
+            <input type="text" name="vendor" class="eo-form-control"
+                   value="{% if edit_obj %}{{ edit_obj.vendor }}{% endif %}"
+                   placeholder="Optional vendor name">
+          </div>
+
+          <div class="col-md-6">
+            <label class="eo-form-label">Expected Delivery</label>
+            <input type="date" name="expected_delivery" class="eo-form-control"
+                   value="{% if edit_obj and edit_obj.expected_delivery %}{{ edit_obj.expected_delivery|date:'Y-m-d' }}{% endif %}">
+          </div>
+        </div>
+
+        <div class="eo-form-group mt-3">
+          <label class="eo-form-label">Attachment</label>
+          <input type="file" name="attachment" class="eo-form-control">
+          {% if edit_obj and edit_obj.attachment %}
+          <div style="margin-top:6px;font-size:.74rem;color:var(--eo-text-muted)">
+            Current: <a href="{{ edit_obj.attachment.url }}" target="_blank">{{ edit_obj.attachment.name|truncatechars:40 }}</a>
+          </div>
+          {% endif %}
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
+          <button type="submit" name="save_as" value="submitted" class="eo-btn eo-btn-primary">
+            <i class="bi bi-send"></i>
+            {% if edit_obj %}Update & Submit{% else %}Submit for CEO Approval{% endif %}
+          </button>
+
+          <button type="submit" name="save_as" value="draft" class="eo-btn eo-btn-secondary">
+            <i class="bi bi-save"></i>
+            {% if edit_obj %}Save Changes{% else %}Save Draft{% endif %}
+          </button>
+
+          {% if edit_obj and edit_obj.status == 'draft' %}
+          <button type="submit" name="cancel_id" value="{{ edit_obj.id }}" class="eo-btn eo-btn-danger"
+                  onclick="return confirm('Cancel this draft request?')">
+            <i class="bi bi-x-circle"></i> Cancel Draft
+          </button>
+          {% endif %}
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Request list -->
+  <div class="col-lg-7">
+    <div class="eo-card">
+      <div class="eo-card-header" style="margin-bottom:14px">
+        <div>
+          <h2 class="eo-card-title">Purchase Request History</h2>
+          <p class="eo-card-subtitle">
+            {% if is_finance or is_ceo %}
+            All visible purchase requests
+            {% else %}
+            Your recent purchase requests
+            {% endif %}
+          </p>
+        </div>
       </div>
 
-      <!-- Progress -->
-      <div style="height:8px;background:var(--eo-bg);border-radius:5px;overflow:hidden;margin-bottom:14px">
-        <div style="height:100%;border-radius:5px;width:{{ b.utilization_pct }}%;
-          background:{% if b.utilization_pct > 85 %}var(--eo-danger){% elif b.utilization_pct > 65 %}var(--eo-warning){% else %}var(--eo-accent){% endif %}">
-        </div>
-      </div>
+      {% if purchase_requests %}
+      <div style="display:flex;flex-direction:column;gap:12px">
+        {% for pr in purchase_requests %}
+        <div style="padding:14px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <div style="min-width:0;flex:1">
+              <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">{{ pr.title }}</div>
+              <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:.74rem;color:var(--eo-text-muted);margin-top:4px">
+                <span><i class="bi bi-person me-1"></i>{{ pr.requested_by.full_name }}</span>
+                {% if pr.department %}<span><i class="bi bi-building me-1"></i>{{ pr.department.name }}</span>{% endif %}
+                {% if pr.project %}
+                <span style="color:var(--eo-accent);font-weight:600">
+                  <i class="bi bi-kanban me-1"></i>{{ pr.project.name|truncatechars:24 }}
+                </span>
+                {% endif %}
+                <span><i class="bi bi-clock me-1"></i>{{ pr.created_at|naturaltime }}</span>
+              </div>
 
-      <!-- 3-col stats -->
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;
-                  padding-top:12px;border-top:1px solid var(--eo-border)">
-        <div style="text-align:center">
-          <div style="font-size:.67rem;color:var(--eo-text-muted);margin-bottom:3px">Spent</div>
-          <div style="font-size:.84rem;font-weight:700;color:var(--eo-text)">D{{ b.spent_amount|floatformat:0|intcomma }}</div>
-        </div>
-        <div style="text-align:center;border-left:1px solid var(--eo-border);border-right:1px solid var(--eo-border)">
-          <div style="font-size:.67rem;color:var(--eo-text-muted);margin-bottom:3px">Allocated</div>
-          <div style="font-size:.84rem;font-weight:700;color:var(--eo-text)">D{{ b.allocated_amount|floatformat:0|intcomma }}</div>
-        </div>
-        <div style="text-align:center">
-          <div style="font-size:.67rem;color:var(--eo-text-muted);margin-bottom:3px">Balance</div>
-          <div style="font-size:.84rem;font-weight:700;color:var(--eo-success)">D{{ b.balance|floatformat:0|intcomma }}</div>
-        </div>
-      </div>
+              <div style="margin-top:8px;font-size:.8rem;color:var(--eo-text-muted)">
+                {{ pr.description|truncatechars:130 }}
+              </div>
 
-      {% if b.approved_by %}
-      <div style="margin-top:12px;font-size:.72rem;color:var(--eo-text-muted)">
-        <i class="bi bi-person-check me-1"></i>Approved by {{ b.approved_by.full_name }}
+              {% if pr.justification %}
+              <div style="margin-top:8px;font-size:.75rem;color:var(--eo-text-muted)">
+                <strong>Justification:</strong> {{ pr.justification|truncatechars:120 }}
+              </div>
+              {% endif %}
+            </div>
+
+            <div style="text-align:right;flex-shrink:0">
+              <div style="font-size:1rem;font-weight:800;color:var(--eo-text)">
+                D{{ pr.estimated_cost|floatformat:0|intcomma }}
+              </div>
+
+              <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;margin-top:6px">
+                <span style="font-size:.68rem;font-weight:700;padding:3px 8px;border-radius:6px;background:{{ pr.status_color }}18;color:{{ pr.status_color }}">
+                  {{ pr.get_status_display }}
+                </span>
+
+                <span style="font-size:.68rem;font-weight:700;padding:3px 8px;border-radius:6px;
+                  {% if pr.priority == 'urgent' %}background:#fee2e2;color:#991b1b
+                  {% elif pr.priority == 'normal' %}background:#dbeafe;color:#1e40af
+                  {% else %}background:#f0fdf4;color:#166534{% endif %}">
+                  {{ pr.get_priority_display }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+            <a href="{% url 'purchase_detail' pr.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+              <i class="bi bi-eye"></i> View
+            </a>
+
+            {% if pr.requested_by_id == request.user.id and pr.status == 'draft' or pr.requested_by_id == request.user.id and pr.status == 'rejected' %}
+            <a href="{% url 'purchase_request' %}?edit={{ pr.id }}" class="eo-btn eo-btn-secondary eo-btn-sm">
+              <i class="bi bi-pencil"></i> Edit
+            </a>
+            {% endif %}
+
+            {% if is_ceo and pr.status == 'submitted' %}
+            <form method="post" action="{% url 'purchase_approval' pr.pk %}" style="display:inline">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="approve">
+              <button type="submit" class="eo-btn eo-btn-success eo-btn-sm">
+                <i class="bi bi-check-lg"></i> Approve
+              </button>
+            </form>
+
+            <form method="post" action="{% url 'purchase_approval' pr.pk %}" style="display:inline"
+                  onsubmit="return confirm('Reject this purchase request?')">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="reject">
+              <button type="submit" class="eo-btn eo-btn-danger eo-btn-sm">
+                <i class="bi bi-x-lg"></i> Reject
+              </button>
+            </form>
+            {% endif %}
+
+            {% if is_finance and pr.status == 'ceo_approved' %}
+            <form method="post" action="{% url 'purchase_approval' pr.pk %}" style="display:inline">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="mark_processing">
+              <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm">
+                <i class="bi bi-cash-coin"></i> Mark Processing
+              </button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:48px 24px;color:var(--eo-text-muted)">
+        <i class="bi bi-cart-x" style="font-size:2.4rem;display:block;margin-bottom:10px;opacity:.25"></i>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No purchase requests yet</div>
+        <p style="font-size:.85rem">Create your first purchase request using the form on the left.</p>
       </div>
       {% endif %}
     </div>
   </div>
-  {% endfor %}
-</div>
 
-{% else %}
-<div class="eo-card" style="text-align:center;padding:72px 32px">
-  <i class="bi bi-wallet2" style="font-size:3rem;display:block;margin-bottom:16px;opacity:.25;color:var(--eo-text-light)"></i>
-  <div style="font-size:1.1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No budgets found for FY{{ year }}</div>
-  <p style="color:var(--eo-text-muted);font-size:.87rem">Try a different year or status filter.</p>
 </div>
-{% endif %}
-{% endblock %}
 {% endblock %}

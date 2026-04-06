@@ -1,0 +1,361 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Purchase Request — {{ purchase.title }}{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'finance_dashboard' %}">Finance</a> /
+<a href="{% url 'purchase_request' %}">Purchase Requests</a> /
+<span>{{ purchase.title|truncatechars:40 }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Purchase Request Detail</h1>
+    <p class="eo-page-subtitle">
+      Full request information, approvals, processing and payment history
+    </p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a href="{% url 'purchase_request' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-arrow-left"></i> Back to Requests
+    </a>
+
+    {% if can_edit_purchase %}
+    <a href="{% url 'purchase_request' %}?edit={{ purchase.id }}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-pencil"></i> Edit
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="row g-4">
+
+  <!-- LEFT -->
+  <div class="col-lg-8 d-flex flex-column gap-4">
+
+    <!-- Main request card -->
+    <div class="eo-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+        <div style="min-width:0;flex:1">
+          <div style="font-size:1.15rem;font-weight:800;color:var(--eo-text);margin-bottom:4px">
+            {{ purchase.title }}
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:.78rem;color:var(--eo-text-muted)">
+            <span><i class="bi bi-person me-1"></i>{{ purchase.requested_by.full_name }}</span>
+            <span><i class="bi bi-clock me-1"></i>{{ purchase.created_at|date:"N j, Y · H:i" }}</span>
+            {% if purchase.updated_at %}
+            <span><i class="bi bi-arrow-repeat me-1"></i>Updated {{ purchase.updated_at|naturaltime }}</span>
+            {% endif %}
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+          <span style="font-size:.72rem;font-weight:700;padding:4px 10px;border-radius:20px;background:{{ purchase.status_color }}18;color:{{ purchase.status_color }}">
+            {{ purchase.get_status_display }}
+          </span>
+          <span style="font-size:.72rem;font-weight:700;padding:4px 10px;border-radius:20px;
+            {% if purchase.priority == 'urgent' %}background:#fee2e2;color:#991b1b
+            {% elif purchase.priority == 'normal' %}background:#dbeafe;color:#1e40af
+            {% else %}background:#f0fdf4;color:#166534{% endif %}">
+            {{ purchase.get_priority_display }}
+          </span>
+        </div>
+      </div>
+
+      <div class="row g-4">
+        <div class="col-md-8">
+          <div style="margin-bottom:16px">
+            <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:6px">
+              Description
+            </div>
+            <div style="font-size:.9rem;line-height:1.65;color:var(--eo-text)">
+              {{ purchase.description|linebreaksbr }}
+            </div>
+          </div>
+
+          <div style="margin-bottom:16px">
+            <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:6px">
+              Justification
+            </div>
+            <div style="font-size:.88rem;line-height:1.65;color:var(--eo-text)">
+              {{ purchase.justification|linebreaksbr }}
+            </div>
+          </div>
+
+          {% if purchase.notes %}
+          <div style="margin-bottom:16px">
+            <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:6px">
+              Internal Notes
+            </div>
+            <div style="font-size:.84rem;line-height:1.65;color:var(--eo-text-muted)">
+              {{ purchase.notes|linebreaksbr }}
+            </div>
+          </div>
+          {% endif %}
+
+          {% if purchase.approval_notes %}
+          <div style="padding:12px 14px;border-radius:10px;background:#fff7ed;border:1px solid #fdba74">
+            <div style="font-size:.74rem;font-weight:700;color:#9a3412;margin-bottom:4px">
+              Approval Notes
+            </div>
+            <div style="font-size:.84rem;color:#7c2d12">
+              {{ purchase.approval_notes|linebreaksbr }}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+
+        <div class="col-md-4">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="padding:12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+              <div style="font-size:.72rem;color:var(--eo-text-muted);margin-bottom:4px">Estimated Cost</div>
+              <div style="font-size:1.2rem;font-weight:800;color:var(--eo-text)">
+                D{{ purchase.estimated_cost|floatformat:2|intcomma }}
+              </div>
+            </div>
+
+            {% if purchase.actual_cost %}
+            <div style="padding:12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+              <div style="font-size:.72rem;color:var(--eo-text-muted);margin-bottom:4px">Actual Cost</div>
+              <div style="font-size:1.05rem;font-weight:800;color:var(--eo-success)">
+                D{{ purchase.actual_cost|floatformat:2|intcomma }}
+              </div>
+            </div>
+            {% endif %}
+
+            {% if purchase.department %}
+            <div style="padding:12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+              <div style="font-size:.72rem;color:var(--eo-text-muted);margin-bottom:4px">Department</div>
+              <div style="font-size:.88rem;font-weight:700;color:var(--eo-text)">
+                {{ purchase.department.name }}
+              </div>
+            </div>
+            {% endif %}
+
+            {% if purchase.budget %}
+            <div style="padding:12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+              <div style="font-size:.72rem;color:var(--eo-text-muted);margin-bottom:4px">Budget</div>
+              <div style="font-size:.88rem;font-weight:700;color:var(--eo-text)">
+                {{ purchase.budget.name }}
+              </div>
+              <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:4px">
+                FY{{ purchase.budget.fiscal_year }} · Balance: D{{ purchase.budget.balance|floatformat:0|intcomma }}
+              </div>
+            </div>
+            {% endif %}
+
+            {% if purchase.project %}
+            <div style="padding:12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+              <div style="font-size:.72rem;color:var(--eo-text-muted);margin-bottom:4px">Project</div>
+              <div style="font-size:.88rem;font-weight:700;color:var(--eo-accent)">
+                {{ purchase.project.name }}
+              </div>
+            </div>
+            {% endif %}
+
+            {% if purchase.vendor %}
+            <div style="padding:12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+              <div style="font-size:.72rem;color:var(--eo-text-muted);margin-bottom:4px">Vendor</div>
+              <div style="font-size:.88rem;font-weight:700;color:var(--eo-text)">
+                {{ purchase.vendor }}
+              </div>
+            </div>
+            {% endif %}
+
+            {% if purchase.expected_delivery %}
+            <div style="padding:12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+              <div style="font-size:.72rem;color:var(--eo-text-muted);margin-bottom:4px">Expected Delivery</div>
+              <div style="font-size:.88rem;font-weight:700;color:var(--eo-text)">
+                {{ purchase.expected_delivery|date:"N j, Y" }}
+              </div>
+            </div>
+            {% endif %}
+
+            {% if purchase.attachment %}
+            <div style="padding:12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+              <div style="font-size:.72rem;color:var(--eo-text-muted);margin-bottom:6px">Attachment</div>
+              <a href="{{ purchase.attachment.url }}" target="_blank" class="eo-btn eo-btn-secondary eo-btn-sm">
+                <i class="bi bi-paperclip"></i> Open Attachment
+              </a>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Payment history -->
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">Payment History</h2>
+          <p class="eo-card-subtitle">Payments linked to this purchase request</p>
+        </div>
+      </div>
+
+      {% if payments %}
+      <div style="display:flex;flex-direction:column;gap:10px">
+        {% for p in payments %}
+        <div style="padding:12px 14px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <div>
+              <div style="font-weight:700;color:var(--eo-text)">{{ p.reference }}</div>
+              <div style="font-size:.74rem;color:var(--eo-text-muted)">
+                {{ p.payment_date|date:"N j, Y" }} · {{ p.get_method_display }} · {{ p.get_payment_type_display }}
+              </div>
+            </div>
+            <div style="font-weight:800;color:var(--eo-text)">
+              D{{ p.amount|floatformat:2|intcomma }}
+            </div>
+          </div>
+
+          <div style="margin-top:6px;font-size:.8rem;color:var(--eo-text-muted)">
+            Recipient: {{ p.recipient }}
+          </div>
+
+          {% if p.notes %}
+          <div style="margin-top:6px;font-size:.78rem;color:var(--eo-text-muted)">
+            {{ p.notes|truncatechars:140 }}
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:36px 20px;color:var(--eo-text-muted)">
+        <i class="bi bi-receipt" style="font-size:2rem;display:block;margin-bottom:8px;opacity:.25"></i>
+        <p style="font-size:.84rem">No payments recorded for this purchase request yet.</p>
+      </div>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <!-- RIGHT -->
+  <div class="col-lg-4 d-flex flex-column gap-4">
+
+    <!-- Approval / processing actions -->
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Actions</h2>
+      </div>
+
+      {% if is_ceo and purchase.status == 'submitted' %}
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <form method="post" action="{% url 'purchase_approval' purchase.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="approve">
+          <div class="eo-form-group">
+            <label class="eo-form-label">CEO Approval Notes</label>
+            <textarea name="notes" rows="3" class="eo-form-control" placeholder="Optional approval note"></textarea>
+          </div>
+          <button type="submit" class="eo-btn eo-btn-success w-100">
+            <i class="bi bi-check-lg"></i> Approve Request
+          </button>
+        </form>
+
+        <form method="post" action="{% url 'purchase_approval' purchase.pk %}" onsubmit="return confirm('Reject this request?')">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="reject">
+          <div class="eo-form-group">
+            <label class="eo-form-label">Rejection Notes</label>
+            <textarea name="notes" rows="3" class="eo-form-control" placeholder="Reason for rejection"></textarea>
+          </div>
+          <button type="submit" class="eo-btn eo-btn-danger w-100">
+            <i class="bi bi-x-lg"></i> Reject Request
+          </button>
+        </form>
+      </div>
+      {% elif is_finance and purchase.status == 'ceo_approved' %}
+      <form method="post" action="{% url 'purchase_approval' purchase.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="mark_processing">
+        <div class="eo-form-group">
+          <label class="eo-form-label">Finance Notes</label>
+          <textarea name="notes" rows="3" class="eo-form-control" placeholder="Processing note"></textarea>
+        </div>
+        <button type="submit" class="eo-btn eo-btn-primary w-100">
+          <i class="bi bi-cash-coin"></i> Mark as Processing
+        </button>
+      </form>
+      {% elif is_finance and purchase.status == 'processing' %}
+      <form method="post" action="{% url 'purchase_approval' purchase.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="update_status">
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Update Status</label>
+          <select name="status" class="eo-form-select">
+            {% for val, label in status_choices %}
+            <option value="{{ val }}" {% if purchase.status == val %}selected{% endif %}>
+              {{ label }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Notes</label>
+          <textarea name="notes" rows="3" class="eo-form-control" placeholder="Status update notes">{{ purchase.notes }}</textarea>
+        </div>
+
+        <button type="submit" class="eo-btn eo-btn-primary w-100">
+          <i class="bi bi-arrow-repeat"></i> Update Status
+        </button>
+      </form>
+      {% else %}
+      <div style="text-align:center;padding:20px;color:var(--eo-text-muted)">
+        <i class="bi bi-info-circle" style="font-size:1.8rem;display:block;margin-bottom:8px;opacity:.3"></i>
+        <p style="font-size:.84rem;margin:0">
+          No actions available for your role at this stage.
+        </p>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Audit summary -->
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Approval Summary</h2>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="padding:10px 12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <div style="font-size:.72rem;color:var(--eo-text-muted)">Requested By</div>
+          <div style="font-weight:700;color:var(--eo-text)">{{ purchase.requested_by.full_name }}</div>
+        </div>
+
+        <div style="padding:10px 12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <div style="font-size:.72rem;color:var(--eo-text-muted)">Approved By</div>
+          <div style="font-weight:700;color:var(--eo-text)">
+            {% if purchase.approved_by %}{{ purchase.approved_by.full_name }}{% else %}—{% endif %}
+          </div>
+        </div>
+
+        <div style="padding:10px 12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <div style="font-size:.72rem;color:var(--eo-text-muted)">Approval Date</div>
+          <div style="font-weight:700;color:var(--eo-text)">
+            {% if purchase.approval_date %}{{ purchase.approval_date|date:"N j, Y · H:i" }}{% else %}—{% endif %}
+          </div>
+        </div>
+
+        <div style="padding:10px 12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <div style="font-size:.72rem;color:var(--eo-text-muted)">Processed By</div>
+          <div style="font-weight:700;color:var(--eo-text)">
+            {% if purchase.processed_by %}{{ purchase.processed_by.full_name }}{% else %}—{% endif %}
+          </div>
+        </div>
+
+        <div style="padding:10px 12px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <div style="font-size:.72rem;color:var(--eo-text-muted)">Processed At</div>
+          <div style="font-weight:700;color:var(--eo-text)">
+            {% if purchase.processed_at %}{{ purchase.processed_at|date:"N j, Y · H:i" }}{% else %}—{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+{% endblock %}

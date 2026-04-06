@@ -17,7 +17,7 @@
   background: var(--eo-surface);
 }
 
-/* ── Sidebar ── */
+/* ── Sidebar — collapsible at all screen sizes via hamburger ── */
 .fm-sidebar {
   width: 220px;
   flex-shrink: 0;
@@ -25,8 +25,14 @@
   background: var(--eo-bg);
   display: flex;
   flex-direction: column;
-  overflow-y: auto;          /* whole sidebar scrolls as one unit */
+  overflow-y: auto;
   overflow-x: hidden;
+  /* Collapsed by default — JS opens it */
+  width: 0;
+  transition: width .22s ease;
+}
+.fm-sidebar.mob-open {
+  width: 220px;
 }
 .fm-sidebar-section { padding: 10px 10px 4px; }
 .fm-sidebar-label {
@@ -254,23 +260,32 @@
 @media (max-width: 768px) {
   .fm-layout { height: auto; min-height: 0; flex-direction: column; }
 
-  /* Sidebar slides open/closed via toggle button */
-  .fm-sidebar {
+  /* Sidebar slides in from top on mobile when open */
+  .fm-sidebar.mob-open {
     width: 100%;
-    max-height: 0;
-    overflow: hidden;
+    max-height: 70vh;
+    overflow-y: auto;
     border-right: none;
     border-bottom: 1px solid var(--eo-border);
+  }
+  /* Override the width-based slide for mobile — use max-height instead */
+  .fm-sidebar {
+    width: 100% !important;
+    max-height: 0;
+    overflow: hidden;
     transition: max-height .25s ease;
   }
-  .fm-sidebar.mob-open { max-height: 70vh; overflow-y: auto; }
+  .fm-sidebar.mob-open {
+    max-height: 70vh !important;
+    overflow-y: auto;
+  }
 
   .fm-main { min-height: 60vh; }
 
   /* Bigger touch targets */
   .fm-action-btn { width: 34px; height: 34px; font-size: .85rem; }
 
-  /* Move action row to bottom of card so it doesn't cover the icon/name */
+  /* Move action row to bottom of card */
   .fm-card-actions {
     top: auto; bottom: 6px;
     left: 6px; right: 6px;
@@ -531,6 +546,14 @@
          class="fm-nav-item {% if request.resolver_match.url_name in 'quick_sign,quick_sign_file' %}active{% endif %}">
         <i class="bi bi-pen-fill" style="color:#8b5cf6"></i> Quick Sign PDF
       </a>
+      <a href="{% url 'notes_to_pdf' %}"
+         class="fm-nav-item {% if request.resolver_match.url_name == 'notes_to_pdf' %}active{% endif %}">
+        <i class="bi bi-journal-text" style="color:#8b5cf6"></i> Note Editor
+      </a>
+      <a href="{% url 'pdf_to_word' %}"
+         class="fm-nav-item {% if request.resolver_match.url_name in 'pdf_to_word,pdf_to_image' %}active{% endif %}">
+        <i class="bi bi-arrow-left-right" style="color:#2563eb"></i> PDF Converter
+      </a>
     </div>
 
     <div class="fm-sidebar-section" style="padding-top:4px">
@@ -574,10 +597,10 @@
 
     <!-- Toolbar -->
     <div class="fm-toolbar">
-      <!-- Mobile sidebar toggle (hidden on desktop, shown via JS on mobile) -->
-      <button class="view-toggle-btn" id="sidebarToggle" title="Toggle navigation"
-              style="display:none" onclick="toggleMobileSidebar()">
-        <i class="bi bi-layout-sidebar"></i>
+      <!-- Hamburger — always visible, toggles sidebar on all screen sizes -->
+      <button class="view-toggle-btn" id="sidebarToggle" title="Toggle sidebar"
+              onclick="toggleMobileSidebar()">
+        <i class="bi bi-list" style="font-size:1.1rem"></i>
       </button>
       <!-- Search -->
       <form method="get" class="fm-search">
@@ -1751,22 +1774,25 @@ function toggleMobileSidebar() {
   const sidebar = document.querySelector('.fm-sidebar');
   const btn     = document.getElementById('sidebarToggle');
   const open    = sidebar.classList.toggle('mob-open');
-  btn.style.background  = open ? 'var(--eo-accent)' : '';
-  btn.style.color       = open ? '#fff' : '';
-  btn.style.borderColor = open ? 'var(--eo-accent)' : '';
+  btn.classList.toggle('active', open);
 }
 
 (function initMobileNav() {
-  const btn = document.getElementById('sidebarToggle');
-  function check() {
-    const mobile = window.innerWidth <= 768;
-    btn.style.display = mobile ? 'flex' : 'none';
-    if (!mobile) {
-      document.querySelector('.fm-sidebar').classList.remove('mob-open');
-    }
+  const sidebar = document.querySelector('.fm-sidebar');
+  const btn     = document.getElementById('sidebarToggle');
+  // Desktop (>768px): sidebar open by default
+  // Mobile (≤768px): sidebar closed by default
+  if (window.innerWidth > 768) {
+    sidebar.classList.add('mob-open');
+    btn.classList.add('active');
   }
-  check();
-  window.addEventListener('resize', check);
+  // On resize crossing the breakpoint, keep state sensible
+  window.addEventListener('resize', function() {
+    if (window.innerWidth > 768 && !sidebar.classList.contains('mob-open')) {
+      sidebar.classList.add('mob-open');
+      btn.classList.add('active');
+    }
+  });
 })();
 </script>
 {% endblock %}

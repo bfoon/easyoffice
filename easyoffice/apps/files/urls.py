@@ -24,7 +24,6 @@ urlpatterns = [
     path('signatures/new/',                     views.SignatureRequestCreateView.as_view(),     name='signature_request_new'),
     path('signatures/<uuid:pk>/',               views.SignatureRequestDetailView.as_view(),     name='signature_request_detail'),
     path('signatures/<uuid:pk>/fields/',        views.SaveSignatureFieldsView.as_view(),        name='save_signature_fields'),
-    # Creator signs their own document when they are a required signer in the flow
     path('signatures/<uuid:pk>/creator-sign/',  views.CreatorSignView.as_view(),               name='creator_sign'),
 
     path('sign/<uuid:token>/',                  views.SignDocumentView.as_view(),               name='sign_document'),
@@ -35,12 +34,15 @@ urlpatterns = [
     path('pdf-tools/',                         views.PDFToolsPageView.as_view(),        name='pdf_tools_page'),
     path('pdf-tools/merge/',                   views.PDFMergeView.as_view(),            name='pdf_merge'),
     path('pdf-tools/remove-pages/<uuid:pk>/', views.PDFRemovePagesView.as_view(),      name='pdf_remove_pages'),
-    path('pdf-tools/reorder-pages/<uuid:pk>/', views.PDFReorderPagesView.as_view(),     name='pdf_reorder_pages'),
-    path('pdf-tools/rotate-pages/<uuid:pk>/',  views.PDFRotatePagesView.as_view(),      name='pdf_rotate_pages'),
-    path('pdf-tools/split/<uuid:pk>/',         views.PDFSplitView.as_view(),            name='pdf_split'),
-    path('pdf-tools/merge-images/', views.PDFMergeImagesView.as_view(), name='pdf_merge_images'),
+    path('pdf-tools/reorder-pages/<uuid:pk>/', views.PDFReorderPagesView.as_view(),    name='pdf_reorder_pages'),
+    path('pdf-tools/rotate-pages/<uuid:pk>/',  views.PDFRotatePagesView.as_view(),     name='pdf_rotate_pages'),
+    path('pdf-tools/split/<uuid:pk>/',         views.PDFSplitView.as_view(),           name='pdf_split'),
+    path('pdf-tools/merge-images/',            views.PDFMergeImagesView.as_view(),     name='pdf_merge_images'),
 
-    # ── Quick Sign — standalone PDF signing tool (no flow, no other signers) ──
     path('quick-sign/',          views.QuickSignView.as_view(),  name='quick_sign'),
     path('quick-sign/<uuid:pk>/', views.QuickSignView.as_view(), name='quick_sign_file'),
+
+    path('tools/notes/',        views.NotesToPDFView.as_view(),  name='notes_to_pdf'),
+    path('tools/pdf-to-word/',  views.PDFToWordView.as_view(),   name='pdf_to_word'),
+    path('tools/pdf-to-image/', views.PDFToImageView.as_view(),  name='pdf_to_image'),
 ]

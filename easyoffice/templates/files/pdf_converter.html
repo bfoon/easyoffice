@@ -1,0 +1,359 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}PDF Converter{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'file_manager' %}">Files</a> / PDF Converter
+{% endblock %}
+
+{% block content %}
+<style>
+.pc-layout { display:grid; grid-template-columns:1fr 320px; gap:20px; align-items:start; }
+@media(max-width:860px){ .pc-layout{ grid-template-columns:1fr; } }
+
+/* Tabs */
+.pc-tabs { display:flex; border-bottom:2px solid var(--eo-border); margin-bottom:20px; }
+.pc-tab {
+  padding:10px 22px; font-size:.88rem; font-weight:600; cursor:pointer;
+  border:none; background:none; color:var(--eo-text-muted);
+  border-bottom:2px solid transparent; margin-bottom:-2px;
+  transition:color .14s, border-color .14s;
+}
+.pc-tab.active { color:var(--eo-primary); border-bottom-color:var(--eo-primary); }
+
+/* File picker */
+.pc-file-item {
+  display:flex; align-items:center; gap:10px;
+  padding:9px 12px; border-radius:9px;
+  border:1.5px solid var(--eo-border);
+  cursor:pointer; transition:border-color .14s;
+  margin-bottom:4px;
+}
+.pc-file-item:hover { border-color:var(--eo-primary)50; }
+.pc-file-item.selected { border-color:var(--eo-primary); background:var(--eo-primary)06; }
+
+.pc-folder-row {
+  display:flex; align-items:center; gap:8px;
+  padding:9px 8px; cursor:pointer; border-radius:8px;
+  border:1px solid transparent; user-select:none;
+  transition:background .1s;
+}
+.pc-folder-row:hover { background:var(--eo-bg); border-color:var(--eo-border); }
+.pc-caret { font-size:.62rem; color:var(--eo-text-muted); transition:transform .15s; flex-shrink:0; }
+.pc-folder-files { display:none; margin-left:24px; border-left:2px solid var(--eo-border); padding-left:10px; margin-top:2px; margin-bottom:4px; }
+</style>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title"><i class="bi bi-arrow-left-right" style="color:#ef4444"></i> PDF Converter</h1>
+    <p class="eo-page-subtitle">Convert PDF files to Word documents or images</p>
+  </div>
+  <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-secondary">
+    <i class="bi bi-arrow-left"></i> File Manager
+  </a>
+</div>
+
+{% if messages %}
+  {% for msg in messages %}
+  <div style="padding:12px 16px;border-radius:10px;margin-bottom:14px;border:1px solid var(--eo-border);background:var(--eo-card);font-size:.88rem">
+    <i class="bi bi-{% if 'success' in msg.tags %}check-circle-fill" style="color:var(--eo-success){% else %}exclamation-circle-fill" style="color:var(--eo-danger){% endif %} me-2"></i>{{ msg }}
+  </div>
+  {% endfor %}
+{% endif %}
+
+<!-- Tab switcher -->
+<div class="pc-tabs">
+  <button class="pc-tab {% if active_tab == 'word' %}active{% endif %}"
+          onclick="switchTab('word', this)">
+    <i class="bi bi-file-earmark-word me-1" style="color:#2563eb"></i> PDF → Word
+  </button>
+  <button class="pc-tab {% if active_tab == 'image' %}active{% endif %}"
+          onclick="switchTab('image', this)">
+    <i class="bi bi-file-earmark-image me-1" style="color:#7c3aed"></i> PDF → Image
+  </button>
+</div>
+
+<!-- ── PDF → WORD tab ── -->
+<div id="tabWord" {% if active_tab != 'word' %}style="display:none"{% endif %}>
+  <div class="pc-layout">
+
+    <!-- File picker -->
+    <div>
+      <div class="eo-card" style="padding-bottom:0;margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <h3 class="eo-card-title" style="margin:0">Folders</h3>
+        </div>
+        {% if folders %}
+        <div style="max-height:200px;overflow-y:auto;margin:0 -16px;padding:0 16px 12px;display:flex;flex-direction:column;gap:2px">
+          {% for group in folders %}
+          <div class="pc-folder-group">
+            <div class="pc-folder-row" onclick="toggleFolder(this)">
+              <span class="pc-caret">▶</span>
+              <i class="bi bi-folder-fill" style="color:{{ group.folder.color }};font-size:1rem;flex-shrink:0"></i>
+              <span style="font-size:.84rem;font-weight:600;color:var(--eo-text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ group.folder.name }}</span>
+              <span style="font-size:.68rem;color:var(--eo-text-muted);background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px;padding:1px 7px">{{ group.pdfs|length }}</span>
+            </div>
+            <div class="pc-folder-files">
+              {% for f in group.pdfs %}
+              <div class="pc-file-item"
+                   data-id="{{ f.id }}" data-name="{{ f.name|escapejs }}"
+                   onclick="selectFile(this, 'word')">
+                <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444;font-size:1.2rem;flex-shrink:0"></i>
+                <div style="min-width:0">
+                  <div style="font-size:.82rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.name }}</div>
+                  <div style="font-size:.69rem;color:var(--eo-text-muted)">{{ f.file_size|filesizeformat }}</div>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p style="font-size:.82rem;color:var(--eo-text-muted);margin-bottom:12px">No folders with PDFs</p>
+        {% endif %}
+      </div>
+
+      <div class="eo-card" style="padding-bottom:0">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <h3 class="eo-card-title" style="margin:0">PDFs</h3>
+          {% if root_pdfs %}<span style="font-size:.72rem;color:var(--eo-text-muted)">{{ root_pdfs|length }} file{{ root_pdfs|length|pluralize }}</span>{% endif %}
+        </div>
+        <!-- Search -->
+        <div style="position:relative;margin-bottom:8px">
+          <i class="bi bi-search" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.78rem;pointer-events:none"></i>
+          <input type="text" placeholder="Search PDFs…" oninput="filterFiles(this.value, 'word')"
+                 style="width:100%;padding:7px 10px 7px 30px;border:1px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);font-size:.82rem;outline:none"/>
+        </div>
+        <div id="wordRootList" style="max-height:200px;overflow-y:auto;margin:0 -16px;padding:0 16px 12px;display:flex;flex-direction:column;gap:4px">
+          {% for f in root_pdfs %}
+          <div class="pc-file-item"
+               data-id="{{ f.id }}" data-name="{{ f.name|escapejs }}"
+               data-search="{{ f.name|lower|escapejs }}"
+               onclick="selectFile(this, 'word')">
+            <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444;font-size:1.3rem;flex-shrink:0"></i>
+            <div style="min-width:0">
+              <div style="font-size:.83rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.name }}</div>
+              <div style="font-size:.7rem;color:var(--eo-text-muted)">{{ f.file_size|filesizeformat }}</div>
+            </div>
+          </div>
+          {% empty %}
+          <p style="font-size:.8rem;color:var(--eo-text-muted);text-align:center;padding:16px 0">No PDF files found</p>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Convert panel -->
+    <div>
+      <div class="eo-card">
+        <h3 class="eo-card-title mb-3"><i class="bi bi-file-earmark-word" style="color:#2563eb"></i> Convert to Word</h3>
+
+        <!-- Selected file display -->
+        <div id="wordSelected" style="padding:12px;background:var(--eo-bg);border-radius:9px;border:1.5px solid var(--eo-border);margin-bottom:14px;min-height:56px;display:flex;align-items:center;gap:10px">
+          <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444;font-size:1.4rem;flex-shrink:0;opacity:.3"></i>
+          <span id="wordSelectedName" style="font-size:.84rem;color:var(--eo-text-muted);font-style:italic">No file selected</span>
+        </div>
+
+        <form method="post" action="{% url 'pdf_to_word' %}" id="wordForm">
+          {% csrf_token %}
+          <input type="hidden" name="file_id" id="wordFileId"/>
+          <button type="button" onclick="submitConvert('word')"
+                  class="eo-btn eo-btn-primary w-100" id="wordBtn" disabled
+                  style="padding:11px;font-size:.92rem">
+            <i class="bi bi-file-earmark-word-fill"></i> Convert to .docx
+          </button>
+        </form>
+
+        <div style="margin-top:12px;padding:10px 12px;background:var(--eo-bg);border-radius:8px;font-size:.76rem;color:var(--eo-text-muted);line-height:1.6">
+          <i class="bi bi-cpu me-1" style="color:var(--eo-primary)"></i>
+          Conversion uses LibreOffice. The result is saved alongside the original PDF in your file manager.
+          Complex layouts may vary in fidelity.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── PDF → IMAGE tab ── -->
+<div id="tabImage" {% if active_tab != 'image' %}style="display:none"{% endif %}>
+  <div class="pc-layout">
+
+    <!-- File picker (same folders/files) -->
+    <div>
+      <div class="eo-card" style="padding-bottom:0;margin-bottom:16px">
+        <h3 class="eo-card-title" style="margin-bottom:10px">Folders</h3>
+        {% if folders %}
+        <div style="max-height:200px;overflow-y:auto;margin:0 -16px;padding:0 16px 12px;display:flex;flex-direction:column;gap:2px">
+          {% for group in folders %}
+          <div class="pc-folder-group">
+            <div class="pc-folder-row" onclick="toggleFolder(this)">
+              <span class="pc-caret">▶</span>
+              <i class="bi bi-folder-fill" style="color:{{ group.folder.color }};font-size:1rem;flex-shrink:0"></i>
+              <span style="font-size:.84rem;font-weight:600;color:var(--eo-text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ group.folder.name }}</span>
+              <span style="font-size:.68rem;color:var(--eo-text-muted);background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px;padding:1px 7px">{{ group.pdfs|length }}</span>
+            </div>
+            <div class="pc-folder-files">
+              {% for f in group.pdfs %}
+              <div class="pc-file-item"
+                   data-id="{{ f.id }}" data-name="{{ f.name|escapejs }}"
+                   onclick="selectFile(this, 'image')">
+                <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444;font-size:1.2rem;flex-shrink:0"></i>
+                <div style="min-width:0">
+                  <div style="font-size:.82rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.name }}</div>
+                  <div style="font-size:.69rem;color:var(--eo-text-muted)">{{ f.file_size|filesizeformat }}</div>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p style="font-size:.82rem;color:var(--eo-text-muted);margin-bottom:12px">No folders with PDFs</p>
+        {% endif %}
+      </div>
+
+      <div class="eo-card" style="padding-bottom:0">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <h3 class="eo-card-title" style="margin:0">PDFs</h3>
+        </div>
+        <div style="position:relative;margin-bottom:8px">
+          <i class="bi bi-search" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.78rem;pointer-events:none"></i>
+          <input type="text" placeholder="Search PDFs…" oninput="filterFiles(this.value, 'image')"
+                 style="width:100%;padding:7px 10px 7px 30px;border:1px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);font-size:.82rem;outline:none"/>
+        </div>
+        <div id="imageRootList" style="max-height:200px;overflow-y:auto;margin:0 -16px;padding:0 16px 12px;display:flex;flex-direction:column;gap:4px">
+          {% for f in root_pdfs %}
+          <div class="pc-file-item"
+               data-id="{{ f.id }}" data-name="{{ f.name|escapejs }}"
+               data-search="{{ f.name|lower|escapejs }}"
+               onclick="selectFile(this, 'image')">
+            <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444;font-size:1.3rem;flex-shrink:0"></i>
+            <div style="min-width:0">
+              <div style="font-size:.83rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.name }}</div>
+              <div style="font-size:.7rem;color:var(--eo-text-muted)">{{ f.file_size|filesizeformat }}</div>
+            </div>
+          </div>
+          {% empty %}
+          <p style="font-size:.8rem;color:var(--eo-text-muted);text-align:center;padding:16px 0">No PDF files found</p>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Convert options panel -->
+    <div>
+      <div class="eo-card">
+        <h3 class="eo-card-title mb-3"><i class="bi bi-file-earmark-image" style="color:#7c3aed"></i> Convert to Images</h3>
+
+        <!-- Selected file display -->
+        <div id="imageSelected" style="padding:12px;background:var(--eo-bg);border-radius:9px;border:1.5px solid var(--eo-border);margin-bottom:14px;min-height:56px;display:flex;align-items:center;gap:10px">
+          <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444;font-size:1.4rem;flex-shrink:0;opacity:.3"></i>
+          <span id="imageSelectedName" style="font-size:.84rem;color:var(--eo-text-muted);font-style:italic">No file selected</span>
+        </div>
+
+        <form method="post" action="{% url 'pdf_to_image' %}" id="imageForm">
+          {% csrf_token %}
+          <input type="hidden" name="file_id" id="imageFileId"/>
+
+          <div class="row g-3 mb-3">
+            <div class="col-6">
+              <label class="eo-form-label">Format</label>
+              <select name="fmt" class="eo-form-select">
+                <option value="png">PNG (lossless)</option>
+                <option value="jpg">JPG (smaller)</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="eo-form-label">Resolution</label>
+              <select name="dpi" class="eo-form-select">
+                <option value="72">72 DPI — web</option>
+                <option value="96">96 DPI — screen</option>
+                <option value="150" selected>150 DPI — default</option>
+                <option value="300">300 DPI — print</option>
+              </select>
+            </div>
+          </div>
+
+          <button type="button" onclick="submitConvert('image')"
+                  class="eo-btn eo-btn-primary w-100" id="imageBtn" disabled
+                  style="padding:11px;font-size:.92rem;background:#7c3aed;border-color:#7c3aed">
+            <i class="bi bi-image-fill"></i> Convert to Images
+          </button>
+        </form>
+
+        <div style="margin-top:12px;padding:10px 12px;background:var(--eo-bg);border-radius:8px;font-size:.76rem;color:var(--eo-text-muted);line-height:1.6">
+          <i class="bi bi-layers me-1" style="color:#7c3aed"></i>
+          Each page is saved as a separate image file. Requires
+          <code style="background:var(--eo-border);border-radius:3px;padding:0 3px">poppler-utils</code>
+          or <code style="background:var(--eo-border);border-radius:3px;padding:0 3px">pdf2image</code> on the server.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Tab switcher ──────────────────────────────────────────────────────────────
+function switchTab(tab, btn) {
+  document.getElementById('tabWord').style.display  = tab === 'word'  ? '' : 'none';
+  document.getElementById('tabImage').style.display = tab === 'image' ? '' : 'none';
+  document.querySelectorAll('.pc-tab').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+}
+
+// ── Folder toggle ─────────────────────────────────────────────────────────────
+function toggleFolder(row) {
+  var group     = row.closest('.pc-folder-group');
+  var files     = group.querySelector('.pc-folder-files');
+  var caret     = row.querySelector('.pc-caret');
+  var open      = files.style.display !== 'none';
+  files.style.display  = open ? 'none' : '';
+  caret.style.transform = open ? '' : 'rotate(90deg)';
+}
+
+// ── File selection ────────────────────────────────────────────────────────────
+var selectedWord  = null;
+var selectedImage = null;
+
+function selectFile(el, tab) {
+  // Deselect same tab
+  var listId = tab === 'word' ? 'wordRootList' : 'imageRootList';
+  document.querySelectorAll('.pc-file-item').forEach(function(i){ i.classList.remove('selected'); });
+  el.classList.add('selected');
+
+  var id   = el.dataset.id;
+  var name = el.dataset.name;
+
+  if (tab === 'word') {
+    selectedWord = id;
+    document.getElementById('wordFileId').value      = id;
+    document.getElementById('wordSelectedName').textContent = name;
+    document.getElementById('wordSelected').querySelector('i').style.opacity = '1';
+    document.getElementById('wordBtn').disabled = false;
+  } else {
+    selectedImage = id;
+    document.getElementById('imageFileId').value      = id;
+    document.getElementById('imageSelectedName').textContent = name;
+    document.getElementById('imageSelected').querySelector('i').style.opacity = '1';
+    document.getElementById('imageBtn').disabled = false;
+  }
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+function filterFiles(q, tab) {
+  var listId = tab === 'word' ? 'wordRootList' : 'imageRootList';
+  var ql = q.toLowerCase();
+  document.querySelectorAll('#' + listId + ' .pc-file-item').forEach(function(el) {
+    el.style.display = !ql || (el.dataset.search || '').includes(ql) ? '' : 'none';
+  });
+}
+
+// ── Submit ────────────────────────────────────────────────────────────────────
+function submitConvert(tab) {
+  var id = tab === 'word' ? selectedWord : selectedImage;
+  if (!id) { alert('Please select a PDF file first.'); return; }
+  document.getElementById(tab === 'word' ? 'wordForm' : 'imageForm').submit();
+}
+</script>
+{% endblock %}

@@ -8,7 +8,7 @@ from django.utils import timezone
 from django.db.models import Q, Sum
 from django.core.mail import send_mail
 from django.conf import settings
-import os, subprocess, tempfile, hashlib, mimetypes
+import os, subprocess, tempfile, hashlib, mimetypes, re
 from django.utils.decorators import method_decorator
 from io import BytesIO
 from django.core.files.base import ContentFile
@@ -2534,3 +2534,436 @@ class QuickSignView(LoginRequiredMixin, View):
         except Exception as e:
             messages.error(request, f'Signing failed: {e}')
             return redirect('quick_sign')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE EDITOR → PDF
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_note_pdf(title, content, user):
+    """Render a plain-text / markdown-lite note to a clean PDF using reportlab."""
+    import re
+    from datetime import datetime
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_JUSTIFY
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+    )
+
+    buf = BytesIO()
+    PAGE_W, PAGE_H = A4
+    MARGIN = 22 * mm
+
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        rightMargin=MARGIN, leftMargin=MARGIN,
+        topMargin=28*mm, bottomMargin=20*mm,
+        title=title, author=getattr(user, 'full_name', str(user)),
+    )
+
+    C_INK    = colors.HexColor('#1e293b')
+    C_ACCENT = colors.HexColor('#3b82f6')
+    C_MUTED  = colors.HexColor('#64748b')
+    C_HEAD   = colors.HexColor('#1e3a5f')
+
+    base = getSampleStyleSheet()
+    sTitle  = ParagraphStyle('NoteTitle', parent=base['Title'],
+                fontSize=24, textColor=C_HEAD, spaceAfter=2*mm, leading=30)
+    sMeta   = ParagraphStyle('NoteMeta',  parent=base['Normal'],
+                fontSize=9, textColor=C_MUTED, spaceAfter=5*mm)
+    sH1     = ParagraphStyle('NoteH1',    parent=base['Heading1'],
+                fontSize=17, textColor=C_HEAD, spaceBefore=7*mm, spaceAfter=3*mm)
+    sH2     = ParagraphStyle('NoteH2',    parent=base['Heading2'],
+                fontSize=13, textColor=C_HEAD, spaceBefore=5*mm, spaceAfter=2*mm)
+    sBody   = ParagraphStyle('NoteBody',  parent=base['Normal'],
+                fontSize=11, leading=17, spaceAfter=3*mm, alignment=TA_JUSTIFY,
+                textColor=C_INK)
+    sBullet = ParagraphStyle('NoteBullet', parent=base['Normal'],
+                fontSize=11, leading=16, spaceAfter=2*mm,
+                leftIndent=12*mm, firstLineIndent=-6*mm, textColor=C_INK)
+    sCode   = ParagraphStyle('NoteCode',  parent=base['Normal'],
+                fontName='Courier', fontSize=9, leading=14, spaceAfter=3*mm,
+                leftIndent=6*mm, backColor=colors.HexColor('#f1f5f9'),
+                textColor=colors.HexColor('#0f172a'))
+
+    def inline(text):
+        """Bold, italic, inline-code → reportlab XML."""
+        text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+        text = re.sub(r'\*(.+?)\*',     r'<i>\1</i>', text)
+        text = re.sub(r'`(.+?)`',
+                      r'<font name="Courier" color="#0f172a">\1</font>', text)
+        return text
+
+    story = []
+    story.append(Paragraph(title, sTitle))
+    author_name = getattr(user, 'full_name', str(user))
+    story.append(Paragraph(
+        f'{author_name}  ·  {datetime.now().strftime("%d %B %Y, %H:%M")}', sMeta))
+    story.append(HRFlowable(width='100%', color=C_ACCENT,
+                             thickness=1.5, spaceAfter=6*mm))
+
+    lines = content.splitlines()
+    buf_lines = []
+
+    def flush():
+        if buf_lines:
+            text = ' '.join(l for l in buf_lines if l)
+            if text:
+                story.append(Paragraph(inline(text), sBody))
+            buf_lines.clear()
+
+    in_code = False
+    code_block = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Fenced code block
+        if stripped.startswith('```'):
+            if not in_code:
+                flush()
+                in_code = True
+                code_block = []
+            else:
+                in_code = False
+                story.append(Paragraph(
+                    '<br/>'.join(code_block) or ' ', sCode))
+                code_block = []
+            continue
+        if in_code:
+            code_block.append(
+                line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
+            continue
+
+        if stripped.startswith('# '):
+            flush(); story.append(Paragraph(inline(stripped[2:]), sH1))
+        elif stripped.startswith('## '):
+            flush(); story.append(Paragraph(inline(stripped[3:]), sH2))
+        elif stripped.startswith('### '):
+            flush(); story.append(Paragraph(inline(stripped[4:]), sH2))
+        elif stripped.startswith(('- ', '* ', '• ')):
+            flush()
+            story.append(Paragraph(f'•  {inline(stripped[2:])}', sBullet))
+        elif re.match(r'^\d+\.\s', stripped):
+            flush()
+            num, rest = stripped.split('.', 1)
+            story.append(Paragraph(f'{num}.  {inline(rest.strip())}', sBullet))
+        elif stripped == '':
+            flush()
+            if story:
+                story.append(Spacer(1, 2*mm))
+        else:
+            buf_lines.append(stripped)
+
+    flush()
+
+    def footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont('Helvetica', 8)
+        canvas.setFillColor(C_MUTED)
+        canvas.drawString(MARGIN, 12*mm, f'EasyOffice · {title}')
+        canvas.drawRightString(PAGE_W - MARGIN, 12*mm, f'Page {doc.page}')
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    return buf.getvalue()
+
+
+class NotesToPDFView(LoginRequiredMixin, View):
+    template_name = 'files/notes_editor.html'
+
+    def get(self, request):
+        folders_qs = _visible_folders_qs(request.user).order_by('name')
+        return render(request, self.template_name, {'folders': folders_qs})
+
+    def post(self, request):
+        title   = request.POST.get('title', '').strip() or 'Untitled Note'
+        content = request.POST.get('content', '').strip()
+        folder_id = request.POST.get('folder_id', '').strip()
+
+        if not content:
+            messages.error(request, 'Please write something before saving.')
+            return redirect('notes_to_pdf')
+
+        try:
+            pdf_bytes = _build_note_pdf(title, content, request.user)
+        except Exception as e:
+            messages.error(request, f'PDF generation failed: {e}')
+            return redirect('notes_to_pdf')
+
+        safe_title = re.sub(r'[^\w\s-]', '', title)[:50].strip().replace(' ', '-')
+        filename   = f'{safe_title}.pdf'
+
+        folder = None
+        if folder_id:
+            try:
+                folder = _visible_folders_qs(request.user).get(pk=folder_id)
+            except Exception:
+                pass
+
+        new_file = SharedFile.objects.create(
+            name        = filename,
+            uploaded_by = request.user,
+            folder      = folder,
+            visibility  = 'private',
+            description = f'Note: {title}',
+            file_type   = 'application/pdf',
+            file_size   = len(pdf_bytes),
+        )
+        new_file.file.save(filename, ContentFile(pdf_bytes), save=True)
+        try:
+            new_file.file_hash = new_file.compute_hash()
+            new_file.save(update_fields=['file_hash'])
+        except Exception:
+            pass
+
+        messages.success(request, f'Note saved as "{filename}".')
+        return redirect('file_manager')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PDF → WORD  &  PDF → IMAGE  (shared PDF picker helper)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_user_pdf_tree(user):
+    """Return (root_pdfs, folders_with_pdfs) for the PDF picker."""
+    from collections import defaultdict
+    all_pdfs = [
+        f for f in _visible_files_qs(user).filter(uploaded_by=user)
+                                          .select_related('folder')
+                                          .order_by('name')
+        if getattr(f, 'is_pdf', False)
+    ]
+    root_pdfs = [f for f in all_pdfs if f.folder_id is None]
+    by_folder = defaultdict(list)
+    for f in all_pdfs:
+        if f.folder_id:
+            by_folder[f.folder_id].append(f)
+    folders = []
+    for folder in _visible_folders_qs(user).filter(
+            pk__in=by_folder.keys()).order_by('name'):
+        folders.append({'folder': folder, 'pdfs': by_folder[folder.pk]})
+    return root_pdfs, folders
+
+
+def _pdf_to_images_bytes(pdf_path, fmt='png', dpi=150):
+    """
+    Convert a PDF to per-page images. Returns list of (page_num, bytes) tuples.
+    Tries: pdf2image → pdftoppm → LibreOffice.
+    """
+    out_dir = tempfile.mkdtemp()
+    images  = []
+
+    # ── pdf2image (pip install pdf2image) ────────────────────────────────────
+    try:
+        from pdf2image import convert_from_path
+        pages = convert_from_path(pdf_path, dpi=dpi, fmt=fmt)
+        for i, page in enumerate(pages, 1):
+            buf = BytesIO()
+            page.save(buf, format='PNG' if fmt == 'png' else 'JPEG')
+            images.append((i, buf.getvalue()))
+        return images
+    except ImportError:
+        pass
+
+    # ── pdftoppm (poppler-utils) ──────────────────────────────────────────────
+    try:
+        prefix  = os.path.join(out_dir, 'page')
+        fmt_flag = '-png' if fmt == 'png' else '-jpeg'
+        result  = subprocess.run(
+            ['pdftoppm', fmt_flag, '-r', str(dpi), pdf_path, prefix],
+            capture_output=True, timeout=180)
+        if result.returncode == 0:
+            files = sorted(f for f in os.listdir(out_dir)
+                           if f.startswith('page'))
+            for i, fn in enumerate(files, 1):
+                with open(os.path.join(out_dir, fn), 'rb') as fh:
+                    images.append((i, fh.read()))
+            if images:
+                return images
+    except FileNotFoundError:
+        pass
+
+    # ── LibreOffice fallback ──────────────────────────────────────────────────
+    result = subprocess.run(
+        ['libreoffice', '--headless', '--convert-to', fmt,
+         '--outdir', out_dir, pdf_path],
+        capture_output=True, text=True, timeout=180)
+    files = sorted(f for f in os.listdir(out_dir) if f.endswith(f'.{fmt}'))
+    if not files:
+        raise RuntimeError(
+            'PDF→Image conversion requires poppler-utils or pdf2image. '
+            'Run: sudo apt install poppler-utils  OR  pip install pdf2image')
+    for i, fn in enumerate(files, 1):
+        with open(os.path.join(out_dir, fn), 'rb') as fh:
+            images.append((i, fh.read()))
+    return images
+
+
+class PDFToWordView(LoginRequiredMixin, View):
+    template_name = 'files/pdf_converter.html'
+
+    def get(self, request):
+        root_pdfs, folders = _get_user_pdf_tree(request.user)
+        return render(request, self.template_name, {
+            'root_pdfs': root_pdfs, 'folders': folders,
+            'active_tab': 'word',
+        })
+
+    def post(self, request):
+        file_id = request.POST.get('file_id', '').strip()
+        if not file_id:
+            messages.error(request, 'Please select a PDF.')
+            return redirect('pdf_to_word')
+
+        pdf = get_object_or_404(SharedFile, pk=file_id, uploaded_by=request.user)
+        if not getattr(pdf, 'is_pdf', False):
+            messages.error(request, 'Only PDF files can be converted.')
+            return redirect('pdf_to_word')
+
+        try:
+            import shutil
+
+            src = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+            src.write(pdf.file.open('rb').read())
+            src.flush(); src.close()
+
+            out_dir = tempfile.mkdtemp()
+
+            # ── Step 1: PDF → ODT via writer_pdf_import ───────────────────────
+            # Direct PDF→DOCX fails because LibreOffice opens PDFs as Draw
+            # documents by default. writer_pdf_import opens it as Writer (text).
+            r1 = subprocess.run(
+                [
+                    'libreoffice', '--headless', '--norestore',
+                    '--infilter=writer_pdf_import',
+                    '--convert-to', 'odt',
+                    '--outdir', out_dir,
+                    src.name,
+                ],
+                capture_output=True, text=True, timeout=120,
+            )
+            os.unlink(src.name)
+
+            odt_files = [f for f in os.listdir(out_dir) if f.endswith('.odt')]
+            if not odt_files:
+                # Combine stdout+stderr for a useful error message
+                lo_err = (r1.stdout + r1.stderr).strip()
+                raise RuntimeError(
+                    lo_err or 'LibreOffice produced no ODT output in step 1.')
+
+            odt_path = os.path.join(out_dir, odt_files[0])
+
+            # ── Step 2: ODT → DOCX ────────────────────────────────────────────
+            r2 = subprocess.run(
+                [
+                    'libreoffice', '--headless', '--norestore',
+                    '--convert-to', 'docx:MS Word 2007 XML',
+                    '--outdir', out_dir,
+                    odt_path,
+                ],
+                capture_output=True, text=True, timeout=120,
+            )
+
+            docx_files = [f for f in os.listdir(out_dir) if f.endswith('.docx')]
+            if not docx_files:
+                lo_err = (r2.stdout + r2.stderr).strip()
+                raise RuntimeError(
+                    lo_err or 'LibreOffice produced no DOCX output in step 2.')
+
+            docx_path = os.path.join(out_dir, docx_files[0])
+            with open(docx_path, 'rb') as fh:
+                docx_bytes = fh.read()
+
+            base_name = pdf.name[:-4] if pdf.name.lower().endswith('.pdf') else pdf.name
+            out_name  = f'{base_name}.docx'
+            MIME_DOCX = ('application/vnd.openxmlformats-officedocument'
+                         '.wordprocessingml.document')
+
+            new_file = SharedFile.objects.create(
+                name        = out_name,
+                uploaded_by = request.user,
+                folder      = pdf.folder,
+                visibility  = pdf.visibility,
+                description = f'Converted from PDF: {pdf.name}',
+                file_type   = MIME_DOCX,
+                file_size   = len(docx_bytes),
+            )
+            new_file.file.save(out_name, ContentFile(docx_bytes), save=True)
+
+            shutil.rmtree(out_dir, ignore_errors=True)
+            messages.success(request, f'"{pdf.name}" converted → "{out_name}".')
+            return redirect('file_manager')
+
+        except Exception as e:
+            messages.error(request, f'Conversion failed: {e}')
+            return redirect('pdf_to_word')
+
+
+class PDFToImageView(LoginRequiredMixin, View):
+    template_name = 'files/pdf_converter.html'
+
+    def get(self, request):
+        root_pdfs, folders = _get_user_pdf_tree(request.user)
+        return render(request, self.template_name, {
+            'root_pdfs': root_pdfs, 'folders': folders,
+            'active_tab': 'image',
+        })
+
+    def post(self, request):
+        file_id = request.POST.get('file_id', '').strip()
+        fmt     = request.POST.get('fmt', 'png').lower()
+        dpi     = int(request.POST.get('dpi', 150))
+        if fmt not in ('png', 'jpg'):  fmt = 'png'
+        if dpi not in (72, 96, 150, 300): dpi = 150
+
+        if not file_id:
+            messages.error(request, 'Please select a PDF.')
+            return redirect('pdf_to_image')
+
+        pdf = get_object_or_404(SharedFile, pk=file_id, uploaded_by=request.user)
+        if not getattr(pdf, 'is_pdf', False):
+            messages.error(request, 'Only PDF files can be converted.')
+            return redirect('pdf_to_image')
+
+        try:
+            src = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+            src.write(pdf.file.open('rb').read())
+            src.flush(); src.close()
+
+            page_images = _pdf_to_images_bytes(src.name, fmt=fmt, dpi=dpi)
+            os.unlink(src.name)
+
+            if not page_images:
+                raise RuntimeError('No pages were converted.')
+
+            base_name = pdf.name[:-4] if pdf.name.lower().endswith('.pdf') else pdf.name
+            mime = 'image/png' if fmt == 'png' else 'image/jpeg'
+
+            for page_num, img_bytes in page_images:
+                suffix = f'-p{page_num:03d}.{fmt}'
+                out_name = f'{base_name}{suffix}'
+                new_file = SharedFile.objects.create(
+                    name        = out_name,
+                    uploaded_by = request.user,
+                    folder      = pdf.folder,
+                    visibility  = pdf.visibility,
+                    description = f'Page {page_num} of "{pdf.name}"',
+                    file_type   = mime,
+                    file_size   = len(img_bytes),
+                )
+                new_file.file.save(out_name, ContentFile(img_bytes), save=True)
+
+            n = len(page_images)
+            messages.success(
+                request,
+                f'"{pdf.name}" → {n} image{"s" if n>1 else ""} saved to your files.')
+            return redirect('file_manager')
+
+        except Exception as e:
+            messages.error(request, f'Conversion failed: {e}')
+            return redirect('pdf_to_image')

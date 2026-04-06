@@ -24,6 +24,8 @@ urlpatterns = [
     path('signatures/new/',                     views.SignatureRequestCreateView.as_view(),     name='signature_request_new'),
     path('signatures/<uuid:pk>/',               views.SignatureRequestDetailView.as_view(),     name='signature_request_detail'),
     path('signatures/<uuid:pk>/fields/',        views.SaveSignatureFieldsView.as_view(),        name='save_signature_fields'),
+    # Creator signs their own document when they are a required signer in the flow
+    path('signatures/<uuid:pk>/creator-sign/',  views.CreatorSignView.as_view(),               name='creator_sign'),
 
     path('sign/<uuid:token>/',                  views.SignDocumentView.as_view(),               name='sign_document'),
     path('sign/<uuid:token>/preview/',          views.SignDocumentPreviewView.as_view(),        name='sign_document_preview'),
@@ -37,4 +39,8 @@ urlpatterns = [
     path('pdf-tools/rotate-pages/<uuid:pk>/',  views.PDFRotatePagesView.as_view(),      name='pdf_rotate_pages'),
     path('pdf-tools/split/<uuid:pk>/',         views.PDFSplitView.as_view(),            name='pdf_split'),
     path('pdf-tools/merge-images/', views.PDFMergeImagesView.as_view(), name='pdf_merge_images'),
+
+    # ── Quick Sign — standalone PDF signing tool (no flow, no other signers) ──
+    path('quick-sign/',          views.QuickSignView.as_view(),  name='quick_sign'),
+    path('quick-sign/<uuid:pk>/', views.QuickSignView.as_view(), name='quick_sign_file'),
 ]

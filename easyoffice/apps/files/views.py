@@ -130,6 +130,54 @@ def _notify_signer(signer, base_url):
         pass
 
 
+def _push_notification(user, notif_type, title, body='', link='', icon='bi-bell-fill', color='#3b82f6'):
+    """
+    Push a real-time notification to a user via the existing
+    notifications_ws WebSocket channel (group: notifications_{user.id}).
+    Silently skips if Channels / Redis is not running.
+    """
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        layer = get_channel_layer()
+        if layer is None:
+            return
+        async_to_sync(layer.group_send)(
+            f'notifications_{user.id}',
+            {
+                'type': 'send_notification',   # handled by NotificationConsumer.send_notification
+                'data': {
+                    'type':  notif_type,
+                    'title': title,
+                    'body':  body,
+                    'link':  link,
+                    'icon':  icon,
+                    'color': color,
+                },
+            }
+        )
+    except Exception:
+        pass
+
+
+# Notification type → (icon, colour) — mirrors the consumer's expected payload
+_NOTIF_META = {
+    'file_shared':    ('bi-share-fill',         '#3b82f6'),
+    'sign_request':   ('bi-pen-fill',           '#8b5cf6'),
+    'sign_viewed':    ('bi-eye-fill',           '#06b6d4'),
+    'sign_signed':    ('bi-check-circle-fill',  '#10b981'),
+    'sign_declined':  ('bi-x-circle-fill',      '#ef4444'),
+    'sign_completed': ('bi-patch-check-fill',   '#10b981'),
+    'sign_reminder':  ('bi-alarm-fill',         '#f59e0b'),
+}
+
+
+def _notify(user, notif_type, title, body='', link=''):
+    """Convenience wrapper: push WS notification with correct icon/colour."""
+    icon, color = _NOTIF_META.get(notif_type, ('bi-bell-fill', '#64748b'))
+    _push_notification(user, notif_type, title, body, link, icon, color)
+
+
 def _get_sig_font_path(font_name='Dancing Script'):
     """
     Download and cache the TTF for the requested signature font.
@@ -791,6 +839,31 @@ class FileShareView(LoginRequiredMixin, View):
                     f.department = Department.objects.get(id=did); f.save(update_fields=['department'])
                 except Exception: pass
         messages.success(request, f'Sharing updated for "{f.name}".')
+
+        # ── Notify users added to shared_with ──────────────────────────────
+        if f.visibility == 'shared_with':
+            for recipient in f.shared_with.exclude(pk=request.user.pk):
+                _notify(
+                    recipient, 'file_shared',
+                    title=f'{request.user.full_name} shared a file with you',
+                    body=f.name,
+                    link=f'/files/{f.pk}/preview/',
+                )
+                try:
+                    send_mail(
+                        subject=f'[EasyOffice] {request.user.full_name} shared "{f.name}" with you',
+                        message=(
+                            f'Hello {recipient.full_name},\n\n'
+                            f'{request.user.full_name} has shared the file "{f.name}" with you.\n\n'
+                            f'View it in EasyOffice Files:\n/files/{f.pk}/preview/\n\n'
+                            f'— EasyOffice'
+                        ),
+                        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
+                        recipient_list=[recipient.email],
+                        fail_silently=True,
+                    )
+                except Exception:
+                    pass
         next_url = request.POST.get('next', '')
         return redirect(next_url if next_url.startswith('/') else 'file_manager')
 
@@ -1077,7 +1150,14 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
                 email=email, name=name or (user_obj.full_name if user_obj else email),
                 order=i+1,
             )
-            _notify_signer(signer, base_url)
+            _notify_signer(signer, base_url)   # email (all signers)
+            if user_obj:                        # WS push (internal users only)
+                _notify(
+                    user_obj, 'sign_request',
+                    title=f'Please sign: {sig_req.title}',
+                    body=f'Requested by {request.user.full_name}',
+                    link=signer.signing_url,
+                )
 
         _log_audit(sig_req, 'created', request=request,
                    notes=f'Created by {request.user.full_name}')
@@ -1141,9 +1221,47 @@ class SignatureRequestDetailView(LoginRequiredMixin, View):
             signer_id = request.POST.get('signer_id')
             signer = get_object_or_404(SignatureRequestSigner, pk=signer_id, request=sig_req)
             base_url = request.build_absolute_uri('/')
-            _notify_signer(signer, base_url)
+            _notify_signer(signer, base_url)   # email
+            if signer.user:                    # WS push
+                _notify(
+                    signer.user, 'sign_reminder',
+                    title=f'Reminder: Please sign "{sig_req.title}"',
+                    body=f'Requested by {sig_req.created_by.full_name}',
+                    link=signer.signing_url,
+                )
             messages.success(request, f'Reminder sent to {signer.email}.')
         return redirect('signature_request_detail', pk=sig_req.pk)
+
+
+class CreatorSignView(LoginRequiredMixin, View):
+    """
+    Lets the creator sign their own document when they are a required
+    signer in the flow (i.e. a SignatureRequestSigner row exists for them).
+    Redirects straight to the token-based signing page using their signer token.
+    If they are not a signer, shows an error.
+    """
+    def get(self, request, pk):
+        sig_req = get_object_or_404(
+            SignatureRequest,
+            pk=pk,
+            created_by=request.user,
+        )
+        # Find the creator's own signer row
+        signer = sig_req.signers.filter(user=request.user).first()
+        if not signer:
+            messages.error(
+                request,
+                'You are not listed as a required signer on this document. '
+                'To sign it yourself, add your own name and email when creating the request.'
+            )
+            return redirect('signature_request_detail', pk=sig_req.pk)
+
+        if signer.status in ('signed', 'declined'):
+            messages.info(request, 'You have already responded to this document.')
+            return redirect('signature_request_detail', pk=sig_req.pk)
+
+        # Redirect to the standard token-based signing page
+        return redirect('sign_document', token=signer.token)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1197,6 +1315,14 @@ class SignDocumentView(View):
             signer.ip_address = _get_client_ip(request)
             signer.save(update_fields=['status', 'viewed_at', 'ip_address'])
             _log_audit(sig_req, 'viewed', signer=signer, request=request)
+            # Notify creator via WS (no email — too noisy for a view event)
+            if sig_req.created_by != signer.user:
+                _notify(
+                    sig_req.created_by, 'sign_viewed',
+                    title=f'{signer.name} viewed your document',
+                    body=sig_req.title,
+                    link=f'/files/signatures/{sig_req.pk}/',
+                )
 
         return render(request, self.template_name, {
             'signer': signer,
@@ -1260,6 +1386,30 @@ class SignDocumentView(View):
                 notes=f'Signature type: {sig_type}'
             )
 
+            # ── Notify creator: someone signed ─────────────────────────────
+            if sig_req.created_by != signer.user:
+                _notify(
+                    sig_req.created_by, 'sign_signed',
+                    title=f'{signer.name} signed your document',
+                    body=sig_req.title,
+                    link=f'/files/signatures/{sig_req.pk}/',
+                )
+                try:
+                    send_mail(
+                        subject=f'[EasyOffice] {signer.name} signed "{sig_req.title}"',
+                        message=(
+                            f'Hello {sig_req.created_by.full_name},\n\n'
+                            f'{signer.name} has signed your document "{sig_req.title}".\n\n'
+                            f'View the audit trail:\n/files/signatures/{sig_req.pk}/\n\n'
+                            f'— EasyOffice'
+                        ),
+                        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
+                        recipient_list=[sig_req.created_by.email],
+                        fail_silently=True,
+                    )
+                except Exception:
+                    pass
+
             if hasattr(sig_req, 'update_status'):
                 sig_req.update_status()
 
@@ -1267,13 +1417,18 @@ class SignDocumentView(View):
                 _log_audit(sig_req, 'completed', request=request)
 
                 # ── Burn all signatures into the PDF ──────────────────────
-                # This creates a new signed copy of the document and updates
-                # sig_req.document so every download link serves the stamped file.
                 try:
                     _embed_signatures_in_pdf(sig_req)
                 except Exception:
                     pass  # PDF stamping failure must never block a completed signing
 
+                # ── Notify creator: all done (WS + email) ─────────────────
+                _notify(
+                    sig_req.created_by, 'sign_completed',
+                    title=f'All signatures collected: {sig_req.title}',
+                    body=f'{sig_req.signers.count()} signer(s) have all signed.',
+                    link=f'/files/signatures/{sig_req.pk}/',
+                )
                 try:
                     send_mail(
                         subject=f'✓ All signatures collected: {sig_req.title}',
@@ -1299,6 +1454,32 @@ class SignDocumentView(View):
             signer.save(update_fields=['status', 'decline_reason', 'ip_address', 'user_agent'])
 
             _log_audit(sig_req, 'declined', signer=signer, request=request, notes=signer.decline_reason)
+
+            # ── Notify creator: someone declined (WS + email) ─────────────
+            if sig_req.created_by != signer.user:
+                reason_suffix = f' Reason: {signer.decline_reason}' if signer.decline_reason else ''
+                _notify(
+                    sig_req.created_by, 'sign_declined',
+                    title=f'{signer.name} declined to sign',
+                    body=f'{sig_req.title}.{reason_suffix}',
+                    link=f'/files/signatures/{sig_req.pk}/',
+                )
+                try:
+                    send_mail(
+                        subject=f'[EasyOffice] {signer.name} declined to sign "{sig_req.title}"',
+                        message=(
+                            f'Hello {sig_req.created_by.full_name},\n\n'
+                            f'{signer.name} has declined to sign "{sig_req.title}".'
+                            + (f'\n\nReason: {signer.decline_reason}' if signer.decline_reason else '')
+                            + f'\n\nView the request:\n/files/signatures/{sig_req.pk}/\n\n'
+                            f'— EasyOffice'
+                        ),
+                        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
+                        recipient_list=[sig_req.created_by.email],
+                        fail_silently=True,
+                    )
+                except Exception:
+                    pass
 
             if hasattr(sig_req, 'update_status'):
                 sig_req.update_status()
@@ -1992,3 +2173,301 @@ class PDFMergeImagesView(LoginRequiredMixin, View):
 
         messages.success(request, 'Images combined into PDF successfully.')
         return redirect('convert_pdf_page')
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Quick Sign — standalone PDF signing tool (no flow, no other signers)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class QuickSignView(LoginRequiredMixin, View):
+    """
+    Lets a user sign any of their PDF files directly — no signature request
+    flow, no other signers, no emails.  The signed copy is saved alongside
+    the original as a new SharedFile.
+    """
+    template_name = 'files/quick_sign.html'
+
+    def _build_file_tree(self, user):
+        """
+        Returns a structure for the file picker:
+          - root_pdfs:   PDF files not in any folder
+          - folders:     list of { folder, pdfs }  (only folders that contain PDFs)
+        """
+        all_pdfs = [
+            f for f in _visible_files_qs(user).filter(uploaded_by=user)
+                                              .select_related('folder')
+                                              .order_by('name')
+            if getattr(f, 'is_pdf', False)
+        ]
+        root_pdfs = [f for f in all_pdfs if f.folder_id is None]
+
+        # Group the rest by folder
+        from collections import defaultdict
+        by_folder = defaultdict(list)
+        for f in all_pdfs:
+            if f.folder_id:
+                by_folder[f.folder_id].append(f)
+
+        folders = []
+        for folder in _visible_folders_qs(user).filter(
+            pk__in=by_folder.keys()
+        ).order_by('name'):
+            folders.append({
+                'folder': folder,
+                'pdfs':   by_folder[folder.pk],
+            })
+
+        return root_pdfs, folders
+
+    def get(self, request, pk=None):
+        selected = None
+        if pk:
+            selected = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+            if not getattr(selected, 'is_pdf', False):
+                messages.error(request, 'Only PDF files can be quick-signed.')
+                return redirect('quick_sign')
+
+        root_pdfs, folders = self._build_file_tree(request.user)
+        return render(request, self.template_name, {
+            'root_pdfs': root_pdfs,
+            'folders':   folders,
+            'selected':  selected,
+        })
+
+    def post(self, request, pk=None):
+        file_id   = request.POST.get('file_id') or (str(pk) if pk else None)
+        sig_data  = request.POST.get('signature_data', '').strip()
+        sig_type  = request.POST.get('signature_type', 'draw')
+        sig_page  = int(request.POST.get('sig_page', 1))
+        sig_x     = float(request.POST.get('sig_x', 10))
+        sig_y     = float(request.POST.get('sig_y', 80))
+        sig_w     = float(request.POST.get('sig_w', 35))
+        sig_h     = float(request.POST.get('sig_h', 12))
+        output_name = request.POST.get('output_name', '').strip()
+
+        if not file_id or not sig_data:
+            messages.error(request, 'Please select a file and provide your signature.')
+            return redirect('quick_sign')
+
+        pdf = get_object_or_404(SharedFile, pk=file_id, uploaded_by=request.user)
+        if not getattr(pdf, 'is_pdf', False):
+            messages.error(request, 'Only PDF files can be quick-signed.')
+            return redirect('quick_sign')
+
+        try:
+            # ── Build a minimal SignatureField-like object for _embed helper ──
+            from dataclasses import dataclass
+            from datetime import datetime as _dt
+
+            @dataclass
+            class _FakeField:
+                field_type:  str
+                value:       str
+                page:        int
+                x_pct:       float
+                y_pct:       float
+                width_pct:   float
+                height_pct:  float
+                signer:      object
+                filled_at:   object
+
+            @dataclass
+            class _FakeSigner:
+                name: str
+
+            fake_signer = _FakeSigner(name=request.user.full_name)
+            fake_field  = _FakeField(
+                field_type = 'signature',
+                value      = sig_data,
+                page       = sig_page,
+                x_pct      = sig_x,
+                y_pct      = sig_y,
+                width_pct  = sig_w,
+                height_pct = sig_h,
+                signer     = fake_signer,
+                filled_at  = timezone.now(),
+            )
+
+            # ── Embed the signature directly using the reportlab helper ──────
+            try:
+                from reportlab.pdfgen import canvas as rl_canvas
+                from reportlab.lib.utils import ImageReader
+            except ImportError:
+                messages.error(request, 'reportlab is not installed on this server.')
+                return redirect('quick_sign')
+
+            import base64
+            from collections import defaultdict
+
+            pdf_bytes = pdf.file.open('rb').read()
+            reader = PdfReader(BytesIO(pdf_bytes))
+            writer = PdfWriter()
+
+            # Colour constants (same as _embed_signatures_in_pdf)
+            DS_BLUE       = (0.098, 0.376, 0.875)
+            DS_BLUE_LIGHT = (0.918, 0.937, 0.992)
+            DS_INK        = (0.063, 0.271, 0.773)
+            DS_LABEL      = (0.373, 0.420, 0.510)
+            DS_CHECK      = (0.063, 0.271, 0.773)
+            STRIP_H       = 18.0
+
+            from datetime import datetime as _dt2
+            signed_at = _dt2.now().strftime('%d %b %Y %H:%M UTC')
+
+            for page_idx in range(len(reader.pages)):
+                page    = reader.pages[page_idx]
+                page_w  = float(page.mediabox.width)
+                page_h  = float(page.mediabox.height)
+                page_num = page_idx + 1
+
+                overlay = BytesIO()
+                c = rl_canvas.Canvas(overlay, pagesize=(page_w, page_h))
+
+                # ── Header strip (all pages) ──────────────────────────────
+                hdr_y = page_h - STRIP_H
+                c.setFillColorRGB(0.937, 0.953, 1.0)
+                c.rect(0, hdr_y, page_w, STRIP_H, stroke=0, fill=1)
+                c.setStrokeColorRGB(*DS_BLUE)
+                c.setLineWidth(0.8)
+                c.line(0, hdr_y, page_w, hdr_y)
+                c.setFont('Helvetica-Bold', 6.5)
+                c.setFillColorRGB(*DS_BLUE)
+                c.drawString(5, hdr_y + STRIP_H * 0.28, '\u26BF EasyOffice')
+                c.setFont('Helvetica', 6.0)
+                c.setFillColorRGB(*DS_LABEL)
+                c.drawString(52, hdr_y + STRIP_H * 0.28, f'\u00B7  {pdf.name}')
+                c.drawRightString(page_w - 5, hdr_y + STRIP_H * 0.28,
+                                  f'Page {page_num} / {len(reader.pages)}')
+
+                # ── Footer strip (all pages) ──────────────────────────────
+                c.setFillColorRGB(0.937, 0.953, 1.0)
+                c.rect(0, 0, page_w, STRIP_H, stroke=0, fill=1)
+                c.setLineWidth(0.8)
+                c.line(0, STRIP_H, page_w, STRIP_H)
+                c.setFont('Helvetica-Bold', 5.5)
+                c.setFillColorRGB(*DS_BLUE)
+                c.drawString(5, STRIP_H * 0.28, 'Signed by:')
+                c.setFont('Helvetica', 5.5)
+                c.setFillColorRGB(0.2, 0.2, 0.2)
+                c.drawString(38, STRIP_H * 0.28, request.user.full_name)
+                c.drawRightString(page_w - 5, STRIP_H * 0.28,
+                                  f'Electronically signed \u00B7 {signed_at}')
+
+                # ── Signature field (only on selected page) ───────────────
+                if page_num == sig_page:
+                    fx = (sig_x  / 100.0) * page_w
+                    fw = (sig_w  / 100.0) * page_w
+                    fh = (sig_h  / 100.0) * page_h
+                    fy = page_h * (1.0 - (sig_y + sig_h) / 100.0)
+
+                    label_h = max(9.0, min(fh * 0.24, 16.0)) if fh >= 20 else 0.0
+                    sig_h_area = fh - label_h
+                    sig_y_area = fy + label_h
+
+                    # Background + border
+                    c.setFillColorRGB(*DS_BLUE_LIGHT)
+                    c.setStrokeColorRGB(*DS_BLUE)
+                    c.setLineWidth(0.6)
+                    c.roundRect(fx, fy, fw, fh, radius=2, stroke=1, fill=1)
+                    if label_h:
+                        c.setLineWidth(1.0)
+                        c.line(fx + 2, fy + label_h, fx + fw - 2, fy + label_h)
+
+                    # Drawn / uploaded
+                    if sig_data.startswith('data:image'):
+                        try:
+                            _, b64 = sig_data.split(',', 1)
+                            raw = base64.b64decode(b64)
+                            img = Image.open(BytesIO(raw)).convert('RGBA')
+                            bg  = Image.new('RGBA', img.size, (255, 255, 255, 255))
+                            bg.paste(img, mask=img)
+                            bg  = bg.convert('RGB')
+                            ib  = BytesIO(); bg.save(ib, format='PNG'); ib.seek(0)
+                            pad = 5
+                            c.drawImage(ImageReader(ib),
+                                        fx + pad, sig_y_area + pad,
+                                        width=fw - pad*2, height=sig_h_area - pad*2,
+                                        preserveAspectRatio=True, anchor='c', mask='auto')
+                        except Exception:
+                            pass
+
+                    # Typed signature — render via PIL for cursive font
+                    elif sig_type == 'type':
+                        display_text = sig_data
+                        font_hint    = 'Dancing Script'
+                        if sig_data.startswith('font:') and '|' in sig_data:
+                            parts        = sig_data.split('|', 1)
+                            font_hint    = parts[0][5:]
+                            display_text = parts[1]
+                        img_buf = None
+                        try:
+                            img_buf = _typed_sig_to_image(display_text, fw, sig_h_area, font_name=font_hint)
+                        except Exception:
+                            pass
+                        if img_buf:
+                            pad = 4
+                            c.drawImage(ImageReader(img_buf),
+                                        fx + pad, sig_y_area + pad,
+                                        width=fw - pad*2, height=sig_h_area - pad*2,
+                                        preserveAspectRatio=True, anchor='c', mask='auto')
+                        else:
+                            fs = max(8.0, min(sig_h_area * 0.62, 30.0))
+                            c.setFont('Helvetica-BoldOblique', fs)
+                            c.setFillColorRGB(*DS_INK)
+                            c.drawString(fx + 6, sig_y_area + (sig_h_area - fs) * 0.4, display_text)
+
+                    # Label strip
+                    if label_h:
+                        lf = max(5.5, min(label_h * 0.50, 7.5))
+                        my = fy + (label_h - lf) * 0.45
+                        c.setFont('Helvetica-Bold', lf)
+                        c.setFillColorRGB(*DS_CHECK)
+                        c.drawString(fx + 3, my, '\u2713')
+                        c.setFont('Helvetica', lf)
+                        c.setFillColorRGB(*DS_LABEL)
+                        c.saveState()
+                        p = c.beginPath(); p.rect(fx + 3, fy, fw * 0.62, label_h)
+                        c.clipPath(p, stroke=0, fill=0)
+                        c.drawString(fx + 3 + lf, my, f' {request.user.full_name[:24]}')
+                        c.restoreState()
+                        c.setFont('Helvetica', lf)
+                        c.setFillColorRGB(*DS_LABEL)
+                        c.drawRightString(fx + fw - 4, my, signed_at[:11])
+
+                c.save()
+                overlay.seek(0)
+                page.merge_page(PdfReader(overlay).pages[0])
+                writer.add_page(page)
+
+            # ── Save signed copy ─────────────────────────────────────────
+            out = BytesIO()
+            writer.write(out)
+            signed_bytes = out.getvalue()
+
+            base_name = pdf.name[:-4] if pdf.name.lower().endswith('.pdf') else pdf.name
+            signed_name = output_name if output_name else f'{base_name}-signed.pdf'
+            if not signed_name.lower().endswith('.pdf'):
+                signed_name += '.pdf'
+
+            signed_file = SharedFile.objects.create(
+                name        = signed_name,
+                uploaded_by = request.user,
+                folder      = pdf.folder,
+                visibility  = pdf.visibility,
+                description = f'Quick-signed copy of "{pdf.name}" by {request.user.full_name}',
+                tags        = pdf.tags,
+                file_size   = len(signed_bytes),
+                file_type   = 'application/pdf',
+            )
+            signed_file.file.save(signed_name, ContentFile(signed_bytes), save=True)
+            try:
+                signed_file.file_hash = signed_file.compute_hash()
+                signed_file.save(update_fields=['file_hash'])
+            except Exception:
+                pass
+
+            messages.success(request, f'Signed copy saved as "{signed_name}".')
+            return redirect('file_manager')
+
+        except Exception as e:
+            messages.error(request, f'Signing failed: {e}')
+            return redirect('quick_sign')

@@ -1,0 +1,718 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Quick Sign PDF{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'file_manager' %}">Files</a> / Quick Sign PDF
+{% endblock %}
+
+{% block content %}
+<style>
+/* ── Layout ── */
+.qs-layout { display:grid; grid-template-columns:1fr 360px; gap:20px; align-items:start; }
+@media(max-width:900px){ .qs-layout{ grid-template-columns:1fr; } }
+
+/* ── PDF viewer + drag overlay ── */
+.qs-viewer-wrap {
+  position:relative;
+  background:var(--eo-bg);
+  border:1px solid var(--eo-border);
+  border-radius:12px;
+  overflow:hidden;
+  min-height:500px;
+}
+.qs-viewer-toolbar {
+  display:flex; align-items:center; gap:8px;
+  padding:10px 14px;
+  background:var(--eo-card);
+  border-bottom:1px solid var(--eo-border);
+  flex-wrap:wrap;
+}
+.qs-canvas-scroll {
+  overflow:auto;
+  display:flex; justify-content:center;
+  padding:20px;
+  min-height:460px;
+  background:var(--eo-bg);
+}
+#pdfCanvas { display:block; box-shadow:0 8px 30px rgba(0,0,0,.15); }
+
+/* ── Draggable signature field on the PDF ── */
+#sigOverlay {
+  position:absolute;
+  border:2px dashed #8b5cf6;
+  background:rgba(139,92,246,.12);
+  border-radius:4px;
+  cursor:move;
+  display:none;
+  user-select:none;
+  min-width:60px; min-height:24px;
+  box-sizing:border-box;
+}
+#sigOverlay.placed {
+  border-style:solid;
+  border-color:#8b5cf6;
+  background:rgba(139,92,246,.08);
+}
+#sigOverlay .qs-sig-preview {
+  width:100%; height:100%;
+  display:flex; align-items:center; justify-content:center;
+  overflow:hidden; padding:4px;
+}
+#sigOverlay .qs-resize-handle {
+  position:absolute; bottom:2px; right:2px;
+  width:10px; height:10px;
+  cursor:se-resize;
+  border-right:2px solid #8b5cf6;
+  border-bottom:2px solid #8b5cf6;
+  border-radius:0 0 2px 0;
+}
+.qs-overlay-hint {
+  position:absolute; bottom:10px; left:50%;
+  transform:translateX(-50%);
+  font-size:12px; color:var(--eo-text-muted);
+  background:var(--eo-card);
+  border:1px solid var(--eo-border);
+  border-radius:6px; padding:5px 12px;
+  pointer-events:none; white-space:nowrap;
+}
+
+/* ── Right panel ── */
+.qs-panel { display:flex; flex-direction:column; gap:16px; }
+
+/* ── File selector ── */
+.qs-file-item {
+  display:flex; align-items:center; gap:10px;
+  padding:10px 12px; border-radius:9px;
+  border:1.5px solid var(--eo-border);
+  cursor:pointer; transition:border-color .14s;
+}
+.qs-file-item:hover { border-color:var(--eo-primary)50; }
+.qs-file-item.selected { border-color:#8b5cf6; background:rgba(139,92,246,.06); }
+
+/* ── Signature tabs ── */
+.qs-sig-tabs { display:flex; gap:0; border:1px solid var(--eo-border); border-radius:8px; overflow:hidden; margin-bottom:10px; }
+.qs-sig-tab  { flex:1; padding:8px; font-size:.78rem; font-weight:600; background:var(--eo-bg); border:none; color:var(--eo-text-muted); cursor:pointer; transition:all .14s; text-align:center; }
+.qs-sig-tab.active { background:#8b5cf6; color:#fff; }
+
+#qsCanvas { border:2px solid var(--eo-border); border-radius:8px; width:100%; height:120px; cursor:crosshair; display:block; touch-action:none; background:#fff; }
+#qsCanvas.has-sig { border-color:#10b981; }
+
+.qs-font-btn { padding:4px 10px; border-radius:6px; border:1.5px solid var(--eo-border); background:var(--eo-bg); cursor:pointer; font-size:1rem; color:var(--eo-text); transition:border-color .12s; }
+.qs-font-btn.active { border-color:#8b5cf6; }
+</style>
+
+<link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600;700&family=Caveat:wght@600&family=Great+Vibes&family=Pacifico&display=swap" rel="stylesheet"/>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title"><i class="bi bi-pen-fill" style="color:#8b5cf6"></i> Quick Sign PDF</h1>
+    <p class="eo-page-subtitle">Sign any of your PDF files directly — no workflow, no other signers needed</p>
+  </div>
+  <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-secondary">
+    <i class="bi bi-arrow-left"></i> File Manager
+  </a>
+</div>
+
+{% if messages %}
+  {% for msg in messages %}
+  <div style="padding:12px 16px;border-radius:10px;margin-bottom:14px;border:1px solid var(--eo-border);background:var(--eo-card);font-size:14px">
+    <i class="bi bi-{% if 'success' in msg.tags %}check-circle-fill text-success{% else %}exclamation-circle-fill text-danger{% endif %} me-2"></i>{{ msg }}
+  </div>
+  {% endfor %}
+{% endif %}
+
+{% if not root_pdfs and not folders %}
+<div class="eo-card" style="text-align:center;padding:60px 24px">
+  <i class="bi bi-file-earmark-pdf" style="font-size:3.5rem;color:var(--eo-text-muted);opacity:.25;display:block;margin-bottom:16px"></i>
+  <h3 style="color:var(--eo-text-muted);margin-bottom:8px">No PDF files found</h3>
+  <p style="font-size:.88rem;color:var(--eo-text-muted);margin-bottom:20px">Upload a PDF to your file manager to sign it here.</p>
+  <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-primary"><i class="bi bi-cloud-upload"></i> Go to File Manager</a>
+</div>
+{% else %}
+
+<div class="qs-layout">
+
+  <!-- ── LEFT: PDF viewer ── -->
+  <div>
+    <div class="qs-viewer-wrap">
+      <div class="qs-viewer-toolbar">
+        <button class="eo-btn eo-btn-secondary eo-btn-sm" onclick="prevPage()"><i class="bi bi-chevron-left"></i></button>
+        <span style="font-size:.82rem;color:var(--eo-text-muted)">
+          Page <strong id="pageNum" style="color:var(--eo-text)">—</strong> / <strong id="pageTotal" style="color:var(--eo-text)">—</strong>
+        </span>
+        <button class="eo-btn eo-btn-secondary eo-btn-sm" onclick="nextPage()"><i class="bi bi-chevron-right"></i></button>
+        <span style="margin-left:auto;font-size:.75rem;color:var(--eo-text-muted)" id="fileNameLabel">Select a PDF →</span>
+        <button class="eo-btn eo-btn-secondary eo-btn-sm" id="placeBtn" disabled onclick="enablePlacing()">
+          <i class="bi bi-cursor-fill"></i> Place Signature
+        </button>
+      </div>
+
+      <div class="qs-canvas-scroll" id="canvasScroll" style="position:relative">
+        <div style="position:relative;display:inline-block" id="pdfWrap">
+          <canvas id="pdfCanvas"></canvas>
+          <!-- Draggable signature overlay -->
+          <div id="sigOverlay">
+            <div class="qs-sig-preview" id="sigPreview">
+              <span style="font-size:.7rem;color:#8b5cf6;font-weight:600">Drag to position</span>
+            </div>
+            <div class="qs-resize-handle" id="resizeHandle"></div>
+          </div>
+        </div>
+        <div class="qs-overlay-hint" id="overlayHint" style="display:none">
+          Click anywhere on the page to place your signature
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RIGHT: Controls ── -->
+  <div class="qs-panel">
+
+    <!-- 1a. Folders -->
+    {% if folders %}
+    <div class="eo-card" style="padding-bottom:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <h3 class="eo-card-title" style="margin:0">1a · Folders</h3>
+        <span style="font-size:.72rem;color:var(--eo-text-muted);background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px;padding:2px 9px">{{ folders|length }} folder{{ folders|length|pluralize }}</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px;max-height:180px;overflow-y:auto;margin:0 -16px;padding:0 16px 12px">
+        {% for group in folders %}
+        <div class="qs-folder-group" data-folder-id="{{ group.folder.id }}">
+
+          <!-- Folder header -->
+          <div class="qs-folder-row" onclick="toggleFolder(this)"
+               style="display:flex;align-items:center;gap:9px;padding:9px 8px;
+                      cursor:pointer;border-radius:9px;border:1px solid transparent;
+                      transition:background .1s,border-color .1s;user-select:none"
+               onmouseover="this.style.background='var(--eo-bg)';this.style.borderColor='var(--eo-border)'"
+               onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span class="qs-folder-caret" style="font-size:.62rem;color:var(--eo-text-muted);width:10px;flex-shrink:0;transition:transform .15s">▶</span>
+            <i class="bi bi-folder-fill" style="color:{{ group.folder.color }};font-size:1.1rem;flex-shrink:0"></i>
+            <span style="font-size:.85rem;font-weight:600;color:var(--eo-text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ group.folder.name }}</span>
+            <span style="font-size:.68rem;font-weight:600;color:var(--eo-text-muted);background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px;padding:1px 8px;flex-shrink:0">
+              {{ group.pdfs|length }} PDF{{ group.pdfs|length|pluralize }}
+            </span>
+          </div>
+
+          <!-- Files inside folder (collapsed by default) -->
+          <div class="qs-folder-files" style="display:none;margin-left:28px;margin-top:3px;margin-bottom:3px;
+               border-left:2px solid var(--eo-border);padding-left:10px">
+            {% for f in group.pdfs %}
+            <div class="qs-file-item {% if selected and selected.pk == f.pk %}selected{% endif %}"
+                 data-id="{{ f.id }}"
+                 data-name="{{ f.name|escapejs }}"
+                 data-url="{% url 'file_download' f.id %}"
+                 data-search="{{ f.name|lower|escapejs }} {{ group.folder.name|lower|escapejs }}"
+                 style="margin-bottom:4px;padding:8px 10px"
+                 onclick="selectFile(this)">
+              <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444;font-size:1.1rem;flex-shrink:0"></i>
+              <div style="min-width:0">
+                <div style="font-size:.81rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.name }}</div>
+                <div style="font-size:.69rem;color:var(--eo-text-muted)">{{ f.file_size|filesizeformat }}</div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- 1b. Files (root-level PDFs + search) -->
+    <div class="eo-card" style="padding-bottom:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <h3 class="eo-card-title" style="margin:0">{% if folders %}1b{% else %}1{% endif %} · PDFs</h3>
+        {% if root_pdfs %}
+        <span style="font-size:.72rem;color:var(--eo-text-muted);background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px;padding:2px 9px">{{ root_pdfs|length }} file{{ root_pdfs|length|pluralize }}</span>
+        {% endif %}
+      </div>
+
+      <!-- Search bar -->
+      <div style="position:relative;margin-bottom:10px">
+        <i class="bi bi-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.8rem;pointer-events:none"></i>
+        <input type="text" id="fileSearch" placeholder="Search PDFs…"
+               oninput="filterFiles(this.value)"
+               style="width:100%;padding:7px 10px 7px 32px;border:1px solid var(--eo-border);
+                      border-radius:8px;background:var(--eo-bg);color:var(--eo-text);
+                      font-size:.83rem;outline:none;transition:border-color .15s"
+               onfocus="this.style.borderColor='#8b5cf6'" onblur="this.style.borderColor='var(--eo-border)'"/>
+      </div>
+
+      <!-- Root file list -->
+      <div id="rootGroup" style="max-height:200px;overflow-y:auto;margin:0 -16px;padding:0 16px 12px;display:flex;flex-direction:column;gap:4px">
+        {% for f in root_pdfs %}
+        <div class="qs-file-item {% if selected and selected.pk == f.pk %}selected{% endif %}"
+             data-id="{{ f.id }}"
+             data-name="{{ f.name|escapejs }}"
+             data-url="{% url 'file_download' f.id %}"
+             data-search="{{ f.name|lower|escapejs }}"
+             onclick="selectFile(this)">
+          <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444;font-size:1.3rem;flex-shrink:0"></i>
+          <div style="min-width:0">
+            <div style="font-size:.83rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.name }}</div>
+            <div style="font-size:.7rem;color:var(--eo-text-muted)">{{ f.file_size|filesizeformat }}</div>
+          </div>
+        </div>
+        {% empty %}
+        <div id="noRootFiles" style="font-size:.78rem;color:var(--eo-text-muted);padding:6px 0;text-align:center">
+          {% if folders %}No PDFs outside folders{% else %}No PDF files found — upload some to get started.{% endif %}
+        </div>
+        {% endfor %}
+
+        <!-- No-search-results row -->
+        <div id="noResults" style="display:none;text-align:center;padding:12px 8px;font-size:.82rem;color:var(--eo-text-muted)">
+          <i class="bi bi-search me-1"></i> No PDFs match "{{ '<span id=searchTerm></span>'|safe }}"
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Draw / Type / Upload signature -->
+    <div class="eo-card">
+      <h3 class="eo-card-title mb-3">2 · Your Signature</h3>
+
+      <div class="qs-sig-tabs">
+        <button class="qs-sig-tab active" onclick="setTab('draw', this)"><i class="bi bi-pen me-1"></i>Draw</button>
+        <button class="qs-sig-tab" onclick="setTab('type', this)"><i class="bi bi-type me-1"></i>Type</button>
+        <button class="qs-sig-tab" onclick="setTab('upload', this)"><i class="bi bi-upload me-1"></i>Upload</button>
+      </div>
+
+      <!-- Draw -->
+      <div id="tabDraw">
+        <canvas id="qsCanvas" width="320" height="120"></canvas>
+        <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:.72rem">
+          <span style="color:var(--eo-text-muted)">Draw your signature above</span>
+          <button type="button" onclick="clearSigCanvas()" style="background:none;border:none;cursor:pointer;color:var(--eo-text-muted);font-size:.72rem;font-weight:600">
+            <i class="bi bi-arrow-counterclockwise"></i> Clear
+          </button>
+        </div>
+      </div>
+
+      <!-- Type -->
+      <div id="tabType" style="display:none">
+        <div style="display:flex;gap:5px;margin-bottom:7px;flex-wrap:wrap">
+          <button class="qs-font-btn active" data-font="'Dancing Script', cursive" onclick="setFont(this)">Script</button>
+          <button class="qs-font-btn" data-font="'Caveat', cursive" onclick="setFont(this)">Casual</button>
+          <button class="qs-font-btn" data-font="'Great Vibes', cursive" onclick="setFont(this)">Elegant</button>
+          <button class="qs-font-btn" data-font="'Pacifico', cursive" onclick="setFont(this)">Pacifico</button>
+        </div>
+        <input type="hidden" id="fontChoice" value="'Dancing Script', cursive"/>
+        <input type="text" id="typedSig" placeholder="Type your name"
+               style="width:100%;padding:12px;border:2px solid var(--eo-border);border-radius:8px;
+                      font-size:1.6rem;font-family:'Dancing Script',cursive;text-align:center;
+                      outline:none;color:var(--eo-text);background:var(--eo-bg)"
+               oninput="onTypedInput()"/>
+      </div>
+
+      <!-- Upload -->
+      <div id="tabUpload" style="display:none">
+        <label style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                      padding:24px;border:2px dashed var(--eo-border);border-radius:8px;cursor:pointer;
+                      transition:border-color .14s;background:var(--eo-bg)"
+               onmouseover="this.style.borderColor='#8b5cf6'" onmouseout="this.style.borderColor='var(--eo-border)'">
+          <i class="bi bi-cloud-upload" style="font-size:1.6rem;color:var(--eo-text-muted);margin-bottom:6px"></i>
+          <span style="font-size:.82rem;color:var(--eo-text-muted)">Click to upload signature image</span>
+          <input type="file" id="uploadInput" accept="image/png,image/jpeg" style="display:none" onchange="handleUpload(this)"/>
+        </label>
+        <canvas id="uploadPreview" style="display:none;width:100%;max-height:80px;margin-top:8px;border-radius:6px;background:#fff"></canvas>
+      </div>
+    </div>
+
+    <!-- 3. Place & Sign -->
+    <div class="eo-card">
+      <h3 class="eo-card-title mb-3">3 · Place &amp; Sign</h3>
+      <p style="font-size:.82rem;color:var(--eo-text-muted);margin-bottom:12px">
+        Click <strong>Place Signature</strong>, then click where you want it on the PDF.
+        Drag and resize to adjust, then click <strong>Sign &amp; Save</strong>.
+      </p>
+
+      <div class="eo-form-group mb-3">
+        <label class="eo-form-label">Output filename</label>
+        <input type="text" id="outputName" class="eo-form-control" placeholder="document-signed.pdf"/>
+      </div>
+
+      <!-- Hidden form that submits all values -->
+      <form method="post" id="signForm" action="{% url 'quick_sign' %}">
+        {% csrf_token %}
+        <input type="hidden" name="file_id"        id="hFileId"/>
+        <input type="hidden" name="signature_data"  id="hSigData"/>
+        <input type="hidden" name="signature_type"  id="hSigType" value="draw"/>
+        <input type="hidden" name="sig_page"        id="hSigPage" value="1"/>
+        <input type="hidden" name="sig_x"           id="hSigX"    value="10"/>
+        <input type="hidden" name="sig_y"           id="hSigY"    value="80"/>
+        <input type="hidden" name="sig_w"           id="hSigW"    value="35"/>
+        <input type="hidden" name="sig_h"           id="hSigH"    value="12"/>
+        <input type="hidden" name="output_name"     id="hOutName"/>
+
+        <button type="button" class="eo-btn eo-btn-primary w-100" id="signBtn" onclick="submitSign()" style="font-size:.95rem;padding:12px" disabled>
+          <i class="bi bi-pen-fill"></i> Sign &amp; Save
+        </button>
+      </form>
+      <div style="margin-top:10px;font-size:.75rem;color:var(--eo-text-muted);line-height:1.6">
+        <i class="bi bi-info-circle me-1"></i>
+        The original file is not modified. A new signed copy is saved to your file manager.
+      </div>
+    </div>
+
+  </div>
+</div>
+
+{% endif %}
+
+<!-- PDF.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+'use strict';
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// ── State ─────────────────────────────────────────────────────────────────────
+var pdfDoc = null, currentPage = 1, totalPages = 1;
+var currentTab = 'draw', hasSig = false, uploadedData = '';
+var selectedFileId = '', selectedFileUrl = '';
+var placing = false;   // true while user is in "click to place" mode
+var sigPlaced = false; // true once the overlay has been placed
+
+var canvas    = document.getElementById('pdfCanvas');
+var ctx       = canvas.getContext('2d');
+var sigCanvas = document.getElementById('qsCanvas');
+var sigCtx    = sigCanvas.getContext('2d');
+var overlay   = document.getElementById('sigOverlay');
+var pdfWrap   = document.getElementById('pdfWrap');
+
+// ── PDF rendering ─────────────────────────────────────────────────────────────
+function loadPDF(url, name) {
+  document.getElementById('fileNameLabel').textContent = name;
+  document.getElementById('pageNum').textContent   = '…';
+  document.getElementById('pageTotal').textContent = '…';
+  sigPlaced = false; placing = false;
+  overlay.style.display = 'none';
+  document.getElementById('hSigPage').value = '1';
+
+  pdfjsLib.getDocument(url).promise.then(function(doc) {
+    pdfDoc = doc; totalPages = doc.numPages; currentPage = 1;
+    document.getElementById('pageTotal').textContent = totalPages;
+    renderPage(1);
+    document.getElementById('placeBtn').disabled = false;
+    updateSignBtn();
+  }).catch(function() {
+    document.getElementById('fileNameLabel').textContent = 'Failed to load PDF';
+  });
+}
+
+function renderPage(n) {
+  if (!pdfDoc) return;
+  pdfDoc.getPage(n).then(function(page) {
+    var vp = page.getViewport({ scale: 1.3 });
+    canvas.width  = vp.width;
+    canvas.height = vp.height;
+    page.render({ canvasContext: ctx, viewport: vp }).promise.then(function() {
+      document.getElementById('pageNum').textContent = n;
+      // Restore overlay on this page if already placed
+      if (sigPlaced && parseInt(document.getElementById('hSigPage').value) === n) {
+        overlay.style.display = 'block';
+      } else if (sigPlaced) {
+        overlay.style.display = 'none';
+      }
+    });
+  });
+}
+function prevPage() { if (currentPage > 1) { currentPage--; renderPage(currentPage); } }
+function nextPage() { if (currentPage < totalPages) { currentPage++; renderPage(currentPage); } }
+
+// ── File selection ────────────────────────────────────────────────────────────
+function selectFile(el) {
+  document.querySelectorAll('.qs-file-item').forEach(function(e){ e.classList.remove('selected'); });
+  el.classList.add('selected');
+  selectedFileId  = el.dataset.id;
+  selectedFileUrl = el.dataset.url;
+  document.getElementById('hFileId').value = selectedFileId;
+
+  var name = el.dataset.name;
+  var base = name.endsWith('.pdf') ? name.slice(0,-4) : name;
+  document.getElementById('outputName').value = base + '-signed.pdf';
+
+  loadPDF(selectedFileUrl, name);
+}
+
+{% if selected %}
+// Pre-select the file passed from the file manager
+window.addEventListener('load', function() {
+  var el = document.querySelector('[data-id="{{ selected.pk }}"]');
+  if (el) {
+    // If the file is inside a folder, open that folder first
+    var group = el.closest('.qs-folder-group');
+    if (group) {
+      var row = group.querySelector('.qs-folder-row');
+      if (row) toggleFolder(row);
+    }
+    selectFile(el);
+  }
+});
+{% endif %}
+
+// ── File search (root PDFs card only) ────────────────────────────────────────
+function filterFiles(q) {
+  q = q.trim();
+  var ql = q.toLowerCase();
+
+  var term = document.getElementById('searchTerm');
+  if (term) term.textContent = q;
+
+  var anyVisible = false;
+  document.querySelectorAll('#rootGroup .qs-file-item').forEach(function(el) {
+    var match = !ql || (el.dataset.search || '').includes(ql);
+    el.style.display = match ? '' : 'none';
+    if (match) anyVisible = true;
+  });
+
+  // Also search inside folder cards and auto-expand matching folders
+  document.querySelectorAll('.qs-folder-group').forEach(function(group) {
+    var items     = group.querySelectorAll('.qs-file-item');
+    var filesWrap = group.querySelector('.qs-folder-files');
+    var caret     = group.querySelector('.qs-folder-caret');
+    var anyMatch  = false;
+
+    items.forEach(function(el) {
+      var match = !ql || (el.dataset.search || '').includes(ql);
+      el.style.display = match ? '' : 'none';
+      if (match) anyMatch = true;
+    });
+
+    if (ql && anyMatch) {
+      filesWrap.style.display = '';
+      if (caret) caret.style.transform = 'rotate(90deg)';
+    } else if (!ql) {
+      filesWrap.style.display = 'none';
+      if (caret) caret.style.transform = '';
+    }
+    group.style.display = (ql && !anyMatch) ? 'none' : '';
+    if (anyMatch) anyVisible = true;
+  });
+
+  var noRoot = document.getElementById('noRootFiles');
+  if (noRoot) noRoot.style.display = (ql && !anyVisible) ? '' : 'none';
+
+  document.getElementById('noResults').style.display = (!anyVisible && ql) ? '' : 'none';
+}
+
+// ── Folder toggle ─────────────────────────────────────────────────────────────
+function toggleFolder(row) {
+  var group     = row.closest('.qs-folder-group');
+  var filesWrap = group.querySelector('.qs-folder-files');
+  var caret     = row.querySelector('.qs-folder-caret');
+  var open      = filesWrap.style.display !== 'none';
+  filesWrap.style.display = open ? 'none' : '';
+  if (caret) caret.style.transform = open ? '' : 'rotate(90deg)';
+}
+
+// ── Signature draw canvas ─────────────────────────────────────────────────────
+var drawing = false;
+(function initSigCanvas() {
+  var r = window.devicePixelRatio || 1;
+  var w = sigCanvas.offsetWidth || 320, h = 120;
+  sigCanvas.width  = w * r; sigCanvas.height = h * r;
+  sigCanvas.style.width = w+'px'; sigCanvas.style.height = h+'px';
+  sigCtx.scale(r, r);
+  sigCtx.lineWidth = 2.5; sigCtx.lineCap = 'round'; sigCtx.strokeStyle = '#1e293b';
+})();
+
+function getPos(e) {
+  var r = sigCanvas.getBoundingClientRect();
+  var s = e.touches ? e.touches[0] : e;
+  return { x: s.clientX - r.left, y: s.clientY - r.top };
+}
+sigCanvas.addEventListener('mousedown',  function(e){ drawing=true; var p=getPos(e); sigCtx.beginPath(); sigCtx.moveTo(p.x,p.y); });
+sigCanvas.addEventListener('mousemove',  function(e){ if(!drawing) return; var p=getPos(e); sigCtx.lineTo(p.x,p.y); sigCtx.stroke(); hasSig=true; sigCanvas.classList.add('has-sig'); updatePreview(); });
+sigCanvas.addEventListener('mouseup',    function(){ drawing=false; });
+sigCanvas.addEventListener('mouseleave', function(){ drawing=false; });
+sigCanvas.addEventListener('touchstart', function(e){ e.preventDefault(); drawing=true; var p=getPos(e); sigCtx.beginPath(); sigCtx.moveTo(p.x,p.y); },{passive:false});
+sigCanvas.addEventListener('touchmove',  function(e){ e.preventDefault(); if(!drawing) return; var p=getPos(e); sigCtx.lineTo(p.x,p.y); sigCtx.stroke(); hasSig=true; updatePreview(); },{passive:false});
+sigCanvas.addEventListener('touchend',   function(){ drawing=false; });
+
+function clearSigCanvas() {
+  sigCtx.clearRect(0, 0, sigCanvas.width, sigCanvas.height);
+  hasSig = false; sigCanvas.classList.remove('has-sig');
+  updatePreview(); updateSignBtn();
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+function setTab(t, btn) {
+  currentTab = t;
+  ['draw','type','upload'].forEach(function(tab) {
+    document.getElementById('tab'+tab.charAt(0).toUpperCase()+tab.slice(1)).style.display = tab===t?'':'none';
+  });
+  document.querySelectorAll('.qs-sig-tab').forEach(function(b){ b.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
+  updatePreview(); updateSignBtn();
+}
+
+// ── Font chooser ─────────────────────────────────────────────────────────────
+function setFont(btn) {
+  document.querySelectorAll('.qs-font-btn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  document.getElementById('fontChoice').value = btn.dataset.font;
+  document.getElementById('typedSig').style.fontFamily = btn.dataset.font;
+  updatePreview();
+}
+
+function onTypedInput() { updatePreview(); updateSignBtn(); }
+
+// ── Upload ────────────────────────────────────────────────────────────────────
+function handleUpload(input) {
+  var file = input.files[0]; if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    uploadedData = e.target.result;
+    var prev = document.getElementById('uploadPreview');
+    var img  = new Image();
+    img.onload = function() {
+      prev.style.display = 'block';
+      prev.width  = img.width; prev.height = img.height;
+      prev.getContext('2d').drawImage(img, 0, 0);
+    };
+    img.src = uploadedData;
+    updatePreview(); updateSignBtn();
+  };
+  reader.readAsDataURL(file);
+}
+
+// ── Live overlay preview ──────────────────────────────────────────────────────
+function updatePreview() {
+  var preview = document.getElementById('sigPreview');
+  if (currentTab === 'draw' && hasSig) {
+    var dataUrl = sigCanvas.toDataURL('image/png');
+    preview.innerHTML = '<img src="'+dataUrl+'" style="max-width:100%;max-height:100%;object-fit:contain"/>';
+  } else if (currentTab === 'type') {
+    var txt  = document.getElementById('typedSig').value.trim();
+    var font = document.getElementById('fontChoice').value || "'Dancing Script',cursive";
+    if (txt) {
+      preview.innerHTML = '<span style="font-family:'+font+';font-size:1.2rem;color:#1045C5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:95%">'+escHtml(txt)+'</span>';
+    } else {
+      preview.innerHTML = '<span style="font-size:.7rem;color:#8b5cf6;font-weight:600">Type your name →</span>';
+    }
+  } else if (currentTab === 'upload' && uploadedData) {
+    preview.innerHTML = '<img src="'+uploadedData+'" style="max-width:100%;max-height:100%;object-fit:contain"/>';
+  } else {
+    preview.innerHTML = '<span style="font-size:.7rem;color:#8b5cf6;font-weight:600">Drag to position</span>';
+  }
+}
+
+function updateSignBtn() {
+  var ready = false;
+  if (currentTab === 'draw')   ready = hasSig;
+  if (currentTab === 'type')   ready = document.getElementById('typedSig').value.trim().length > 0;
+  if (currentTab === 'upload') ready = uploadedData.length > 0;
+  document.getElementById('signBtn').disabled = !(ready && selectedFileId && sigPlaced);
+}
+
+// ── Place signature mode ──────────────────────────────────────────────────────
+function enablePlacing() {
+  placing = true;
+  document.getElementById('overlayHint').style.display = '';
+  pdfWrap.style.cursor = 'crosshair';
+}
+
+pdfWrap.addEventListener('click', function(e) {
+  if (!placing) return;
+  placing = false;
+  pdfWrap.style.cursor = '';
+  document.getElementById('overlayHint').style.display = 'none';
+
+  var rect = pdfWrap.getBoundingClientRect();
+  var x = e.clientX - rect.left;
+  var y = e.clientY - rect.top;
+
+  // Default size: 35% wide, 12% tall
+  var ow = canvas.offsetWidth  * 0.35;
+  var oh = canvas.offsetHeight * 0.12;
+
+  overlay.style.left   = x + 'px';
+  overlay.style.top    = y + 'px';
+  overlay.style.width  = ow + 'px';
+  overlay.style.height = oh + 'px';
+  overlay.style.display = 'block';
+  overlay.classList.add('placed');
+  sigPlaced = true;
+
+  document.getElementById('hSigPage').value = currentPage;
+  updateHiddenCoords();
+  updateSignBtn();
+});
+
+// ── Drag to reposition ───────────────────────────────────────────────────────
+var dragging = false, dragOffX = 0, dragOffY = 0;
+overlay.addEventListener('mousedown', function(e) {
+  if (e.target.id === 'resizeHandle') return;
+  dragging = true;
+  dragOffX = e.clientX - overlay.getBoundingClientRect().left;
+  dragOffY = e.clientY - overlay.getBoundingClientRect().top;
+  e.preventDefault();
+});
+document.addEventListener('mousemove', function(e) {
+  if (!dragging) return;
+  var rect = pdfWrap.getBoundingClientRect();
+  overlay.style.left = Math.max(0, e.clientX - rect.left - dragOffX) + 'px';
+  overlay.style.top  = Math.max(0, e.clientY - rect.top  - dragOffY) + 'px';
+  updateHiddenCoords();
+});
+document.addEventListener('mouseup', function() { dragging = false; });
+
+// ── Resize handle ─────────────────────────────────────────────────────────────
+var resizing = false, resizeStartX = 0, resizeStartY = 0, resizeStartW = 0, resizeStartH = 0;
+document.getElementById('resizeHandle').addEventListener('mousedown', function(e) {
+  resizing = true;
+  resizeStartX = e.clientX; resizeStartY = e.clientY;
+  resizeStartW = overlay.offsetWidth; resizeStartH = overlay.offsetHeight;
+  e.preventDefault(); e.stopPropagation();
+});
+document.addEventListener('mousemove', function(e) {
+  if (!resizing) return;
+  var newW = Math.max(60, resizeStartW + (e.clientX - resizeStartX));
+  var newH = Math.max(24, resizeStartH + (e.clientY - resizeStartY));
+  overlay.style.width  = newW + 'px';
+  overlay.style.height = newH + 'px';
+  updateHiddenCoords();
+});
+document.addEventListener('mouseup', function() { resizing = false; });
+
+function updateHiddenCoords() {
+  var cw = canvas.offsetWidth, ch = canvas.offsetHeight;
+  var ox = parseFloat(overlay.style.left) || 0;
+  var oy = parseFloat(overlay.style.top)  || 0;
+  var ow = overlay.offsetWidth, oh = overlay.offsetHeight;
+  document.getElementById('hSigX').value = (ox / cw * 100).toFixed(2);
+  document.getElementById('hSigY').value = (oy / ch * 100).toFixed(2);
+  document.getElementById('hSigW').value = (ow / cw * 100).toFixed(2);
+  document.getElementById('hSigH').value = (oh / ch * 100).toFixed(2);
+}
+
+// ── Submit ────────────────────────────────────────────────────────────────────
+function submitSign() {
+  var data = '', type = currentTab;
+
+  if (type === 'draw') {
+    if (!hasSig) { alert('Please draw your signature.'); return; }
+    data = sigCanvas.toDataURL('image/png');
+  } else if (type === 'type') {
+    var raw  = document.getElementById('typedSig').value.trim();
+    if (!raw)  { alert('Please type your name.'); return; }
+    var font = document.getElementById('fontChoice').value.replace(/'/g,'').replace(/"/g,'').split(',')[0].trim();
+    data = 'font:' + font + '|' + raw;
+  } else {
+    data = uploadedData;
+    if (!data) { alert('Please upload a signature image.'); return; }
+  }
+
+  if (!sigPlaced) { alert('Please place your signature on the document first.'); return; }
+  updateHiddenCoords();
+
+  document.getElementById('hSigData').value  = data;
+  document.getElementById('hSigType').value  = type;
+  document.getElementById('hOutName').value  = document.getElementById('outputName').value.trim();
+  document.getElementById('signForm').submit();
+}
+
+function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+</script>
+{% endblock %}

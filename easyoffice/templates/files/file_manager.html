@@ -25,7 +25,8 @@
   background: var(--eo-bg);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;          /* whole sidebar scrolls as one unit */
+  overflow-x: hidden;
 }
 .fm-sidebar-section { padding: 10px 10px 4px; }
 .fm-sidebar-label {
@@ -61,7 +62,7 @@
   color: var(--eo-text-muted);
 }
 .fm-nav-item.active .fm-nav-badge { background: var(--eo-accent)20; border-color: var(--eo-accent)40; color: var(--eo-accent); }
-.fm-folders-list { flex: 1; overflow-y: auto; padding: 4px 10px 12px; }
+.fm-folders-list { flex-shrink: 0; padding: 4px 10px 12px; } /* no longer flex:1 or overflow-y:auto — parent scrolls */
 .fm-folder-nav-item {
   display: flex;
   align-items: center;
@@ -200,10 +201,16 @@
   display: flex;
   gap: 3px;
 }
+/* Mouse devices: show on hover */
 .fm-folder-card:hover .fm-card-actions,
 .fm-file-card:hover .fm-card-actions { opacity: 1; }
+/* Touch devices: always visible */
+@media (hover: none) { .fm-card-actions { opacity: 1; } }
+/* Laptops (trackpad): always visible */
+@media (max-width: 1100px) { .fm-card-actions { opacity: 1; } }
+
 .fm-action-btn {
-  width: 26px; height: 26px;
+  width: 28px; height: 28px;
   border-radius: 6px;
   border: 1px solid var(--eo-border);
   background: var(--eo-surface);
@@ -212,9 +219,21 @@
   color: var(--eo-text-muted);
   cursor: pointer;
   transition: background .1s, color .1s;
+  text-decoration: none;
 }
 .fm-action-btn:hover { background: var(--eo-accent); color: #fff; border-color: var(--eo-accent); }
 .fm-action-btn.danger:hover { background: var(--eo-danger); border-color: var(--eo-danger); }
+
+/* ── List view — always scrolls sideways, never hides columns ── */
+#viewList .eo-card {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;   /* smooth momentum scroll on iOS */
+}
+#viewList table {
+  min-width: 780px;   /* wide enough for all columns + full action bar */
+}
+#viewList th, #viewList td { white-space: nowrap; }   /* prevent text wrapping that wastes height */
+
 .fm-vis-badge {
   position: absolute;
   top: 6px; left: 6px;
@@ -230,6 +249,41 @@
 .vis-unit     { background: #d1fae5; color: #065f46; }
 .vis-department { background: #fef3c7; color: #92400e; }
 .vis-shared_with { background: #ede9fe; color: #5b21b6; }
+
+/* ── Mobile responsive ── */
+@media (max-width: 768px) {
+  .fm-layout { height: auto; min-height: 0; flex-direction: column; }
+
+  /* Sidebar slides open/closed via toggle button */
+  .fm-sidebar {
+    width: 100%;
+    max-height: 0;
+    overflow: hidden;
+    border-right: none;
+    border-bottom: 1px solid var(--eo-border);
+    transition: max-height .25s ease;
+  }
+  .fm-sidebar.mob-open { max-height: 70vh; overflow-y: auto; }
+
+  .fm-main { min-height: 60vh; }
+
+  /* Bigger touch targets */
+  .fm-action-btn { width: 34px; height: 34px; font-size: .85rem; }
+
+  /* Move action row to bottom of card so it doesn't cover the icon/name */
+  .fm-card-actions {
+    top: auto; bottom: 6px;
+    left: 6px; right: 6px;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+  .fm-file-card, .fm-folder-card { padding-bottom: 40px; }
+  .fm-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+
+  .fm-toolbar { gap: 8px; }
+  .fm-search { max-width: 100%; }
+  .fm-breadcrumb { font-size: .74rem; }
+}
 
 /* ── List view ── */
 .fm-list { display: flex; flex-direction: column; gap: 0; }
@@ -520,6 +574,11 @@
 
     <!-- Toolbar -->
     <div class="fm-toolbar">
+      <!-- Mobile sidebar toggle (hidden on desktop, shown via JS on mobile) -->
+      <button class="view-toggle-btn" id="sidebarToggle" title="Toggle navigation"
+              style="display:none" onclick="toggleMobileSidebar()">
+        <i class="bi bi-layout-sidebar"></i>
+      </button>
       <!-- Search -->
       <form method="get" class="fm-search">
         {% if filter_mode %}<input type="hidden" name="filter" value="{{ filter_mode }}"/>{% endif %}
@@ -742,18 +801,18 @@
 
       <!-- ─── LIST VIEW ─── -->
       <div id="viewList" style="display:none">
-        <div class="eo-card" style="padding:0;overflow:hidden">
-          <table class="eo-table" style="margin:0">
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--eo-border);border-radius:var(--eo-radius);background:var(--eo-surface)">
+          <table class="eo-table" style="margin:0;min-width:780px;white-space:nowrap">
             <thead>
               <tr>
-                <th style="padding-left:14px">Name</th>
-                <th>Uploader</th>
-                <th>Folder</th>
-                <th>Size</th>
-                <th>Visibility</th>
-                <th>Uploaded</th>
-                <th>Downloads</th>
-                <th></th>
+                <th style="padding-left:14px;min-width:200px;white-space:normal">Name</th>
+                <th style="min-width:120px">Uploader</th>
+                <th style="min-width:100px">Folder</th>
+                <th style="min-width:80px">Size</th>
+                <th style="min-width:100px">Visibility</th>
+                <th style="min-width:110px">Uploaded</th>
+                <th style="min-width:90px">Downloads</th>
+                <th style="min-width:220px"></th>
               </tr>
             </thead>
             <tbody>
@@ -1562,13 +1621,58 @@ function openPreviewModal(fileId, fileName, extension) {
   const ext = (extension || '').toLowerCase();
   const previewUrl = `/files/${fileId}/preview/`;
 
-  if (['pdf'].includes(ext)) {
+  // ── PDF: serve inline ─────────────────────────────────────────────────────
+  if (ext === 'pdf') {
     content.innerHTML = `<iframe class="preview-frame" src="${previewUrl}"></iframe>`;
     loading.style.display = 'none';
     content.style.display = 'block';
     return;
   }
 
+  // ── Office documents: backend converts to PDF via LibreOffice ─────────────
+  const officeExts = ['doc','docx','odt','rtf','xls','xlsx','ods','ppt','pptx','odp'];
+  if (officeExts.includes(ext)) {
+    // Show a "Converting…" spinner while LibreOffice runs (can take 2-5s)
+    loading.innerHTML = `
+      <div style="text-align:center">
+        <div style="width:36px;height:36px;border:3px solid var(--eo-border);border-top-color:var(--eo-accent);
+                    border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 14px"></div>
+        <div style="font-size:.9rem;font-weight:600;color:var(--eo-text);margin-bottom:4px">Converting to PDF…</div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted)">LibreOffice is rendering your document</div>
+      </div>`;
+    loading.style.display = 'flex';
+
+    // Probe the preview endpoint — it returns 200+PDF or 422+text on failure
+    fetch(previewUrl, { credentials: 'same-origin' })
+      .then(function(res) {
+        if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+        return res.blob();
+      })
+      .then(function(blob) {
+        const objUrl = URL.createObjectURL(blob);
+        content.innerHTML = `<iframe class="preview-frame" src="${objUrl}"></iframe>`;
+        loading.style.display = 'none';
+        content.style.display = 'block';
+      })
+      .catch(function(err) {
+        loading.style.display = 'none';
+        content.style.display = 'block';
+        content.innerHTML = `
+          <div style="height:100%;display:flex;align-items:center;justify-content:center;color:#cbd5e1;text-align:center;padding:24px;">
+            <div>
+              <i class="bi bi-file-earmark-x" style="font-size:2.4rem;display:block;margin-bottom:12px;color:#f87171"></i>
+              <div style="font-weight:700;margin-bottom:6px;color:#f1f5f9">Office preview failed</div>
+              <div style="color:#94a3b8;font-size:.82rem;margin-bottom:16px">LibreOffice could not convert this file.<br>Download it to open locally.</div>
+              <a href="/files/${fileId}/download/" class="eo-btn eo-btn-primary eo-btn-sm">
+                <i class="bi bi-download"></i> Download file
+              </a>
+            </div>
+          </div>`;
+      });
+    return;
+  }
+
+  // ── Images ────────────────────────────────────────────────────────────────
   if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) {
     content.innerHTML = `<img class="preview-image" src="${previewUrl}" alt="">`;
     loading.style.display = 'none';
@@ -1576,6 +1680,7 @@ function openPreviewModal(fileId, fileName, extension) {
     return;
   }
 
+  // ── Video ─────────────────────────────────────────────────────────────────
   if (['mp4', 'webm', 'ogg', 'mov'].includes(ext)) {
     content.innerHTML = `
       <video class="preview-video" controls>
@@ -1588,6 +1693,7 @@ function openPreviewModal(fileId, fileName, extension) {
     return;
   }
 
+  // ── Audio ─────────────────────────────────────────────────────────────────
   if (['mp3', 'wav', 'm4a', 'ogg'].includes(ext)) {
     content.innerHTML = `
       <div class="preview-audio">
@@ -1602,10 +1708,9 @@ function openPreviewModal(fileId, fileName, extension) {
     return;
   }
 
+  // ── Plain text / code ─────────────────────────────────────────────────────
   if (['txt', 'md', 'py', 'js', 'html', 'css', 'json', 'xml', 'sql', 'csv'].includes(ext)) {
-    fetch(previewUrl, {
-      headers: { 'X-Requested-With': 'XMLHttpRequest' }
-    })
+    fetch(previewUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
     .then(function(res) { return res.text(); })
     .then(function(text) {
       content.innerHTML = `<pre class="preview-text"></pre>`;
@@ -1621,6 +1726,7 @@ function openPreviewModal(fileId, fileName, extension) {
     return;
   }
 
+  // ── No preview available ──────────────────────────────────────────────────
   content.innerHTML = `
     <div style="height:100%;display:flex;align-items:center;justify-content:center;color:#cbd5e1;text-align:center;padding:24px;">
       <div>
@@ -1639,5 +1745,28 @@ function closePreviewModal() {
   content.innerHTML = '';
   closeModal('previewModal');
 }
+
+// ── Mobile sidebar toggle ────────────────────────────────────────────────────
+function toggleMobileSidebar() {
+  const sidebar = document.querySelector('.fm-sidebar');
+  const btn     = document.getElementById('sidebarToggle');
+  const open    = sidebar.classList.toggle('mob-open');
+  btn.style.background  = open ? 'var(--eo-accent)' : '';
+  btn.style.color       = open ? '#fff' : '';
+  btn.style.borderColor = open ? 'var(--eo-accent)' : '';
+}
+
+(function initMobileNav() {
+  const btn = document.getElementById('sidebarToggle');
+  function check() {
+    const mobile = window.innerWidth <= 768;
+    btn.style.display = mobile ? 'flex' : 'none';
+    if (!mobile) {
+      document.querySelector('.fm-sidebar').classList.remove('mob-open');
+    }
+  }
+  check();
+  window.addEventListener('resize', check);
+})();
 </script>
 {% endblock %}

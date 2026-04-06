@@ -767,16 +767,24 @@ class FileDownloadView(LoginRequiredMixin, View):
 @method_decorator(xframe_options_sameorigin, name='dispatch')
 class FilePreviewView(LoginRequiredMixin, View):
     """
-    Serve a file inline (no forced download) so it can be embedded in the
-    preview modal — images, PDFs, video, audio all render in the browser.
-    Text files are served as plain text so JS can fetch and display them.
-    Same access-control rules as FileDownloadView.
+    Serve a file inline for the preview modal.
+    For Office documents (docx, xlsx, pptx, etc.) LibreOffice converts them
+    to PDF on first request; the result is cached in /tmp so repeat previews
+    are instant.  All other types are served as-is.
     """
+
+    _OFFICE_EXTS = {
+        'doc', 'docx', 'odt', 'rtf',
+        'xls', 'xlsx', 'ods',
+        'ppt', 'pptx', 'odp',
+    }
+
     def get(self, request, pk):
         f = get_object_or_404(SharedFile, pk=pk)
         user = request.user
         profile = getattr(user, 'staffprofile', None)
-        unit, dept = (profile.unit if profile else None), (profile.department if profile else None)
+        unit = profile.unit if profile else None
+        dept = profile.department if profile else None
 
         if not (
             f.uploaded_by == user or
@@ -787,15 +795,70 @@ class FilePreviewView(LoginRequiredMixin, View):
         ):
             raise Http404
 
+        ext = f.extension.lower()
+
+        # ── Office documents → convert to PDF, serve inline ──────────────────
+        if ext in self._OFFICE_EXTS:
+            return self._office_preview(f, ext)
+
+        # ── Text files → plain text so JS can fetch & display ────────────────
+        if ext in ('md', 'py', 'js', 'html', 'css', 'sql', 'xml', 'json', 'csv', 'txt'):
+            response = FileResponse(f.file.open('rb'), content_type='text/plain; charset=utf-8')
+            response['Content-Disposition'] = f'inline; filename="{f.name}"'
+            response['X-Frame-Options'] = 'SAMEORIGIN'
+            return response
+
+        # ── Everything else (PDF, image, video, audio) ────────────────────────
         content_type, _ = mimetypes.guess_type(f.name)
-
-        if f.extension in ('md', 'py', 'js', 'html', 'css', 'sql', 'xml', 'json', 'csv', 'txt'):
-            content_type = 'text/plain; charset=utf-8'
-
         content_type = content_type or 'application/octet-stream'
-
         response = FileResponse(f.file.open('rb'), content_type=content_type)
         response['Content-Disposition'] = f'inline; filename="{f.name}"'
+        response['X-Frame-Options'] = 'SAMEORIGIN'
+        return response
+
+    def _office_preview(self, f, ext):
+        """Convert Office file to PDF (LibreOffice) with a file-system cache."""
+        import shutil
+        from pathlib import Path
+
+        # Cache dir and key — keyed on pk + file_hash so a new upload busts cache
+        cache_dir = Path(tempfile.gettempdir()) / 'eo_preview_cache'
+        cache_dir.mkdir(exist_ok=True)
+        cache_key  = f'{f.pk}_{f.file_hash or "v1"}.pdf'
+        cache_path = cache_dir / cache_key
+
+        if not cache_path.exists():
+            # Write original file to a temp path with the correct extension so
+            # LibreOffice picks up the right filter automatically.
+            src_tmp = tempfile.NamedTemporaryFile(
+                suffix=f'.{ext}', delete=False,
+                dir=tempfile.gettempdir()
+            )
+            try:
+                src_tmp.write(f.file.open('rb').read())
+                src_tmp.flush()
+                src_tmp.close()
+
+                pdf_path = _convert_to_pdf(src_tmp.name)   # existing helper
+                shutil.copy2(pdf_path, str(cache_path))
+            except Exception as exc:
+                # Conversion failed — tell the browser so the frontend can show a message
+                return HttpResponse(
+                    f'Office preview unavailable: {exc}',
+                    content_type='text/plain',
+                    status=422,
+                )
+            finally:
+                try:
+                    os.unlink(src_tmp.name)
+                except OSError:
+                    pass
+
+        response = FileResponse(
+            open(str(cache_path), 'rb'),
+            content_type='application/pdf',
+        )
+        response['Content-Disposition'] = f'inline; filename="{f.name}.preview.pdf"'
         response['X-Frame-Options'] = 'SAMEORIGIN'
         return response
 

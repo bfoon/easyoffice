@@ -401,6 +401,29 @@
       </a>
     </div>
 
+    <!-- Signatures -->
+    <div class="fm-sidebar-section" style="padding-top:0">
+      <div class="fm-sidebar-label">Signatures</div>
+      <a href="{% url 'my_signatures' %}"
+         class="fm-nav-item {% if request.resolver_match.url_name == 'my_signatures' %}active{% endif %}">
+        <i class="bi bi-pen-fill" style="color:#8b5cf6"></i> My Signatures
+        {% if pending_sigs %}
+        <span class="fm-nav-badge" style="background:#ef4444;color:#fff;border:none">{{ pending_sigs }}</span>
+        {% endif %}
+      </a>
+      <a href="{% url 'signature_request_new' %}" class="fm-nav-item">
+        <i class="bi bi-send-plus"></i> Send for Signature
+      </a>
+    </div>
+
+    <div class="fm-sidebar-section" style="padding-top:0">
+      <div class="fm-sidebar-label">Tools</div>
+      <a href="{% url 'convert_pdf_page' %}"
+         class="fm-nav-item {% if request.resolver_match.url_name == 'convert_pdf_page' %}active{% endif %}">
+        <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444"></i> Convert to PDF
+      </a>
+    </div>
+
     <div class="fm-sidebar-section" style="padding-top:4px">
       <div class="fm-sidebar-label">By Type</div>
       {% for cat_key, cat_label, cat_icon in type_categories %}
@@ -481,6 +504,15 @@
       </div>
 
       <div style="margin-left:auto;display:flex;gap:8px">
+        {% if pending_sigs %}
+        <a href="{% url 'my_signatures' %}" class="eo-btn eo-btn-sm"
+           style="background:#8b5cf6;color:#fff;border-color:#8b5cf6">
+          <i class="bi bi-pen-fill"></i> Sign ({{ pending_sigs }})
+        </a>
+        {% endif %}
+        <a href="{% url 'convert_pdf_page' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-file-earmark-pdf" style="color:#ef4444"></i> Convert to PDF
+        </a>
         <button class="eo-btn eo-btn-secondary eo-btn-sm" onclick="openModal('newFolderModal')">
           <i class="bi bi-folder-plus"></i> New Folder
         </button>
@@ -620,6 +652,19 @@
                       onclick="event.preventDefault();openShareModal('{{ file.id }}','{{ file.name|escapejs }}','{{ file.visibility }}')">
                 <i class="bi bi-share"></i>
               </button>
+              {% if file.is_convertible %}
+              <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
+                <button class="fm-action-btn" type="submit" title="Convert to PDF" style="color:#ef4444">
+                  <i class="bi bi-file-earmark-pdf"></i>
+                </button>
+              </form>
+              {% endif %}
+              <a href="{% url 'create_signature_request' file.pk %}"
+                 class="fm-action-btn" title="Send for Signature" style="color:#8b5cf6">
+                <i class="bi bi-pen"></i>
+              </a>
               <form method="post" action="{% url 'file_delete' file.pk %}" style="display:inline"
                     onsubmit="return confirm('Delete {{ file.name|escapejs }}? This cannot be undone.')">
                 {% csrf_token %}
@@ -734,6 +779,21 @@
                             onclick="openShareModal('{{ file.id }}','{{ file.name|escapejs }}','{{ file.visibility }}')">
                       <i class="bi bi-share"></i>
                     </button>
+                    {% if file.is_convertible %}
+                    <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="display:inline">
+                      {% csrf_token %}
+                      <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
+                      <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" type="submit"
+                              style="color:#ef4444;border-color:#ef444430" title="Convert to PDF">
+                        <i class="bi bi-file-earmark-pdf"></i>
+                      </button>
+                    </form>
+                    {% endif %}
+                    <a href="{% url 'create_signature_request' file.pk %}"
+                       class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon"
+                       style="color:#8b5cf6;border-color:#8b5cf630" title="Send for Signature">
+                      <i class="bi bi-pen"></i>
+                    </a>
                     <form method="post" action="{% url 'file_delete' file.pk %}" style="display:inline"
                           onsubmit="return confirm('Delete {{ file.name|escapejs }}?')">
                       {% csrf_token %}

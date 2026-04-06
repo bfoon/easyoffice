@@ -1,0 +1,751 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Send for Signature{% endblock %}
+{% block breadcrumb %}<a href="{% url 'file_manager' %}">Files</a> / Send for Signature{% endblock %}
+
+{% block extra_css %}
+<style>
+/* ── Signer chips ── */
+.signer-row { display:flex;gap:10px;align-items:flex-start;padding:12px 14px;background:var(--eo-bg);border-radius:9px;border:1.5px solid var(--eo-border);margin-bottom:8px;position:relative; }
+.signer-order { width:26px;height:26px;border-radius:50%;color:#fff;font-size:.72rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:5px; }
+.signer-remove { position:absolute;right:8px;top:8px;background:none;border:none;color:var(--eo-text-muted);cursor:pointer;font-size:.9rem;transition:color .12s; }
+.signer-remove:hover { color:var(--eo-danger); }
+.staff-chip { display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 6px;background:var(--eo-accent)10;border:1px solid var(--eo-accent)30;border-radius:20px;cursor:pointer;font-size:.78rem;transition:all .12s;white-space:nowrap; }
+.staff-chip:hover { background:var(--eo-accent);color:#fff; }
+.chip-init { width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--eo-accent);color:#fff;font-size:.5rem;font-weight:800; }
+
+/* ── Annotation canvas ── */
+.anno-wrap { position:relative;width:100%;background:#525659;border-radius:8px;overflow:hidden;min-height:400px; }
+.anno-canvas-wrap { position:relative;display:inline-block; }
+#pdfCanvas { display:block; }
+#annoCanvas { position:absolute;top:0;left:0;cursor:crosshair; }
+.anno-field-overlay { position:absolute;border:2px solid;border-radius:4px;cursor:move;user-select:none;display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:700;gap:4px;transition:opacity .12s; }
+.anno-field-overlay:hover .field-del { opacity:1; }
+.field-del { position:absolute;top:-8px;right:-8px;width:16px;height:16px;border-radius:50%;background:#ef4444;color:#fff;font-size:.55rem;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity .12s; }
+
+/* ── Toolbar ── */
+.anno-toolbar { display:flex;gap:6px;align-items:center;padding:10px 14px;background:#2d2d2d;border-radius:8px 8px 0 0;flex-wrap:wrap; }
+.anno-tool { display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border-radius:7px;border:1.5px solid #555;background:#3d3d3d;color:#ccc;font-size:.78rem;font-weight:600;cursor:pointer;transition:all .14s;white-space:nowrap; }
+.anno-tool:hover { border-color:#888;color:#fff; }
+.anno-tool.active { border-color:#3b82f6;background:#3b82f620;color:#60a5fa; }
+.anno-tool[data-signer] { border-color:#8b5cf6;background:#8b5cf620;color:#a78bfa; }
+.anno-tool[data-signer].active { background:#8b5cf6;color:#fff; }
+.page-nav { display:flex;align-items:center;gap:8px;margin-left:auto;color:#ccc;font-size:.8rem; }
+.page-nav button { background:#3d3d3d;border:1px solid #555;color:#ccc;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:.9rem;transition:all .12s; }
+.page-nav button:hover { background:#555; }
+
+/* ── Step indicator ── */
+.steps { display:flex;gap:0;margin-bottom:24px; }
+.step { flex:1;padding:10px 14px;background:var(--eo-bg);border:1px solid var(--eo-border);font-size:.8rem;font-weight:600;color:var(--eo-text-muted);text-align:center;transition:all .14s;cursor:pointer; }
+.step:first-child { border-radius:9px 0 0 9px; }
+.step:last-child  { border-radius:0 9px 9px 0; }
+.step.active { background:var(--eo-accent);border-color:var(--eo-accent);color:#fff; }
+.step.done { background:var(--eo-success)12;border-color:var(--eo-success);color:var(--eo-success); }
+
+/* Field type colours */
+:root {
+  --fc-signature: #3b82f6;
+  --fc-initials:  #8b5cf6;
+  --fc-date:      #10b981;
+  --fc-text:      #f59e0b;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Send for Signature</h1>
+    <p class="eo-page-subtitle">Place signature fields, add signers, then send</p>
+  </div>
+  <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-arrow-left"></i> Back</a>
+</div>
+
+<!-- Step indicator -->
+<div class="steps" id="stepIndicator">
+  <div class="step active" data-step="1"><i class="bi bi-people me-1"></i>1. Add Signers</div>
+  <div class="step" data-step="2"><i class="bi bi-cursor me-1"></i>2. Place Fields</div>
+  <div class="step" data-step="3"><i class="bi bi-send me-1"></i>3. Review & Send</div>
+</div>
+
+<form method="post" id="sigForm" enctype="multipart/form-data">
+  {% csrf_token %}
+  <!-- Hidden field to store JSON of placed fields -->
+  <input type="hidden" name="fields_json" id="fieldsJson"/>
+
+  <div class="row g-4">
+
+    <!-- ══ STEP 1: Signers ══ -->
+    <div class="col-12" id="step1">
+      <div class="row g-4">
+        <!-- Document picker -->
+        <div class="col-lg-5">
+          <div class="eo-card">
+            <div class="eo-card-header" style="margin-bottom:14px">
+              <h2 class="eo-card-title">Document</h2>
+            </div>
+            {% if document %}
+            <input type="hidden" name="document_id" value="{{ document.id }}"/>
+            <div style="display:flex;align-items:center;gap:12px;padding:13px;background:var(--eo-bg);border-radius:9px;border:1.5px solid var(--eo-accent)">
+              <i class="bi {{ document.icon_class }}" style="font-size:1.8rem;color:{{ document.icon_color }};flex-shrink:0"></i>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">{{ document.name }}</div>
+                <div style="font-size:.75rem;color:var(--eo-text-muted)">{{ document.size_display }} · {{ document.created_at|date:"N j, Y" }}</div>
+              </div>
+              <i class="bi bi-check-circle-fill" style="color:var(--eo-success);font-size:1.2rem"></i>
+            </div>
+            {% else %}
+            <select name="document_id" class="eo-form-select" required id="docSelect"
+                    onchange="onDocSelect(this)">
+              <option value="">— Select a document —</option>
+              {% for f in my_files %}
+              <option value="{{ f.id }}"
+                      data-is-pdf="{% if f.is_pdf %}1{% else %}0{% endif %}"
+                      data-convertible="{% if f.is_convertible %}1{% else %}0{% endif %}"
+                      data-ext="{{ f.extension }}"
+                      data-name="{{ f.name|escapejs }}">
+                {% if not f.is_pdf and f.is_convertible %}⇄ {% endif %}{{ f.name }} ({{ f.size_display }})
+              </option>
+              {% endfor %}
+            </select>
+
+            <!-- shown when a convertible non-PDF is chosen -->
+            <div id="convertNotice" style="display:none;margin-top:8px;padding:10px 13px;
+                 background:#fffbeb;border:1.5px solid #f59e0b;border-radius:8px;
+                 font-size:.8rem;color:#92400e;display:flex;align-items:flex-start;gap:8px">
+              <i class="bi bi-arrow-repeat" style="font-size:1rem;flex-shrink:0;margin-top:1px"></i>
+              <div>
+                <strong>Auto-convert to PDF</strong><br/>
+                This file will be converted to PDF when you proceed to place fields.
+                Your original file is kept unchanged.
+              </div>
+            </div>
+            <!-- shown when file cannot be converted at all -->
+            <div id="cantConvertNotice" style="display:none;margin-top:8px;padding:10px 13px;
+                 background:#fee2e2;border:1.5px solid #ef4444;border-radius:8px;
+                 font-size:.8rem;color:#991b1b;display:flex;align-items:flex-start;gap:8px">
+              <i class="bi bi-exclamation-circle" style="font-size:1rem;flex-shrink:0;margin-top:1px"></i>
+              <div>
+                <strong>Cannot convert this file type.</strong><br/>
+                Please upload a Word, Excel, PowerPoint, or PDF file instead.
+              </div>
+            </div>
+            {% endif %}
+
+            <div class="row g-2 mt-3">
+              <div class="col-12">
+                <label class="eo-form-label">Request Title *</label>
+                <input type="text" name="title" class="eo-form-control" required
+                       value="{% if document %}{{ document.name }} — Signature Request{% endif %}"
+                       placeholder="e.g. Employment Contract — John Doe"/>
+              </div>
+              <div class="col-sm-6">
+                <label class="eo-form-label">Expires In (days)</label>
+                <input type="number" name="expires_days" class="eo-form-control" value="14" min="1" max="365"/>
+              </div>
+              <div class="col-sm-6" style="display:flex;align-items:flex-end;padding-bottom:1px">
+                <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--eo-bg);border-radius:8px;cursor:pointer;width:100%;border:1.5px solid var(--eo-border)">
+                  <input type="checkbox" name="ordered"/>
+                  <div style="font-size:.82rem;font-weight:600;color:var(--eo-text)">Ordered signing</div>
+                </label>
+              </div>
+              <div class="col-12">
+                <label class="eo-form-label">Message to Signers</label>
+                <textarea name="message" class="eo-form-control" rows="2" placeholder="Please review and sign at your earliest convenience."></textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Signers panel -->
+        <div class="col-lg-7">
+          <div class="eo-card">
+            <div class="eo-card-header" style="margin-bottom:14px">
+              <div>
+                <h2 class="eo-card-title">Signers</h2>
+                <p class="eo-card-subtitle">Add everyone who needs to sign</p>
+              </div>
+              <span id="signerCount" style="font-size:.78rem;font-weight:700;padding:3px 10px;border-radius:20px;background:var(--eo-accent)12;color:var(--eo-accent)">0 signers</span>
+            </div>
+
+            {% if all_staff %}
+            <div style="margin-bottom:12px">
+              <div style="font-size:.72rem;font-weight:700;color:var(--eo-text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em">Quick add</div>
+              <div style="max-height:120px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:5px">
+                {% for s in all_staff %}
+                <button type="button" class="staff-chip" onclick="addStaff('{{ s.full_name|escapejs }}','{{ s.email }}')" title="{{ s.email }}">
+                  <div class="chip-init">{{ s.initials }}</div>{{ s.full_name }}
+                </button>
+                {% endfor %}
+              </div>
+            </div>
+            <div style="height:1px;background:var(--eo-border);margin-bottom:12px"></div>
+            {% endif %}
+
+            <div id="signersContainer"></div>
+
+            <button type="button" onclick="addSigner()" class="eo-btn eo-btn-secondary eo-btn-sm" style="width:100%">
+              <i class="bi bi-plus-lg"></i> Add Signer Manually
+            </button>
+
+            <div style="margin-top:16px">
+              <button type="button" class="eo-btn eo-btn-primary" style="width:100%"
+                      id="nextToFieldsBtn" onclick="goStep2()">
+                Next: Place Signature Fields <i class="bi bi-arrow-right ms-1"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ STEP 2: Annotation canvas ══ -->
+    <div class="col-12" id="step2" style="display:none">
+      <div class="eo-card" style="padding:0;overflow:hidden">
+
+        <!-- Toolbar -->
+        <div class="anno-toolbar" id="annoToolbar">
+          <!-- Field type buttons -->
+          <div style="display:flex;gap:5px;align-items:center">
+            <span style="font-size:.7rem;color:#888;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-right:4px">Field:</span>
+            <button type="button" class="anno-tool active" data-tool="signature" onclick="setTool('signature')">
+              <i class="bi bi-pen-fill"></i> Signature
+            </button>
+            <button type="button" class="anno-tool" data-tool="initials" onclick="setTool('initials')">
+              <i class="bi bi-type-bold"></i> Initials
+            </button>
+            <button type="button" class="anno-tool" data-tool="date" onclick="setTool('date')">
+              <i class="bi bi-calendar3"></i> Date
+            </button>
+            <button type="button" class="anno-tool" data-tool="text" onclick="setTool('text')">
+              <i class="bi bi-textarea-t"></i> Text
+            </button>
+          </div>
+
+          <!-- Signer assignment -->
+          <div style="display:flex;gap:5px;align-items:center;margin-left:12px">
+            <span style="font-size:.7rem;color:#888;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-right:4px">Assign to:</span>
+            <div id="signerBtns" style="display:flex;gap:4px"></div>
+          </div>
+
+          <!-- Page nav -->
+          <div class="page-nav">
+            <button type="button" onclick="prevPage()"><i class="bi bi-chevron-left"></i></button>
+            <span>Page <strong id="pageNum">1</strong> of <strong id="pageTotal">1</strong></span>
+            <button type="button" onclick="nextPage()"><i class="bi bi-chevron-right"></i></button>
+          </div>
+        </div>
+
+        <!-- Canvas -->
+        <div class="anno-wrap" id="annoWrap" style="display:flex;justify-content:center;align-items:flex-start;padding:20px;min-height:600px">
+          <div style="text-align:center;color:#aaa;padding:60px;font-size:.9rem" id="annoPlaceholder">
+            <i class="bi bi-file-earmark-pdf" style="font-size:3rem;display:block;margin-bottom:14px;opacity:.4"></i>
+            Select a document and add signers first,<br/>then the PDF will render here for annotation.
+          </div>
+          <div class="anno-canvas-wrap" id="canvasWrap" style="display:none;position:relative">
+            <canvas id="pdfCanvas"></canvas>
+            <canvas id="annoCanvas"></canvas>
+            <!-- Field overlays inserted by JS here -->
+            <div id="fieldOverlays"></div>
+          </div>
+        </div>
+
+        <!-- Step 2 footer -->
+        <div style="padding:14px 20px;background:#2d2d2d;display:flex;justify-content:space-between;align-items:center">
+          <button type="button" class="eo-btn eo-btn-secondary" onclick="goStep(1)">
+            <i class="bi bi-arrow-left"></i> Back
+          </button>
+          <div style="font-size:.8rem;color:#aaa">
+            <i class="bi bi-info-circle me-1"></i>
+            Click and drag on the document to place a field. Drag placed fields to reposition.
+          </div>
+          <button type="button" class="eo-btn eo-btn-primary" onclick="goStep(3)">
+            Next: Review &amp; Send <i class="bi bi-arrow-right ms-1"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ STEP 3: Review & Send ══ -->
+    <div class="col-12" id="step3" style="display:none">
+      <div class="row g-4">
+        <div class="col-lg-7">
+          <div class="eo-card">
+            <div class="eo-card-header" style="margin-bottom:16px">
+              <h2 class="eo-card-title">Summary</h2>
+            </div>
+            <div id="reviewContent"></div>
+          </div>
+        </div>
+        <div class="col-lg-5">
+          <div class="eo-card">
+            <div class="eo-card-header" style="margin-bottom:14px">
+              <h2 class="eo-card-title">Ready to Send?</h2>
+            </div>
+            <div style="padding:14px;background:var(--eo-bg);border-radius:9px;font-size:.82rem;color:var(--eo-text-muted);margin-bottom:16px">
+              <i class="bi bi-shield-check me-2" style="color:var(--eo-accent)"></i>
+              Each signer will receive a secure email with a unique signing link. All actions are recorded in a tamper-evident audit trail.
+            </div>
+            <div style="display:flex;gap:10px;flex-direction:column">
+              <button type="submit" class="eo-btn eo-btn-primary" style="padding:13px">
+                <i class="bi bi-send-fill"></i> Send for Signature
+              </button>
+              <button type="button" class="eo-btn eo-btn-secondary" onclick="goStep(2)">
+                <i class="bi bi-arrow-left"></i> Back to Fields
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /row -->
+</form>
+
+<!-- PDF.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+<script>
+// ════════════════════════════════════════════════════════
+// STATE
+// ════════════════════════════════════════════════════════
+var signers = [];    // [{id, name, email, color}]
+var fields  = [];    // [{id, type, page, x, y, w, h, label, signer_idx}]
+var currentTool   = 'signature';
+var currentSigner = 0; // index into signers[]
+var currentPage   = 1;
+var totalPages    = 1;
+var pdfDoc        = null;
+var SIGNER_COLORS = ['#3b82f6','#8b5cf6','#ef4444','#10b981','#f59e0b','#06b6d4','#ec4899'];
+
+// Tracks whether the currently selected document is a PDF and its ID
+var selectedDocIsPdf = {% if document %}{% if document.is_pdf %}true{% else %}false{% endif %}{% else %}true{% endif %};
+var selectedDocId    = '{% if document %}{{ document.id }}{% endif %}';
+
+// ─── Steps ───────────────────────────────────────────────
+function goStep(n) {
+  [1,2,3].forEach(function(i) {
+    document.getElementById('step'+i).style.display = i===n ? '' : 'none';
+    var el = document.querySelector('[data-step="'+i+'"]');
+    if (el) {
+      el.classList.toggle('active', i===n);
+      el.classList.toggle('done', i<n);
+    }
+  });
+  if (n===2) { initAnnotationCanvas(); buildReview(); }
+  if (n===3) buildReview();
+}
+
+// ─── Step 2 entry — auto-convert non-PDFs first ──────────
+function goStep2() {
+  if (!signers.length) { alert('Add at least one signer first.'); return; }
+
+  var docId = selectedDocId || (document.getElementById('docSelect') && document.getElementById('docSelect').value);
+  if (!docId) { alert('Please select a document first.'); return; }
+
+  if (selectedDocIsPdf) {
+    goStep(2);
+    return;
+  }
+
+  // Non-PDF: convert via AJAX then proceed
+  var btn = document.getElementById('nextToFieldsBtn');
+  var origHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px"></span>Converting to PDF…';
+
+  var csrf = (document.cookie.match('(^|;)\\s*csrftoken=([^;]*)') || [])[2] || '';
+  fetch('/files/' + docId + '/convert-for-signing/', {
+    method: 'POST',
+    headers: { 'X-CSRFToken': csrf },
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    btn.disabled  = false;
+    btn.innerHTML = origHtml;
+
+    if (data.status !== 'ok') {
+      alert('Could not convert file: ' + (data.message || 'Unknown error'));
+      return;
+    }
+
+    // Update the form so the POST uses the new PDF's ID
+    var sel = document.getElementById('docSelect');
+    if (sel) {
+      // Insert a hidden option for the converted PDF and select it
+      var opt = document.createElement('option');
+      opt.value = data.file_id;
+      opt.dataset.isPdf = '1';
+      opt.dataset.convertible = '0';
+      opt.text = data.name;
+      opt.selected = true;
+      sel.appendChild(opt);
+    }
+    // Also add / update a hidden input so the POST always sends the right ID
+    var hidden = document.getElementById('convertedDocId');
+    if (!hidden) {
+      hidden = document.createElement('input');
+      hidden.type = 'hidden';
+      hidden.name = 'document_id';
+      hidden.id   = 'convertedDocId';
+      document.getElementById('sigForm').appendChild(hidden);
+      // Disable the original select so it doesn't override
+      if (sel) sel.removeAttribute('name');
+    }
+    hidden.value = data.file_id;
+
+    selectedDocId    = data.file_id;
+    selectedDocIsPdf = true;
+    docUrl           = data.download_url;
+    pdfDoc           = null;  // force PDF.js reload with new URL
+
+    // Hide conversion notice
+    var n1 = document.getElementById('convertNotice');
+    if (n1) n1.style.display = 'none';
+
+    goStep(2);
+  })
+  .catch(function() {
+    btn.disabled  = false;
+    btn.innerHTML = origHtml;
+    alert('Conversion request failed. Please check your connection and try again.');
+  });
+}
+
+// spinner keyframes
+var _ss = document.createElement('style');
+_ss.textContent = '@keyframes spin{to{transform:rotate(360deg)}}';
+document.head.appendChild(_ss);
+
+// ─── Dropdown change handler ──────────────────────────────
+function onDocSelect(sel) {
+  var opt = sel.options[sel.selectedIndex];
+  selectedDocId    = opt.value;
+  selectedDocIsPdf = opt.dataset.isPdf === '1';
+  var isConvertible = opt.dataset.convertible === '1';
+
+  var n1 = document.getElementById('convertNotice');
+  var n2 = document.getElementById('cantConvertNotice');
+  if (n1) n1.style.display = (opt.value && !selectedDocIsPdf &&  isConvertible) ? 'flex' : 'none';
+  if (n2) n2.style.display = (opt.value && !selectedDocIsPdf && !isConvertible) ? 'flex'  : 'none';
+
+  // Reset PDF viewer when document changes
+  pdfDoc = null;
+  docUrl = '';
+}
+
+// ─── Signers ─────────────────────────────────────────────
+var signerIdx = 0;
+function addSigner(name, email) {
+  // Prevent duplicate email
+  if (email && signers.find(function(s){ return s.email===email; })) return;
+  signerIdx++;
+  var color = SIGNER_COLORS[(signers.length) % SIGNER_COLORS.length];
+  var id = 'signer-' + Date.now() + signerIdx;
+  signers.push({id:id, name:name||'', email:email||'', color:color, order:signers.length+1});
+  renderSigners();
+}
+function addStaff(name, email) { addSigner(name, email); }
+
+function removeSignerById(id) {
+  var idx = signers.findIndex(function(s){ return s.id===id; });
+  if (idx < 0) return;
+  signers.splice(idx, 1);
+  // Remove fields assigned to this signer
+  fields = fields.filter(function(f){ return f.signer_idx !== idx; });
+  // Reassign indices
+  fields.forEach(function(f){ if(f.signer_idx > idx) f.signer_idx--; });
+  renderSigners();
+  renderFieldOverlays();
+}
+
+function renderSigners() {
+  var container = document.getElementById('signersContainer');
+  container.innerHTML = '';
+  signers.forEach(function(s, idx) {
+    var row = document.createElement('div');
+    row.className = 'signer-row';
+    row.id = 'sigrow-' + s.id;
+    row.innerHTML =
+      '<div class="signer-order" style="background:'+s.color+'">'+s.order+'</div>' +
+      '<div style="flex:1;display:flex;flex-direction:column;gap:7px">' +
+        '<input type="text" name="signer_name" placeholder="Full name *" required class="eo-form-control" value="'+escHtml(s.name)+'" ' +
+               'oninput="signers['+idx+'].name=this.value;buildReview()" style="font-size:.83rem"/>' +
+        '<input type="email" name="signer_email" placeholder="Email *" required class="eo-form-control" value="'+escHtml(s.email)+'" ' +
+               'oninput="signers['+idx+'].email=this.value;buildReview()" style="font-size:.83rem"/>' +
+      '</div>' +
+      '<button type="button" class="signer-remove" onclick="removeSignerById(\''+s.id+'\')"><i class="bi bi-x-lg"></i></button>';
+    container.appendChild(row);
+  });
+  var countEl = document.getElementById('signerCount');
+  countEl.textContent = signers.length + ' signer' + (signers.length!==1?'s':'');
+  buildSignerButtons();
+}
+
+function buildSignerButtons() {
+  var wrap = document.getElementById('signerBtns');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  signers.forEach(function(s, i) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'anno-tool' + (i===currentSigner?' active':'');
+    b.dataset.signer = i;
+    b.style.borderColor = s.color;
+    b.style.color = s.color;
+    b.style.background = s.color+'20';
+    b.innerHTML = '<i class="bi bi-circle-fill" style="font-size:.5rem"></i> '+(s.name||'Signer '+(i+1));
+    b.onclick = function(){ setSigner(i); };
+    wrap.appendChild(b);
+  });
+  if (!signers.length) {
+    wrap.innerHTML = '<span style="color:#888;font-size:.78rem">Add signers first</span>';
+  }
+}
+
+function setSigner(i) {
+  currentSigner = i;
+  document.querySelectorAll('[data-signer]').forEach(function(b,j){ b.classList.toggle('active',j===i); });
+}
+
+// ─── Tool ────────────────────────────────────────────────
+function setTool(t) {
+  currentTool = t;
+  document.querySelectorAll('[data-tool]').forEach(function(b){ b.classList.toggle('active', b.dataset.tool===t); });
+}
+
+// ─── PDF.js rendering ────────────────────────────────────
+var docUrl = '{% if document %}{% url "file_download" document.pk %}{% else %}{% endif %}'; // may be overwritten by goStep2() after AJAX conversion
+
+function initAnnotationCanvas() {
+  var wrap = document.getElementById('canvasWrap');
+  var placeholder = document.getElementById('annoPlaceholder');
+  if (!docUrl || !signers.length) {
+    placeholder.style.display = 'block'; wrap.style.display = 'none';
+    return;
+  }
+  placeholder.style.display = 'none'; wrap.style.display = 'block';
+  if (pdfDoc) { renderPage(currentPage); return; }
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  pdfjsLib.getDocument(docUrl).promise.then(function(doc) {
+    pdfDoc = doc;
+    totalPages = doc.numPages;
+    document.getElementById('pageTotal').textContent = totalPages;
+    renderPage(1);
+  }).catch(function(err) {
+    placeholder.innerHTML = '<i class="bi bi-exclamation-triangle" style="color:#f59e0b;font-size:2rem;display:block;margin-bottom:10px"></i>Cannot preview this file.<br/><span style="font-size:.8rem">You can still place fields without the preview.</span>';
+    placeholder.style.display = 'block'; wrap.style.display = 'none';
+  });
+}
+
+function renderPage(pageNum) {
+  if (!pdfDoc) return;
+  pdfDoc.getPage(pageNum).then(function(page) {
+    var viewport = page.getViewport({scale:1.4});
+    var pdfCanvas = document.getElementById('pdfCanvas');
+    var annoCanvas = document.getElementById('annoCanvas');
+    pdfCanvas.width  = annoCanvas.width  = viewport.width;
+    pdfCanvas.height = annoCanvas.height = viewport.height;
+    pdfCanvas.style.width  = annoCanvas.style.width  = viewport.width+'px';
+    pdfCanvas.style.height = annoCanvas.style.height = viewport.height+'px';
+    page.render({canvasContext: pdfCanvas.getContext('2d'), viewport: viewport});
+    document.getElementById('pageNum').textContent = pageNum;
+    renderFieldOverlays();
+  });
+}
+
+function prevPage() { if (currentPage>1) { currentPage--; renderPage(currentPage); } }
+function nextPage() { if (currentPage<totalPages) { currentPage++; renderPage(currentPage); } }
+
+// ─── Drawing fields on the annotation canvas ─────────────
+var drawing=false, startX=0, startY=0, drawRect=null;
+
+(function() {
+  var annoCanvas = document.getElementById('annoCanvas');
+  if (!annoCanvas) return;
+
+  annoCanvas.addEventListener('mousedown', function(e) {
+    if (!signers.length) { alert('Add at least one signer before placing fields.'); return; }
+    drawing = true;
+    var r = annoCanvas.getBoundingClientRect();
+    startX = e.clientX - r.left; startY = e.clientY - r.top;
+    drawRect = document.createElement('div');
+    drawRect.style.cssText = 'position:absolute;border:2px dashed '+getColor()+';border-radius:3px;pointer-events:none;';
+    drawRect.style.left = startX+'px'; drawRect.style.top = startY+'px';
+    document.getElementById('fieldOverlays').appendChild(drawRect);
+  });
+
+  annoCanvas.addEventListener('mousemove', function(e) {
+    if (!drawing) return;
+    var r = annoCanvas.getBoundingClientRect();
+    var cx = e.clientX-r.left, cy = e.clientY-r.top;
+    var x=Math.min(startX,cx), y=Math.min(startY,cy);
+    var w=Math.abs(cx-startX), h=Math.abs(cy-startY);
+    drawRect.style.left=x+'px'; drawRect.style.top=y+'px';
+    drawRect.style.width=w+'px'; drawRect.style.height=h+'px';
+  });
+
+  annoCanvas.addEventListener('mouseup', function(e) {
+    if (!drawing) return; drawing=false;
+    var canvasW = annoCanvas.offsetWidth, canvasH = annoCanvas.offsetHeight;
+    var r = annoCanvas.getBoundingClientRect();
+    var cx=e.clientX-r.left, cy=e.clientY-r.top;
+    var rx=Math.min(startX,cx), ry=Math.min(startY,cy);
+    var rw=Math.abs(cx-startX), rh=Math.abs(cy-startY);
+    if (drawRect) { drawRect.remove(); drawRect=null; }
+    if (rw<20 || rh<10) return; // too small
+    var field = {
+      id: 'f-'+Date.now(),
+      type: currentTool,
+      page: currentPage,
+      signer_idx: currentSigner,
+      x_pct: rx/canvasW*100, y_pct: ry/canvasH*100,
+      w_pct: rw/canvasW*100, h_pct: rh/canvasH*100,
+      label: currentTool.charAt(0).toUpperCase()+currentTool.slice(1),
+    };
+    fields.push(field);
+    renderFieldOverlays();
+  });
+})();
+
+function getColor() {
+  var colors = {'signature':'#3b82f6','initials':'#8b5cf6','date':'#10b981','text':'#f59e0b'};
+  return colors[currentTool] || '#3b82f6';
+}
+
+function getFieldColor(type) {
+  var colors = {'signature':'#3b82f6','initials':'#8b5cf6','date':'#10b981','text':'#f59e0b'};
+  return colors[type] || '#64748b';
+}
+
+function renderFieldOverlays() {
+  var wrap = document.getElementById('fieldOverlays');
+  if (!wrap) return;
+  var canvasWrap = document.getElementById('annoCanvas');
+  var cw = canvasWrap ? canvasWrap.offsetWidth : 0;
+  var ch = canvasWrap ? canvasWrap.offsetHeight : 0;
+  wrap.innerHTML = '';
+  fields.filter(function(f){ return f.page===currentPage; }).forEach(function(f, i) {
+    var color = getFieldColor(f.type);
+    var signer = signers[f.signer_idx] || signers[0];
+    var sigColor = signer ? signer.color : '#3b82f6';
+    var el = document.createElement('div');
+    el.className = 'anno-field-overlay';
+    el.id = 'fov-'+f.id;
+    el.style.cssText = [
+      'left:'+(f.x_pct*cw/100)+'px',
+      'top:'+(f.y_pct*ch/100)+'px',
+      'width:'+(f.w_pct*cw/100)+'px',
+      'height:'+(f.h_pct*ch/100)+'px',
+      'border-color:'+sigColor,
+      'background:'+sigColor+'18',
+      'color:'+sigColor,
+    ].join(';');
+    el.innerHTML =
+      '<i class="bi bi-pen-fill" style="font-size:.55rem"></i>' +
+      '<span>'+f.label+(signer?' — '+(signer.name||'Signer '+(f.signer_idx+1)):'')+'</span>' +
+      '<div class="field-del" onclick="removeField(\''+f.id+'\')">×</div>';
+    // Drag to reposition
+    makeDraggable(el, f, cw, ch);
+    wrap.appendChild(el);
+  });
+  // Serialize to hidden input
+  serializeFields();
+}
+
+function removeField(id) {
+  fields = fields.filter(function(f){ return f.id!==id; });
+  renderFieldOverlays();
+}
+
+function makeDraggable(el, field, cw, ch) {
+  var ox=0, oy=0;
+  el.addEventListener('mousedown', function(e) {
+    if (e.target.classList.contains('field-del')) return;
+    e.preventDefault();
+    ox=e.clientX-el.offsetLeft; oy=e.clientY-el.offsetTop;
+    var onMove = function(e) {
+      var nx=e.clientX-ox, ny=e.clientY-oy;
+      el.style.left=nx+'px'; el.style.top=ny+'px';
+      field.x_pct = nx/cw*100; field.y_pct = ny/ch*100;
+    };
+    var onUp = function() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      serializeFields();
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+function serializeFields() {
+  // Convert to the format expected by the backend
+  var out = fields.map(function(f) {
+    var signer = signers[f.signer_idx];
+    return {
+      type:  f.type,
+      page:  f.page,
+      x:     f.x_pct,  y: f.y_pct,
+      w:     f.w_pct,  h: f.h_pct,
+      label: f.label,
+      signer_order: f.signer_idx+1,
+    };
+  });
+  document.getElementById('fieldsJson').value = JSON.stringify(out);
+}
+
+// ─── Review ──────────────────────────────────────────────
+function buildReview() {
+  var el = document.getElementById('reviewContent');
+  if (!el) return;
+  var html = '<div style="display:flex;flex-direction:column;gap:12px">';
+  html += '<div style="padding:12px 14px;background:var(--eo-bg);border-radius:9px">' +
+    '<div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:6px">Signers ('+signers.length+')</div>';
+  signers.forEach(function(s,i) {
+    var myFields = fields.filter(function(f){ return f.signer_idx===i; });
+    html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--eo-surface);border-radius:7px;margin-bottom:4px">' +
+      '<div style="width:22px;height:22px;border-radius:50%;background:'+s.color+';color:#fff;font-size:.65rem;font-weight:800;display:flex;align-items:center;justify-content:center">'+s.order+'</div>' +
+      '<div style="flex:1"><div style="font-size:.85rem;font-weight:600">'+escHtml(s.name||'(no name)')+'</div><div style="font-size:.73rem;color:var(--eo-text-muted)">'+escHtml(s.email)+'</div></div>' +
+      '<span style="font-size:.72rem;color:var(--eo-text-muted)">'+myFields.length+' field'+(myFields.length!==1?'s':'')+'</span>' +
+    '</div>';
+  });
+  html += '</div>';
+  html += '<div style="padding:12px 14px;background:var(--eo-bg);border-radius:9px">' +
+    '<div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:6px">Fields ('+fields.length+')</div>';
+  if (!fields.length) {
+    html += '<div style="font-size:.82rem;color:var(--eo-text-muted);font-style:italic">No fields placed — signers will sign freely.</div>';
+  } else {
+    var byPage = {};
+    fields.forEach(function(f){ (byPage[f.page]=byPage[f.page]||[]).push(f); });
+    Object.keys(byPage).sort().forEach(function(pg) {
+      html += '<div style="font-size:.77rem;color:var(--eo-text-muted);margin-bottom:4px">Page '+pg+'</div>';
+      byPage[pg].forEach(function(f) {
+        var s = signers[f.signer_idx];
+        html += '<div style="display:flex;align-items:center;gap:8px;font-size:.8rem;padding:5px 8px;border-left:3px solid '+getFieldColor(f.type)+';margin-bottom:3px">' +
+          '<i class="bi bi-'+fieldIcon(f.type)+'"></i> '+f.label+
+          (s ? ' <span style="color:var(--eo-text-muted)">→ '+(s.name||'Signer '+(f.signer_idx+1))+'</span>' : '') +
+          '</div>';
+      });
+    });
+  }
+  html += '</div></div>';
+  el.innerHTML = html;
+}
+
+function fieldIcon(type) {
+  return {signature:'pen-fill',initials:'type-bold',date:'calendar3',text:'textarea-t'}[type]||'pen';
+}
+function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// Form submit — serialize fields then submit
+document.getElementById('sigForm').addEventListener('submit', function(e) {
+  if (!signers.length) { e.preventDefault(); alert('Add at least one signer.'); return; }
+  serializeFields();
+});
+
+// Init: add first signer automatically
+addSigner();
+</script>
+{% endblock %}

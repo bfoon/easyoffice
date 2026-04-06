@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}My Signatures{% endblock %}
+{% block breadcrumb %}<a href="{% url 'file_manager' %}">Files</a> / My Signatures{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">My Signatures</h1>
+    <p class="eo-page-subtitle">Documents waiting for your signature and requests you've sent</p>
+  </div>
+  <a href="{% url 'signature_request_new' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-send-plus"></i> Send for Signature
+  </a>
+</div>
+
+<!-- ── PENDING ALERT ── -->
+{% if pending %}
+<div style="display:flex;align-items:center;gap:14px;padding:16px 20px;background:#8b5cf610;border:2px solid #8b5cf640;border-radius:var(--eo-radius);margin-bottom:24px">
+  <i class="bi bi-pen-fill" style="font-size:1.5rem;color:#8b5cf6;flex-shrink:0"></i>
+  <div style="flex:1">
+    <div style="font-size:.95rem;font-weight:800;color:var(--eo-text)">
+      You have {{ pending|length }} document{{ pending|length|pluralize }} waiting for your signature
+    </div>
+    <div style="font-size:.8rem;color:var(--eo-text-muted);margin-top:2px">
+      Click "Sign Now" on each document below to review and sign.
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-lg-8 d-flex flex-column gap-4">
+
+    <!-- ── AWAITING MY SIGNATURE ── -->
+    <div class="eo-card">
+      <div class="eo-card-header" style="margin-bottom:{% if pending or viewed %}16px{% else %}0{% endif %}">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-hourglass-split me-1" style="color:#8b5cf6"></i>
+            Awaiting My Signature
+          </h2>
+          <p class="eo-card-subtitle">{{ pending|length }} pending · {{ viewed|length }} viewed</p>
+        </div>
+      </div>
+
+      {% if pending or viewed %}
+      <div style="display:flex;flex-direction:column;gap:10px">
+        {% for signer in pending %}
+        <div style="display:flex;align-items:center;gap:14px;padding:16px;background:var(--eo-bg);border-radius:10px;border-left:4px solid #8b5cf6">
+          <i class="bi {{ signer.request.document.icon_class }}" style="font-size:1.6rem;color:{{ signer.request.document.icon_color }};flex-shrink:0"></i>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.9rem;font-weight:700;color:var(--eo-text);margin-bottom:3px">
+              {{ signer.request.title }}
+            </div>
+            <div style="font-size:.77rem;color:var(--eo-text-muted);display:flex;flex-wrap:wrap;gap:12px">
+              <span><i class="bi bi-person me-1"></i>From {{ signer.request.created_by.full_name }}</span>
+              <span><i class="bi bi-file-earmark me-1"></i>{{ signer.request.document.name }}</span>
+              <span><i class="bi bi-clock me-1"></i>{{ signer.request.created_at|naturaltime }}</span>
+              {% if signer.request.expires_at %}
+              <span style="color:var(--eo-warning)"><i class="bi bi-alarm me-1"></i>Expires {{ signer.request.expires_at|date:"N j, Y" }}</span>
+              {% endif %}
+            </div>
+            {% if signer.request.message %}
+            <div style="margin-top:7px;font-size:.78rem;color:var(--eo-text-muted);font-style:italic">
+              "{{ signer.request.message|truncatechars:100 }}"
+            </div>
+            {% endif %}
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+            <a href="{{ signer.signing_url }}" class="eo-btn eo-btn-primary eo-btn-sm"
+               style="background:#8b5cf6;border-color:#8b5cf6;white-space:nowrap">
+              <i class="bi bi-pen-fill"></i> Sign Now
+            </a>
+            <span style="font-size:.68rem;font-weight:700;text-align:center;padding:2px 8px;border-radius:12px;background:#f3e8ff;color:#6d28d9">
+              Signer #{{ signer.order }}
+            </span>
+          </div>
+        </div>
+        {% endfor %}
+
+        {% for signer in viewed %}
+        <div style="display:flex;align-items:center;gap:14px;padding:14px;background:var(--eo-bg);border-radius:10px;border-left:4px solid var(--eo-accent)">
+          <i class="bi {{ signer.request.document.icon_class }}" style="font-size:1.4rem;color:{{ signer.request.document.icon_color }};flex-shrink:0;opacity:.7"></i>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.88rem;font-weight:600;color:var(--eo-text);margin-bottom:2px">{{ signer.request.title }}</div>
+            <div style="font-size:.75rem;color:var(--eo-text-muted)">
+              From {{ signer.request.created_by.full_name }} · Viewed {{ signer.viewed_at|naturaltime }}
+            </div>
+          </div>
+          <a href="{{ signer.signing_url }}" class="eo-btn eo-btn-secondary eo-btn-sm" style="white-space:nowrap">
+            <i class="bi bi-pen"></i> Continue Signing
+          </a>
+        </div>
+        {% endfor %}
+      </div>
+
+      {% else %}
+      <div style="text-align:center;padding:40px 24px;color:var(--eo-text-muted)">
+        <i class="bi bi-check2-circle" style="font-size:2.5rem;display:block;margin-bottom:12px;color:var(--eo-success)"></i>
+        <div style="font-size:.95rem;font-weight:700;color:var(--eo-text);margin-bottom:6px">All caught up!</div>
+        <p style="font-size:.84rem">No documents are currently waiting for your signature.</p>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- ── COMPLETED ── -->
+    {% if signed or declined %}
+    <div class="eo-card">
+      <div class="eo-card-header" style="margin-bottom:14px">
+        <h2 class="eo-card-title">Completed</h2>
+        <span style="font-size:.78rem;color:var(--eo-text-muted)">{{ signed|length }} signed · {{ declined|length }} declined</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        {% for signer in signed %}
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--eo-bg);border-radius:9px;opacity:.85">
+          <i class="bi bi-check-circle-fill" style="color:var(--eo-success);font-size:1.1rem;flex-shrink:0"></i>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.86rem;font-weight:600;color:var(--eo-text)">{{ signer.request.title }}</div>
+            <div style="font-size:.73rem;color:var(--eo-text-muted)">
+              Signed {{ signer.signed_at|naturaltime }} · {{ signer.get_signature_type_display }}
+            </div>
+          </div>
+          <a href="{% url 'signature_request_detail' signer.request.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-eye"></i>
+          </a>
+        </div>
+        {% endfor %}
+        {% for signer in declined %}
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--eo-bg);border-radius:9px;opacity:.75">
+          <i class="bi bi-x-circle" style="color:var(--eo-danger);font-size:1.1rem;flex-shrink:0"></i>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.86rem;font-weight:600;color:var(--eo-text)">{{ signer.request.title }}</div>
+            <div style="font-size:.73rem;color:var(--eo-text-muted)">Declined</div>
+          </div>
+          <a href="{% url 'signature_request_detail' signer.request.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-eye"></i>
+          </a>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- ── RIGHT: Sent by me ── -->
+  <div class="col-lg-4">
+    <div class="eo-card" style="position:sticky;top:20px">
+      <div class="eo-card-header" style="margin-bottom:14px">
+        <h2 class="eo-card-title">Sent by Me</h2>
+        <a href="{% url 'signature_request_new' %}" class="eo-btn eo-btn-secondary eo-btn-sm">+ New</a>
+      </div>
+
+      {% if sent_by_me %}
+      <div style="display:flex;flex-direction:column;gap:8px">
+        {% for req in sent_by_me %}
+        <a href="{% url 'signature_request_detail' req.pk %}" style="text-decoration:none;display:block;padding:12px 13px;background:var(--eo-bg);border-radius:9px;border-left:3px solid {{ req.status_color }};transition:background .1s"
+           onmouseover="this.style.background='var(--eo-surface)'" onmouseout="this.style.background='var(--eo-bg)'">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:5px">
+            <div style="font-size:.85rem;font-weight:700;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              {{ req.title|truncatechars:36 }}
+            </div>
+            <span style="font-size:.67rem;font-weight:700;padding:2px 8px;border-radius:12px;flex-shrink:0;
+              background:{{ req.status_color }}18;color:{{ req.status_color }}">
+              {{ req.get_status_display }}
+            </span>
+          </div>
+          <div style="font-size:.73rem;color:var(--eo-text-muted)">
+            {{ req.signers.count }} signer{{ req.signers.count|pluralize }} ·
+            {{ req.progress_pct }}% signed ·
+            {{ req.created_at|naturaltime }}
+          </div>
+          <!-- Mini progress -->
+          <div style="height:3px;background:var(--eo-border);border-radius:2px;margin-top:7px;overflow:hidden">
+            <div style="height:100%;width:{{ req.progress_pct }}%;background:{{ req.status_color }};border-radius:2px"></div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:32px 16px;color:var(--eo-text-muted)">
+        <i class="bi bi-send" style="font-size:2rem;display:block;margin-bottom:10px;opacity:.25"></i>
+        <p style="font-size:.84rem">You haven't sent any signature requests yet.</p>
+        <a href="{% url 'signature_request_new' %}" class="eo-btn eo-btn-primary eo-btn-sm mt-3">
+          <i class="bi bi-send-plus"></i> Send First Request
+        </a>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Signature Request — {{ sig_req.title }}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'file_manager' %}">Files</a> / <a href="?filter=signatures">Signatures</a> / {{ sig_req.title|truncatechars:30 }}{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">{{ sig_req.title }}</h1>
+    <p class="eo-page-subtitle">Signature request · {{ sig_req.created_at|date:"N j, Y" }}</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a href="{% url 'file_download' sig_req.document.pk %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-download"></i> Download Document
+    </a>
+    {% if is_creator and sig_req.status not in 'completed cancelled expired' %}
+    <form method="post" onsubmit="return confirm('Cancel this signature request?')">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="cancel"/>
+      <button type="submit" class="eo-btn eo-btn-danger eo-btn-sm">
+        <i class="bi bi-x-circle"></i> Cancel Request
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="row g-4">
+
+  <!-- ── LEFT ── -->
+  <div class="col-lg-8 d-flex flex-column gap-4">
+
+    <!-- Status card -->
+    <div class="eo-card" style="border-left:4px solid {{ sig_req.status_color }}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div>
+          <span style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted)">Status</span>
+          <div style="font-size:1.1rem;font-weight:800;color:var(--eo-text);margin-top:3px">{{ sig_req.get_status_display }}</div>
+        </div>
+        <span style="font-size:2.5rem;font-weight:900;color:{{ sig_req.status_color }}">{{ sig_req.progress_pct }}%</span>
+      </div>
+      <div style="height:10px;background:var(--eo-bg);border-radius:5px;overflow:hidden;margin-bottom:8px">
+        <div style="height:100%;border-radius:5px;width:{{ sig_req.progress_pct }}%;background:{{ sig_req.status_color }};transition:width .6s ease"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:.75rem;color:var(--eo-text-muted)">
+        <span>{{ signers|length }} signer{{ signers|length|pluralize }}</span>
+        <span>{% if sig_req.completed_at %}Completed {{ sig_req.completed_at|naturaltime }}{% elif sig_req.expires_at %}Expires {{ sig_req.expires_at|date:"N j, Y" }}{% else %}No expiry set{% endif %}</span>
+      </div>
+    </div>
+
+    <!-- Signers -->
+    <div class="eo-card">
+      <h2 class="eo-card-title" style="margin-bottom:16px">Signers</h2>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        {% for signer in signers %}
+        <div style="display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--eo-bg);border-radius:10px;
+                    border-left:3px solid {% if signer.status == 'signed' %}var(--eo-success){% elif signer.status == 'declined' %}var(--eo-danger){% elif signer.status == 'viewed' %}var(--eo-accent){% else %}var(--eo-border){% endif %}">
+
+          <!-- Order badge -->
+          <div style="width:30px;height:30px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.75rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            {{ signer.order }}
+          </div>
+
+          <!-- Identity -->
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">{{ signer.name }}</div>
+            <div style="font-size:.75rem;color:var(--eo-text-muted)">{{ signer.email }}</div>
+            {% if signer.signed_at %}
+            <div style="font-size:.72rem;color:var(--eo-success);margin-top:3px">
+              <i class="bi bi-check2-circle me-1"></i>Signed {{ signer.signed_at|naturaltime }}
+              {% if signer.ip_address %}· {{ signer.ip_address }}{% endif %}
+            </div>
+            {% elif signer.viewed_at %}
+            <div style="font-size:.72rem;color:var(--eo-accent);margin-top:3px">
+              <i class="bi bi-eye me-1"></i>Viewed {{ signer.viewed_at|naturaltime }}
+            </div>
+            {% endif %}
+            {% if signer.decline_reason %}
+            <div style="font-size:.74rem;color:var(--eo-danger);margin-top:4px;padding:5px 8px;background:#fee2e218;border-radius:5px">
+              Declined: {{ signer.decline_reason }}
+            </div>
+            {% endif %}
+          </div>
+
+          <!-- Status badge -->
+          <span style="font-size:.72rem;font-weight:700;padding:3px 10px;border-radius:20px;flex-shrink:0;
+            {% if signer.status == 'signed' %}background:#d1fae5;color:#065f46
+            {% elif signer.status == 'viewed' %}background:#dbeafe;color:#1e40af
+            {% elif signer.status == 'declined' %}background:#fee2e2;color:#991b1b
+            {% else %}background:#f1f5f9;color:#64748b{% endif %}">
+            {{ signer.get_status_display }}
+          </span>
+
+          <!-- Signature type badge -->
+          {% if signer.signature_type %}
+          <span style="font-size:.68rem;color:var(--eo-text-muted);background:var(--eo-surface);border:1px solid var(--eo-border);padding:2px 8px;border-radius:12px">
+            <i class="bi {% if signer.signature_type == 'draw' %}bi-pen{% else %}bi-type{% endif %} me-1"></i>
+            {{ signer.get_signature_type_display }}
+          </span>
+          {% endif %}
+
+          <!-- Resend -->
+          {% if is_creator and signer.status == 'pending' %}
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="resend"/>
+            <input type="hidden" name="signer_id" value="{{ signer.id }}"/>
+            <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm" title="Send reminder">
+              <i class="bi bi-envelope-arrow-up"></i> Remind
+            </button>
+          </form>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Document -->
+    <div class="eo-card">
+      <h2 class="eo-card-title" style="margin-bottom:14px">Document</h2>
+      <div style="display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--eo-bg);border-radius:10px">
+        <i class="bi {{ sig_req.document.icon_class }}" style="font-size:2rem;color:{{ sig_req.document.icon_color }};flex-shrink:0"></i>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">{{ sig_req.document.name }}</div>
+          <div style="font-size:.75rem;color:var(--eo-text-muted)">{{ sig_req.document.size_display }} · Uploaded {{ sig_req.document.created_at|date:"N j, Y" }}</div>
+          {% if sig_req.document.file_hash %}
+          <div style="font-size:.68rem;color:var(--eo-text-light);margin-top:3px;font-family:var(--eo-mono)">
+            SHA-256: {{ sig_req.document.file_hash|truncatechars:32 }}…
+          </div>
+          {% endif %}
+        </div>
+        <a href="{% url 'file_download' sig_req.document.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-download"></i> Download
+        </a>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── RIGHT ── -->
+  <div class="col-lg-4 d-flex flex-column gap-4">
+
+    <!-- Request info -->
+    <div class="eo-card">
+      <h2 class="eo-card-title" style="margin-bottom:14px">Details</h2>
+      <div style="display:flex;flex-direction:column;gap:12px;font-size:.84rem">
+        <div style="display:flex;gap:12px">
+          <i class="bi bi-person-circle" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:1px"></i>
+          <div>
+            <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--eo-text-muted)">Created by</div>
+            <div style="font-weight:600">{{ sig_req.created_by.full_name }}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <i class="bi bi-calendar3" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:1px"></i>
+          <div>
+            <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--eo-text-muted)">Created</div>
+            <div>{{ sig_req.created_at|date:"N j, Y \a\t H:i" }}</div>
+          </div>
+        </div>
+        {% if sig_req.expires_at %}
+        <div style="display:flex;gap:12px">
+          <i class="bi bi-clock" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:1px"></i>
+          <div>
+            <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--eo-text-muted)">Expires</div>
+            <div style="color:{% if sig_req.is_expired %}var(--eo-danger){% else %}var(--eo-warning){% endif %}">{{ sig_req.expires_at|date:"N j, Y" }}</div>
+          </div>
+        </div>
+        {% endif %}
+        <div style="display:flex;gap:12px">
+          <i class="bi bi-arrow-down-up" style="color:var(--eo-text-light);width:16px;flex-shrink:0;margin-top:1px"></i>
+          <div>
+            <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--eo-text-muted)">Signing Order</div>
+            <div>{% if sig_req.ordered_signing %}Sequential (ordered){% else %}Any order{% endif %}</div>
+          </div>
+        </div>
+      </div>
+      {% if sig_req.message %}
+      <div style="margin-top:14px;padding:12px;background:var(--eo-bg);border-radius:8px;font-size:.82rem;color:var(--eo-text-muted);border-left:3px solid var(--eo-accent)">
+        {{ sig_req.message }}
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Audit trail -->
+    <div class="eo-card">
+      <h2 class="eo-card-title" style="margin-bottom:14px">
+        <i class="bi bi-shield-check me-1" style="color:var(--eo-success)"></i> Audit Trail
+      </h2>
+      {% if sig_req.audit_hash %}
+      <div style="font-size:.68rem;color:var(--eo-text-muted);font-family:var(--eo-mono);padding:6px 9px;background:var(--eo-bg);border-radius:6px;margin-bottom:12px;word-break:break-all">
+        Hash: {{ sig_req.audit_hash|truncatechars:32 }}…
+      </div>
+      {% endif %}
+      <div style="display:flex;flex-direction:column;gap:0">
+        {% for event in audit %}
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
+          <div style="width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:5px;
+            {% if event.event == 'signed' %}background:var(--eo-success)
+            {% elif event.event == 'declined' %}background:var(--eo-danger)
+            {% elif event.event == 'completed' %}background:#8b5cf6
+            {% else %}background:var(--eo-accent){% endif %}">
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.8rem;font-weight:600;color:var(--eo-text)">{{ event.get_event_display }}</div>
+            {% if event.signer_name %}
+            <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ event.signer_name }}</div>
+            {% endif %}
+            {% if event.notes %}
+            <div style="font-size:.7rem;color:var(--eo-text-light)">{{ event.notes }}</div>
+            {% endif %}
+          </div>
+          <div style="font-size:.7rem;color:var(--eo-text-muted);white-space:nowrap">{{ event.timestamp|date:"N j, H:i" }}</div>
+        </div>
+        {% empty %}
+        <div style="font-size:.84rem;color:var(--eo-text-muted);padding:12px 0">No events recorded yet.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

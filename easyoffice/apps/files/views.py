@@ -9,6 +9,8 @@ from django.db.models import Q, Sum
 from django.core.mail import send_mail
 from django.conf import settings
 import os, subprocess, tempfile, hashlib, mimetypes
+from django.utils.decorators import method_decorator
+from django.views.decorators.clickjacking import xframe_options_sameorigin
 from apps.files.models import (
     SharedFile, FileFolder, SignatureRequest,
     SignatureRequestSigner, SignatureAuditEvent, CONVERTIBLE_TYPES
@@ -84,306 +86,6 @@ def _convert_to_pdf(source_path):
         raise RuntimeError(
             'LibreOffice is not installed. Install with: apt-get install libreoffice'
         )
-
-
-
-def _add_certificate_page(writer, sig_req):
-    """Append a Certificate of Completion page to the PDF writer."""
-    import io
-    from reportlab.pdfgen import canvas as rl_canvas
-    from reportlab.lib.pagesizes import A4
-    from pypdf import PdfReader
-
-    pw, ph = A4
-    packet = io.BytesIO()
-    c = rl_canvas.Canvas(packet, pagesize=A4)
-
-    c.setFillColorRGB(0.07, 0.15, 0.40)
-    c.rect(0, ph - 72, pw, 72, fill=1, stroke=0)
-    c.setFillColorRGB(1, 1, 1)
-    c.setFont('Helvetica-Bold', 16)
-    c.drawString(36, ph - 36, 'Certificate of Completion')
-    c.setFont('Helvetica', 9)
-    c.setFillColorRGB(0.65, 0.75, 0.95)
-    c.drawString(36, ph - 56, 'Electronic Signature Record — EasyOffice')
-
-    y = ph - 100
-
-    def row(lbl, val, cy):
-        c.setFont('Helvetica-Bold', 7)
-        c.setFillColorRGB(0.45, 0.45, 0.58)
-        c.drawString(36, cy, lbl.upper())
-        c.setFont('Helvetica', 10)
-        c.setFillColorRGB(0.08, 0.08, 0.20)
-        c.drawString(36, cy - 13, str(val)[:90])
-        return cy - 30
-
-    y = row('Document', sig_req.title, y)
-    y = row('Request ID', str(sig_req.id), y)
-    sent_by = getattr(sig_req.created_by, 'full_name', str(sig_req.created_by))
-    y = row('Initiated by', sent_by, y)
-    if sig_req.completed_at:
-        y = row('Completed', sig_req.completed_at.strftime('%B %d, %Y at %H:%M UTC'), y)
-    y -= 8
-    c.setStrokeColorRGB(0.80, 0.82, 0.92)
-    c.setLineWidth(0.5)
-    c.line(36, y, pw - 36, y)
-    y -= 20
-
-    c.setFont('Helvetica-Bold', 11)
-    c.setFillColorRGB(0.07, 0.15, 0.40)
-    c.drawString(36, y, 'Signers')
-    y -= 16
-
-    for signer in sig_req.signers.all():
-        if y < 120:
-            break
-        box_h = 70
-        c.setFillColorRGB(0.96, 0.97, 1.0)
-        c.roundRect(36, y - box_h, pw - 72, box_h, 5, fill=1, stroke=0)
-        if signer.status == 'signed':
-            c.setFillColorRGB(0.06, 0.62, 0.45)
-        elif signer.status == 'declined':
-            c.setFillColorRGB(0.75, 0.10, 0.10)
-        else:
-            c.setFillColorRGB(0.60, 0.60, 0.70)
-        c.circle(52, y - box_h / 2, 5, fill=1, stroke=0)
-        c.setFillColorRGB(0.05, 0.08, 0.22)
-        c.setFont('Helvetica-Bold', 10)
-        c.drawString(66, y - 16, signer.name)
-        c.setFont('Helvetica', 9)
-        c.setFillColorRGB(0.35, 0.35, 0.50)
-        c.drawString(66, y - 29, signer.email)
-        status_line = signer.get_status_display()
-        if signer.signed_at:
-            status_line += '  |  ' + signer.signed_at.strftime('%b %d, %Y %H:%M UTC')
-        if signer.ip_address:
-            status_line += '  |  IP ' + signer.ip_address
-        c.setFont('Helvetica', 8)
-        c.setFillColorRGB(0.50, 0.50, 0.62)
-        c.drawString(66, y - 42, status_line[:90])
-        c.setFont('Helvetica-Bold', 7)
-        c.setFillColorRGB(0.18, 0.39, 0.75)
-        c.drawString(66, y - 56, 'Signer #' + str(signer.order))
-        y -= box_h + 8
-
-    y -= 6
-    c.setStrokeColorRGB(0.80, 0.82, 0.92)
-    c.line(36, y, pw - 36, y)
-    y -= 18
-
-    c.setFont('Helvetica-Bold', 11)
-    c.setFillColorRGB(0.07, 0.15, 0.40)
-    c.drawString(36, y, 'Audit Trail')
-    y -= 16
-    for event in sig_req.audit_trail.all()[:18]:
-        if y < 80:
-            break
-        c.setFillColorRGB(0.18, 0.39, 0.75)
-        c.circle(43, y - 3, 3, fill=1, stroke=0)
-        c.setFont('Helvetica-Bold', 8)
-        c.setFillColorRGB(0.08, 0.08, 0.22)
-        c.drawString(54, y - 5, event.get_event_display())
-        c.setFont('Helvetica', 8)
-        c.setFillColorRGB(0.42, 0.42, 0.55)
-        detail = event.timestamp.strftime('%b %d, %Y %H:%M UTC')
-        if event.signer_name:
-            detail = event.signer_name + '  |  ' + detail
-        if event.ip_address:
-            detail += '  |  ' + event.ip_address
-        c.drawString(200, y - 5, detail[:70])
-        y -= 14
-
-    if sig_req.audit_hash:
-        y -= 6
-        c.setFont('Helvetica', 7)
-        c.setFillColorRGB(0.52, 0.52, 0.65)
-        c.drawString(36, y, 'Tamper-Evident Audit Hash (SHA-256):')
-        c.setFont('Courier', 7)
-        c.drawString(36, y - 11, sig_req.audit_hash)
-
-    c.setFillColorRGB(0.07, 0.15, 0.40)
-    c.rect(0, 0, pw, 36, fill=1, stroke=0)
-    c.setFillColorRGB(0.65, 0.72, 0.92)
-    c.setFont('Helvetica', 8)
-    c.drawString(36, 13, 'Generated by EasyOffice · Electronic Signature System')
-    from django.utils import timezone as _tz
-    c.drawRightString(pw - 36, 13, 'Generated: ' + _tz.now().strftime('%Y-%m-%d %H:%M UTC'))
-
-    c.save()
-    packet.seek(0)
-    writer.add_page(PdfReader(packet).pages[0])
-
-
-def _embed_signatures_in_pdf(sig_req):
-    """
-    Embed all filled signature fields into the PDF and save to
-    sig_req.signed_document.  Handles both cases:
-      - Fields were placed: embed each field value at its exact coordinates.
-      - No fields (free signing): stamp each signer's signature on the last page.
-    Requires: pypdf, reportlab
-    """
-    import io, base64, os, tempfile, logging
-    from collections import defaultdict
-    from django.core.files import File as _DFile
-
-    log = logging.getLogger(__name__)
-
-    try:
-        from pypdf import PdfReader, PdfWriter
-        from reportlab.pdfgen import canvas as rl_canvas
-        from reportlab.lib.utils import ImageReader
-    except ImportError as exc:
-        log.error('PDF signing skipped — missing library: %s', exc)
-        return
-
-    doc = sig_req.document
-    if not doc or not getattr(doc, 'file', None):
-        log.warning('SignatureRequest %s has no document file.', sig_req.id)
-        return
-
-    try:
-        reader = PdfReader(doc.file.open('rb'))
-    except Exception as exc:
-        log.error('Cannot open PDF for request %s: %s', sig_req.id, exc)
-        return
-
-    total_pages = len(reader.pages)
-
-    # Group filled field values by page
-    fields_by_page = defaultdict(list)
-    for field in sig_req.fields.exclude(value='').select_related('signer'):
-        fields_by_page[field.page].append(field)
-
-    # Signers who signed without any field placement — stamp on last page
-    free_signers = [
-        s for s in sig_req.signers.filter(status='signed')
-        if s.signature_data and not s.fields.exists()
-    ]
-
-    writer = PdfWriter()
-
-    for page_num, page in enumerate(reader.pages, start=1):
-        pw = float(page.mediabox.width)
-        ph = float(page.mediabox.height)
-        page_fields  = fields_by_page.get(page_num, [])
-        is_last_page = (page_num == total_pages)
-
-        if page_fields or (is_last_page and free_signers):
-            packet = io.BytesIO()
-            c = rl_canvas.Canvas(packet, pagesize=(pw, ph))
-
-            # ── Placed field values ─────────────────────────────────────────
-            for f in page_fields:
-                val = (f.value or '').strip()
-                if not val:
-                    continue
-                # % coords (top-left origin) → PDF points (bottom-left origin)
-                fx  = f.x_pct       / 100.0 * pw
-                fw  = f.width_pct   / 100.0 * pw
-                fh  = f.height_pct  / 100.0 * ph
-                fy  = ph - (f.y_pct / 100.0 * ph) - fh
-
-                if val.startswith('data:image'):
-                    try:
-                        _, b64 = val.split(',', 1)
-                        img_buf = io.BytesIO(base64.b64decode(b64))
-                        c.drawImage(ImageReader(img_buf), fx, fy,
-                                    width=fw, height=fh,
-                                    preserveAspectRatio=True, mask='auto')
-                    except Exception as exc:
-                        log.warning('Field image error %s: %s', f.id, exc)
-                else:
-                    font_size = max(6, min(fh * 0.55, 16))
-                    c.setFont('Helvetica-Oblique', font_size)
-                    c.setFillColorRGB(0.05, 0.10, 0.30)
-                    c.drawString(fx + 3, fy + (fh - font_size) / 2.0, val[:80])
-
-                # Thin blue underline — DocuSign style
-                c.setStrokeColorRGB(0.18, 0.39, 0.75)
-                c.setLineWidth(0.75)
-                c.line(fx, fy, fx + fw, fy)
-
-            # ── Free-signing stamps on the last page ────────────────────────
-            if is_last_page and free_signers:
-                stamp_w = min(200, pw / 3)
-                stamp_h = 65
-                margin  = 36
-                sx = pw - stamp_w - margin
-                sy = margin
-
-                for signer in free_signers:
-                    sig_data = (signer.signature_data or '').strip()
-                    if not sig_data:
-                        continue
-
-                    c.setStrokeColorRGB(0.18, 0.39, 0.75)
-                    c.setLineWidth(0.6)
-                    c.roundRect(sx, sy, stamp_w, stamp_h, 3, fill=0, stroke=1)
-
-                    if sig_data.startswith('data:image'):
-                        try:
-                            _, b64 = sig_data.split(',', 1)
-                            img_buf = io.BytesIO(base64.b64decode(b64))
-                            c.drawImage(ImageReader(img_buf),
-                                        sx + 4, sy + 18,
-                                        width=stamp_w - 8, height=stamp_h - 22,
-                                        preserveAspectRatio=True, mask='auto')
-                        except Exception as exc:
-                            log.warning('Stamp error for %s: %s', signer.name, exc)
-                    else:
-                        c.setFont('Helvetica-Oblique', 13)
-                        c.setFillColorRGB(0.05, 0.10, 0.30)
-                        c.drawString(sx + 6, sy + stamp_h / 2 + 2, sig_data[:28])
-
-                    c.setStrokeColorRGB(0.18, 0.39, 0.75)
-                    c.setLineWidth(0.5)
-                    c.line(sx, sy + 16, sx + stamp_w, sy + 16)
-
-                    c.setFont('Helvetica', 7)
-                    c.setFillColorRGB(0.40, 0.40, 0.55)
-                    label = signer.name
-                    if signer.signed_at:
-                        label += '  ' + signer.signed_at.strftime('%d %b %Y')
-                    c.drawString(sx + 4, sy + 4, label[:38])
-
-                    sx -= stamp_w + 10
-                    if sx < margin:
-                        sx  = pw - stamp_w - margin
-                        sy += stamp_h + 8
-
-            c.save()
-            packet.seek(0)
-            page.merge_page(PdfReader(packet).pages[0])
-
-        writer.add_page(page)
-
-    try:
-        _add_certificate_page(writer, sig_req)
-    except Exception as exc:
-        log.warning('Certificate page error: %s', exc)
-
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix='_signed.pdf')
-    try:
-        with os.fdopen(tmp_fd, 'wb') as tmp_f:
-            writer.write(tmp_f)
-        base_name = os.path.splitext(os.path.basename(doc.file.name))[0]
-        out_name  = base_name + '_signed.pdf'
-        if sig_req.signed_document:
-            try:
-                sig_req.signed_document.delete(save=False)
-            except Exception:
-                pass
-        with open(tmp_path, 'rb') as out_f:
-            sig_req.signed_document.save(out_name, _DFile(out_f), save=True)
-        log.info('Signed PDF saved for request %s', sig_req.id)
-    except Exception as exc:
-        log.error('Failed to save signed PDF for request %s: %s', sig_req.id, exc)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
 
 
 def _notify_signer(signer, base_url):
@@ -577,6 +279,42 @@ class FileDownloadView(LoginRequiredMixin, View):
         f.download_count += 1
         f.save(update_fields=['download_count'])
         return FileResponse(f.file.open('rb'), as_attachment=True, filename=f.name)
+
+
+@method_decorator(xframe_options_sameorigin, name='dispatch')
+class FilePreviewView(LoginRequiredMixin, View):
+    """
+    Serve a file inline (no forced download) so it can be embedded in the
+    preview modal — images, PDFs, video, audio all render in the browser.
+    Text files are served as plain text so JS can fetch and display them.
+    Same access-control rules as FileDownloadView.
+    """
+    def get(self, request, pk):
+        f = get_object_or_404(SharedFile, pk=pk)
+        user = request.user
+        profile = getattr(user, 'staffprofile', None)
+        unit, dept = (profile.unit if profile else None), (profile.department if profile else None)
+
+        if not (
+            f.uploaded_by == user or
+            f.visibility == 'office' or
+            (f.visibility == 'unit' and f.unit == unit) or
+            (f.visibility == 'department' and f.department == dept) or
+            f.shared_with.filter(id=user.id).exists()
+        ):
+            raise Http404
+
+        content_type, _ = mimetypes.guess_type(f.name)
+
+        if f.extension in ('md', 'py', 'js', 'html', 'css', 'sql', 'xml', 'json', 'csv', 'txt'):
+            content_type = 'text/plain; charset=utf-8'
+
+        content_type = content_type or 'application/octet-stream'
+
+        response = FileResponse(f.file.open('rb'), content_type=content_type)
+        response['Content-Disposition'] = f'inline; filename="{f.name}"'
+        response['X-Frame-Options'] = 'SAMEORIGIN'
+        return response
 
 
 class FileDeleteView(LoginRequiredMixin, View):
@@ -1021,13 +759,6 @@ class SignDocumentView(View):
             if hasattr(sig_req, 'update_status'):
                 sig_req.update_status()
 
-            # Write signatures physically into the PDF
-            try:
-                _embed_signatures_in_pdf(sig_req)
-            except Exception as _e:
-                import logging as _lg
-                _lg.getLogger(__name__).error('PDF embed error for %s: %s', sig_req.id, _e)
-
             if getattr(sig_req, 'status', None) == 'completed':
                 _log_audit(sig_req, 'completed', request=request)
                 try:
@@ -1255,93 +986,6 @@ class FillSignatureFieldView(View):
         })
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AJAX: Convert a file to PDF for the signing annotation canvas
-# ─────────────────────────────────────────────────────────────────────────────
-
-class ConvertForSigningView(LoginRequiredMixin, View):
-    """
-    AJAX POST — converts any supported non-PDF file to PDF so PDF.js can
-    render it in the signature annotation canvas (Step 2).
-    Returns JSON: {status, file_id, download_url, name}
-    The original file is never modified or deleted.
-    """
-    def post(self, request, pk):
-        document = get_object_or_404(SharedFile, pk=pk)
-
-        # Already a PDF — return its details immediately
-        if document.is_pdf:
-            from django.urls import reverse
-            return JsonResponse({
-                'status':       'ok',
-                'file_id':      str(document.pk),
-                'download_url': request.build_absolute_uri(
-                    reverse('file_download', kwargs={'pk': document.pk})
-                ),
-                'name':         document.name,
-                'already_pdf':  True,
-            })
-
-        if not document.is_convertible:
-            return JsonResponse({
-                'status':  'error',
-                'message': (
-                    f'"{document.name}" cannot be converted to PDF. '
-                    'Please upload a Word, Excel, PowerPoint, or similar document.'
-                ),
-            }, status=400)
-
-        tmp_path = pdf_path = None
-        try:
-            suffix = '.' + document.extension
-            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                tmp_path = tmp.name
-                document.file.open('rb')
-                for chunk in document.file.chunks():
-                    tmp.write(chunk)
-                document.file.close()
-
-            pdf_path = _convert_to_pdf(tmp_path)
-            pdf_name = os.path.splitext(document.name)[0] + '.pdf'
-
-            from django.core.files import File as _DFile
-            from django.urls import reverse
-            with open(pdf_path, 'rb') as pdf_f:
-                new_doc = SharedFile.objects.create(
-                    name=pdf_name,
-                    file=_DFile(pdf_f, name=pdf_name),
-                    folder=document.folder,
-                    uploaded_by=request.user,
-                    visibility=document.visibility,
-                    description=f'Auto-converted from "{document.name}" for signing',
-                    tags=document.tags,
-                    file_size=os.path.getsize(pdf_path),
-                    file_type='application/pdf',
-                )
-
-            return JsonResponse({
-                'status':       'ok',
-                'file_id':      str(new_doc.pk),
-                'download_url': request.build_absolute_uri(
-                    reverse('file_download', kwargs={'pk': new_doc.pk})
-                ),
-                'name':         pdf_name,
-                'message':      f'"{document.name}" converted to PDF successfully.',
-            })
-
-        except RuntimeError as exc:
-            return JsonResponse({'status': 'error', 'message': str(exc)}, status=500)
-        except Exception as exc:
-            return JsonResponse({'status': 'error', 'message': f'Conversion failed: {exc}'}, status=500)
-        finally:
-            for p in (tmp_path, pdf_path):
-                try:
-                    if p:
-                        os.unlink(p)
-                except Exception:
-                    pass
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Saved Signatures — manage user's saved signatures
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1434,26 +1078,13 @@ class SignDocumentDownloadView(View):
         if not document or not getattr(document, 'file', None):
             raise Http404("Document file not found.")
 
-        # Serve the signed copy (with embedded signatures) when available
-        if getattr(sig_req, 'signed_document', None) and sig_req.signed_document.name:
-            try:
-                stem = os.path.splitext(document.name or 'document')[0]
-                response = FileResponse(
-                    sig_req.signed_document.open('rb'),
-                    content_type='application/pdf',
-                )
-                response['Content-Disposition'] = f'attachment; filename="{stem}_signed.pdf"'
-                return response
-            except Exception:
-                pass  # fall through to original
-
-        # Fallback: original document
         file_name = document.name or os.path.basename(document.file.name)
         content_type, _ = mimetypes.guess_type(file_name)
         content_type = content_type or 'application/octet-stream'
+
         response = FileResponse(
             document.file.open('rb'),
-            content_type=content_type,
+            content_type=content_type
         )
         response['Content-Disposition'] = f'attachment; filename="{file_name}"'
         return response
@@ -1476,3 +1107,23 @@ class SavedSignatureAPIView(LoginRequiredMixin, View):
                 entry['data'] = request.build_absolute_uri(s.image.url)
             sigs.append(entry)
         return JsonResponse({'signatures': sigs})
+
+class FileMoveView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        f = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+
+        folder_id = (request.POST.get('folder_id') or '').strip()
+        folder = None
+
+        if folder_id:
+            folder = get_object_or_404(FileFolder, id=folder_id, owner=request.user)
+
+        f.folder = folder
+        f.save(update_fields=['folder'])
+
+        return JsonResponse({
+            'status': 'ok',
+            'message': f'"{f.name}" moved successfully.',
+            'folder_id': str(folder.id) if folder else '',
+            'folder_name': folder.name if folder else 'My Drive',
+        })

@@ -326,6 +326,53 @@
   font-weight: 600;
   color: var(--eo-text);
 }
+
+.preview-frame,
+.preview-image,
+.preview-video,
+.preview-audio,
+.preview-text {
+  width: 100%;
+  height: 100%;
+}
+
+.preview-frame {
+  border: none;
+  background: #111827;
+}
+
+.preview-image {
+  object-fit: contain;
+  background: #111827;
+  display: block;
+}
+
+.preview-video {
+  background: #000;
+}
+
+.preview-audio {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #111827;
+}
+
+.preview-text {
+  margin: 0;
+  padding: 18px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: .84rem;
+  line-height: 1.55;
+  color: #e5e7eb;
+  background: #111827;
+}
+
+/* Spinner animation used by loaders */
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>
 
 <!-- ══ STATS BAR ══ -->
@@ -652,6 +699,10 @@
                       onclick="event.preventDefault();openShareModal('{{ file.id }}','{{ file.name|escapejs }}','{{ file.visibility }}')">
                 <i class="bi bi-share"></i>
               </button>
+              <button class="fm-action-btn" title="Move to folder"
+                      onclick="event.preventDefault();openMoveModal('{{ file.id }}','{{ file.name|escapejs }}')">
+                <i class="bi bi-folder-symlink"></i>
+              </button>
               {% if file.is_convertible %}
               <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="display:inline">
                 {% csrf_token %}
@@ -771,6 +822,10 @@
                 <td style="font-size:.82rem;color:var(--eo-text-muted);text-align:center">{{ file.download_count }}</td>
                 <td>
                   <div style="display:flex;gap:5px;justify-content:flex-end">
+                     <button class="fm-action-btn" title="Preview"
+                            onclick="event.preventDefault(); openPreviewModal('{{ file.id }}', '{{ file.name|escapejs }}', '{{ file.extension|default:'' }}')">
+                      <i class="bi bi-eye"></i>
+                    </button>
                     <a href="{% url 'file_download' file.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Download">
                       <i class="bi bi-download"></i>
                     </a>
@@ -778,6 +833,10 @@
                     <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Share"
                             onclick="openShareModal('{{ file.id }}','{{ file.name|escapejs }}','{{ file.visibility }}')">
                       <i class="bi bi-share"></i>
+                    </button>
+                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Move to folder"
+                            onclick="openMoveModal('{{ file.id }}','{{ file.name|escapejs }}')">
+                      <i class="bi bi-folder-symlink"></i>
                     </button>
                     {% if file.is_convertible %}
                     <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="display:inline">
@@ -820,6 +879,71 @@
     </div><!-- /fm-content -->
   </main>
 </div><!-- /fm-layout -->
+
+<!-- ══════════════════════════════════
+     MOVE FILE MODAL
+══════════════════════════════════ -->
+<div class="fm-modal-backdrop" id="moveModal">
+  <div class="fm-modal" style="width:420px">
+    <div class="fm-modal-head">
+      <div>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">
+          <i class="bi bi-folder-symlink me-2" style="color:var(--eo-accent)"></i>Move File
+        </div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px" id="moveModalFileName"></div>
+      </div>
+      <button onclick="closeModal('moveModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="fm-modal-body" style="padding-top:12px">
+      <div style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:10px">
+        Select destination
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;max-height:340px;overflow-y:auto" id="moveFolderList">
+        <!-- Root -->
+        <button type="button" class="move-folder-opt" data-folder-id="" data-folder-name="My Drive"
+                onclick="selectMoveFolder(this)"
+                style="display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:9px;border:2px solid var(--eo-border);background:var(--eo-bg);cursor:pointer;text-align:left;width:100%;transition:border-color .12s,background .12s">
+          <i class="bi bi-hdd" style="font-size:1.3rem;color:var(--eo-accent);flex-shrink:0"></i>
+          <div>
+            <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">My Drive</div>
+            <div style="font-size:.74rem;color:var(--eo-text-muted)">Root — no folder</div>
+          </div>
+        </button>
+        <!-- All folders -->
+        {% for folder in all_folders %}
+        <button type="button" class="move-folder-opt"
+                data-folder-id="{{ folder.id }}" data-folder-name="{{ folder.name|escapejs }}"
+                onclick="selectMoveFolder(this)"
+                style="display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:9px;border:2px solid var(--eo-border);background:var(--eo-bg);cursor:pointer;text-align:left;width:100%;transition:border-color .12s,background .12s">
+          <i class="bi bi-folder-fill" style="font-size:1.3rem;color:{{ folder.color }};flex-shrink:0"></i>
+          <div style="min-width:0">
+            <div style="font-size:.9rem;font-weight:700;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ folder.name }}</div>
+            <div style="font-size:.74rem;color:var(--eo-text-muted)">{{ folder.file_count }} file{{ folder.file_count|pluralize }} · {{ folder.get_visibility_display }}</div>
+          </div>
+        </button>
+        {% empty %}
+        <div style="padding:24px;text-align:center;color:var(--eo-text-muted);font-size:.84rem">
+          <i class="bi bi-folder-x" style="font-size:1.8rem;display:block;margin-bottom:8px;opacity:.4"></i>
+          No folders yet —
+          <button onclick="closeModal('moveModal');openModal('newFolderModal')"
+                  style="background:none;border:none;color:var(--eo-accent);cursor:pointer;font-weight:600;padding:0">
+            create one first
+          </button>
+        </div>
+        {% endfor %}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button type="button" id="moveConfirmBtn" class="eo-btn eo-btn-primary flex-grow-1"
+                onclick="confirmMove()" disabled>
+          <i class="bi bi-folder-symlink"></i> Move Here
+        </button>
+        <button type="button" onclick="closeModal('moveModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ══════════════════════════════════
      UPLOAD MODAL
@@ -1073,6 +1197,39 @@
   </div>
 </div>
 
+<div class="fm-modal-backdrop" id="previewModal">
+  <div class="fm-modal" style="width: min(1100px, 96vw);">
+    <div class="fm-modal-head">
+      <div>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">
+          <i class="bi bi-eye me-2" style="color:var(--eo-accent)"></i>File Preview
+        </div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px" id="previewModalFileName"></div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <a href="#" id="previewDownloadBtn" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-download"></i> Download
+        </a>
+        <button onclick="closePreviewModal()" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
+    </div>
+
+    <div class="fm-modal-body" style="padding:0; height:min(78vh, 820px);">
+      <div id="previewLoading"
+           style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--eo-text-muted);font-size:.92rem;">
+        <div style="text-align:center">
+          <i class="bi bi-hourglass-split" style="font-size:1.8rem;display:block;margin-bottom:10px"></i>
+          Loading preview...
+        </div>
+      </div>
+
+      <div id="previewContent" style="display:none;height:100%;background:#111827;"></div>
+    </div>
+  </div>
+</div>
+
 {% endblock content %}
 
 {% block extra_js %}
@@ -1153,7 +1310,15 @@ document.querySelectorAll('.fm-modal-backdrop').forEach(function(el) {
   el.addEventListener('click', function(e) { if (e.target === el) el.classList.remove('open'); });
 });
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape') document.querySelectorAll('.fm-modal-backdrop.open').forEach(function(el) { el.classList.remove('open'); });
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.fm-modal-backdrop.open').forEach(function(el) {
+      if (el.id === 'previewModal') {
+        closeModal('previewModal'); // uses patched version that stops media
+      } else {
+        el.classList.remove('open');
+      }
+    });
+  }
 });
 
 // ── File input ──
@@ -1193,6 +1358,278 @@ if (dropZone) {
       handleFileChange(document.getElementById('fileInput'));
     }
   });
+}
+
+// ── Move File Modal ───────────────────────────────────────────────────────────
+var _moveFileId     = null;
+var _moveFolderId   = null;
+var _moveFolderName = null;
+
+function openMoveModal(fileId, fileName) {
+  _moveFileId     = fileId;
+  _moveFolderId   = null;
+  _moveFolderName = null;
+  document.getElementById('moveModalFileName').textContent = fileName;
+  document.querySelectorAll('.move-folder-opt').forEach(function(b) {
+    b.style.borderColor = 'var(--eo-border)';
+    b.style.background  = 'var(--eo-bg)';
+  });
+  var btn = document.getElementById('moveConfirmBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="bi bi-folder-symlink"></i> Move Here';
+  openModal('moveModal');
+}
+
+function selectMoveFolder(btn) {
+  document.querySelectorAll('.move-folder-opt').forEach(function(b) {
+    b.style.borderColor = 'var(--eo-border)';
+    b.style.background  = 'var(--eo-bg)';
+  });
+  btn.style.borderColor = 'var(--eo-accent)';
+  btn.style.background  = 'var(--eo-accent)08';
+  _moveFolderId   = btn.dataset.folderId   || null;
+  _moveFolderName = btn.dataset.folderName || 'My Drive';
+  var confirmBtn  = document.getElementById('moveConfirmBtn');
+  confirmBtn.disabled = false;
+  confirmBtn.innerHTML = '<i class="bi bi-folder-symlink"></i> Move to "' + _moveFolderName + '"';
+}
+
+function confirmMove() {
+  if (!_moveFileId) return;
+  var btn  = document.getElementById('moveConfirmBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span style="display:inline-block;width:13px;height:13px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px"></span>Moving…';
+  var csrf = (document.cookie.match('(^|;)\s*csrftoken=([^;]*)') || [])[2] || '';
+  fetch('/files/' + _moveFileId + '/move/', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
+    body:    JSON.stringify({ folder_id: _moveFolderId || null }),
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    closeModal('moveModal');
+    if (data.status === 'ok') {
+      fmToast(data.message, 'success');
+      var card = document.querySelector('[data-file-id="' + _moveFileId + '"]');
+      if (card) {
+        card.style.transition = 'opacity .25s,transform .25s';
+        card.style.opacity    = '0';
+        card.style.transform  = 'scale(.92)';
+        setTimeout(function() { card.remove(); }, 280);
+      }
+    } else {
+      fmToast(data.message || 'Move failed', 'error');
+    }
+    _moveFileId = _moveFolderId = _moveFolderName = null;
+  })
+  .catch(function() {
+    closeModal('moveModal');
+    fmToast('Move failed — please try again.', 'error');
+  });
+}
+
+function fmToast(msg, type) {
+  var old = document.getElementById('fmToast');
+  if (old) old.remove();
+  var t   = document.createElement('div');
+  t.id    = 'fmToast';
+  var isOk = (type === 'success');
+  t.style.cssText = [
+    'position:fixed','bottom:24px','right:24px','z-index:9999',
+    'padding:13px 20px','border-radius:10px',
+    'background:' + (isOk ? '#10b981' : '#ef4444'),
+    'color:#fff','font-size:.86rem','font-weight:600',
+    'box-shadow:0 8px 32px rgba(0,0,0,.20)',
+    'display:flex','align-items:center','gap:9px','max-width:360px',
+    'opacity:0','transform:translateY(10px)',
+    'transition:opacity .22s,transform .22s',
+  ].join(';');
+  t.innerHTML = '<i class="bi bi-' + (isOk ? 'check-circle-fill' : 'exclamation-circle-fill') + '"></i><span>' + msg + '</span>';
+  document.body.appendChild(t);
+  requestAnimationFrame(function() { t.style.opacity = '1'; t.style.transform = 'translateY(0)'; });
+  setTimeout(function() {
+    t.style.opacity = '0'; t.style.transform = 'translateY(10px)';
+    setTimeout(function() { t.remove(); }, 250);
+  }, 3800);
+}
+
+</script>
+<script>
+let currentMoveFileId = null;
+let selectedMoveFolderId = null;
+
+function getCsrfToken() {
+  const match = document.cookie.match(/(^|;)\s*csrftoken=([^;]+)/);
+  return match ? match[2] : '';
+}
+
+function openModal(id) {
+  const modal = document.getElementById(id);
+  if (modal) modal.classList.add('open');
+}
+
+function closeModal(id) {
+  const modal = document.getElementById(id);
+  if (modal) modal.classList.remove('open');
+}
+
+function openMoveModal(fileId, fileName) {
+  currentMoveFileId = fileId;
+  selectedMoveFolderId = null;
+
+  document.getElementById('moveModalFileName').textContent = fileName;
+  document.getElementById('moveConfirmBtn').disabled = true;
+
+  document.querySelectorAll('.move-folder-opt').forEach(function(btn) {
+    btn.style.borderColor = 'var(--eo-border)';
+    btn.style.background = 'var(--eo-bg)';
+  });
+
+  openModal('moveModal');
+}
+
+function selectMoveFolder(el) {
+  selectedMoveFolderId = el.getAttribute('data-folder-id') || '';
+
+  document.querySelectorAll('.move-folder-opt').forEach(function(btn) {
+    btn.style.borderColor = 'var(--eo-border)';
+    btn.style.background = 'var(--eo-bg)';
+  });
+
+  el.style.borderColor = 'var(--eo-accent)';
+  el.style.background = 'rgba(59,130,246,.08)';
+
+  document.getElementById('moveConfirmBtn').disabled = false;
+}
+
+function confirmMove() {
+  if (!currentMoveFileId) return;
+
+  const formData = new FormData();
+  formData.append('folder_id', selectedMoveFolderId || '');
+  formData.append('csrfmiddlewaretoken', getCsrfToken());
+
+  fetch(`/files/${currentMoveFileId}/move/`, {
+    method: 'POST',
+    headers: {
+      'X-Requested-With': 'XMLHttpRequest'
+    },
+    body: formData
+  })
+  .then(function(res) {
+    return res.json();
+  })
+  .then(function(data) {
+    if (data.status === 'ok') {
+      closeModal('moveModal');
+      window.location.reload();
+    } else {
+      alert(data.message || 'Could not move file.');
+    }
+  })
+  .catch(function() {
+    alert('Move request failed.');
+  });
+}
+
+// ─────────────────────────────────────────────
+// PREVIEW MODAL
+// ─────────────────────────────────────────────
+function openPreviewModal(fileId, fileName, extension) {
+  const modal = document.getElementById('previewModal');
+  const content = document.getElementById('previewContent');
+  const loading = document.getElementById('previewLoading');
+  const nameEl = document.getElementById('previewModalFileName');
+  const downloadBtn = document.getElementById('previewDownloadBtn');
+
+  nameEl.textContent = fileName;
+  downloadBtn.href = `/files/${fileId}/download/`;
+
+  content.innerHTML = '';
+  content.style.display = 'none';
+  loading.style.display = 'flex';
+
+  openModal('previewModal');
+
+  const ext = (extension || '').toLowerCase();
+  const previewUrl = `/files/${fileId}/preview/`;
+
+  if (['pdf'].includes(ext)) {
+    content.innerHTML = `<iframe class="preview-frame" src="${previewUrl}"></iframe>`;
+    loading.style.display = 'none';
+    content.style.display = 'block';
+    return;
+  }
+
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) {
+    content.innerHTML = `<img class="preview-image" src="${previewUrl}" alt="">`;
+    loading.style.display = 'none';
+    content.style.display = 'block';
+    return;
+  }
+
+  if (['mp4', 'webm', 'ogg', 'mov'].includes(ext)) {
+    content.innerHTML = `
+      <video class="preview-video" controls>
+        <source src="${previewUrl}">
+        Your browser does not support video preview.
+      </video>
+    `;
+    loading.style.display = 'none';
+    content.style.display = 'block';
+    return;
+  }
+
+  if (['mp3', 'wav', 'm4a', 'ogg'].includes(ext)) {
+    content.innerHTML = `
+      <div class="preview-audio">
+        <audio controls style="width:min(720px, 92%)">
+          <source src="${previewUrl}">
+          Your browser does not support audio preview.
+        </audio>
+      </div>
+    `;
+    loading.style.display = 'none';
+    content.style.display = 'block';
+    return;
+  }
+
+  if (['txt', 'md', 'py', 'js', 'html', 'css', 'json', 'xml', 'sql', 'csv'].includes(ext)) {
+    fetch(previewUrl, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    .then(function(res) { return res.text(); })
+    .then(function(text) {
+      content.innerHTML = `<pre class="preview-text"></pre>`;
+      content.querySelector('.preview-text').textContent = text;
+      loading.style.display = 'none';
+      content.style.display = 'block';
+    })
+    .catch(function() {
+      content.innerHTML = `<div class="preview-text">Unable to preview this text file.</div>`;
+      loading.style.display = 'none';
+      content.style.display = 'block';
+    });
+    return;
+  }
+
+  content.innerHTML = `
+    <div style="height:100%;display:flex;align-items:center;justify-content:center;color:#cbd5e1;text-align:center;padding:24px;">
+      <div>
+        <i class="bi bi-file-earmark" style="font-size:2rem;display:block;margin-bottom:10px;"></i>
+        <div style="font-weight:700;margin-bottom:6px;">Preview not available for this file type</div>
+        <div style="color:#94a3b8;font-size:.85rem;">Use the download button to open the file locally.</div>
+      </div>
+    </div>
+  `;
+  loading.style.display = 'none';
+  content.style.display = 'block';
+}
+
+function closePreviewModal() {
+  const content = document.getElementById('previewContent');
+  content.innerHTML = '';
+  closeModal('previewModal');
 }
 </script>
 {% endblock %}

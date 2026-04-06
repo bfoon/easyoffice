@@ -10,10 +10,11 @@ urlpatterns = [
     path('saved-signatures/api/',               views.SavedSignatureAPIView.as_view(),          name='saved_signatures_api'),
 
     path('<uuid:pk>/download/',                 views.FileDownloadView.as_view(),               name='file_download'),
+    path('<uuid:pk>/preview/',                  views.FilePreviewView.as_view(),                name='file_preview'),
+    path('<uuid:pk>/move/',                     views.FileMoveView.as_view(),                   name='file_move'),
     path('<uuid:pk>/delete/',                   views.FileDeleteView.as_view(),                 name='file_delete'),
     path('<uuid:pk>/share/',                    views.FileShareView.as_view(),                  name='file_share'),
     path('<uuid:pk>/convert-pdf/',              views.ConvertToPDFView.as_view(),               name='file_convert_pdf'),
-    path('<uuid:pk>/convert-for-signing/',      views.ConvertForSigningView.as_view(),          name='convert_for_signing'),
     path('<uuid:pk>/request-signature/',        views.SignatureRequestCreateView.as_view(),     name='create_signature_request'),
 
     path('folder/create/',                      views.FolderCreateView.as_view(),               name='folder_create'),

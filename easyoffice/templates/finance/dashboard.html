@@ -8,63 +8,80 @@
   <div>
     <h1 class="eo-page-title">Finance Dashboard</h1>
     <p class="eo-page-subtitle">
-      Fiscal year overview &mdash; budgets, purchase requests &amp; payments
+      Fiscal year overview — budgets, staff finance requests, purchase requests &amp; payments
     </p>
   </div>
-  <div style="display:flex;gap:8px;align-items:center">
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <a href="{% url 'purchase_request' %}" class="eo-btn eo-btn-secondary">
-      <i class="bi bi-cart-plus"></i> New Request
+      <i class="bi bi-cart-plus"></i> New Purchase Request
     </a>
+
+    <a href="{% url 'employee_finance_request' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-cash-stack"></i> New Finance Request
+    </a>
+
     <a href="{% url 'payment_list' %}" class="eo-btn eo-btn-secondary">
       <i class="bi bi-receipt"></i> Payments
     </a>
-    {% if is_finance %}
+
+    <a href="{% url 'my_finance_dashboard' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-person-lines-fill"></i> My Finance
+    </a>
+
+    {% if is_finance or is_ceo or is_hr %}
     <a href="{% url 'budget_list' %}" class="eo-btn eo-btn-primary">
       <i class="bi bi-wallet2"></i> Budgets
+    </a>
+    {% endif %}
+
+    {% if is_finance %}
+    <a href="{% url 'finance_request_queue' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-cash-coin"></i> Processing Queue
     </a>
     {% endif %}
   </div>
 </div>
 
-<!-- ── KPI STATS ── -->
 <div class="row g-3 mb-4">
   <div class="col-6 col-xl-3">
     <div class="eo-stat eo-stat-info">
       <div class="eo-stat-label">Total Budget</div>
-      <div class="eo-stat-value">${{ total_budget|floatformat:0|intcomma }}</div>
+      <div class="eo-stat-value">D{{ total_budget|floatformat:0|intcomma }}</div>
       <i class="bi bi-wallet2 eo-stat-icon"></i>
     </div>
   </div>
+
   <div class="col-6 col-xl-3">
     <div class="eo-stat eo-stat-danger">
       <div class="eo-stat-label">Spent</div>
-      <div class="eo-stat-value">${{ total_spent|floatformat:0|intcomma }}</div>
+      <div class="eo-stat-value">D{{ total_spent|floatformat:0|intcomma }}</div>
       <i class="bi bi-graph-down-arrow eo-stat-icon"></i>
     </div>
   </div>
+
   <div class="col-6 col-xl-3">
     <div class="eo-stat eo-stat-success">
       <div class="eo-stat-label">Balance</div>
-      <div class="eo-stat-value">${{ total_balance|floatformat:0|intcomma }}</div>
+      <div class="eo-stat-value">D{{ total_balance|floatformat:0|intcomma }}</div>
       <i class="bi bi-safe eo-stat-icon"></i>
     </div>
   </div>
+
   <div class="col-6 col-xl-3">
     <div class="eo-stat eo-stat-warning">
-      <div class="eo-stat-label">Pending Requests</div>
+      <div class="eo-stat-label">Pending Purchase Requests</div>
       <div class="eo-stat-value">{{ pending_count }}</div>
       <i class="bi bi-hourglass-split eo-stat-icon"></i>
     </div>
   </div>
 </div>
 
-<!-- ── OVERALL UTILISATION BAR ── -->
 <div class="eo-card mb-4">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:12px;flex-wrap:wrap">
     <div>
       <span style="font-size:.9rem;font-weight:700;color:var(--eo-text)">Overall Utilisation</span>
       <span style="font-size:.78rem;color:var(--eo-text-muted);margin-left:12px">
-        This month's payments: <strong>${{ payments_this_month|floatformat:0|intcomma }}</strong>
+        This month's payments: <strong>D{{ payments_this_month|floatformat:0|intcomma }}</strong>
       </span>
     </div>
     <span style="font-size:1.25rem;font-weight:800;
@@ -72,46 +89,50 @@
       {{ overall_pct }}%
     </span>
   </div>
+
   <div style="height:12px;background:var(--eo-bg);border-radius:6px;overflow:hidden">
     <div style="height:100%;border-radius:6px;transition:width .6s ease;width:{{ overall_pct }}%;
       background:{% if overall_pct > 85 %}var(--eo-danger){% elif overall_pct > 65 %}var(--eo-warning){% else %}var(--eo-accent){% endif %}">
     </div>
   </div>
+
   <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:.72rem;color:var(--eo-text-muted)">
-    <span>$0</span><span>${{ total_budget|floatformat:0|intcomma }}</span>
+    <span>D0</span>
+    <span>D{{ total_budget|floatformat:0|intcomma }}</span>
   </div>
 </div>
 
 <div class="row g-4">
 
-  <!-- ── LEFT COL ── -->
   <div class="col-lg-8 d-flex flex-column gap-4">
 
-    <!-- Active Budgets -->
     <div class="eo-card">
       <div class="eo-card-header">
         <div>
           <h2 class="eo-card-title">Active Budgets</h2>
           <p class="eo-card-subtitle">Current fiscal year allocations</p>
         </div>
+        {% if is_finance or is_ceo or is_hr %}
         <a href="{% url 'budget_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">View All</a>
+        {% endif %}
       </div>
 
       {% if budgets %}
       <div style="display:flex;flex-direction:column;gap:16px">
         {% for b in budgets %}
         <div>
-          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;gap:12px;flex-wrap:wrap">
             <div>
               <span style="font-size:.88rem;font-weight:600;color:var(--eo-text)">{{ b.name }}</span>
               {% if b.department %}
               <span style="font-size:.73rem;color:var(--eo-text-muted);margin-left:6px">· {{ b.department.name }}</span>
               {% endif %}
             </div>
+
             <div style="display:flex;align-items:center;gap:8px">
               <span style="font-size:.82rem;font-weight:700;color:var(--eo-text)">
-                ${{ b.spent_amount|floatformat:0|intcomma }}
-                <span style="font-size:.73rem;font-weight:400;color:var(--eo-text-muted)">/ ${{ b.total_amount|floatformat:0|intcomma }}</span>
+                D{{ b.spent_amount|floatformat:0|intcomma }}
+                <span style="font-size:.73rem;font-weight:400;color:var(--eo-text-muted)">/ D{{ b.total_amount|floatformat:0|intcomma }}</span>
               </span>
               <span style="font-size:.73rem;font-weight:700;
                 color:{% if b.utilization_pct > 85 %}var(--eo-danger){% elif b.utilization_pct > 65 %}var(--eo-warning){% else %}var(--eo-success){% endif %}">
@@ -119,13 +140,15 @@
               </span>
             </div>
           </div>
+
           <div style="height:7px;background:var(--eo-bg);border-radius:4px;overflow:hidden">
             <div style="height:100%;border-radius:4px;width:{{ b.utilization_pct }}%;
               background:{% if b.utilization_pct > 85 %}var(--eo-danger){% elif b.utilization_pct > 65 %}var(--eo-warning){% else %}var(--eo-accent){% endif %}">
             </div>
           </div>
+
           <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:.71rem;color:var(--eo-text-muted)">
-            <span>Balance: <strong style="color:var(--eo-success)">${{ b.balance|floatformat:0|intcomma }}</strong></span>
+            <span>Balance: <strong style="color:var(--eo-success)">D{{ b.balance|floatformat:0|intcomma }}</strong></span>
             {% if b.unit %}<span>{{ b.unit.name }}</span>{% endif %}
           </div>
         </div>
@@ -139,16 +162,96 @@
       {% endif %}
     </div>
 
-    <!-- Pending Approvals -->
+    {% if is_ceo %}
+    <div class="eo-card" style="border-left:4px solid #8b5cf6">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-person-check me-1" style="color:#8b5cf6"></i>
+            CEO Approval Queue — Staff Finance Requests
+          </h2>
+          <p class="eo-card-subtitle">
+            {{ pending_staff_requests|length }} request{{ pending_staff_requests|length|pluralize }} awaiting CEO approval
+          </p>
+        </div>
+      </div>
+
+      {% if pending_staff_requests %}
+      <div style="display:flex;flex-direction:column;gap:12px">
+        {% for r in pending_staff_requests %}
+        <div style="padding:14px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <div style="min-width:0;flex:1">
+              <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">{{ r.title }}</div>
+              <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:.74rem;color:var(--eo-text-muted);margin-top:4px">
+                <span><i class="bi bi-person me-1"></i>{{ r.employee.full_name|default:r.employee }}</span>
+                <span><i class="bi bi-cash-stack me-1"></i>{{ r.get_request_type_display }}</span>
+                {% if r.project %}
+                <span style="color:var(--eo-accent);font-weight:600">
+                  <i class="bi bi-kanban me-1"></i>{{ r.project.name|truncatechars:24 }}
+                </span>
+                {% endif %}
+                <span><i class="bi bi-clock me-1"></i>{{ r.created_at|naturaltime }}</span>
+              </div>
+              <div style="margin-top:8px;font-size:.8rem;color:var(--eo-text-muted)">
+                {{ r.reason|truncatechars:140 }}
+              </div>
+            </div>
+
+            <div style="text-align:right;flex-shrink:0">
+              <div style="font-size:1rem;font-weight:800;color:var(--eo-text)">
+                D{{ r.amount_requested|floatformat:0|intcomma }}
+              </div>
+              <span style="font-size:.68rem;font-weight:700;padding:3px 8px;border-radius:6px;background:#ede9fe;color:#6d28d9">
+                {{ r.get_request_type_display }}
+              </span>
+            </div>
+          </div>
+
+          <form method="post" action="{% url 'employee_finance_request_action' r.pk %}" style="margin-top:12px">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.path }}"/>
+
+            <div class="row g-3 align-items-end">
+              <div class="col-md-3">
+                <label class="eo-form-label">Approved Amount</label>
+                <input type="number" step="0.01" name="amount_approved" class="eo-form-control" value="{{ r.amount_requested }}">
+              </div>
+              <div class="col-md-6">
+                <label class="eo-form-label">CEO Notes</label>
+                <input type="text" name="notes" class="eo-form-control" placeholder="Approval or rejection note">
+              </div>
+              <div class="col-md-3" style="display:flex;gap:8px;flex-wrap:wrap">
+                <button type="submit" name="action" value="approve" class="eo-btn eo-btn-success eo-btn-sm">
+                  <i class="bi bi-check-lg"></i> Approve
+                </button>
+                <button type="submit" name="action" value="reject" class="eo-btn eo-btn-danger eo-btn-sm">
+                  <i class="bi bi-x-lg"></i> Reject
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:26px;color:var(--eo-text-muted)">
+        <i class="bi bi-person-check" style="font-size:2rem;display:block;margin-bottom:8px;opacity:.25"></i>
+        <p style="font-size:.84rem">No staff finance requests waiting for CEO approval.</p>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
     {% if pending_purchases %}
     <div class="eo-card" style="border-left:4px solid var(--eo-warning)">
       <div class="eo-card-header">
         <div>
           <h2 class="eo-card-title">
             <i class="bi bi-hourglass-split me-1" style="color:var(--eo-warning)"></i>
-            Pending Approvals
+            Purchase Requests Awaiting Approval
           </h2>
-          <p class="eo-card-subtitle">{{ pending_purchases|length }} request{{ pending_purchases|length|pluralize }} awaiting decision</p>
+          <p class="eo-card-subtitle">{{ pending_purchases|length }} request{{ pending_purchases|length|pluralize }} awaiting CEO decision</p>
         </div>
         <a href="{% url 'purchase_request' %}" class="eo-btn eo-btn-sm eo-btn-warning">Review All</a>
       </div>
@@ -158,7 +261,6 @@
         <div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;
                     {% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
 
-          <!-- Priority pip -->
           <span style="width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:6px;
                        background:{{ pr.priority_color }}"></span>
 
@@ -180,7 +282,7 @@
 
           <div style="text-align:right;flex-shrink:0">
             <div style="font-size:.95rem;font-weight:800;color:var(--eo-text)">
-              ${{ pr.estimated_cost|floatformat:0|intcomma }}
+              D{{ pr.estimated_cost|floatformat:0|intcomma }}
             </div>
             <span style="font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:4px;
               {% if pr.priority == 'urgent' %}background:#fee2e2;color:#991b1b
@@ -190,7 +292,7 @@
             </span>
           </div>
 
-          {% if is_finance %}
+          {% if is_ceo %}
           <div style="display:flex;gap:5px;flex-shrink:0">
             <form method="post" action="{% url 'purchase_approval' pr.pk %}">
               {% csrf_token %}
@@ -200,8 +302,8 @@
                 <i class="bi bi-check-lg"></i>
               </button>
             </form>
-            <form method="post" action="{% url 'purchase_approval' pr.pk %}"
-                  onsubmit="return confirm('Reject this request?')">
+
+            <form method="post" action="{% url 'purchase_approval' pr.pk %}" onsubmit="return confirm('Reject this request?')">
               {% csrf_token %}
               <input type="hidden" name="action" value="reject"/>
               <input type="hidden" name="next" value="{{ request.path }}"/>
@@ -217,10 +319,73 @@
     </div>
     {% endif %}
 
+    {% if is_finance %}
+    <div class="eo-card" style="border-left:4px solid #10b981">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-cash-coin me-1" style="color:#10b981"></i>
+            Finance Processing Queue
+          </h2>
+          <p class="eo-card-subtitle">CEO-approved staff requests waiting for payment processing</p>
+        </div>
+        <a href="{% url 'finance_request_queue' %}" class="eo-btn eo-btn-secondary eo-btn-sm">Open Queue</a>
+      </div>
+
+      {% if finance_processing_queue %}
+      <div style="display:flex;flex-direction:column;gap:10px">
+        {% for r in finance_processing_queue %}
+        <div style="padding:12px 14px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <div>
+              <div style="font-size:.88rem;font-weight:700;color:var(--eo-text)">{{ r.title }}</div>
+              <div style="font-size:.74rem;color:var(--eo-text-muted)">
+                {{ r.employee.full_name|default:r.employee }} · {{ r.get_request_type_display }}
+                {% if r.project %} · {{ r.project.name|truncatechars:24 }}{% endif %}
+              </div>
+            </div>
+            <div style="font-size:.92rem;font-weight:800;color:var(--eo-success)">
+              D{{ r.amount_approved|default:r.amount_requested|floatformat:0|intcomma }}
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:24px;color:var(--eo-text-muted)">
+        <i class="bi bi-cash-coin" style="font-size:2rem;display:block;margin-bottom:8px;opacity:.25"></i>
+        <p style="font-size:.84rem">No CEO-approved staff requests waiting for finance processing.</p>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
   </div>
 
-  <!-- ── RIGHT COL ── -->
-  <div class="col-lg-4">
+  <div class="col-lg-4 d-flex flex-column gap-4">
+
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">My Finance</h2>
+        <a href="{% url 'my_finance_dashboard' %}" class="eo-btn eo-btn-secondary eo-btn-sm">Open</a>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <a href="{% url 'employee_finance_request' %}" class="eo-btn eo-btn-secondary" style="justify-content:flex-start">
+          <i class="bi bi-send-plus"></i> Request Payment
+        </a>
+        <a href="{% url 'my_loan_list' %}" class="eo-btn eo-btn-secondary" style="justify-content:flex-start">
+          <i class="bi bi-cash-stack"></i> My Loans
+        </a>
+        <a href="{% url 'payment_list' %}" class="eo-btn eo-btn-secondary" style="justify-content:flex-start">
+          <i class="bi bi-receipt"></i> My Payments
+        </a>
+        <a href="{% url 'purchase_request' %}" class="eo-btn eo-btn-secondary" style="justify-content:flex-start">
+          <i class="bi bi-cart-plus"></i> My Purchases
+        </a>
+      </div>
+    </div>
+
     <div class="eo-card" style="position:sticky;top:20px">
       <div class="eo-card-header">
         <h2 class="eo-card-title">Recent Payments</h2>
@@ -232,7 +397,6 @@
         {% for p in recent_payments %}
         <div style="display:flex;align-items:center;gap:11px;padding:11px 0;
                     {% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
-          <!-- Method icon -->
           <div style="width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0;
             {% if p.method == 'bank_transfer' %}background:#dbeafe;color:#1d4ed8
             {% elif p.method == 'cash' %}background:#d1fae5;color:#065f46
@@ -243,14 +407,21 @@
               {% elif p.method == 'cheque' %}bi-file-text
               {% else %}bi-credit-card{% endif %}"></i>
           </div>
+
           <div style="flex:1;min-width:0">
             <div style="font-size:.83rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
               {{ p.recipient|truncatechars:26 }}
             </div>
-            <div style="font-size:.71rem;color:var(--eo-text-muted)">{{ p.reference }} · {{ p.payment_date|date:"N j" }}</div>
+            <div style="font-size:.71rem;color:var(--eo-text-muted)">
+              {{ p.reference }} · {{ p.payment_date|date:"N j" }}
+              {% if p.employee %} · {{ p.get_payment_type_display }}{% endif %}
+            </div>
           </div>
-          <div style="font-size:.88rem;font-weight:800;color:var(--eo-text);flex-shrink:0">
-            ${{ p.amount|floatformat:0|intcomma }}
+
+          <div style="font-size:.88rem;font-weight:800;
+                      color:{% if p.direction == 'staff_to_company' %}var(--eo-danger){% else %}var(--eo-text){% endif %};
+                      flex-shrink:0">
+            {% if p.direction == 'staff_to_company' %}-{% endif %}D{{ p.amount|floatformat:0|intcomma }}
           </div>
         </div>
         {% endfor %}
@@ -261,6 +432,7 @@
       </div>
       {% endif %}
     </div>
+
   </div>
 
 </div>

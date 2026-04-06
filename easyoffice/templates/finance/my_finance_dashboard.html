@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}My Finance{% endblock %}
+{% block breadcrumb %}<a href="{% url 'finance_dashboard' %}">Finance</a> / My Finance{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">My Finance</h1>
+    <p class="eo-page-subtitle">Salary, allowances, requests, loans and payment history</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a href="{% url 'employee_finance_request' %}" class="eo-btn eo-btn-primary">
+      <i class="bi bi-send-plus"></i> New Finance Request
+    </a>
+    <a href="{% url 'my_loan_list' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-cash-stack"></i> My Loans
+    </a>
+    <a href="{% url 'payment_list' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-receipt"></i> My Payments
+    </a>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-xl-3">
+    <div class="eo-stat eo-stat-success">
+      <div class="eo-stat-label">Paid This Month</div>
+      <div class="eo-stat-value">D{{ paid_this_month|floatformat:0|intcomma }}</div>
+      <i class="bi bi-cash-coin eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-xl-3">
+    <div class="eo-stat eo-stat-info">
+      <div class="eo-stat-label">Paid YTD</div>
+      <div class="eo-stat-value">D{{ paid_ytd|floatformat:0|intcomma }}</div>
+      <i class="bi bi-wallet2 eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-xl-3">
+    <div class="eo-stat eo-stat-warning">
+      <div class="eo-stat-label">Salary YTD</div>
+      <div class="eo-stat-value">D{{ salary_ytd|floatformat:0|intcomma }}</div>
+      <i class="bi bi-bank eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-xl-3">
+    <div class="eo-stat eo-stat-danger">
+      <div class="eo-stat-label">Loan Balance</div>
+      <div class="eo-stat-value">
+        {% if active_loan %}D{{ active_loan.balance|floatformat:0|intcomma }}{% else %}D0{% endif %}
+      </div>
+      <i class="bi bi-cash-stack eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">My Requests</h2>
+      </div>
+      {% if my_requests %}
+        <div style="display:flex;flex-direction:column;gap:10px">
+          {% for r in my_requests %}
+          <div style="padding:12px 14px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+            <div style="display:flex;justify-content:space-between;gap:10px">
+              <div>
+                <div style="font-weight:700;color:var(--eo-text)">{{ r.title }}</div>
+                <div style="font-size:.74rem;color:var(--eo-text-muted)">
+                  {{ r.get_request_type_display }} · {{ r.created_at|date:"N j, Y" }}
+                </div>
+              </div>
+              <span style="font-size:.72rem;font-weight:700;padding:4px 10px;border-radius:20px;background:{{ r.status_color }}18;color:{{ r.status_color }}">
+                {{ r.get_status_display }}
+              </span>
+            </div>
+            <div style="margin-top:8px;font-size:.85rem;color:var(--eo-text)">
+              D{{ r.amount_requested|floatformat:2|intcomma }}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p style="color:var(--eo-text-muted)">No finance requests yet.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <h2 class="eo-card-title">Recent Payments</h2>
+      </div>
+      {% if my_payments %}
+        <div style="display:flex;flex-direction:column;gap:10px">
+          {% for p in my_payments %}
+          <div style="padding:12px 14px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+            <div style="display:flex;justify-content:space-between;gap:10px">
+              <div>
+                <div style="font-weight:700;color:var(--eo-text)">{{ p.get_payment_type_display }}</div>
+                <div style="font-size:.74rem;color:var(--eo-text-muted)">
+                  {{ p.reference }} · {{ p.payment_date|date:"N j, Y" }}
+                </div>
+              </div>
+              <div style="font-weight:800;color:{% if p.direction == 'staff_to_company' %}var(--eo-danger){% else %}var(--eo-success){% endif %}">
+                {% if p.direction == 'staff_to_company' %}-{% else %}+{% endif %}
+                D{{ p.amount|floatformat:2|intcomma }}
+              </div>
+            </div>
+            <div style="margin-top:6px;font-size:.8rem;color:var(--eo-text-muted)">
+              {{ p.description|truncatechars:90 }}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p style="color:var(--eo-text-muted)">No payments yet.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

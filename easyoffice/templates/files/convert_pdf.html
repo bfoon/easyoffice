@@ -4,145 +4,633 @@
 {% block breadcrumb %}<a href="{% url 'file_manager' %}">Files</a> / Convert to PDF{% endblock %}
 
 {% block content %}
+
+<style>
+/* ══════════════════════════════════════════════
+   CONVERT TO PDF — Professional UI
+══════════════════════════════════════════════ */
+
+/* ── Layout ── */
+.cvt-layout {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 960px) { .cvt-layout { grid-template-columns: 1fr; } }
+
+/* ── Stat chips in header ── */
+.cvt-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.cvt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid;
+}
+.cvt-chip-doc  { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+.cvt-chip-img  { background: #ecfeff; border-color: #a5f3fc; color: #0e7490; }
+.cvt-chip-pdf  { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+
+/* ── Format group pills ── */
+.fmt-group { margin-bottom: 20px; }
+.fmt-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--eo-text-muted);
+  margin-bottom: 8px;
+}
+.fmt-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.fmt-pill {
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid;
+  letter-spacing: .02em;
+}
+.fp-doc  { background: #eff6ff; border-color: #bfdbfe; color: #1e40af; }
+.fp-img  { background: #ecfeff; border-color: #a5f3fc; color: #0e7490; }
+.fp-out  { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+.fp-arrow { font-size: 13px; color: var(--eo-text-muted); align-self: center; }
+
+/* ── Search bar ── */
+.cvt-search-wrap {
+  position: relative;
+  margin-bottom: 14px;
+}
+.cvt-search-wrap i {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--eo-text-muted);
+  font-size: 14px;
+  pointer-events: none;
+}
+.cvt-search {
+  width: 100%;
+  padding: 9px 12px 9px 36px;
+  border: 1px solid var(--eo-border);
+  border-radius: 9px;
+  background: var(--eo-bg);
+  color: var(--eo-text);
+  font-size: 14px;
+  outline: none;
+  transition: border-color .15s;
+}
+.cvt-search:focus { border-color: var(--eo-primary); }
+.cvt-search::placeholder { color: var(--eo-text-muted); }
+
+/* ── File type group header ── */
+.file-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--eo-border);
+}
+.file-group-header span {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--eo-text-muted);
+}
+.file-group-count {
+  background: var(--eo-bg);
+  border: 1px solid var(--eo-border);
+  border-radius: 20px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--eo-text-muted);
+}
+
+/* ── File row ── */
+.cvt-file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--eo-card);
+  border: 1.5px solid var(--eo-border);
+  border-radius: 10px;
+  margin-bottom: 6px;
+  transition: border-color .14s, box-shadow .14s;
+}
+.cvt-file-row:hover {
+  border-color: var(--eo-primary)60;
+  box-shadow: 0 2px 10px rgba(0,0,0,.06);
+}
+.cvt-file-row.is-selected {
+  border-color: #06b6d480;
+  background: #ecfeff20;
+}
+
+/* Checkbox */
+.cvt-checkbox {
+  width: 17px; height: 17px;
+  cursor: pointer;
+  accent-color: #06b6d4;
+  flex-shrink: 0;
+}
+.cvt-checkbox-placeholder { width: 17px; height: 17px; flex-shrink: 0; }
+
+/* File icon */
+.cvt-file-icon { font-size: 1.6rem; flex-shrink: 0; line-height: 1; }
+
+/* File info */
+.cvt-file-info { flex: 1; min-width: 0; }
+.cvt-file-name {
+  font-size: 14px; font-weight: 700; color: var(--eo-text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cvt-file-meta {
+  font-size: 12px; color: var(--eo-text-muted);
+  display: flex; gap: 10px; flex-wrap: wrap; margin-top: 2px;
+  align-items: center;
+}
+
+/* Extension arrow badge */
+.cvt-ext-arrow {
+  display: flex; align-items: center; gap: 6px;
+  flex-shrink: 0;
+}
+.ext-badge {
+  font-size: 11px; font-weight: 700; padding: 2px 8px;
+  border-radius: 5px; letter-spacing: .02em;
+}
+.ext-src { background: var(--eo-bg); border: 1px solid var(--eo-border); color: var(--eo-text-muted); }
+.ext-dst { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+
+/* Action buttons */
+.cvt-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+
+.cvt-btn-convert {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 12px; border-radius: 7px; font-size: 12px; font-weight: 700;
+  background: #ef4444; color: #fff; border: none; cursor: pointer;
+  transition: background .12s, transform .1s;
+  white-space: nowrap;
+}
+.cvt-btn-convert:hover { background: #dc2626; }
+.cvt-btn-convert:active { transform: scale(.97); }
+.cvt-btn-convert:disabled { background: var(--eo-text-muted); cursor: not-allowed; }
+.cvt-btn-converting { background: var(--eo-text-muted) !important; }
+
+/* ── Combine panel ── */
+.combine-panel {
+  background: linear-gradient(135deg, #ecfeff 0%, var(--eo-card) 100%);
+  border: 2px solid #06b6d440;
+  border-radius: 14px;
+  padding: 18px;
+  margin-bottom: 16px;
+}
+.combine-panel-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.combine-panel-title { font-size: 15px; font-weight: 800; color: var(--eo-text); }
+.combine-panel-subtitle { font-size: 12px; color: var(--eo-text-muted); margin-top: 2px; }
+.combine-sel-badge {
+  background: #06b6d4; color: #fff;
+  border-radius: 20px; padding: 2px 10px;
+  font-size: 12px; font-weight: 800;
+  transition: background .15s;
+}
+.combine-sel-badge.empty { background: var(--eo-border); color: var(--eo-text-muted); }
+
+.combine-output-row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+.combine-output-row input { flex: 1; min-width: 0; }
+
+.combine-submit {
+  width: 100%;
+  padding: 10px 16px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 700;
+  background: #06b6d4;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  transition: background .12s;
+  margin-top: 10px;
+}
+.combine-submit:hover { background: #0891b2; }
+.combine-submit:disabled { background: var(--eo-text-muted); cursor: not-allowed; }
+
+.combine-note { font-size: 12px; color: var(--eo-text-muted); margin-top: 8px; }
+
+/* ── Your PDFs panel ── */
+.pdf-list-panel {
+  background: var(--eo-card);
+  border: 1px solid var(--eo-border);
+  border-radius: 14px;
+  padding: 16px;
+}
+.pdf-list-scroll {
+  max-height: 340px;
+  overflow-y: auto;
+  margin-top: 10px;
+}
+.pdf-list-scroll::-webkit-scrollbar { width: 5px; }
+.pdf-list-scroll::-webkit-scrollbar-thumb { background: var(--eo-border); border-radius: 3px; }
+
+.pdf-list-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  transition: background .12s;
+}
+.pdf-list-item:hover { background: var(--eo-bg); }
+.pdf-list-item-info { flex: 1; min-width: 0; }
+.pdf-list-item-name { font-size: 13px; font-weight: 600; color: var(--eo-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-list-item-meta { font-size: 11px; color: var(--eo-text-muted); }
+.pdf-list-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+
+/* ── How it works banner ── */
+.cvt-info-bar {
+  display: flex; gap: 16px; align-items: flex-start;
+  padding: 14px 18px;
+  background: var(--eo-card);
+  border: 1px solid var(--eo-border);
+  border-left: 4px solid var(--eo-primary);
+  border-radius: 10px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: var(--eo-text-muted);
+  line-height: 1.6;
+}
+.cvt-info-bar i { color: var(--eo-primary); font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+
+/* ── Empty state ── */
+.cvt-empty {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--eo-text-muted);
+}
+.cvt-empty i { font-size: 44px; display: block; opacity: .25; margin-bottom: 14px; }
+.cvt-empty h3 { font-size: 16px; color: var(--eo-text-muted); margin-bottom: 6px; }
+.cvt-empty p { font-size: 13px; margin-bottom: 18px; }
+
+/* ── Filter tabs ── */
+.cvt-filter-tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+.cvt-ftab {
+  padding: 6px 14px; border-radius: 7px; font-size: 13px; font-weight: 600;
+  border: 1px solid var(--eo-border); background: var(--eo-bg);
+  color: var(--eo-text-muted); cursor: pointer; transition: all .12s;
+}
+.cvt-ftab:hover { border-color: var(--eo-primary); color: var(--eo-primary); }
+.cvt-ftab.active { background: var(--eo-primary); border-color: var(--eo-primary); color: #fff; }
+
+/* ── No-results message ── */
+.cvt-no-results {
+  text-align: center; padding: 24px; color: var(--eo-text-muted); font-size: 13px; display: none;
+}
+</style>
+
+
+<!-- ════════════════════════════════════════════
+     PAGE HEADER
+════════════════════════════════════════════ -->
 <div class="eo-page-header">
   <div>
-    <h1 class="eo-page-title">Convert to PDF</h1>
-    <p class="eo-page-subtitle">Convert Word, Excel, PowerPoint and other documents to PDF in one click</p>
-  </div>
-  <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-secondary">
-    <i class="bi bi-arrow-left"></i> File Manager
-  </a>
-</div>
-
-<!-- How it works -->
-<div class="eo-card mb-4" style="border-left:4px solid var(--eo-accent)">
-  <div style="display:flex;align-items:flex-start;gap:16px">
-    <i class="bi bi-info-circle-fill" style="font-size:1.3rem;color:var(--eo-accent);flex-shrink:0;margin-top:2px"></i>
-    <div>
-      <div style="font-size:.9rem;font-weight:700;color:var(--eo-text);margin-bottom:6px">How it works</div>
-      <div style="font-size:.83rem;color:var(--eo-text-muted);line-height:1.65">
-        Select any document below and click <strong>Convert to PDF</strong>. The converted PDF will be saved alongside your original file in the same folder. Your original file is not modified or deleted.
-        <br/>Supported formats: <strong>Word</strong> (.doc, .docx), <strong>Excel</strong> (.xls, .xlsx, .csv), <strong>PowerPoint</strong> (.ppt, .pptx), <strong>OpenDocument</strong> (.odt, .ods, .odp), <strong>Text</strong> (.txt, .md, .rtf)
-      </div>
+    <h1 class="eo-page-title">
+      <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444"></i> Convert to PDF
+    </h1>
+    <p class="eo-page-subtitle">Convert documents and images to PDF with one click</p>
+    <div class="cvt-chips">
+      <span class="cvt-chip cvt-chip-doc">
+        <i class="bi bi-file-earmark-text"></i>
+        {{ convertible_files|length }} file{{ convertible_files|length|pluralize }} to convert
+      </span>
+      <span class="cvt-chip cvt-chip-pdf">
+        <i class="bi bi-file-earmark-pdf-fill"></i>
+        {{ pdf_files|length }} existing PDF{{ pdf_files|length|pluralize }}
+      </span>
     </div>
   </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-arrow-left"></i> File Manager
+    </a>
+    <a href="{% url 'pdf_tools_page' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-tools"></i> PDF Tools
+    </a>
+  </div>
 </div>
 
-<!-- Supported formats visual -->
-<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px">
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.doc</span>
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.docx</span>
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.xls</span>
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.xlsx</span>
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.csv</span>
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.ppt</span>
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.pptx</span>
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.odt</span>
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.ods</span>
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.odp</span>
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.txt</span>
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.md</span>
-  <span style="padding:4px 12px;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-text-muted)">.rtf</span>
-  <span style="padding:4px 12px;background:#fee2e2;border:1px solid #fecaca;border-radius:20px;font-size:.75rem;font-weight:700;color:#991b1b">
-    <i class="bi bi-arrow-right me-1"></i>.pdf
-  </span>
+
+<!-- ════════════════════════════════════════════
+     MESSAGES
+════════════════════════════════════════════ -->
+{% if messages %}
+  {% for msg in messages %}
+  <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-radius:10px;margin-bottom:12px;
+              border:1px solid var(--eo-border);background:var(--eo-card);font-size:14px">
+    <i class="bi bi-{% if 'success' in msg.tags %}check-circle-fill text-success{% elif 'error' in msg.tags %}x-circle-fill text-danger{% elif 'warning' in msg.tags %}exclamation-triangle-fill text-warning{% else %}info-circle-fill{% endif %}"></i>
+    {{ msg }}
+  </div>
+  {% endfor %}
+{% endif %}
+
+
+<!-- ════════════════════════════════════════════
+     FORMAT REFERENCE + HOW IT WORKS
+════════════════════════════════════════════ -->
+<div class="cvt-info-bar">
+  <i class="bi bi-info-circle-fill"></i>
+  <div>
+    The converted PDF is saved alongside your original file — the original is never modified or deleted.
+    Documents use <strong>LibreOffice</strong> for conversion; images use <strong>Pillow</strong>.
+  </div>
 </div>
 
-<div class="row g-4">
+<div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:22px;align-items:center">
+  <div class="fmt-group" style="margin:0">
+    <div class="fmt-group-label">Documents & Spreadsheets</div>
+    <div class="fmt-pills">
+      <span class="fmt-pill fp-doc">.doc</span>
+      <span class="fmt-pill fp-doc">.docx</span>
+      <span class="fmt-pill fp-doc">.xls</span>
+      <span class="fmt-pill fp-doc">.xlsx</span>
+      <span class="fmt-pill fp-doc">.csv</span>
+      <span class="fmt-pill fp-doc">.ppt</span>
+      <span class="fmt-pill fp-doc">.pptx</span>
+      <span class="fmt-pill fp-doc">.odt</span>
+      <span class="fmt-pill fp-doc">.ods</span>
+      <span class="fmt-pill fp-doc">.odp</span>
+      <span class="fmt-pill fp-doc">.txt</span>
+      <span class="fmt-pill fp-doc">.md</span>
+      <span class="fmt-pill fp-doc">.rtf</span>
+    </div>
+  </div>
+  <span class="fp-arrow"><i class="bi bi-arrow-right"></i></span>
+  <div class="fmt-group" style="margin:0">
+    <div class="fmt-group-label">Images</div>
+    <div class="fmt-pills">
+      <span class="fmt-pill fp-img">.jpg</span>
+      <span class="fmt-pill fp-img">.jpeg</span>
+      <span class="fmt-pill fp-img">.png</span>
+      <span class="fmt-pill fp-img">.webp</span>
+      <span class="fmt-pill fp-img">.bmp</span>
+      <span class="fmt-pill fp-img">.tiff</span>
+    </div>
+  </div>
+  <span class="fp-arrow"><i class="bi bi-arrow-right"></i></span>
+  <span class="fmt-pill fp-out" style="font-size:14px;padding:5px 14px"><i class="bi bi-file-earmark-pdf-fill me-1"></i>.pdf</span>
+</div>
 
-  <!-- ── Convertible files ── -->
-  <div class="col-lg-8">
-    <div class="eo-card">
-      <div class="eo-card-header" style="margin-bottom:16px">
+
+<!-- ════════════════════════════════════════════
+     MAIN LAYOUT
+════════════════════════════════════════════ -->
+<div class="cvt-layout">
+
+  <!-- ─────────────────────────────────
+       LEFT: File list
+  ───────────────────────────────── -->
+  <div>
+    <div class="eo-card" style="padding:0;overflow:hidden">
+
+      <!-- Card header -->
+      <div style="padding:16px 18px;border-bottom:1px solid var(--eo-border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
         <div>
-          <h2 class="eo-card-title">Your Files — Ready to Convert</h2>
-          <p class="eo-card-subtitle">{{ convertible_files|length }} convertible file{{ convertible_files|length|pluralize }}</p>
+          <h2 class="eo-card-title" style="margin:0">Your Convertible Files</h2>
+          <p style="font-size:13px;color:var(--eo-text-muted);margin:2px 0 0">Click <strong>Convert to PDF</strong> on any file, or check images to combine them</p>
         </div>
-        <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
-          <i class="bi bi-cloud-upload"></i> Upload New
-        </a>
+        <div style="display:flex;gap:6px">
+          <button class="cvt-ftab active" data-filter="all" onclick="filterFiles('all', this)">All</button>
+          <button class="cvt-ftab" data-filter="doc" onclick="filterFiles('doc', this)">
+            <i class="bi bi-file-earmark-text"></i> Documents
+          </button>
+          <button class="cvt-ftab" data-filter="img" onclick="filterFiles('img', this)">
+            <i class="bi bi-image"></i> Images
+          </button>
+        </div>
       </div>
 
-      {% if convertible_files %}
-      <div style="display:flex;flex-direction:column;gap:8px">
-        {% for file in convertible_files %}
-        <div style="display:flex;align-items:center;gap:14px;padding:13px 16px;background:var(--eo-bg);border-radius:10px;border:1.5px solid var(--eo-border);transition:border-color .14s"
-             onmouseover="this.style.borderColor='var(--eo-accent)'"
-             onmouseout="this.style.borderColor='var(--eo-border)'">
+      <div style="padding:14px 18px">
 
-          <!-- File icon -->
-          <i class="bi {{ file.icon_class }}" style="font-size:1.7rem;color:{{ file.icon_color }};flex-shrink:0"></i>
+        {% if convertible_files %}
 
-          <!-- File info -->
-          <div style="flex:1;min-width:0">
-            <div style="font-size:.9rem;font-weight:700;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-              {{ file.name }}
+        <!-- Search -->
+        <div class="cvt-search-wrap">
+          <i class="bi bi-search"></i>
+          <input type="text" class="cvt-search" id="fileSearch" placeholder="Search files…" oninput="searchFiles(this.value)">
+        </div>
+
+        <!-- File list -->
+        <div id="fileList">
+
+
+          <div class="file-group" data-group="doc" id="group-doc">
+            <div class="file-group-header">
+              <i class="bi bi-file-earmark-text" style="color:var(--eo-primary)"></i>
+              <span>Documents & Spreadsheets</span>
+              <span class="file-group-count" id="doc-count"></span>
             </div>
-            <div style="font-size:.75rem;color:var(--eo-text-muted);display:flex;gap:12px;flex-wrap:wrap;margin-top:2px">
-              <span>{{ file.size_display }}</span>
-              <span>{{ file.created_at|date:"N j, Y" }}</span>
-              {% if file.folder %}<span><i class="bi bi-folder me-1"></i>{{ file.folder.name }}</span>{% endif %}
+            <div id="docs-list">
+              {% for file in convertible_files %}
+              {% if file.type_category != 'image' %}
+              <div class="cvt-file-row" data-name="{{ file.name|lower }}" data-type="doc">
+                <div class="cvt-checkbox-placeholder"></div>
+
+                <i class="cvt-file-icon bi {{ file.icon_class }}" style="color:{{ file.icon_color }}"></i>
+
+                <div class="cvt-file-info">
+                  <div class="cvt-file-name" title="{{ file.name }}">{{ file.name }}</div>
+                  <div class="cvt-file-meta">
+                    <span><i class="bi bi-hdd me-1"></i>{{ file.file_size|filesizeformat }}</span>
+                    <span><i class="bi bi-calendar3 me-1"></i>{{ file.created_at|date:"N j, Y" }}</span>
+                    {% if file.folder %}<span><i class="bi bi-folder me-1"></i>{{ file.folder.name }}</span>{% endif %}
+                  </div>
+                </div>
+
+                <div class="cvt-ext-arrow">
+                  <span class="ext-badge ext-src">.{{ file.extension }}</span>
+                  <i class="bi bi-arrow-right" style="color:var(--eo-text-muted);font-size:13px"></i>
+                  <span class="ext-badge ext-dst">.pdf</span>
+                </div>
+
+                <div class="cvt-actions">
+                  <a href="{% url 'file_preview' file.pk %}"
+                     class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Preview"
+                     target="_blank">
+                    <i class="bi bi-eye"></i>
+                  </a>
+                  <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="margin:0">
+                    {% csrf_token %}
+                    <input type="hidden" name="next" value="{{ request.path }}">
+                    <button type="submit" class="cvt-btn-convert"
+                            onclick="markConverting(this)"
+                            title="Convert to PDF">
+                      <i class="bi bi-file-earmark-pdf-fill"></i> Convert
+                    </button>
+                  </form>
+                </div>
+              </div>
+              {% endif %}
+              {% endfor %}
             </div>
           </div>
 
-          <!-- Arrow indicator -->
-          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
-            <span style="font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:12px;background:var(--eo-surface);border:1px solid var(--eo-border);color:var(--eo-text-muted)">.{{ file.extension }}</span>
-            <i class="bi bi-arrow-right" style="color:var(--eo-text-muted)"></i>
-            <span style="font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:12px;background:#fee2e2;color:#991b1b">.pdf</span>
+          <!-- ── Image files ── -->
+          <div class="file-group" data-group="img" id="group-img" style="margin-top:16px">
+            <div class="file-group-header">
+              <i class="bi bi-images" style="color:#06b6d4"></i>
+              <span>Images</span>
+              <span class="file-group-count" id="img-count"></span>
+            </div>
+            <div id="imgs-list">
+              {% for file in convertible_files %}
+              {% if file.type_category == 'image' %}
+              <div class="cvt-file-row" data-name="{{ file.name|lower }}" data-type="img" data-id="{{ file.id }}">
+                <input type="checkbox" class="cvt-checkbox img-check"
+                       value="{{ file.id }}"
+                       onchange="updateCombineCount()"
+                       title="Select for combining into PDF">
+
+                <i class="cvt-file-icon bi bi-image" style="color:#06b6d4"></i>
+
+                <div class="cvt-file-info">
+                  <div class="cvt-file-name" title="{{ file.name }}">{{ file.name }}</div>
+                  <div class="cvt-file-meta">
+                    <span><i class="bi bi-hdd me-1"></i>{{ file.file_size|filesizeformat }}</span>
+                    <span><i class="bi bi-calendar3 me-1"></i>{{ file.created_at|date:"N j, Y" }}</span>
+                    {% if file.folder %}<span><i class="bi bi-folder me-1"></i>{{ file.folder.name }}</span>{% endif %}
+                  </div>
+                </div>
+
+                <div class="cvt-ext-arrow">
+                  <span class="ext-badge ext-src">.{{ file.extension }}</span>
+                  <i class="bi bi-arrow-right" style="color:var(--eo-text-muted);font-size:13px"></i>
+                  <span class="ext-badge ext-dst">.pdf</span>
+                </div>
+
+                <div class="cvt-actions">
+                  <a href="{% url 'file_preview' file.pk %}"
+                     class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Preview"
+                     target="_blank">
+                    <i class="bi bi-eye"></i>
+                  </a>
+                  <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="margin:0">
+                    {% csrf_token %}
+                    <input type="hidden" name="next" value="{{ request.path }}">
+                    <button type="submit" class="cvt-btn-convert"
+                            onclick="markConverting(this)"
+                            title="Convert this image to PDF">
+                      <i class="bi bi-file-earmark-pdf-fill"></i> Convert
+                    </button>
+                  </form>
+                </div>
+              </div>
+              {% endif %}
+              {% endfor %}
+            </div>
           </div>
 
-          <!-- Convert button -->
-          <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="flex-shrink:0">
-            {% csrf_token %}
-            <input type="hidden" name="next" value="{{ request.path }}"/>
-            <button type="submit" class="eo-btn eo-btn-sm"
-                    style="background:#ef4444;color:#fff;border-color:#ef4444;white-space:nowrap">
-              <i class="bi bi-file-earmark-pdf-fill"></i> Convert to PDF
-            </button>
-          </form>
+          <div class="cvt-no-results" id="noResults">
+            <i class="bi bi-search" style="font-size:24px;display:block;margin-bottom:8px;opacity:.3"></i>
+            No files match your search.
+          </div>
+
+        </div>{# /fileList #}
+
+        {% else %}
+        <!-- Empty state -->
+        <div class="cvt-empty">
+          <i class="bi bi-file-earmark-pdf"></i>
+          <h3>No convertible files</h3>
+          <p>Upload a Word document, spreadsheet, presentation, or image to get started.</p>
+          <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-primary">
+            <i class="bi bi-cloud-upload"></i> Upload a File
+          </a>
         </div>
-        {% endfor %}
+        {% endif %}
+
+      </div>{# /card body #}
+    </div>{# /eo-card #}
+  </div>{# /left col #}
+
+
+  <!-- ─────────────────────────────────
+       RIGHT: Sidebar panels
+  ───────────────────────────────── -->
+  <div>
+
+    <!-- ── Combine Images panel ── -->
+    <div class="combine-panel">
+      <div class="combine-panel-header">
+        <i class="bi bi-images" style="font-size:22px;color:#06b6d4"></i>
+        <div style="flex:1">
+          <div class="combine-panel-title">Combine Images into PDF</div>
+          <div class="combine-panel-subtitle">Check images on the left to combine them</div>
+        </div>
+        <span class="combine-sel-badge empty" id="combineBadge">0</span>
       </div>
 
-      {% else %}
-      <div style="text-align:center;padding:56px 24px;color:var(--eo-text-muted)">
-        <i class="bi bi-file-earmark-pdf" style="font-size:3rem;display:block;margin-bottom:14px;opacity:.25;color:#ef4444"></i>
-        <div style="font-size:1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No convertible files</div>
-        <p style="font-size:.86rem;margin-bottom:20px">
-          Upload a Word, Excel, PowerPoint or other supported document to get started.
-        </p>
-        <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-primary">
-          <i class="bi bi-cloud-upload"></i> Upload a File
-        </a>
+      <div id="combineSelectedList" style="font-size:12px;color:var(--eo-text-muted);min-height:24px;margin-bottom:4px">
+        No images selected yet.
       </div>
-      {% endif %}
+
+      <div class="combine-output-row">
+        <input type="text" id="combineOutputName" class="eo-form-control" placeholder="combined-images.pdf" value="combined-images.pdf">
+      </div>
+
+      <button class="combine-submit" id="combineSubmitBtn" disabled onclick="submitCombine()">
+        <i class="bi bi-file-earmark-pdf-fill"></i> Combine Selected Images
+      </button>
+
+      <p class="combine-note">
+        <i class="bi bi-info-circle me-1"></i>
+        Images will be combined in the order they are selected.
+      </p>
+
+      <!-- Hidden form for combining -->
+      <form method="post" action="{% url 'pdf_merge_images' %}" id="combineForm" style="display:none">
+        {% csrf_token %}
+      </form>
     </div>
-  </div>
 
-  <!-- ── Right: already PDFs ── -->
-  <div class="col-lg-4">
-    <div class="eo-card">
-      <div class="eo-card-header" style="margin-bottom:14px">
-        <h2 class="eo-card-title">Your PDFs</h2>
-        <span style="font-size:.78rem;color:var(--eo-text-muted)">{{ pdf_files|length }} file{{ pdf_files|length|pluralize }}</span>
+    <!-- ── Your PDFs panel ── -->
+    <div class="pdf-list-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <h3 class="eo-card-title" style="margin:0">
+          <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444;margin-right:6px"></i>Your PDFs
+        </h3>
+        <span style="font-size:12px;font-weight:700;color:var(--eo-text-muted);background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:20px;padding:2px 10px">
+          {{ pdf_files|length }}
+        </span>
       </div>
 
       {% if pdf_files %}
-      <div style="display:flex;flex-direction:column;gap:6px">
+      <div class="pdf-list-scroll">
         {% for file in pdf_files %}
-        <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--eo-bg);border-radius:8px">
-          <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444;font-size:1.1rem;flex-shrink:0"></i>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:.83rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ file.name }}</div>
-            <div style="font-size:.71rem;color:var(--eo-text-muted)">{{ file.size_display }}</div>
+        <div class="pdf-list-item">
+          <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444;font-size:18px;flex-shrink:0"></i>
+          <div class="pdf-list-item-info">
+            <div class="pdf-list-item-name" title="{{ file.name }}">{{ file.name }}</div>
+            <div class="pdf-list-item-meta">{{ file.file_size|filesizeformat }} · {{ file.created_at|date:"d M Y" }}</div>
           </div>
-          <div style="display:flex;gap:5px;flex-shrink:0">
-            <a href="{% url 'file_download' file.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Download">
+          <div class="pdf-list-item-actions">
+            <a href="{% url 'file_preview' file.pk %}"
+               class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Preview" target="_blank">
+              <i class="bi bi-eye"></i>
+            </a>
+            <a href="{% url 'file_download' file.pk %}"
+               class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Download">
               <i class="bi bi-download"></i>
             </a>
-            <a href="{% url 'create_signature_request' file.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon"
-               title="Send for Signature" style="color:#8b5cf6;border-color:#8b5cf630">
+            <a href="{% url 'create_signature_request' file.pk %}"
+               class="eo-btn eo-btn-sm eo-btn-icon" title="Send for Signature"
+               style="color:#8b5cf6;border:1px solid #8b5cf630;background:transparent">
               <i class="bi bi-pen"></i>
             </a>
           </div>
@@ -150,27 +638,163 @@
         {% endfor %}
       </div>
       {% else %}
-      <div style="text-align:center;padding:32px 16px;color:var(--eo-text-muted)">
-        <i class="bi bi-file-earmark-pdf" style="font-size:2rem;display:block;margin-bottom:8px;opacity:.2;color:#ef4444"></i>
-        <p style="font-size:.83rem">No PDFs yet — convert a document above.</p>
+      <div style="text-align:center;padding:24px 16px;color:var(--eo-text-muted)">
+        <i class="bi bi-file-earmark-pdf" style="font-size:28px;display:block;margin-bottom:8px;opacity:.2;color:#ef4444"></i>
+        <p style="font-size:13px;margin:0">No PDFs yet — convert a file.</p>
       </div>
       {% endif %}
     </div>
 
-    <!-- Requirements note -->
-    <div class="eo-card mt-4" style="border-left:4px solid var(--eo-warning)">
-      <h3 style="font-size:.86rem;font-weight:700;color:var(--eo-text);margin-bottom:10px">
-        <i class="bi bi-exclamation-triangle me-1" style="color:var(--eo-warning)"></i> Server Requirement
-      </h3>
-      <div style="font-size:.79rem;color:var(--eo-text-muted);line-height:1.6">
-        PDF conversion requires <strong>LibreOffice</strong> installed on the server.<br/>
-        Install with:<br/>
-        <code style="display:block;background:var(--eo-bg);padding:6px 9px;border-radius:6px;font-size:.75rem;margin-top:6px">
-          apt-get install libreoffice
-        </code>
-      </div>
-    </div>
-  </div>
 
-</div>
+  </div>{# /right col #}
+</div>{# /cvt-layout #}
+
+
+<!-- ════════════════════════════════════════════
+     JAVASCRIPT
+════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+/* ── Count group items and display in badge ── */
+function updateGroupCounts() {
+  const docItems = document.querySelectorAll('[data-type="doc"]:not([style*="display:none"])');
+  const imgItems = document.querySelectorAll('[data-type="img"]:not([style*="display:none"])');
+  const docCount = document.getElementById('doc-count');
+  const imgCount = document.getElementById('img-count');
+  if (docCount) docCount.textContent = docItems.length;
+  if (imgCount) imgCount.textContent = imgItems.length;
+}
+
+/* ── Filter tabs ── */
+let activeFilter = 'all';
+function filterFiles(type, btn) {
+  activeFilter = type;
+  document.querySelectorAll('.cvt-ftab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  const docGroup = document.getElementById('group-doc');
+  const imgGroup = document.getElementById('group-img');
+
+  if (type === 'all') {
+    if (docGroup) docGroup.style.display = '';
+    if (imgGroup) imgGroup.style.display = '';
+  } else if (type === 'doc') {
+    if (docGroup) docGroup.style.display = '';
+    if (imgGroup) imgGroup.style.display = 'none';
+  } else if (type === 'img') {
+    if (docGroup) docGroup.style.display = 'none';
+    if (imgGroup) imgGroup.style.display = '';
+  }
+
+  // Re-apply search
+  searchFiles(document.getElementById('fileSearch')?.value || '');
+}
+
+/* ── Live search ── */
+function searchFiles(query) {
+  const q = query.toLowerCase().trim();
+  const rows = document.querySelectorAll('.cvt-file-row');
+  let visible = 0;
+
+  rows.forEach(row => {
+    // Check if parent group is visible
+    const group = row.closest('.file-group');
+    if (group && group.style.display === 'none') {
+      row.style.display = 'none';
+      return;
+    }
+    const name = row.dataset.name || '';
+    const match = !q || name.includes(q);
+    row.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+
+  const noResults = document.getElementById('noResults');
+  if (noResults) noResults.style.display = visible === 0 && q ? 'block' : 'none';
+
+  updateGroupCounts();
+}
+
+/* ── Convert button loading state ── */
+function markConverting(btn) {
+  setTimeout(() => {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Converting…';
+    btn.classList.add('cvt-btn-converting');
+  }, 10);
+}
+
+/* ── Combine images logic ── */
+function updateCombineCount() {
+  const checks = document.querySelectorAll('.img-check:checked');
+  const badge  = document.getElementById('combineBadge');
+  const btn    = document.getElementById('combineSubmitBtn');
+  const list   = document.getElementById('combineSelectedList');
+
+  const count = checks.length;
+  badge.textContent = count;
+  badge.classList.toggle('empty', count === 0);
+  btn.disabled = count === 0;
+
+  // Update row highlight
+  document.querySelectorAll('[data-type="img"]').forEach(row => {
+    const cb = row.querySelector('.img-check');
+    row.classList.toggle('is-selected', cb && cb.checked);
+  });
+
+  if (count === 0) {
+    list.textContent = 'No images selected yet.';
+    list.style.color = 'var(--eo-text-muted)';
+  } else {
+    const names = Array.from(checks).map(c => {
+      const row = c.closest('.cvt-file-row');
+      return row ? row.querySelector('.cvt-file-name').textContent.trim() : '';
+    });
+    list.innerHTML = names.map((n, i) =>
+      `<div style="padding:2px 0;display:flex;align-items:center;gap:6px">
+        <span style="background:#06b6d420;color:#0e7490;border-radius:50%;width:16px;height:16px;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</span>
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--eo-text)">${n}</span>
+      </div>`
+    ).join('');
+    list.style.color = '';
+  }
+}
+
+function submitCombine() {
+  const checks = document.querySelectorAll('.img-check:checked');
+  if (checks.length === 0) return;
+
+  const form   = document.getElementById('combineForm');
+  const output = document.getElementById('combineOutputName').value.trim() || 'combined-images.pdf';
+
+  // Remove previous dynamic inputs
+  form.querySelectorAll('.dyn-input').forEach(i => i.remove());
+
+  checks.forEach(cb => {
+    const inp = document.createElement('input');
+    inp.type  = 'hidden';
+    inp.name  = 'multi_files';
+    inp.value = cb.value;
+    inp.className = 'dyn-input';
+    form.appendChild(inp);
+  });
+
+  const outInp = document.createElement('input');
+  outInp.type  = 'hidden';
+  outInp.name  = 'output_name';
+  outInp.value = output;
+  outInp.className = 'dyn-input';
+  form.appendChild(outInp);
+
+  form.submit();
+}
+
+/* ── Init ── */
+document.addEventListener('DOMContentLoaded', () => {
+  updateGroupCounts();
+  updateCombineCount();
+});
+</script>
+
 {% endblock %}

@@ -10,6 +10,10 @@ from django.core.mail import send_mail
 from django.conf import settings
 import os, subprocess, tempfile, hashlib, mimetypes
 from django.utils.decorators import method_decorator
+from io import BytesIO
+from django.core.files.base import ContentFile
+from pypdf import PdfReader, PdfWriter
+from PIL import Image
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 from apps.files.models import (
     SharedFile, FileFolder, SignatureRequest,
@@ -87,6 +91,21 @@ def _convert_to_pdf(source_path):
             'LibreOffice is not installed. Install with: apt-get install libreoffice'
         )
 
+def _convert_image_to_pdf(source_path):
+    """
+    Convert an image file to PDF using Pillow.
+    Returns bytes of the generated PDF.
+    """
+    with Image.open(source_path) as img:
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+
+        buffer = BytesIO()
+        img.save(buffer, format="PDF", resolution=100.0)
+        buffer.seek(0)
+        return buffer
 
 def _notify_signer(signer, base_url):
     """Send an email notification to a signer."""
@@ -109,6 +128,258 @@ def _notify_signer(signer, base_url):
         )
     except Exception:
         pass
+
+
+def _embed_signatures_in_pdf(sig_req):
+    """
+    Burns every filled SignatureField into the PDF with a DocuSign-style visual:
+
+      ┌──────────────────────────────────────┐  ← light-blue field background
+      │   [signature image  OR  typed text]  │  ← signature area (≈75% of height)
+      ├──────────────────────────────────────┤  ← solid blue separator line
+      │ ✓ John Doe                  15 Jan 25│  ← label strip with name + date
+      └──────────────────────────────────────┘
+
+    Date / text fields get the same frame with a label at the bottom.
+
+    Requirements: pip install reportlab
+    """
+    try:
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib.utils import ImageReader
+    except ImportError:
+        return None   # signing still completes; PDF is just unchanged
+
+    import base64
+    from collections import defaultdict
+
+    document = sig_req.document
+    if not document or not getattr(document, 'file', None):
+        return None
+
+    from apps.files.models import SignatureField
+    fields = list(
+        SignatureField.objects
+        .filter(request=sig_req)
+        .exclude(value='')
+        .select_related('signer')
+    )
+    if not fields:
+        return None
+
+    try:
+        pdf_bytes = document.file.open('rb').read()
+        reader = PdfReader(BytesIO(pdf_bytes))
+    except Exception:
+        return None
+
+    # ── Colour palette (DocuSign-inspired) ───────────────────────────────────
+    # All values are (R, G, B) floats 0-1
+    DS_BLUE       = (0.098, 0.376, 0.875)   # #1960DF  border / line / label mark
+    DS_BLUE_LIGHT = (0.918, 0.937, 0.992)   # #EAEFfd  signature field background
+    DS_DATE_BG    = (0.953, 0.961, 0.996)   # #F3F5FE  date / text field background
+    DS_INK        = (0.063, 0.271, 0.773)   # #1045C5  signature ink (slightly darker)
+    DS_LABEL      = (0.373, 0.420, 0.510)   # #5F6B82  label strip text
+    DS_CHECK      = (0.063, 0.271, 0.773)   # same blue for the ✓ mark
+
+    def _rgb(tup):
+        return tup   # just a readability alias
+
+    fields_by_page = defaultdict(list)
+    for f in fields:
+        fields_by_page[f.page].append(f)
+
+    writer = PdfWriter()
+
+    for page_idx in range(len(reader.pages)):
+        page     = reader.pages[page_idx]
+        page_num = page_idx + 1
+        page_w   = float(page.mediabox.width)    # PDF points (72 pt = 1 inch)
+        page_h   = float(page.mediabox.height)
+
+        page_fields = fields_by_page.get(page_num, [])
+        if not page_fields:
+            writer.add_page(page)
+            continue
+
+        overlay_buf = BytesIO()
+        c = rl_canvas.Canvas(overlay_buf, pagesize=(page_w, page_h))
+
+        for field in page_fields:
+            value = field.value.strip()
+            if not value:
+                continue
+
+            # ── Coordinate conversion (% → pt, flip Y axis) ─────────────────
+            fx = (field.x_pct      / 100.0) * page_w
+            fw = (field.width_pct  / 100.0) * page_w
+            fh = (field.height_pct / 100.0) * page_h
+            # PDF Y origin is bottom-left; browser Y origin is top-left
+            fy = page_h * (1.0 - (field.y_pct + field.height_pct) / 100.0)
+
+            is_sig  = field.field_type in ('signature', 'initials')
+            is_date = field.field_type == 'date'
+            # is_text: everything else
+
+            # ── Label strip height ───────────────────────────────────────────
+            # Reserve the bottom 24 % of the field for "✓ Name  |  Date" text.
+            # Minimum 9 pt so it is always readable; skip strip if field < 20 pt.
+            label_h = max(9.0, min(fh * 0.24, 16.0)) if fh >= 20 else 0.0
+            sig_h   = fh - label_h          # height of the signature content area
+            sig_y   = fy + label_h          # bottom-left Y of content area
+
+            # ── 1. Background rectangle ──────────────────────────────────────
+            bg = DS_BLUE_LIGHT if is_sig else DS_DATE_BG
+            c.setFillColorRGB(*bg)
+            c.setStrokeColorRGB(*DS_BLUE)
+            c.setLineWidth(0.6)
+            c.roundRect(fx, fy, fw, fh, radius=2, stroke=1, fill=1)
+
+            # ── 2. Separator line between content and label strip ────────────
+            if label_h:
+                c.setStrokeColorRGB(*DS_BLUE)
+                c.setLineWidth(1.0)
+                c.line(fx + 2, fy + label_h, fx + fw - 2, fy + label_h)
+
+            # ── 3a. Drawn / uploaded signature (base64 PNG data-URI) ─────────
+            if is_sig and value.startswith('data:image'):
+                try:
+                    _, b64  = value.split(',', 1)
+                    raw     = base64.b64decode(b64)
+                    img     = Image.open(BytesIO(raw)).convert('RGBA')
+
+                    # Flatten transparency: make transparent pixels white so the
+                    # signature looks clean on any background.
+                    bg_img = Image.new('RGBA', img.size, (255, 255, 255, 255))
+                    bg_img.paste(img, mask=img)
+                    bg_img  = bg_img.convert('RGB')
+
+                    img_buf = BytesIO()
+                    bg_img.save(img_buf, format='PNG')
+                    img_buf.seek(0)
+
+                    pad = 5   # inner padding so signature doesn't touch the border
+                    c.drawImage(
+                        ImageReader(img_buf),
+                        fx + pad,
+                        sig_y + pad,
+                        width  = fw - pad * 2,
+                        height = sig_h - pad * 2,
+                        preserveAspectRatio = True,
+                        anchor = 'c',        # centre within the given box
+                        mask   = 'auto',
+                    )
+                except Exception:
+                    pass
+
+            # ── 3b. Typed signature ──────────────────────────────────────────
+            elif is_sig:
+                # Use the largest font that fits vertically; clamp to 30 pt.
+                font_size = max(8.0, min(sig_h * 0.62, 30.0))
+                c.setFont('Helvetica-BoldOblique', font_size)
+                c.setFillColorRGB(*DS_INK)
+
+                # Clip text horizontally so it never overflows the field.
+                c.saveState()
+                p = c.beginPath()
+                p.rect(fx + 4, sig_y, fw - 8, sig_h)
+                c.clipPath(p, stroke=0, fill=0)
+
+                # Vertically centre the text in the content area.
+                text_y = sig_y + (sig_h - font_size) * 0.40
+                c.drawString(fx + 6, text_y, value)
+                c.restoreState()
+
+            # ── 3c. Date / text field ────────────────────────────────────────
+            else:
+                font_size = max(7.0, min(sig_h * 0.52, 11.0))
+                c.setFont('Helvetica', font_size)
+                c.setFillColorRGB(0.08, 0.08, 0.08)
+
+                c.saveState()
+                p = c.beginPath()
+                p.rect(fx + 3, sig_y, fw - 6, sig_h)
+                c.clipPath(p, stroke=0, fill=0)
+                text_y = sig_y + (sig_h - font_size) * 0.40
+                c.drawString(fx + 5, text_y, value)
+                c.restoreState()
+
+            # ── 4. Label strip ───────────────────────────────────────────────
+            if label_h:
+                lbl_font = max(5.5, min(label_h * 0.50, 7.5))
+                mid_y    = fy + (label_h - lbl_font) * 0.45
+
+                # Left side: coloured check-mark + signer name / field type
+                c.setFont('Helvetica-Bold', lbl_font)
+                c.setFillColorRGB(*DS_CHECK)
+                c.drawString(fx + 3, mid_y, '\u2713')   # ✓
+
+                c.setFont('Helvetica', lbl_font)
+                c.setFillColorRGB(*DS_LABEL)
+                if is_sig and field.signer:
+                    left_label = f' {field.signer.name[:24]}'
+                elif is_sig:
+                    left_label = ' Signed'
+                elif is_date:
+                    left_label = ' Date'
+                else:
+                    left_label = ' Text'
+
+                # Clip label text to ≈60 % of field width to leave room for date
+                c.saveState()
+                p = c.beginPath()
+                p.rect(fx + 3, fy, fw * 0.62, label_h)
+                c.clipPath(p, stroke=0, fill=0)
+                c.drawString(fx + 3 + lbl_font, mid_y, left_label)
+                c.restoreState()
+
+                # Right side: date the field was filled
+                if field.filled_at:
+                    ts = field.filled_at.strftime('%d %b %Y')
+                    c.setFont('Helvetica', lbl_font)
+                    c.setFillColorRGB(*DS_LABEL)
+                    c.drawRightString(fx + fw - 4, mid_y, ts)
+
+        c.save()
+        overlay_buf.seek(0)
+        page.merge_page(PdfReader(overlay_buf).pages[0])
+        writer.add_page(page)
+
+    # ── Write out the signed PDF ─────────────────────────────────────────────
+    out_buf      = BytesIO()
+    writer.write(out_buf)
+    signed_bytes = out_buf.getvalue()
+
+    orig_name    = document.name
+    signed_name  = (orig_name[:-4] + '-signed.pdf') if orig_name.lower().endswith('.pdf') else (orig_name + '-signed.pdf')
+
+    signed_file = SharedFile.objects.create(
+        name        = signed_name,
+        uploaded_by = document.uploaded_by,
+        folder      = document.folder,
+        visibility  = document.visibility,
+        description = (
+            f'Signed copy of "{orig_name}" — '
+            f'{sig_req.signers.filter(status="signed").count()} signature(s) collected.'
+        ),
+        tags        = document.tags,
+        file_size   = len(signed_bytes),
+        file_type   = 'application/pdf',
+    )
+    signed_file.file.save(signed_name, ContentFile(signed_bytes), save=True)
+
+    try:
+        signed_file.file_hash = signed_file.compute_hash()
+        signed_file.save(update_fields=['file_hash'])
+    except Exception:
+        pass
+
+    # Update the signature request so every download/preview link
+    # now serves the fully-stamped file.
+    sig_req.document = signed_file
+    sig_req.save(update_fields=['document'])
+
+    return signed_file
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -422,14 +693,18 @@ class FolderShareView(LoginRequiredMixin, View):
 class ConvertToPDFView(LoginRequiredMixin, View):
     def post(self, request, pk):
         sf = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+
         if not sf.is_convertible:
             messages.error(request, f'"{sf.name}" cannot be converted to PDF.')
             return redirect('file_manager')
+
         if sf.is_pdf:
             messages.info(request, 'This file is already a PDF.')
             return redirect('file_manager')
 
-        # Write to tmp, convert, save back as new SharedFile
+        tmp_path = None
+        pdf_path = None
+
         try:
             suffix = '.' + sf.extension
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -437,41 +712,77 @@ class ConvertToPDFView(LoginRequiredMixin, View):
                 for chunk in sf.file.chunks():
                     tmp.write(chunk)
 
-            pdf_path = _convert_to_pdf(tmp_path)
-
             pdf_name = os.path.splitext(sf.name)[0] + '.pdf'
-            with open(pdf_path, 'rb') as pdf_f:
-                from django.core.files import File as DjangoFile
+
+            image_exts = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff'}
+
+            if sf.extension.lower() in image_exts:
+                pdf_buffer = _convert_image_to_pdf(tmp_path)
+                file_size = pdf_buffer.getbuffer().nbytes
+
                 new_sf = SharedFile.objects.create(
                     name=pdf_name,
-                    file=DjangoFile(pdf_f, name=pdf_name),
-                    folder=sf.folder,
                     uploaded_by=request.user,
+                    folder=sf.folder,
                     visibility=sf.visibility,
-                    description=f'Converted from {sf.name}',
+                    description=f'Converted from image {sf.name}',
                     tags=sf.tags,
-                    file_size=os.path.getsize(pdf_path),
+                    file_size=file_size,
                     file_type='application/pdf',
                 )
-            # Log to audit if file is part of a sig request
-            for sig_req in sf.signature_requests.filter(status__in=['draft','sent','partial']):
-                _log_audit(sig_req, 'converted', request=request,
-                           notes=f'Converted {sf.name} → {pdf_name}')
+                new_sf.file.save(pdf_name, ContentFile(pdf_buffer.read()), save=True)
+
+            else:
+                pdf_path = _convert_to_pdf(tmp_path)
+
+                with open(pdf_path, 'rb') as pdf_f:
+                    from django.core.files import File as DjangoFile
+                    new_sf = SharedFile.objects.create(
+                        name=pdf_name,
+                        file=DjangoFile(pdf_f, name=pdf_name),
+                        folder=sf.folder,
+                        uploaded_by=request.user,
+                        visibility=sf.visibility,
+                        description=f'Converted from {sf.name}',
+                        tags=sf.tags,
+                        file_size=os.path.getsize(pdf_path),
+                        file_type='application/pdf',
+                    )
+
+            try:
+                new_sf.file_hash = new_sf.compute_hash()
+                new_sf.save(update_fields=['file_hash'])
+            except Exception:
+                pass
+
+            for sig_req in sf.signature_requests.filter(status__in=['draft', 'sent', 'partial']):
+                _log_audit(
+                    sig_req,
+                    'converted',
+                    request=request,
+                    notes=f'Converted {sf.name} → {pdf_name}'
+                )
 
             messages.success(request, f'✓ "{sf.name}" converted to PDF — "{pdf_name}" added to your files.')
+
         except RuntimeError as e:
             messages.error(request, str(e))
         except Exception as e:
             messages.error(request, f'Conversion failed: {e}')
         finally:
-            try: os.unlink(tmp_path)
-            except Exception: pass
-            try: os.unlink(pdf_path)
-            except Exception: pass
+            try:
+                if tmp_path:
+                    os.unlink(tmp_path)
+            except Exception:
+                pass
+            try:
+                if pdf_path:
+                    os.unlink(pdf_path)
+            except Exception:
+                pass
 
         next_url = request.POST.get('next', '')
         return redirect(next_url if next_url.startswith('/') else 'file_manager')
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Signature Flow — Create / Manage
@@ -502,38 +813,67 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
         # ── AUTO-CONVERT TO PDF ──────────────────────────────────────────────
         # Signature requests always use a PDF so signers can view in-browser.
         if not document.is_pdf and document.is_convertible:
+            tmp_path = None
+            pdf_path = None
             try:
                 suffix = '.' + document.extension
                 with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                     tmp_path = tmp.name
                     for chunk in document.file.chunks():
                         tmp.write(chunk)
-                pdf_path = _convert_to_pdf(tmp_path)
+
                 pdf_name = os.path.splitext(document.name)[0] + '.pdf'
-                with open(pdf_path, 'rb') as pdf_f:
-                    from django.core.files import File as DjangoFile
+                image_exts = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff'}
+
+                if document.extension.lower() in image_exts:
+                    pdf_buffer = _convert_image_to_pdf(tmp_path)
+
                     document = SharedFile.objects.create(
                         name=pdf_name,
-                        file=DjangoFile(pdf_f, name=pdf_name),
-                        folder=document.folder,
                         uploaded_by=request.user,
+                        folder=document.folder,
                         visibility=document.visibility,
                         description=f'Auto-converted for signature from {document.name}',
                         tags=document.tags,
-                        file_size=os.path.getsize(pdf_path),
+                        file_size=pdf_buffer.getbuffer().nbytes,
                         file_type='application/pdf',
                     )
-                messages.info(request, f'Document auto-converted to PDF for signing.')
+                    document.file.save(pdf_name, ContentFile(pdf_buffer.read()), save=True)
+
+                else:
+                    pdf_path = _convert_to_pdf(tmp_path)
+
+                    with open(pdf_path, 'rb') as pdf_f:
+                        from django.core.files import File as DjangoFile
+                        document = SharedFile.objects.create(
+                            name=pdf_name,
+                            file=DjangoFile(pdf_f, name=pdf_name),
+                            folder=document.folder,
+                            uploaded_by=request.user,
+                            visibility=document.visibility,
+                            description=f'Auto-converted for signature from {document.name}',
+                            tags=document.tags,
+                            file_size=os.path.getsize(pdf_path),
+                            file_type='application/pdf',
+                        )
+
+                messages.info(request, 'Document auto-converted to PDF for signing.')
+
             except RuntimeError as e:
-                # LibreOffice not available — proceed with original file
                 messages.warning(request, f'Could not auto-convert to PDF ({e}). Proceeding with original file.')
             except Exception as e:
                 messages.warning(request, f'Auto-conversion skipped: {e}')
             finally:
-                try: os.unlink(tmp_path)
-                except Exception: pass
-                try: os.unlink(pdf_path)
-                except Exception: pass
+                try:
+                    if tmp_path:
+                        os.unlink(tmp_path)
+                except Exception:
+                    pass
+                try:
+                    if pdf_path:
+                        os.unlink(pdf_path)
+                except Exception:
+                    pass
         # ────────────────────────────────────────────────────────────────────
 
         # Build signer list from POST
@@ -761,12 +1101,21 @@ class SignDocumentView(View):
 
             if getattr(sig_req, 'status', None) == 'completed':
                 _log_audit(sig_req, 'completed', request=request)
+
+                # ── Burn all signatures into the PDF ──────────────────────
+                # This creates a new signed copy of the document and updates
+                # sig_req.document so every download link serves the stamped file.
+                try:
+                    _embed_signatures_in_pdf(sig_req)
+                except Exception:
+                    pass  # PDF stamping failure must never block a completed signing
+
                 try:
                     send_mail(
                         subject=f'✓ All signatures collected: {sig_req.title}',
                         message=(
                             f'Your document "{sig_req.title}" has been signed by all parties.\n\n'
-                            f'You can view the audit trail in EasyOffice Files.'
+                            f'You can view the signed PDF and audit trail in EasyOffice Files.'
                         ),
                         from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
                         recipient_list=[sig_req.created_by.email],
@@ -1127,3 +1476,343 @@ class FileMoveView(LoginRequiredMixin, View):
             'folder_id': str(folder.id) if folder else '',
             'folder_name': folder.name if folder else 'My Drive',
         })
+
+class PDFMergeView(LoginRequiredMixin, View):
+    def post(self, request):
+        file_ids = request.POST.getlist('file_ids')
+        output_name = request.POST.get('output_name', '').strip() or 'merged.pdf'
+
+        if len(file_ids) < 2:
+            messages.error(request, 'Please select at least two PDF files to merge.')
+            return redirect('pdf_tools_page')
+
+        pdfs = list(
+            SharedFile.objects.filter(
+                id__in=file_ids,
+                uploaded_by=request.user
+            )
+        )
+
+        if len(pdfs) < 2:
+            messages.error(request, 'Could not find the selected PDF files.')
+            return redirect('pdf_tools_page')
+
+        writer = PdfWriter()
+
+        try:
+            for pdf in pdfs:
+                if not getattr(pdf, 'is_pdf', False):
+                    continue
+                reader = PdfReader(pdf.file.open('rb'))
+                for page in reader.pages:
+                    writer.add_page(page)
+
+            buffer = BytesIO()
+            writer.write(buffer)
+            buffer.seek(0)
+
+            if not output_name.lower().endswith('.pdf'):
+                output_name += '.pdf'
+
+            new_file = SharedFile.objects.create(
+                name=output_name,
+                uploaded_by=request.user,
+                visibility='private',
+                file_size=buffer.getbuffer().nbytes,
+                file_type='application/pdf',
+            )
+            new_file.file.save(output_name, ContentFile(buffer.read()), save=True)
+
+            try:
+                new_file.file_hash = new_file.compute_hash()
+                new_file.save(update_fields=['file_hash'])
+            except Exception:
+                pass
+
+            messages.success(request, f'Merged PDF created: "{output_name}".')
+        except Exception as e:
+            messages.error(request, f'Could not merge PDFs: {e}')
+
+        return redirect('pdf_tools_page')
+
+def parse_page_ranges(raw, max_pages):
+    selected = set()
+    for part in raw.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        if '-' in part:
+            start, end = part.split('-', 1)
+            start = int(start)
+            end = int(end)
+            for i in range(start, end + 1):
+                if 1 <= i <= max_pages:
+                    selected.add(i)
+        else:
+            i = int(part)
+            if 1 <= i <= max_pages:
+                selected.add(i)
+    return selected
+
+class PDFRemovePagesView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        pdf = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+
+        if not getattr(pdf, 'is_pdf', False):
+            messages.error(request, 'This file is not a PDF.')
+            return redirect('pdf_tools_page')
+
+        remove_pages_raw = request.POST.get('remove_pages', '').strip()
+        output_name = request.POST.get('output_name', '').strip() or f'{pdf.name.rsplit(".", 1)[0]}-edited.pdf'
+
+        try:
+            reader = PdfReader(pdf.file.open('rb'))
+            writer = PdfWriter()
+
+            total_pages = len(reader.pages)
+            remove_pages = parse_page_ranges(remove_pages_raw, total_pages)
+
+            for page_num in range(1, total_pages + 1):
+                if page_num not in remove_pages:
+                    writer.add_page(reader.pages[page_num - 1])
+
+            buffer = BytesIO()
+            writer.write(buffer)
+            buffer.seek(0)
+
+            if not output_name.lower().endswith('.pdf'):
+                output_name += '.pdf'
+
+            new_file = SharedFile.objects.create(
+                name=output_name,
+                uploaded_by=request.user,
+                visibility=pdf.visibility,
+                folder=pdf.folder,
+                description=f'Edited from {pdf.name}',
+                tags=pdf.tags,
+                file_size=buffer.getbuffer().nbytes,
+                file_type='application/pdf',
+            )
+            new_file.file.save(output_name, ContentFile(buffer.read()), save=True)
+
+            try:
+                new_file.file_hash = new_file.compute_hash()
+                new_file.save(update_fields=['file_hash'])
+            except Exception:
+                pass
+
+            messages.success(request, f'Edited PDF created: "{output_name}".')
+        except Exception as e:
+            messages.error(request, f'Could not remove pages: {e}')
+
+        return redirect('pdf_tools_page')
+
+class PDFSplitView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        pdf = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+
+        if not getattr(pdf, 'is_pdf', False):
+            messages.error(request, 'This file is not a PDF.')
+            return redirect('pdf_tools_page')
+
+        split_pages_raw = request.POST.get('split_pages', '').strip()
+
+        try:
+            reader = PdfReader(pdf.file.open('rb'))
+            total_pages = len(reader.pages)
+            split_pages = sorted(parse_page_ranges(split_pages_raw, total_pages))
+
+            if not split_pages:
+                messages.error(request, 'Please provide valid pages to extract.')
+                return redirect('pdf_tools_page')
+
+            writer = PdfWriter()
+            for p in split_pages:
+                writer.add_page(reader.pages[p - 1])
+
+            output_name = f'{pdf.name.rsplit(".", 1)[0]}-split.pdf'
+            buffer = BytesIO()
+            writer.write(buffer)
+            buffer.seek(0)
+
+            new_file = SharedFile.objects.create(
+                name=output_name,
+                uploaded_by=request.user,
+                visibility=pdf.visibility,
+                folder=pdf.folder,
+                description=f'Split from {pdf.name}',
+                tags=pdf.tags,
+                file_size=buffer.getbuffer().nbytes,
+                file_type='application/pdf',
+            )
+            new_file.file.save(output_name, ContentFile(buffer.read()), save=True)
+
+            try:
+                new_file.file_hash = new_file.compute_hash()
+                new_file.save(update_fields=['file_hash'])
+            except Exception:
+                pass
+
+            messages.success(request, f'Split PDF created: "{output_name}".')
+        except Exception as e:
+            messages.error(request, f'Could not split PDF: {e}')
+
+        return redirect('pdf_tools_page')
+
+class PDFRotatePagesView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        pdf = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+
+        if not getattr(pdf, 'is_pdf', False):
+            messages.error(request, 'This file is not a PDF.')
+            return redirect('pdf_tools_page')
+
+        rotate_pages_raw = request.POST.get('rotate_pages', '').strip()
+        degrees = int(request.POST.get('degrees', '90'))
+
+        try:
+            reader = PdfReader(pdf.file.open('rb'))
+            writer = PdfWriter()
+            total_pages = len(reader.pages)
+            rotate_pages = parse_page_ranges(rotate_pages_raw, total_pages)
+
+            for page_num in range(1, total_pages + 1):
+                page = reader.pages[page_num - 1]
+                if page_num in rotate_pages:
+                    page.rotate(degrees)
+                writer.add_page(page)
+
+            output_name = f'{pdf.name.rsplit(".", 1)[0]}-rotated.pdf'
+            buffer = BytesIO()
+            writer.write(buffer)
+            buffer.seek(0)
+
+            new_file = SharedFile.objects.create(
+                name=output_name,
+                uploaded_by=request.user,
+                visibility=pdf.visibility,
+                folder=pdf.folder,
+                description=f'Rotated from {pdf.name}',
+                tags=pdf.tags,
+                file_size=buffer.getbuffer().nbytes,
+                file_type='application/pdf',
+            )
+            new_file.file.save(output_name, ContentFile(buffer.read()), save=True)
+
+            try:
+                new_file.file_hash = new_file.compute_hash()
+                new_file.save(update_fields=['file_hash'])
+            except Exception:
+                pass
+
+            messages.success(request, f'Rotated PDF created: "{output_name}".')
+        except Exception as e:
+            messages.error(request, f'Could not rotate PDF: {e}')
+
+        return redirect('pdf_tools_page')
+
+class PDFReorderPagesView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        pdf = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+
+        if not getattr(pdf, 'is_pdf', False):
+            messages.error(request, 'This file is not a PDF.')
+            return redirect('pdf_tools_page')
+
+        page_order_raw = request.POST.get('page_order', '').strip()
+
+        try:
+            reader = PdfReader(pdf.file.open('rb'))
+            total_pages = len(reader.pages)
+
+            page_order = [int(x.strip()) for x in page_order_raw.split(',') if x.strip()]
+            if sorted(page_order) != list(range(1, total_pages + 1)):
+                messages.error(request, 'Page order must include every page exactly once.')
+                return redirect('pdf_tools_page')
+
+            writer = PdfWriter()
+            for page_num in page_order:
+                writer.add_page(reader.pages[page_num - 1])
+
+            output_name = f'{pdf.name.rsplit(".", 1)[0]}-reordered.pdf'
+            buffer = BytesIO()
+            writer.write(buffer)
+            buffer.seek(0)
+
+            new_file = SharedFile.objects.create(
+                name=output_name,
+                uploaded_by=request.user,
+                visibility=pdf.visibility,
+                folder=pdf.folder,
+                description=f'Reordered from {pdf.name}',
+                tags=pdf.tags,
+                file_size=buffer.getbuffer().nbytes,
+                file_type='application/pdf',
+            )
+            new_file.file.save(output_name, ContentFile(buffer.read()), save=True)
+
+            try:
+                new_file.file_hash = new_file.compute_hash()
+                new_file.save(update_fields=['file_hash'])
+            except Exception:
+                pass
+
+            messages.success(request, f'Reordered PDF created: "{output_name}".')
+        except Exception as e:
+            messages.error(request, f'Could not reorder pages: {e}')
+
+        return redirect('pdf_tools_page')
+
+class PDFToolsPageView(LoginRequiredMixin, TemplateView):
+    template_name = 'files/pdf_tools.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+
+        all_mine = _visible_files_qs(user).filter(uploaded_by=user).order_by('-created_at')
+        pdf_files = [f for f in all_mine if getattr(f, 'is_pdf', False)]
+
+        ctx.update({
+            'pdf_files': pdf_files,
+        })
+        return ctx
+
+class PDFMergeImagesView(LoginRequiredMixin, View):
+    def post(self, request):
+        ids = request.POST.getlist('multi_files')
+
+        if not ids:
+            messages.error(request, 'Select images first.')
+            return redirect('convert_pdf_page')
+
+        images = SharedFile.objects.filter(id__in=ids, uploaded_by=request.user)
+
+        from PIL import Image
+        from io import BytesIO
+
+        pil_images = []
+
+        for img_file in images:
+            img = Image.open(img_file.file)
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            pil_images.append(img)
+
+        buffer = BytesIO()
+        pil_images[0].save(buffer, format='PDF', save_all=True, append_images=pil_images[1:])
+        buffer.seek(0)
+
+        name = 'combined-images.pdf'
+
+        new = SharedFile.objects.create(
+            name=name,
+            uploaded_by=request.user,
+            visibility='private',
+            file_type='application/pdf',
+            file_size=buffer.getbuffer().nbytes,
+        )
+        new.file.save(name, ContentFile(buffer.read()), save=True)
+
+        messages.success(request, 'Images combined into PDF successfully.')
+        return redirect('convert_pdf_page')

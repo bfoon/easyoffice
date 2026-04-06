@@ -29,4 +29,12 @@ urlpatterns = [
     path('sign/<uuid:token>/preview/',          views.SignDocumentPreviewView.as_view(),        name='sign_document_preview'),
     path('sign/<uuid:token>/download/',         views.SignDocumentDownloadView.as_view(),       name='sign_document_download'),
     path('sign/<uuid:token>/field/<uuid:field_id>/', views.FillSignatureFieldView.as_view(),   name='fill_signature_field'),
+
+    path('pdf-tools/',                         views.PDFToolsPageView.as_view(),        name='pdf_tools_page'),
+    path('pdf-tools/merge/',                   views.PDFMergeView.as_view(),            name='pdf_merge'),
+    path('pdf-tools/remove-pages/<uuid:pk>/', views.PDFRemovePagesView.as_view(),      name='pdf_remove_pages'),
+    path('pdf-tools/reorder-pages/<uuid:pk>/', views.PDFReorderPagesView.as_view(),     name='pdf_reorder_pages'),
+    path('pdf-tools/rotate-pages/<uuid:pk>/',  views.PDFRotatePagesView.as_view(),      name='pdf_rotate_pages'),
+    path('pdf-tools/split/<uuid:pk>/',         views.PDFSplitView.as_view(),            name='pdf_split'),
+    path('pdf-tools/merge-images/', views.PDFMergeImagesView.as_view(), name='pdf_merge_images'),
 ]

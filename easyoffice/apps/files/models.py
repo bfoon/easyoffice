@@ -89,8 +89,13 @@ _TYPE_CATEGORY = {
 }
 
 # File types that can be converted to PDF
-CONVERTIBLE_TYPES = {'doc','docx','odt','rtf','xls','xlsx','ods','csv',
-                     'ppt','pptx','odp','txt','md'}
+CONVERTIBLE_TYPES = {
+    'doc','docx','odt','rtf',
+    'xls','xlsx','ods','csv',
+    'ppt','pptx','odp',
+    'txt','md',
+    'jpg','jpeg','png','webp','bmp','tiff'
+}
 
 
 # ── SharedFile ───────────────────────────────────────────────────────────────

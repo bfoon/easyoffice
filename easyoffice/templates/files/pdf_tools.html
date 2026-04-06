@@ -1,0 +1,1245 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}PDF Tools{% endblock %}
+{% block breadcrumb %}<a href="{% url 'file_manager' %}">Files</a> / PDF Tools{% endblock %}
+
+{% block content %}
+
+<style>
+/* ══════════════════════════════════════════
+   PDF TOOLS — Professional UI
+══════════════════════════════════════════ */
+
+/* ── Tab bar ── */
+.pt-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--eo-card);
+  border: 1px solid var(--eo-border);
+  border-radius: 14px;
+  padding: 5px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.pt-tab {
+  flex: 1;
+  min-width: 120px;
+  padding: 10px 14px;
+  font-weight: 600;
+  font-size: 13px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--eo-text-muted);
+  border-radius: 10px;
+  transition: all .18s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.pt-tab:hover { color: var(--eo-text); background: var(--eo-bg); }
+.pt-tab.active {
+  color: var(--eo-primary);
+  background: var(--eo-primary)18;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+}
+.pt-panel { display: none; animation: ptFadeIn .2s ease; }
+.pt-panel.active { display: block; }
+@keyframes ptFadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+
+/* ── PDF selector row ── */
+.pdf-selector-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.pdf-selector-row label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--eo-text-muted);
+  white-space: nowrap;
+}
+.pdf-selector-row .eo-form-select { flex: 1; min-width: 180px; }
+
+/* ── Stats bar ── */
+.pt-stats {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  padding: 10px 16px;
+  background: var(--eo-bg);
+  border: 1px solid var(--eo-border);
+  border-radius: 10px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: var(--eo-text-muted);
+  flex-wrap: wrap;
+}
+.pt-stat strong { color: var(--eo-text); font-weight: 700; }
+.pt-stat-sep { width: 1px; height: 16px; background: var(--eo-border); }
+
+/* ── Hint bar ── */
+.pt-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--eo-primary)10;
+  border: 1px solid var(--eo-primary)30;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--eo-text-muted);
+  margin-bottom: 16px;
+}
+.pt-hint i { color: var(--eo-primary); font-size: 15px; flex-shrink: 0; }
+
+/* ── Loading state ── */
+.pt-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  gap: 14px;
+  color: var(--eo-text-muted);
+  font-size: 14px;
+}
+.pt-spinner {
+  width: 40px; height: 40px;
+  border: 3px solid var(--eo-border);
+  border-top-color: var(--eo-primary);
+  border-radius: 50%;
+  animation: ptSpin .75s linear infinite;
+}
+@keyframes ptSpin { to { transform: rotate(360deg); } }
+
+/* ── Page grid scrollable area ── */
+.page-grid-area {
+  background: var(--eo-bg);
+  border: 1px solid var(--eo-border);
+  border-radius: 12px;
+  padding: 14px;
+  min-height: 260px;
+  max-height: calc(100vh - 400px);
+  overflow-y: auto;
+}
+.page-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  gap: 12px;
+}
+
+/* ── Page thumbnail ── */
+.page-thumb {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 2px solid var(--eo-border);
+  background: var(--eo-card);
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+  display: flex;
+  flex-direction: column;
+  aspect-ratio: 0.707;
+  user-select: none;
+}
+.page-thumb:hover {
+  border-color: var(--eo-primary);
+  box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  transform: translateY(-2px);
+}
+
+/* Selection states */
+.page-thumb.st-remove  { border-color: #ef4444; background: #fef2f2; }
+.page-thumb.st-extract { border-color: #22c55e; background: #f0fdf4; }
+.page-thumb.st-rotate  { border-color: #f59e0b; background: #fffbeb; }
+
+/* Drag states */
+.page-thumb.sortable-ghost   { opacity: .3; }
+.page-thumb.sortable-chosen  { box-shadow: 0 10px 30px rgba(0,0,0,.2); z-index: 10; transform: scale(1.03); }
+.page-thumb.sortable-drag    { box-shadow: 0 14px 40px rgba(0,0,0,.25); }
+
+/* Canvas container */
+.page-canvas-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  background: #fff;
+}
+.page-canvas-wrap canvas { max-width: 100%; max-height: 100%; display: block; }
+
+/* Page number bar */
+.page-num-bar {
+  padding: 5px 8px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--eo-text-muted);
+  border-top: 1px solid var(--eo-border);
+  background: var(--eo-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.page-pos-arrow { color: var(--eo-primary); font-size: 10px; }
+
+/* Hover overlay */
+.page-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 15, 30, .65);
+  backdrop-filter: blur(2px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity .18s;
+  pointer-events: none;
+}
+.page-thumb:hover .page-overlay { opacity: 1; pointer-events: auto; }
+
+.pov-btn {
+  padding: 5px 11px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  transition: opacity .12s;
+}
+.pov-btn:hover { opacity: .85; }
+.pov-remove  { background: #ef4444; color: #fff; }
+.pov-extract { background: #22c55e; color: #fff; }
+.pov-rotate  { background: #f59e0b; color: #fff; }
+.pov-drag    { background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.3); cursor: grab; }
+
+/* Corner badges */
+.pg-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 900;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  box-shadow: 0 1px 4px rgba(0,0,0,.2);
+}
+.pg-badge-remove  { background: #ef4444; color: #fff; }
+.pg-badge-extract { background: #22c55e; color: #fff; }
+.pg-badge-rotate  { background: #f59e0b; color: #fff; }
+
+.page-thumb.st-remove  .pg-badge-remove  { display: flex; }
+.page-thumb.st-extract .pg-badge-extract { display: flex; }
+.page-thumb.st-rotate  .pg-badge-rotate  { display: flex; }
+
+/* Rotation indicator top-right */
+.pg-rot-tag {
+  position: absolute;
+  top: 6px; right: 6px;
+  background: #f59e0b;
+  color: #fff;
+  border-radius: 20px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  display: none;
+}
+.page-thumb.has-rotation .pg-rot-tag { display: block; }
+
+/* Drag-mode cursor for reorder */
+.reorder-mode .page-thumb { cursor: grab; }
+.reorder-mode .page-thumb:active { cursor: grabbing; }
+
+/* ── Action bar ── */
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  background: var(--eo-card);
+  border: 1px solid var(--eo-border);
+  border-radius: 12px;
+  margin-top: 16px;
+}
+.action-bar .spacer { flex: 1; min-width: 20px; }
+.action-sel-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--eo-text-muted);
+  padding: 6px 12px;
+  background: var(--eo-bg);
+  border-radius: 6px;
+  border: 1px solid var(--eo-border);
+}
+.action-output {
+  min-width: 160px;
+  max-width: 240px;
+}
+
+/* ── Select all / clear controls ── */
+.sel-controls { display: flex; gap: 6px; }
+.sel-ctrl-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--eo-border);
+  background: var(--eo-bg);
+  color: var(--eo-text-muted);
+  cursor: pointer;
+  transition: all .12s;
+}
+.sel-ctrl-btn:hover { border-color: var(--eo-primary); color: var(--eo-primary); }
+
+/* ── Rotate degree selector ── */
+.rotate-deg-wrap { display: flex; align-items: center; gap: 8px; }
+.rotate-deg-wrap label { font-size: 13px; font-weight: 600; color: var(--eo-text-muted); white-space: nowrap; }
+
+/* ── Merge tab ── */
+.merge-layout {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 20px;
+}
+@media (max-width: 900px) { .merge-layout { grid-template-columns: 1fr; } }
+
+.merge-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 80px;
+}
+
+.merge-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--eo-card);
+  border: 1px solid var(--eo-border);
+  border-radius: 10px;
+  cursor: grab;
+  transition: box-shadow .15s, border-color .15s;
+  user-select: none;
+}
+.merge-item:active { cursor: grabbing; }
+.merge-item:hover { border-color: var(--eo-primary)60; }
+.merge-item.sortable-ghost { opacity: .3; }
+.merge-item.sortable-chosen { box-shadow: 0 6px 20px rgba(0,0,0,.15); border-color: var(--eo-primary); }
+.merge-item input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--eo-primary); flex-shrink: 0; }
+.merge-drag-icon { color: var(--eo-text-muted); font-size: 17px; flex-shrink: 0; }
+.merge-file-ico { font-size: 22px; color: #ef4444; flex-shrink: 0; }
+.merge-file-info { flex: 1; min-width: 0; }
+.merge-file-name { font-size: 14px; font-weight: 600; color: var(--eo-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.merge-file-meta { font-size: 12px; color: var(--eo-text-muted); margin-top: 1px; }
+.merge-order-badge {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: var(--eo-primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+
+.merge-preview-panel {
+  background: var(--eo-bg);
+  border: 1px solid var(--eo-border);
+  border-radius: 12px;
+  padding: 16px;
+  min-height: 80px;
+}
+.merge-preview-empty {
+  text-align: center;
+  color: var(--eo-text-muted);
+  font-size: 13px;
+  padding: 20px;
+}
+.merge-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--eo-border);
+  font-size: 13px;
+}
+.merge-preview-row:last-child { border-bottom: none; }
+.merge-preview-num {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--eo-primary)20; color: var(--eo-primary);
+  font-size: 11px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+
+/* ── Empty state ── */
+.pt-empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--eo-text-muted);
+}
+.pt-empty-state i { font-size: 40px; opacity: .3; margin-bottom: 12px; display: block; }
+.pt-empty-state p { font-size: 14px; margin: 0; }
+
+/* ── Danger button override ── */
+.eo-btn-danger { background: #ef4444 !important; border-color: #ef4444 !important; color: #fff !important; }
+.eo-btn-danger:hover { background: #dc2626 !important; }
+.eo-btn-success { background: #22c55e !important; border-color: #22c55e !important; color: #fff !important; }
+.eo-btn-success:hover { background: #16a34a !important; }
+.eo-btn-warning { background: #f59e0b !important; border-color: #f59e0b !important; color: #fff !important; }
+.eo-btn-warning:hover { background: #d97706 !important; }
+
+/* ── Scrollbar ── */
+.page-grid-area::-webkit-scrollbar { width: 6px; }
+.page-grid-area::-webkit-scrollbar-track { background: transparent; }
+.page-grid-area::-webkit-scrollbar-thumb { background: var(--eo-border); border-radius: 3px; }
+</style>
+
+<!-- ═══════════════════════════════════════════════════════
+     PAGE HEADER
+════════════════════════════════════════════════════════ -->
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">
+      <i class="bi bi-file-pdf" style="color:#ef4444"></i> PDF Tools
+    </h1>
+    <p class="eo-page-subtitle">Merge, split, reorder, rotate and extract pages from your PDF files</p>
+  </div>
+  <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-secondary">
+    <i class="bi bi-arrow-left"></i> File Manager
+  </a>
+</div>
+
+{% if messages %}
+  {% for msg in messages %}
+  <div class="alert alert-{{ msg.tags }} mb-3" style="border-radius:10px;padding:12px 16px;border:1px solid var(--eo-border);background:var(--eo-card);font-size:14px">
+    <i class="bi bi-{% if 'success' in msg.tags %}check-circle text-success{% elif 'error' in msg.tags %}x-circle text-danger{% else %}info-circle{% endif %} me-2"></i>
+    {{ msg }}
+  </div>
+  {% endfor %}
+{% endif %}
+
+{% if not pdf_files %}
+
+<div class="eo-card" style="text-align:center;padding:60px 20px">
+  <i class="bi bi-file-pdf" style="font-size:56px;color:var(--eo-text-muted);opacity:.3;display:block;margin-bottom:16px"></i>
+  <h3 style="color:var(--eo-text-muted);margin-bottom:8px">No PDF files found</h3>
+  <p style="color:var(--eo-text-muted);font-size:14px;margin-bottom:20px">Upload PDF files to your file manager to use PDF tools.</p>
+  <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-cloud-upload"></i> Go to File Manager
+  </a>
+</div>
+
+{% else %}
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB BAR
+════════════════════════════════════════════════════════ -->
+<div class="pt-tabs">
+  <button class="pt-tab active" data-tab="merge">
+    <i class="bi bi-files"></i> Merge PDFs
+  </button>
+  <button class="pt-tab" data-tab="remove">
+    <i class="bi bi-trash3"></i> Remove Pages
+  </button>
+  <button class="pt-tab" data-tab="extract">
+    <i class="bi bi-scissors"></i> Extract Pages
+  </button>
+  <button class="pt-tab" data-tab="reorder">
+    <i class="bi bi-grid-3x3-gap"></i> Reorder Pages
+  </button>
+  <button class="pt-tab" data-tab="rotate">
+    <i class="bi bi-arrow-clockwise"></i> Rotate Pages
+  </button>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════
+     MERGE TAB
+════════════════════════════════════════════════════════ -->
+<div class="pt-panel active" id="tab-merge">
+  <div class="merge-layout">
+
+    <!-- Left: File list -->
+    <div class="eo-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <h3 class="eo-card-title" style="margin:0">Select & Order Files</h3>
+        <div style="display:flex;gap:6px">
+          <button class="sel-ctrl-btn" onclick="mergeCheckAll(true)">All</button>
+          <button class="sel-ctrl-btn" onclick="mergeCheckAll(false)">None</button>
+        </div>
+      </div>
+      <p style="font-size:13px;color:var(--eo-text-muted);margin-bottom:14px">
+        Check files to include. Drag <i class="bi bi-grip-vertical"></i> to set merge order.
+      </p>
+      <div class="merge-file-list" id="mergeFileList">
+        {% for f in pdf_files %}
+        <div class="merge-item" data-id="{{ f.id }}" data-name="{{ f.name|escapejs }}" data-size="{{ f.file_size }}">
+          <i class="bi bi-grip-vertical merge-drag-icon"></i>
+          <input type="checkbox" class="merge-check" checked onchange="updateMergePreview()">
+          <i class="bi bi-file-pdf-fill merge-file-ico"></i>
+          <div class="merge-file-info">
+            <div class="merge-file-name">{{ f.name }}</div>
+            <div class="merge-file-meta">{{ f.file_size|filesizeformat }}</div>
+          </div>
+          <div class="merge-order-badge merge-ord-num">–</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Right: Output settings + preview -->
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div class="eo-card">
+        <h3 class="eo-card-title mb-3">Output Settings</h3>
+        <div class="eo-form-group mb-3">
+          <label class="eo-form-label">Output filename</label>
+          <div style="display:flex;align-items:center;gap:0;border:1px solid var(--eo-border);border-radius:8px;overflow:hidden">
+            <span style="padding:0 12px;color:var(--eo-text-muted);font-size:13px;border-right:1px solid var(--eo-border);background:var(--eo-bg)"><i class="bi bi-file-pdf-fill" style="color:#ef4444"></i></span>
+            <input type="text" id="mergeOutputName" class="eo-form-control" style="border:none;border-radius:0" placeholder="merged.pdf" value="merged.pdf">
+          </div>
+        </div>
+        <button type="button" class="eo-btn eo-btn-primary w-100" id="mergeSendBtn" style="font-size:15px;padding:12px">
+          <i class="bi bi-files"></i> Merge PDFs
+        </button>
+        <form method="post" action="{% url 'pdf_merge' %}" id="mergeForm">{% csrf_token %}</form>
+      </div>
+
+      <div class="eo-card" style="flex:1">
+        <h3 class="eo-card-title mb-2">Merge Order Preview</h3>
+        <div id="mergePreviewList" class="merge-preview-panel">
+          <div class="merge-preview-empty"><i class="bi bi-list-ol" style="font-size:24px;display:block;margin-bottom:6px;opacity:.4"></i>Select files to see the merge order</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════
+     REMOVE PAGES TAB
+════════════════════════════════════════════════════════ -->
+<div class="pt-panel" id="tab-remove">
+  <div class="eo-card">
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:18px;flex-wrap:wrap">
+      <h3 class="eo-card-title" style="margin:0">Remove Pages</h3>
+      <div class="pdf-selector-row" style="margin:0;flex:1;min-width:200px">
+        <label>PDF File:</label>
+        <select id="remove-select" class="eo-form-select">
+          <option value="">— Select a PDF —</option>
+          {% for f in pdf_files %}
+          <option value="{{ f.id }}"
+            data-name="{{ f.name|escapejs }}"
+            data-url="{% url 'file_download' f.id %}"
+            data-action-url="{% url 'pdf_remove_pages' f.id %}">
+            {{ f.name }}
+          </option>
+          {% endfor %}
+        </select>
+        <button class="eo-btn eo-btn-secondary" id="remove-load-btn">
+          <i class="bi bi-eye"></i> Load Pages
+        </button>
+      </div>
+    </div>
+
+    <div class="pt-hint" id="remove-hint">
+      <i class="bi bi-info-circle-fill"></i>
+      Click page thumbnails (or use overlay buttons) to mark pages for removal. Marked pages are highlighted in <strong style="color:#ef4444">red</strong>. The remaining pages will be saved as a new PDF.
+    </div>
+
+    <div class="pt-stats" id="remove-stats" style="display:none">
+      <span class="pt-stat">Total pages: <strong id="remove-total">0</strong></span>
+      <span class="pt-stat-sep"></span>
+      <span class="pt-stat">Marked for removal: <strong id="remove-sel-count" style="color:#ef4444">0</strong></span>
+      <span class="pt-stat-sep"></span>
+      <span class="pt-stat">Will keep: <strong id="remove-keep-count" style="color:#22c55e">0</strong></span>
+      <div style="flex:1"></div>
+      <div class="sel-controls">
+        <button class="sel-ctrl-btn" onclick="panels.remove.selectAll()">Mark All</button>
+        <button class="sel-ctrl-btn" onclick="panels.remove.clearAll()">Clear</button>
+      </div>
+    </div>
+
+    <div id="remove-loading" class="pt-loading" style="display:none">
+      <div class="pt-spinner"></div>
+      <span>Rendering PDF pages…</span>
+    </div>
+
+    <div class="page-grid-area">
+      <div class="page-grid" id="remove-grid">
+        <div class="pt-empty-state" style="grid-column:1/-1">
+          <i class="bi bi-file-pdf"></i>
+          <p>Select a PDF and click "Load Pages" to preview</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="action-bar">
+      <div class="action-sel-count" id="remove-action-count">0 pages marked</div>
+      <div class="spacer"></div>
+      <input type="text" class="eo-form-control action-output" id="remove-output" placeholder="output-edited.pdf">
+      <button class="eo-btn eo-btn-danger" id="remove-action-btn" disabled>
+        <i class="bi bi-trash3"></i> Remove Marked Pages
+      </button>
+    </div>
+      <form method="post" id="remove-form" style="display:none">{% csrf_token %}</form>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════
+     EXTRACT PAGES TAB
+════════════════════════════════════════════════════════ -->
+<div class="pt-panel" id="tab-extract">
+  <div class="eo-card">
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:18px;flex-wrap:wrap">
+      <h3 class="eo-card-title" style="margin:0">Extract Pages</h3>
+      <div class="pdf-selector-row" style="margin:0;flex:1;min-width:200px">
+        <label>PDF File:</label>
+        <select id="extract-select" class="eo-form-select">
+          <option value="">— Select a PDF —</option>
+          {% for f in pdf_files %}
+          <option value="{{ f.id }}"
+            data-name="{{ f.name|escapejs }}"
+            data-url="{% url 'file_download' f.id %}"
+            data-action-url="{% url 'pdf_split' f.id %}">
+            {{ f.name }}
+          </option>
+          {% endfor %}
+        </select>
+        <button class="eo-btn eo-btn-secondary" id="extract-load-btn">
+          <i class="bi bi-eye"></i> Load Pages
+        </button>
+      </div>
+    </div>
+
+    <div class="pt-hint" id="extract-hint">
+      <i class="bi bi-info-circle-fill"></i>
+      Click pages to <strong style="color:#22c55e">select</strong> them. Only the selected pages will be saved to the output PDF. Use "Select All" to start with everything checked.
+    </div>
+
+    <div class="pt-stats" id="extract-stats" style="display:none">
+      <span class="pt-stat">Total pages: <strong id="extract-total">0</strong></span>
+      <span class="pt-stat-sep"></span>
+      <span class="pt-stat">Selected: <strong id="extract-sel-count" style="color:#22c55e">0</strong></span>
+      <div style="flex:1"></div>
+      <div class="sel-controls">
+        <button class="sel-ctrl-btn" onclick="panels.extract.selectAll()">Select All</button>
+        <button class="sel-ctrl-btn" onclick="panels.extract.clearAll()">Clear</button>
+      </div>
+    </div>
+
+    <div id="extract-loading" class="pt-loading" style="display:none">
+      <div class="pt-spinner"></div>
+      <span>Rendering PDF pages…</span>
+    </div>
+
+    <div class="page-grid-area">
+      <div class="page-grid" id="extract-grid">
+        <div class="pt-empty-state" style="grid-column:1/-1">
+          <i class="bi bi-file-pdf"></i>
+          <p>Select a PDF and click "Load Pages" to preview</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="action-bar">
+      <div class="action-sel-count" id="extract-action-count">0 pages selected</div>
+      <div class="spacer"></div>
+      <input type="text" class="eo-form-control action-output" id="extract-output" placeholder="output-extract.pdf">
+      <button class="eo-btn eo-btn-success" id="extract-action-btn" disabled>
+        <i class="bi bi-scissors"></i> Extract Selected Pages
+      </button>
+    </div>
+      <form method="post" id="extract-form" style="display:none">{% csrf_token %}</form>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════
+     REORDER PAGES TAB
+════════════════════════════════════════════════════════ -->
+<div class="pt-panel" id="tab-reorder">
+  <div class="eo-card">
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:18px;flex-wrap:wrap">
+      <h3 class="eo-card-title" style="margin:0">Reorder Pages</h3>
+      <div class="pdf-selector-row" style="margin:0;flex:1;min-width:200px">
+        <label>PDF File:</label>
+        <select id="reorder-select" class="eo-form-select">
+          <option value="">— Select a PDF —</option>
+          {% for f in pdf_files %}
+          <option value="{{ f.id }}"
+            data-name="{{ f.name|escapejs }}"
+            data-url="{% url 'file_download' f.id %}"
+            data-action-url="{% url 'pdf_reorder_pages' f.id %}">
+            {{ f.name }}
+          </option>
+          {% endfor %}
+        </select>
+        <button class="eo-btn eo-btn-secondary" id="reorder-load-btn">
+          <i class="bi bi-eye"></i> Load Pages
+        </button>
+      </div>
+    </div>
+
+    <div class="pt-hint" id="reorder-hint">
+      <i class="bi bi-info-circle-fill"></i>
+      <strong>Drag</strong> the page thumbnails to rearrange them into the desired order. The blue arrow (→) shows each page's new position. All pages must be included in the output.
+    </div>
+
+    <div class="pt-stats" id="reorder-stats" style="display:none">
+      <span class="pt-stat">Total pages: <strong id="reorder-total">0</strong></span>
+      <span class="pt-stat-sep"></span>
+      <span class="pt-stat">Drag pages to reorder — current order updates in real-time</span>
+      <div style="flex:1"></div>
+      <button class="sel-ctrl-btn" onclick="panels.reorder.resetOrder()">
+        <i class="bi bi-arrow-counterclockwise"></i> Reset Order
+      </button>
+    </div>
+
+    <div id="reorder-loading" class="pt-loading" style="display:none">
+      <div class="pt-spinner"></div>
+      <span>Rendering PDF pages…</span>
+    </div>
+
+    <div class="page-grid-area reorder-mode">
+      <div class="page-grid" id="reorder-grid">
+        <div class="pt-empty-state" style="grid-column:1/-1">
+          <i class="bi bi-file-pdf"></i>
+          <p>Select a PDF and click "Load Pages" to preview</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="action-bar">
+      <div class="action-sel-count" id="reorder-action-count" style="display:none"></div>
+      <div class="spacer"></div>
+      <input type="text" class="eo-form-control action-output" id="reorder-output" placeholder="output-reordered.pdf">
+      <button class="eo-btn eo-btn-primary" id="reorder-action-btn" disabled>
+        <i class="bi bi-check2-circle"></i> Save Reordered PDF
+      </button>
+    </div>
+      <form method="post" id="reorder-form" style="display:none">{% csrf_token %}</form>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════
+     ROTATE PAGES TAB
+════════════════════════════════════════════════════════ -->
+<div class="pt-panel" id="tab-rotate">
+  <div class="eo-card">
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:18px;flex-wrap:wrap">
+      <h3 class="eo-card-title" style="margin:0">Rotate Pages</h3>
+      <div class="pdf-selector-row" style="margin:0;flex:1;min-width:200px">
+        <label>PDF File:</label>
+        <select id="rotate-select" class="eo-form-select">
+          <option value="">— Select a PDF —</option>
+          {% for f in pdf_files %}
+          <option value="{{ f.id }}"
+            data-name="{{ f.name|escapejs }}"
+            data-url="{% url 'file_download' f.id %}"
+            data-action-url="{% url 'pdf_rotate_pages' f.id %}">
+            {{ f.name }}
+          </option>
+          {% endfor %}
+        </select>
+        <button class="eo-btn eo-btn-secondary" id="rotate-load-btn">
+          <i class="bi bi-eye"></i> Load Pages
+        </button>
+      </div>
+    </div>
+
+    <div class="pt-hint" id="rotate-hint">
+      <i class="bi bi-info-circle-fill"></i>
+      Click pages to <strong style="color:#f59e0b">select</strong> them for rotation (shown in amber). Choose the rotation angle below, then click "Rotate Selected Pages". Selected pages will show a rotation tag.
+    </div>
+
+    <div class="pt-stats" id="rotate-stats" style="display:none">
+      <span class="pt-stat">Total pages: <strong id="rotate-total">0</strong></span>
+      <span class="pt-stat-sep"></span>
+      <span class="pt-stat">Selected: <strong id="rotate-sel-count" style="color:#f59e0b">0</strong></span>
+      <div style="flex:1"></div>
+      <div class="sel-controls">
+        <button class="sel-ctrl-btn" onclick="panels.rotate.selectAll()">Select All</button>
+        <button class="sel-ctrl-btn" onclick="panels.rotate.clearAll()">Clear</button>
+      </div>
+    </div>
+
+    <div id="rotate-loading" class="pt-loading" style="display:none">
+      <div class="pt-spinner"></div>
+      <span>Rendering PDF pages…</span>
+    </div>
+
+    <div class="page-grid-area">
+      <div class="page-grid" id="rotate-grid">
+        <div class="pt-empty-state" style="grid-column:1/-1">
+          <i class="bi bi-file-pdf"></i>
+          <p>Select a PDF and click "Load Pages" to preview</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="action-bar">
+      <div class="action-sel-count" id="rotate-action-count">0 pages selected</div>
+      <div class="rotate-deg-wrap">
+        <label>Rotate:</label>
+        <select class="eo-form-select" id="rotate-degrees" style="width:auto">
+          <option value="90">90° clockwise</option>
+          <option value="180">180°</option>
+          <option value="270">270° (90° counter-clockwise)</option>
+        </select>
+      </div>
+      <div class="spacer"></div>
+      <input type="text" class="eo-form-control action-output" id="rotate-output" placeholder="output-rotated.pdf">
+      <button class="eo-btn eo-btn-warning" id="rotate-action-btn" disabled>
+        <i class="bi bi-arrow-clockwise"></i> Rotate Selected Pages
+      </button>
+    </div>
+      <form method="post" id="rotate-form" style="display:none">{% csrf_token %}</form>
+    </div>
+  </div>
+</div>
+
+{% endif %}{# end if pdf_files #}
+
+
+<!-- ═══════════════════════════════════════════════════════
+     SCRIPTS
+════════════════════════════════════════════════════════ -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
+
+<script>
+'use strict';
+
+/* ── PDF.js worker ── */
+if (typeof pdfjsLib !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+
+/* ══════════════════════════════════════
+   TAB SWITCHING
+══════════════════════════════════════ */
+document.querySelectorAll('.pt-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.pt-tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.pt-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+
+/* ══════════════════════════════════════
+   MERGE TAB LOGIC
+══════════════════════════════════════ */
+const mergeList = document.getElementById('mergeFileList');
+if (mergeList) {
+  Sortable.create(mergeList, {
+    animation: 150,
+    ghostClass: 'sortable-ghost',
+    chosenClass: 'sortable-chosen',
+    handle: '.merge-drag-icon',
+    onEnd: updateMergePreview,
+  });
+  updateMergePreview();
+}
+
+function mergeCheckAll(state) {
+  document.querySelectorAll('.merge-check').forEach(c => c.checked = state);
+  updateMergePreview();
+}
+
+function updateMergePreview() {
+  const items = mergeList ? Array.from(mergeList.querySelectorAll('.merge-item')) : [];
+  const preview = document.getElementById('mergePreviewList');
+  if (!preview) return;
+
+  const checked = items.filter(it => it.querySelector('.merge-check').checked);
+
+  // Update order badges
+  let ord = 1;
+  items.forEach(it => {
+    const badge = it.querySelector('.merge-ord-num');
+    if (it.querySelector('.merge-check').checked) {
+      badge.textContent = ord++;
+      badge.style.background = 'var(--eo-primary)';
+      badge.style.opacity = '1';
+    } else {
+      badge.textContent = '–';
+      badge.style.background = 'var(--eo-border)';
+      badge.style.opacity = '.5';
+    }
+  });
+
+  // Render preview list
+  if (checked.length === 0) {
+    preview.innerHTML = '<div class="merge-preview-empty"><i class="bi bi-list-ol" style="font-size:24px;display:block;margin-bottom:6px;opacity:.4"></i>No files selected</div>';
+    return;
+  }
+  preview.innerHTML = checked.map((it, i) => `
+    <div class="merge-preview-row">
+      <div class="merge-preview-num">${i + 1}</div>
+      <i class="bi bi-file-pdf-fill" style="color:#ef4444"></i>
+      <span style="flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${it.dataset.name}</span>
+    </div>
+  `).join('');
+}
+
+document.getElementById('mergeSendBtn')?.addEventListener('click', () => {
+  const items = Array.from(mergeList.querySelectorAll('.merge-item'));
+  const checked = items.filter(it => it.querySelector('.merge-check').checked);
+  if (checked.length < 2) {
+    alert('Please select at least 2 PDF files to merge.');
+    return;
+  }
+  const form = document.getElementById('mergeForm');
+  // Clear previous file_ids
+  form.querySelectorAll('input[name="file_ids"]').forEach(i => i.remove());
+  form.querySelector('input[name="output_name"]')?.remove();
+
+  checked.forEach(it => {
+    const inp = document.createElement('input');
+    inp.type = 'hidden';
+    inp.name = 'file_ids';
+    inp.value = it.dataset.id;
+    form.appendChild(inp);
+  });
+
+  const outInp = document.createElement('input');
+  outInp.type = 'hidden';
+  outInp.name = 'output_name';
+  outInp.value = document.getElementById('mergeOutputName').value || 'merged.pdf';
+  form.appendChild(outInp);
+  form.submit();
+});
+
+
+/* ══════════════════════════════════════
+   PDF PANEL CLASS
+   Handles remove / extract / reorder / rotate
+══════════════════════════════════════ */
+class PDFPanel {
+  constructor(mode, config) {
+    this.mode    = mode;      // 'remove' | 'extract' | 'reorder' | 'rotate'
+    this.cfg     = config;    // { selClass, badgeClass, stateField, countText }
+    this.pdfDoc  = null;
+    this.totalPages = 0;
+    this.selected   = new Set();   // original page numbers (1-indexed)
+    this.pageOrder  = [];          // for reorder: orig page nums in current order
+    this.sortable   = null;
+    this.fileData   = null;        // { id, url, actionUrl, name }
+
+    this.$  = id => document.getElementById(`${mode}-${id}`);
+
+    this.$('load-btn').addEventListener('click', () => this.load());
+    this.$('action-btn').addEventListener('click', () => this.submit());
+  }
+
+  async load() {
+    const sel  = this.$('select');
+    const opt  = sel.options[sel.selectedIndex];
+    if (!opt || !opt.value) { alert('Please select a PDF file.'); return; }
+
+    this.fileData = {
+      id:        opt.value,
+      url:       opt.dataset.url,
+      actionUrl: opt.dataset.actionUrl,
+      name:      opt.dataset.name,
+    };
+    this.selected.clear();
+    this.pageOrder = [];
+
+    // UI reset
+    this.$('stats').style.display = 'none';
+    this.$('loading').style.display = 'flex';
+    this.$('grid').innerHTML = '';
+    this.$('action-btn').disabled = true;
+
+    // Set default output name
+    const base = this.fileData.name.replace(/\.pdf$/i, '');
+    const suffixes = { remove:'edited', extract:'extract', reorder:'reordered', rotate:'rotated' };
+    this.$('output').value = `${base}-${suffixes[this.mode]}.pdf`;
+
+    try {
+      const task   = pdfjsLib.getDocument(this.fileData.url);
+      this.pdfDoc  = await task.promise;
+      this.totalPages = this.pdfDoc.numPages;
+      this.pageOrder  = Array.from({ length: this.totalPages }, (_, i) => i + 1);
+
+      this.$('loading').style.display = 'none';
+      this.$('stats').style.display   = 'flex';
+      this.$('action-btn').disabled   = false;
+
+      this.renderGrid();
+      this.updateStats();
+    } catch (err) {
+      this.$('loading').style.display = 'none';
+      this.$('grid').innerHTML = `
+        <div class="pt-empty-state" style="grid-column:1/-1">
+          <i class="bi bi-exclamation-triangle" style="color:#ef4444"></i>
+          <p>Failed to load PDF. It may be corrupted or require authentication.</p>
+        </div>`;
+    }
+  }
+
+  renderGrid() {
+    const grid = this.$('grid');
+    grid.innerHTML = '';
+
+    this.pageOrder.forEach((origPage, posIdx) => {
+      const thumb = this.createThumb(origPage, posIdx + 1);
+      grid.appendChild(thumb);
+      // Render asynchronously so UI isn't blocked
+      this.renderPage(origPage, thumb);
+    });
+
+    // Sortable only for reorder mode
+    if (this.mode === 'reorder') {
+      if (this.sortable) this.sortable.destroy();
+      this.sortable = Sortable.create(grid, {
+        animation: 150,
+        ghostClass:  'sortable-ghost',
+        chosenClass: 'sortable-chosen',
+        dragClass:   'sortable-drag',
+        onEnd: () => {
+          // Rebuild pageOrder from current DOM order
+          const thumbs = Array.from(grid.querySelectorAll('.page-thumb'));
+          this.pageOrder = thumbs.map(t => parseInt(t.dataset.page, 10));
+          // Update position indicators
+          thumbs.forEach((t, i) => {
+            const posEl = t.querySelector('.page-pos-label');
+            if (posEl) posEl.textContent = `→ pos ${i + 1}`;
+          });
+          this.updateStats();
+        },
+      });
+    }
+  }
+
+  createThumb(origPage, displayPos) {
+    const div = document.createElement('div');
+    div.className = 'page-thumb';
+    div.dataset.page = origPage;
+
+    const isReorder = this.mode === 'reorder';
+    const isRemove  = this.mode === 'remove';
+    const isExtract = this.mode === 'extract';
+    const isRotate  = this.mode === 'rotate';
+
+    let overlayBtns = '';
+    if (isReorder) {
+      overlayBtns = `<button class="pov-btn pov-drag" title="Drag to reorder"><i class="bi bi-arrows-move"></i> Drag</button>`;
+    } else if (isRemove) {
+      overlayBtns = `<button class="pov-btn pov-remove" data-action="toggle" data-page="${origPage}"><i class="bi bi-trash3"></i> Mark for Removal</button>`;
+    } else if (isExtract) {
+      overlayBtns = `<button class="pov-btn pov-extract" data-action="toggle" data-page="${origPage}"><i class="bi bi-check2"></i> Select Page</button>`;
+    } else if (isRotate) {
+      overlayBtns = `<button class="pov-btn pov-rotate" data-action="toggle" data-page="${origPage}"><i class="bi bi-arrow-clockwise"></i> Select for Rotation</button>`;
+    }
+
+    div.innerHTML = `
+      <div class="page-canvas-wrap"><canvas></canvas></div>
+      <div class="page-num-bar">
+        <span>Page ${origPage}</span>
+        ${isReorder ? `<span class="page-pos-label page-pos-arrow">→ pos ${displayPos}</span>` : ''}
+      </div>
+      <div class="pg-badge pg-badge-remove">✕</div>
+      <div class="pg-badge pg-badge-extract">✓</div>
+      <div class="pg-badge pg-badge-rotate"><i class="bi bi-arrow-clockwise" style="font-size:9px"></i></div>
+      <div class="pg-rot-tag">↺ rot</div>
+      <div class="page-overlay">${overlayBtns}</div>
+    `;
+
+    // Click to toggle (not in reorder mode)
+    if (!isReorder) {
+      div.addEventListener('click', e => {
+        // Don't double-fire if the overlay button was clicked
+        if (!e.target.closest('[data-action="toggle"]')) {
+          this.togglePage(origPage, div);
+        }
+      });
+      div.querySelector('[data-action="toggle"]')?.addEventListener('click', e => {
+        e.stopPropagation();
+        this.togglePage(origPage, div);
+      });
+    }
+
+    return div;
+  }
+
+  async renderPage(pageNum, thumbEl) {
+    if (!this.pdfDoc) return;
+    try {
+      const page    = await this.pdfDoc.getPage(pageNum);
+      const canvas  = thumbEl.querySelector('canvas');
+      const targetW = 116;
+      const vp      = page.getViewport({ scale: 1 });
+      const scale   = targetW / vp.width;
+      const scaled  = page.getViewport({ scale });
+      canvas.width  = scaled.width;
+      canvas.height = scaled.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: scaled }).promise;
+    } catch (_) { /* silent fail, blank canvas shown */ }
+  }
+
+  togglePage(pageNum, thumbEl) {
+    if (!thumbEl) {
+      thumbEl = this.$('grid').querySelector(`[data-page="${pageNum}"]`);
+    }
+    if (!thumbEl) return;
+
+    const stClass = `st-${this.mode}`;
+    if (this.selected.has(pageNum)) {
+      this.selected.delete(pageNum);
+      thumbEl.classList.remove(stClass);
+      thumbEl.classList.remove('has-rotation');
+    } else {
+      this.selected.add(pageNum);
+      thumbEl.classList.add(stClass);
+      if (this.mode === 'rotate') thumbEl.classList.add('has-rotation');
+    }
+    this.updateStats();
+  }
+
+  selectAll() {
+    const grid = this.$('grid');
+    this.pageOrder.forEach(p => {
+      this.selected.add(p);
+      const t = grid.querySelector(`[data-page="${p}"]`);
+      if (t) {
+        t.classList.add(`st-${this.mode}`);
+        if (this.mode === 'rotate') t.classList.add('has-rotation');
+      }
+    });
+    this.updateStats();
+  }
+
+  clearAll() {
+    const grid = this.$('grid');
+    this.selected.clear();
+    grid.querySelectorAll('.page-thumb').forEach(t => {
+      t.classList.remove(`st-${this.mode}`, 'has-rotation');
+    });
+    this.updateStats();
+  }
+
+  resetOrder() {
+    if (!this.pdfDoc) return;
+    this.pageOrder = Array.from({ length: this.totalPages }, (_, i) => i + 1);
+    this.renderGrid();
+    this.updateStats();
+  }
+
+  updateStats() {
+    const total = this.totalPages;
+    const selCount = this.selected.size;
+    const mode = this.mode;
+
+    // Per-tab stats
+    if (mode === 'remove') {
+      setText('remove-total',      total);
+      setText('remove-sel-count',  selCount);
+      setText('remove-keep-count', total - selCount);
+      setText('remove-action-count', `${selCount} page${selCount !== 1 ? 's' : ''} marked for removal`);
+    } else if (mode === 'extract') {
+      setText('extract-total',     total);
+      setText('extract-sel-count', selCount);
+      setText('extract-action-count', `${selCount} page${selCount !== 1 ? 's' : ''} selected`);
+    } else if (mode === 'reorder') {
+      setText('reorder-total', total);
+    } else if (mode === 'rotate') {
+      setText('rotate-total',     total);
+      setText('rotate-sel-count', selCount);
+      setText('rotate-action-count', `${selCount} page${selCount !== 1 ? 's' : ''} selected`);
+    }
+  }
+
+  submit() {
+    if (!this.fileData) return;
+
+    const mode   = this.mode;
+    const form   = this.$('form');
+    const output = this.$('output').value.trim() || 'output.pdf';
+
+    // Clear any previous dynamic inputs
+    form.querySelectorAll('.dyn-input').forEach(i => i.remove());
+
+    // Set form action
+    form.action = this.fileData.actionUrl;
+
+    const addHidden = (name, value) => {
+      const inp = document.createElement('input');
+      inp.type  = 'hidden';
+      inp.name  = name;
+      inp.value = value;
+      inp.className = 'dyn-input';
+      form.appendChild(inp);
+    };
+
+    addHidden('output_name', output);
+
+    if (mode === 'remove') {
+      if (this.selected.size === 0) { alert('Please mark at least one page for removal.'); return; }
+      if (this.selected.size >= this.totalPages) { alert('You cannot remove all pages — at least one page must remain.'); return; }
+      addHidden('remove_pages', Array.from(this.selected).sort((a,b)=>a-b).join(','));
+
+    } else if (mode === 'extract') {
+      if (this.selected.size === 0) { alert('Please select at least one page to extract.'); return; }
+      addHidden('split_pages', Array.from(this.selected).sort((a,b)=>a-b).join(','));
+
+    } else if (mode === 'reorder') {
+      // Validate: all pages present exactly once
+      const ordered = this.pageOrder;
+      if (ordered.length !== this.totalPages) { alert('Page count mismatch. Please reload the PDF.'); return; }
+      addHidden('page_order', ordered.join(','));
+
+    } else if (mode === 'rotate') {
+      if (this.selected.size === 0) { alert('Please select at least one page to rotate.'); return; }
+      addHidden('rotate_pages', Array.from(this.selected).sort((a,b)=>a-b).join(','));
+      addHidden('degrees', document.getElementById('rotate-degrees').value);
+    }
+
+    form.submit();
+  }
+}
+
+/* ── Helper ── */
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+/* ── Instantiate panels ── */
+const panels = {};
+['remove','extract','reorder','rotate'].forEach(mode => {
+  if (document.getElementById(`${mode}-load-btn`)) {
+    panels[mode] = new PDFPanel(mode, {});
+  }
+});
+
+</script>
+{% endblock %}

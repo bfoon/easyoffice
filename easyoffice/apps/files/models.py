@@ -192,6 +192,97 @@ class SharedFile(models.Model):
         self.file.close()
         return h.hexdigest()
 
+#---- File Share Permissions --------------------------------------------------
+
+class SharePermission(models.TextChoices):
+    VIEW = 'view', 'View'
+    EDIT = 'edit', 'Edit'
+    FULL = 'full', 'Full'
+
+
+class FileShareAccess(models.Model):
+    file = models.ForeignKey('SharedFile', on_delete=models.CASCADE, related_name='share_access')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='file_share_access')
+    permission = models.CharField(max_length=10, choices=SharePermission.choices, default=SharePermission.VIEW)
+    granted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='file_permissions_granted')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('file', 'user')
+        ordering = ['user__first_name', 'user__last_name']
+
+    def __str__(self):
+        return f'{self.user} → {self.file.name} ({self.permission})'
+
+
+class FolderShareAccess(models.Model):
+    folder = models.ForeignKey('FileFolder', on_delete=models.CASCADE, related_name='share_access')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='folder_share_access')
+    permission = models.CharField(max_length=10, choices=SharePermission.choices, default=SharePermission.VIEW)
+    granted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='folder_permissions_granted')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('folder', 'user')
+        ordering = ['user__first_name', 'user__last_name']
+
+    def __str__(self):
+        return f'{self.user} → {self.folder.name} ({self.permission})'
+
+
+class FileHistory(models.Model):
+    class Action(models.TextChoices):
+        CREATED = 'created', 'Created'
+        UPDATED = 'updated', 'Updated'
+        RENAMED = 'renamed', 'Renamed'
+        MOVED = 'moved', 'Moved'
+        SHARED = 'shared', 'Shared'
+        PERMISSION_CHANGED = 'permission_changed', 'Permission Changed'
+        DOWNLOADED = 'downloaded', 'Downloaded'
+        RESTORED = 'restored', 'Restored'
+        DELETED = 'deleted', 'Deleted'
+        VERSIONED = 'versioned', 'Versioned'
+
+    file = models.ForeignKey('SharedFile', on_delete=models.CASCADE, related_name='history_rows')
+    action = models.CharField(max_length=30, choices=Action.choices)
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='file_history_actions')
+    notes = models.TextField(blank=True)
+    snapshot_name = models.CharField(max_length=255, blank=True)
+    snapshot_folder_name = models.CharField(max_length=255, blank=True)
+    snapshot_visibility = models.CharField(max_length=20, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+
+class FileTrash(models.Model):
+    class ItemType(models.TextChoices):
+        FILE = 'file', 'File'
+        FOLDER = 'folder', 'Folder'
+
+    item_type = models.CharField(max_length=10, choices=ItemType.choices)
+    original_file = models.ForeignKey('SharedFile', on_delete=models.SET_NULL, null=True, blank=True, related_name='trash_entries')
+    original_folder = models.ForeignKey('FileFolder', on_delete=models.SET_NULL, null=True, blank=True, related_name='trash_entries')
+    name = models.CharField(max_length=255)
+    file_blob = models.FileField(upload_to='trash/%Y/%m/', null=True, blank=True)
+    deleted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='deleted_file_trash')
+    owner = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='owned_file_trash')
+    original_parent_folder = models.ForeignKey('FileFolder', on_delete=models.SET_NULL, null=True, blank=True, related_name='trashed_children')
+    original_visibility = models.CharField(max_length=20, blank=True)
+    original_description = models.TextField(blank=True)
+    original_tags = models.CharField(max_length=500, blank=True)
+    deleted_at = models.DateTimeField(default=timezone.now)
+    restored_at = models.DateTimeField(null=True, blank=True)
+    is_restored = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['-deleted_at']
+
+    def __str__(self):
+        return f'{self.name} ({self.item_type})'
 
 # ── Signature Flow ────────────────────────────────────────────────────────────
 

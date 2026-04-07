@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Recycle Bin{% endblock %}
+{% block breadcrumb %}<a href="{% url 'file_manager' %}">File Manager</a> / Recycle Bin{% endblock %}
+
+{% block content %}
+<style>
+.rb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.rb-card {
+  border: 1px solid var(--eo-border);
+  border-radius: 14px;
+  background: var(--eo-surface);
+  padding: 16px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
+}
+
+.rb-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.rb-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.35rem;
+  flex-shrink: 0;
+}
+
+.rb-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.rb-name {
+  font-size: .95rem;
+  font-weight: 700;
+  color: var(--eo-text);
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.rb-sub {
+  font-size: .76rem;
+  color: var(--eo-text-muted);
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.rb-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .01em;
+}
+
+.rb-badge-file {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.rb-badge-folder {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.rb-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--eo-border);
+}
+
+.rb-label {
+  font-size: .7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--eo-text-muted);
+  margin-bottom: 6px;
+}
+
+.rb-value {
+  font-size: .82rem;
+  color: var(--eo-text);
+  word-break: break-word;
+}
+
+.rb-actions {
+  margin-top: 16px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rb-empty {
+  border: 1px dashed var(--eo-border);
+  border-radius: 16px;
+  background: var(--eo-surface);
+  padding: 56px 24px;
+  text-align: center;
+}
+
+.rb-empty i {
+  font-size: 3rem;
+  color: var(--eo-text-light);
+  opacity: .45;
+  display: block;
+  margin-bottom: 14px;
+}
+
+.rb-empty-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--eo-text);
+  margin-bottom: 6px;
+}
+
+.rb-empty-sub {
+  font-size: .86rem;
+  color: var(--eo-text-muted);
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.rb-stat {
+  font-size: .78rem;
+  color: var(--eo-text-muted);
+}
+
+@media (max-width: 768px) {
+  .rb-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Recycle Bin</h1>
+    <p class="eo-page-subtitle">Deleted files and folders can be restored from here</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-arrow-left"></i> Back to Files
+    </a>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-4">
+    <div class="eo-stat">
+      <div class="eo-stat-label">Items in Bin</div>
+      <div class="eo-stat-value">{{ trash_items|length }}</div>
+      <i class="bi bi-trash eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-4">
+    <div class="eo-stat eo-stat-info">
+      <div class="eo-stat-label">Files</div>
+      <div class="eo-stat-value">
+        {{ trash_items|dictsort:"item_type"|length }}
+      </div>
+      <i class="bi bi-file-earmark eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-12 col-md-4">
+    <div class="eo-stat eo-stat-warning">
+      <div class="eo-stat-label">Restore</div>
+      <div class="eo-stat-value" style="font-size:1rem">Available</div>
+      <i class="bi bi-arrow-counterclockwise eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
+{% if trash_items %}
+  <div class="rb-grid">
+    {% for item in trash_items %}
+      <div class="rb-card">
+        <div class="rb-top">
+          <div class="rb-icon" style="{% if item.item_type == 'file' %}background:#eff6ff;color:#2563eb;{% else %}background:#fffbeb;color:#d97706;{% endif %}">
+            {% if item.item_type == 'file' %}
+              <i class="bi bi-file-earmark"></i>
+            {% else %}
+              <i class="bi bi-folder"></i>
+            {% endif %}
+          </div>
+
+          <div class="rb-meta">
+            <div class="rb-name">{{ item.name }}</div>
+            <div class="rb-sub">
+              <span class="rb-badge {% if item.item_type == 'file' %}rb-badge-file{% else %}rb-badge-folder{% endif %}">
+                {% if item.item_type == 'file' %}
+                  <i class="bi bi-file-earmark"></i> File
+                {% else %}
+                  <i class="bi bi-folder"></i> Folder
+                {% endif %}
+              </span>
+              <span><i class="bi bi-clock-history me-1"></i>{{ item.deleted_at|naturaltime }}</span>
+            </div>
+          </div>
+        </div>
+
+        {% if item.owner %}
+        <div class="rb-section">
+          <div class="rb-label">Owner</div>
+          <div class="rb-value">{{ item.owner.full_name|default:item.owner }}</div>
+        </div>
+        {% endif %}
+
+        {% if item.deleted_by %}
+        <div class="rb-section">
+          <div class="rb-label">Deleted By</div>
+          <div class="rb-value">{{ item.deleted_by.full_name|default:item.deleted_by }}</div>
+        </div>
+        {% endif %}
+
+        {% if item.original_parent_folder %}
+        <div class="rb-section">
+          <div class="rb-label">Original Folder</div>
+          <div class="rb-value">{{ item.original_parent_folder.name }}</div>
+        </div>
+        {% endif %}
+
+        {% if item.original_visibility %}
+        <div class="rb-section">
+          <div class="rb-label">Original Visibility</div>
+          <div class="rb-value" style="text-transform:capitalize">{{ item.original_visibility }}</div>
+        </div>
+        {% endif %}
+
+        {% if item.original_description %}
+        <div class="rb-section">
+          <div class="rb-label">Description</div>
+          <div class="rb-value">{{ item.original_description|truncatechars:140 }}</div>
+        </div>
+        {% endif %}
+
+        <div class="rb-section">
+          <div class="rb-label">Deleted On</div>
+          <div class="rb-value">{{ item.deleted_at|date:"F j, Y, g:i a" }}</div>
+        </div>
+
+        <div class="rb-actions">
+          <form method="post" action="{% url 'restore_trash_item' item.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm">
+              <i class="bi bi-arrow-counterclockwise"></i> Restore
+            </button>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="rb-empty">
+    <i class="bi bi-trash3"></i>
+    <div class="rb-empty-title">Recycle Bin is empty</div>
+    <p class="rb-empty-sub">
+      Deleted files and folders will appear here before permanent removal. You can restore them anytime while they remain in the bin.
+    </p>
+    <div style="margin-top:16px">
+      <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-primary">
+        <i class="bi bi-folder2-open"></i> Go to File Manager
+      </a>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

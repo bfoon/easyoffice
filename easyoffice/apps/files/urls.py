@@ -20,6 +20,9 @@ urlpatterns = [
     path('folder/create/',                      views.FolderCreateView.as_view(),               name='folder_create'),
     path('folder/<uuid:pk>/delete/',            views.FolderDeleteView.as_view(),               name='folder_delete'),
     path('folder/<uuid:pk>/share/',             views.FolderShareView.as_view(),                name='folder_share'),
+    path('recycle-bin/', views.RecycleBinView.as_view(), name='recycle_bin'),
+    path('recycle-bin/<int:pk>/restore/', views.RestoreTrashItemView.as_view(), name='restore_trash_item'),
+    path('history/<uuid:pk>/', views.FileHistoryView.as_view(), name='file_history'),
 
     path('signatures/new/',                     views.SignatureRequestCreateView.as_view(),     name='signature_request_new'),
     path('signatures/<uuid:pk>/',               views.SignatureRequestDetailView.as_view(),     name='signature_request_detail'),

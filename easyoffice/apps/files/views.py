@@ -41,17 +41,102 @@ def _visible_files_qs(user):
         Q(visibility='office') |
         Q(visibility='unit', unit=unit) |
         Q(visibility='department', department=dept) |
-        Q(shared_with=user)
+        Q(shared_with=user) |
+        Q(share_access__user=user)
     ).distinct()
 
 
 def _visible_folders_qs(user):
     profile = getattr(user, 'staffprofile', None)
     unit = profile.unit if profile else None
+    dept = profile.department if profile else None
     return FileFolder.objects.filter(
-        Q(owner=user) | Q(visibility='office') | Q(visibility='unit', unit=unit)
+        Q(owner=user) |
+        Q(visibility='office') |
+        Q(visibility='unit', unit=unit) |
+        Q(visibility='department', department=dept) |
+        Q(share_access__user=user)
     ).distinct()
 
+def _file_permission_for(user, f):
+    if f.uploaded_by_id == user.id or user.is_superuser:
+        return 'full'
+
+    access = f.share_access.filter(user=user).first()
+    if access:
+        return access.permission
+
+    profile = getattr(user, 'staffprofile', None)
+    unit = profile.unit if profile else None
+    dept = profile.department if profile else None
+
+    if f.visibility == 'office':
+        return 'view'
+    if f.visibility == 'unit' and f.unit == unit:
+        return 'view'
+    if f.visibility == 'department' and f.department == dept:
+        return 'view'
+    if f.shared_with.filter(id=user.id).exists():
+        return 'view'
+
+    return None
+
+
+def _folder_permission_for(user, folder):
+    if folder.owner_id == user.id or user.is_superuser:
+        return 'full'
+
+    access = folder.share_access.filter(user=user).first()
+    if access:
+        return access.permission
+
+    profile = getattr(user, 'staffprofile', None)
+    unit = profile.unit if profile else None
+    dept = profile.department if profile else None
+
+    if folder.visibility == 'office':
+        return 'view'
+    if folder.visibility == 'unit' and folder.unit == unit:
+        return 'view'
+    if folder.visibility == 'department' and folder.department == dept:
+        return 'view'
+
+    return None
+
+
+def _can_edit_file(user, f):
+    perm = _file_permission_for(user, f)
+    return perm in ('edit', 'full')
+
+
+def _can_delete_file(user, f):
+    perm = _file_permission_for(user, f)
+    return perm == 'full'
+
+
+def _can_edit_folder(user, folder):
+    perm = _folder_permission_for(user, folder)
+    return perm in ('edit', 'full')
+
+
+def _can_delete_folder(user, folder):
+    perm = _folder_permission_for(user, folder)
+    return perm == 'full'
+
+
+def _log_file_history(file_obj, action, actor=None, notes=''):
+    try:
+        FileHistory.objects.create(
+            file=file_obj,
+            action=action,
+            actor=actor,
+            notes=notes,
+            snapshot_name=file_obj.name or '',
+            snapshot_folder_name=file_obj.folder.name if file_obj.folder else '',
+            snapshot_visibility=file_obj.visibility or '',
+        )
+    except Exception:
+        pass
 
 def _log_audit(sig_req, event, signer=None, request=None, notes=''):
     """Create a tamper-evident audit event."""
@@ -899,13 +984,36 @@ class FilePreviewView(LoginRequiredMixin, View):
 
 class FileDeleteView(LoginRequiredMixin, View):
     def post(self, request, pk):
-        f = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
-        name, folder_id = f.name, f.folder_id
-        f.file.delete(save=False)
-        f.delete()
-        messages.success(request, f'"{name}" deleted.')
-        return redirect(f'/files/?folder={folder_id}' if folder_id else 'file_manager')
+        f = get_object_or_404(SharedFile, pk=pk)
 
+        if not _can_delete_file(request.user, f):
+            messages.error(request, 'You do not have permission to delete this file.')
+            return redirect('file_manager')
+
+        name, folder_id = f.name, f.folder_id
+
+        trash = FileTrash.objects.create(
+            item_type='file',
+            original_file=f,
+            name=f.name,
+            deleted_by=request.user,
+            owner=f.uploaded_by,
+            original_parent_folder=f.folder,
+            original_visibility=f.visibility,
+            original_description=f.description,
+            original_tags=f.tags,
+        )
+
+        # keep a copy in trash storage
+        if f.file:
+            f.file.open('rb')
+            trash.file_blob.save(os.path.basename(f.file.name), ContentFile(f.file.read()), save=True)
+
+        _log_file_history(f, 'deleted', actor=request.user, notes='Moved to recycle bin')
+        f.delete()
+
+        messages.success(request, f'"{name}" moved to recycle bin.')
+        return redirect(f'/files/?folder={folder_id}' if folder_id else 'file_manager')
 
 class FileShareView(LoginRequiredMixin, View):
     def get(self, request, pk):
@@ -919,16 +1027,21 @@ class FileShareView(LoginRequiredMixin, View):
         if vis not in allowed:
             vis = 'private'
 
+        # Track previous direct shares so we only notify newly added users
         previous_shared_ids = set(f.shared_with.values_list('id', flat=True))
 
-        # Reset old sharing configuration first
+        # Reset old sharing state
         f.visibility = vis
         f.unit = None
         f.department = None
         f.save(update_fields=['visibility', 'unit', 'department'])
 
-        # Clear old direct shares
+        # Clear previous direct shares + permission rows
         f.shared_with.clear()
+        try:
+            f.share_access.all().delete()
+        except Exception:
+            pass
 
         added_recipients = []
 
@@ -938,13 +1051,38 @@ class FileShareView(LoginRequiredMixin, View):
             for uid in request.POST.getlist('shared_with'):
                 try:
                     recipient = User.objects.get(id=uid, is_active=True)
-                    if recipient != request.user:
-                        f.shared_with.add(recipient)
-                        if recipient.id not in previous_shared_ids:
-                            added_recipients.append(recipient)
+                    if recipient == request.user:
+                        continue
+
+                    # Permission per selected user
+                    perm = (request.POST.get(f'perm_{uid}', 'view') or 'view').strip().lower()
+                    if perm not in ('view', 'edit', 'full'):
+                        perm = 'view'
+
+                    # Keep legacy M2M for visibility checks if your app still uses it
+                    f.shared_with.add(recipient)
+
+                    # New permission row
+                    try:
+                        FileShareAccess.objects.update_or_create(
+                            file=f,
+                            user=recipient,
+                            defaults={
+                                'permission': perm,
+                                'granted_by': request.user,
+                            }
+                        )
+                    except Exception:
+                        # If FileShareAccess is not yet added/migrated, sharing still works
+                        pass
+
+                    if recipient.id not in previous_shared_ids:
+                        added_recipients.append((recipient, perm))
+
                 except Exception:
                     pass
 
+            # Do not keep a broken shared_with state
             if not f.shared_with.exists():
                 f.visibility = 'private'
                 f.save(update_fields=['visibility'])
@@ -977,19 +1115,30 @@ class FileShareView(LoginRequiredMixin, View):
                 f.visibility = 'private'
                 f.save(update_fields=['visibility'])
 
+        # Optional history log
+        try:
+            _log_file_history(
+                f,
+                'permission_changed',
+                actor=request.user,
+                notes=f'Sharing updated: visibility={f.visibility}'
+            )
+        except Exception:
+            pass
+
         if f.visibility == 'private':
             messages.success(request, f'Sharing stopped for "{f.name}".')
         else:
             messages.success(request, f'Sharing updated for "{f.name}".')
 
-        # Notify newly-added direct-share users
+        # Notify newly added direct-share users
         if f.visibility == 'shared_with':
-            for recipient in added_recipients:
+            for recipient, perm in added_recipients:
                 _notify(
                     recipient,
                     'file_shared',
                     title=f'{request.user.full_name} shared a file with you',
-                    body=f'"{f.name}" was shared with you.',
+                    body=f'"{f.name}" was shared with you with {perm} permission.',
                     link=f'/files/{f.pk}/preview/',
                     sender=request.user,
                 )
@@ -998,7 +1147,8 @@ class FileShareView(LoginRequiredMixin, View):
                         subject=f'[EasyOffice] {request.user.full_name} shared "{f.name}" with you',
                         message=(
                             f'Hello {recipient.full_name},\n\n'
-                            f'{request.user.full_name} has shared the file "{f.name}" with you.\n\n'
+                            f'{request.user.full_name} has shared the file "{f.name}" with you.\n'
+                            f'Permission: {perm}\n\n'
                             f'View it in EasyOffice Files:\n/files/{f.pk}/preview/\n\n'
                             f'— EasyOffice'
                         ),
@@ -1011,6 +1161,7 @@ class FileShareView(LoginRequiredMixin, View):
 
         next_url = request.POST.get('next', '')
         return redirect(next_url if next_url.startswith('/') else 'file_manager')
+
 
 class FolderCreateView(LoginRequiredMixin, View):
     def post(self, request):
@@ -1035,12 +1186,28 @@ class FolderCreateView(LoginRequiredMixin, View):
 
 class FolderDeleteView(LoginRequiredMixin, View):
     def post(self, request, pk):
-        folder = get_object_or_404(FileFolder, pk=pk, owner=request.user)
-        name, parent_id = folder.name, folder.parent_id
-        folder.delete()
-        messages.success(request, f'Folder "{name}" deleted.')
-        return redirect(f'/files/?folder={parent_id}' if parent_id else 'file_manager')
+        folder = get_object_or_404(FileFolder, pk=pk)
 
+        if not _can_delete_folder(request.user, folder):
+            messages.error(request, 'You do not have permission to delete this folder.')
+            return redirect('file_manager')
+
+        name, parent_id = folder.name, folder.parent_id
+
+        FileTrash.objects.create(
+            item_type='folder',
+            original_folder=folder,
+            name=folder.name,
+            deleted_by=request.user,
+            owner=folder.owner,
+            original_parent_folder=folder.parent,
+            original_visibility=folder.visibility,
+        )
+
+        folder.delete()
+
+        messages.success(request, f'Folder "{name}" moved to recycle bin.')
+        return redirect(f'/files/?folder={parent_id}' if parent_id else 'file_manager')
 
 class FolderShareView(LoginRequiredMixin, View):
     def post(self, request, pk):
@@ -1050,15 +1217,71 @@ class FolderShareView(LoginRequiredMixin, View):
         previous_unit_id = folder.unit_id
         previous_department_id = folder.department_id
 
+        # If your FolderShareAccess model exists, track previous direct shares
+        try:
+            previous_shared_ids = set(folder.share_access.values_list('user_id', flat=True))
+        except Exception:
+            previous_shared_ids = set()
+
         vis = (request.POST.get('visibility') or folder.visibility or 'private').strip()
-        allowed = {'private', 'unit', 'department', 'office'}
-        folder.visibility = vis if vis in allowed else 'private'
+        allowed = {'private', 'shared_with', 'unit', 'department', 'office'}
+        if vis not in allowed:
+            vis = 'private'
+
+        folder.visibility = vis
 
         # Reset stale values first
         folder.unit = None
         folder.department = None
 
-        if folder.visibility == 'unit':
+        # Clear old direct-share permissions
+        try:
+            folder.share_access.all().delete()
+        except Exception:
+            pass
+
+        added_recipients = []
+
+        if folder.visibility == 'shared_with':
+            from apps.core.models import User
+
+            for uid in request.POST.getlist('shared_with'):
+                try:
+                    recipient = User.objects.get(id=uid, is_active=True)
+                    if recipient == request.user:
+                        continue
+
+                    perm = (request.POST.get(f'perm_{uid}', 'view') or 'view').strip().lower()
+                    if perm not in ('view', 'edit', 'full'):
+                        perm = 'view'
+
+                    try:
+                        FolderShareAccess.objects.update_or_create(
+                            folder=folder,
+                            user=recipient,
+                            defaults={
+                                'permission': perm,
+                                'granted_by': request.user,
+                            }
+                        )
+                    except Exception:
+                        # If FolderShareAccess not migrated yet, ignore silently
+                        pass
+
+                    if recipient.id not in previous_shared_ids:
+                        added_recipients.append((recipient, perm))
+
+                except Exception:
+                    pass
+
+            # If nobody selected, do not leave broken shared state
+            try:
+                if not folder.share_access.exists():
+                    folder.visibility = 'private'
+            except Exception:
+                folder.visibility = 'private'
+
+        elif folder.visibility == 'unit':
             uid = (request.POST.get('unit_id') or '').strip()
             if uid:
                 try:
@@ -1082,46 +1305,34 @@ class FolderShareView(LoginRequiredMixin, View):
 
         folder.save()
 
+        # Optional history log
+        try:
+            _log_folder_history(
+                folder,
+                'permission_changed',
+                actor=request.user,
+                notes=f'Sharing updated: visibility={folder.visibility}'
+            )
+        except Exception:
+            pass
+
         if folder.visibility == 'private':
             messages.success(request, f'Sharing stopped for "{folder.name}".')
         else:
             messages.success(request, f'Sharing updated for "{folder.name}".')
 
-        # Notify users when folder scope changes
+        # Notify users when folder scope changes or new direct shares are added
         try:
             from apps.core.models import User
-            recipients = User.objects.none()
 
-            changed = (
-                previous_visibility != folder.visibility or
-                previous_unit_id != folder.unit_id or
-                previous_department_id != folder.department_id
-            )
-
-            if changed:
-                if folder.visibility == 'unit' and folder.unit_id:
-                    recipients = User.objects.filter(
-                        is_active=True,
-                        staffprofile__unit_id=folder.unit_id
-                    ).exclude(id=request.user.id).distinct()
-
-                elif folder.visibility == 'department' and folder.department_id:
-                    recipients = User.objects.filter(
-                        is_active=True,
-                        staffprofile__department_id=folder.department_id
-                    ).exclude(id=request.user.id).distinct()
-
-                elif folder.visibility == 'office':
-                    recipients = User.objects.filter(
-                        is_active=True
-                    ).exclude(id=request.user.id).distinct()
-
-                for recipient in recipients:
+            # Direct per-user folder shares
+            if folder.visibility == 'shared_with':
+                for recipient, perm in added_recipients:
                     _notify(
                         recipient,
                         'file_shared',
                         title=f'{request.user.full_name} shared a folder with you',
-                        body=f'Folder "{folder.name}" is now available to you.',
+                        body=f'Folder "{folder.name}" was shared with you with {perm} permission.',
                         link='/files/',
                         sender=request.user,
                     )
@@ -1130,7 +1341,8 @@ class FolderShareView(LoginRequiredMixin, View):
                             subject=f'[EasyOffice] {request.user.full_name} shared folder "{folder.name}" with you',
                             message=(
                                 f'Hello {recipient.full_name},\n\n'
-                                f'{request.user.full_name} has shared the folder "{folder.name}" with you.\n\n'
+                                f'{request.user.full_name} has shared the folder "{folder.name}" with you.\n'
+                                f'Permission: {perm}\n\n'
                                 f'Open EasyOffice Files to access it.\n\n'
                                 f'— EasyOffice'
                             ),
@@ -1140,11 +1352,113 @@ class FolderShareView(LoginRequiredMixin, View):
                         )
                     except Exception:
                         pass
+
+            # Scope-based sharing notifications
+            else:
+                recipients = User.objects.none()
+
+                changed = (
+                    previous_visibility != folder.visibility or
+                    previous_unit_id != folder.unit_id or
+                    previous_department_id != folder.department_id
+                )
+
+                if changed:
+                    if folder.visibility == 'unit' and folder.unit_id:
+                        recipients = User.objects.filter(
+                            is_active=True,
+                            staffprofile__unit_id=folder.unit_id
+                        ).exclude(id=request.user.id).distinct()
+
+                    elif folder.visibility == 'department' and folder.department_id:
+                        recipients = User.objects.filter(
+                            is_active=True,
+                            staffprofile__department_id=folder.department_id
+                        ).exclude(id=request.user.id).distinct()
+
+                    elif folder.visibility == 'office':
+                        recipients = User.objects.filter(
+                            is_active=True
+                        ).exclude(id=request.user.id).distinct()
+
+                    for recipient in recipients:
+                        _notify(
+                            recipient,
+                            'file_shared',
+                            title=f'{request.user.full_name} shared a folder with you',
+                            body=f'Folder "{folder.name}" is now available to you.',
+                            link='/files/',
+                            sender=request.user,
+                        )
+                        try:
+                            send_mail(
+                                subject=f'[EasyOffice] {request.user.full_name} shared folder "{folder.name}" with you',
+                                message=(
+                                    f'Hello {recipient.full_name},\n\n'
+                                    f'{request.user.full_name} has shared the folder "{folder.name}" with you.\n\n'
+                                    f'Open EasyOffice Files to access it.\n\n'
+                                    f'— EasyOffice'
+                                ),
+                                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
+                                recipient_list=[recipient.email],
+                                fail_silently=True,
+                            )
+                        except Exception:
+                            pass
         except Exception:
             pass
 
         next_url = request.POST.get('next', '')
         return redirect(next_url if next_url.startswith('/') else 'file_manager')
+
+class RecycleBinView(LoginRequiredMixin, TemplateView):
+    template_name = 'files/recycle_bin.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['trash_items'] = FileTrash.objects.filter(owner=self.request.user, is_restored=False)
+        return ctx
+
+
+class RestoreTrashItemView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        item = get_object_or_404(FileTrash, pk=pk, owner=request.user, is_restored=False)
+
+        if item.item_type == 'file':
+            restored = SharedFile.objects.create(
+                name=item.name,
+                uploaded_by=item.owner,
+                folder=item.original_parent_folder,
+                visibility=item.original_visibility or 'private',
+                description=item.original_description or '',
+                tags=item.original_tags or '',
+                file_size=item.file_blob.size if item.file_blob else 0,
+                file_type='application/octet-stream',
+            )
+            if item.file_blob:
+                item.file_blob.open('rb')
+                restored.file.save(os.path.basename(item.file_blob.name), ContentFile(item.file_blob.read()), save=True)
+            _log_file_history(restored, 'restored', actor=request.user, notes='Restored from recycle bin')
+
+        item.is_restored = True
+        item.restored_at = timezone.now()
+        item.save(update_fields=['is_restored', 'restored_at'])
+
+        messages.success(request, f'"{item.name}" restored.')
+        return redirect('recycle_bin')
+
+
+class FileHistoryView(LoginRequiredMixin, TemplateView):
+    template_name = 'files/file_history.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        f = get_object_or_404(SharedFile, pk=self.kwargs['pk'])
+        if not _file_permission_for(self.request.user, f):
+            raise Http404
+        ctx['file_obj'] = f
+        ctx['history_rows'] = f.history_rows.select_related('actor')
+        return ctx
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PDF Conversion

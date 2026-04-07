@@ -18,4 +18,10 @@ urlpatterns = [
 
     path('finance-requests/', views.FinanceRequestQueueView.as_view(), name='finance_request_queue'),
     path('finance-requests/<uuid:pk>/process/', views.FinanceRequestProcessView.as_view(), name='finance_request_process'),
+    path('payment-requests/',                           views.PaymentRequestListView.as_view(),      name='payment_request_list'),
+    path('payment-requests/new/',                       views.PaymentRequestCreateView.as_view(),    name='payment_request_create'),
+    path('payment-requests/<uuid:pk>/',                 views.PaymentRequestDetailView.as_view(),    name='payment_request_detail'),
+    path('payment-requests/<uuid:pk>/mark-paid/',       views.PaymentRequestMarkPaidView.as_view(),  name='payment_request_mark_paid'),
+    path('payment-requests/<uuid:pk>/send/',            views.PaymentRequestSendView.as_view(),      name='payment_request_send'),
+    path('payment-requests/<uuid:pk>/cancel/',          views.PaymentRequestCancelView.as_view(),    name='payment_request_cancel'),
 ]

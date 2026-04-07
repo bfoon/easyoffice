@@ -1,0 +1,293 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ pr.title }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'finance_dashboard' %}">Finance</a> /
+  <a href="{% url 'payment_request_list' %}">Payment Requests</a> /
+  {{ pr.title|truncatechars:35 }}
+{% endblock %}
+
+{% block content %}
+<!-- Header banner -->
+<div style="background:{{ pr.status_color }};border-radius:var(--eo-radius);padding:24px 28px 20px;margin-bottom:24px;position:relative;overflow:hidden">
+  <div style="position:absolute;right:-20px;top:-20px;width:160px;height:160px;border-radius:50%;background:rgba(255,255,255,.08)"></div>
+  <div style="position:relative;z-index:1;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+    <div>
+      <div style="display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.2);border-radius:20px;padding:3px 12px;font-size:.75rem;font-weight:700;color:#fff;margin-bottom:8px">
+        {{ pr.get_payment_type_display }}
+      </div>
+      <h1 style="font-size:1.4rem;font-weight:800;color:#fff;margin:0 0 6px">{{ pr.title }}</h1>
+      <div style="font-size:.84rem;color:rgba(255,255,255,.8)">
+        <i class="bi bi-person me-1"></i>{{ pr.effective_recipient_name }}
+        {% if pr.recipient_email %}· <i class="bi bi-envelope me-1"></i>{{ pr.recipient_email }}{% endif %}
+        &nbsp;·&nbsp; Created by {{ pr.requested_by.full_name }}
+        &nbsp;·&nbsp; {{ pr.created_at|date:"N j, Y" }}
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start">
+      <span style="background:rgba(255,255,255,.25);color:#fff;font-size:.8rem;font-weight:700;padding:5px 16px;border-radius:20px;border:1px solid rgba(255,255,255,.4)">
+        {{ pr.get_status_display }}
+      </span>
+      {% if pr.status == 'draft' and is_finance %}
+      <form method="post" action="{% url 'payment_request_send' pr.pk %}" style="display:inline">
+        {% csrf_token %}
+        <button type="submit" class="eo-btn eo-btn-sm" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.35)">
+          <i class="bi bi-send"></i> Send to Recipient
+        </button>
+      </form>
+      {% endif %}
+      {% if pr.status != 'paid' and pr.status != 'cancelled' and is_finance %}
+      <button onclick="document.getElementById('markPaidModal').style.display='flex'"
+              class="eo-btn eo-btn-sm" style="background:#fff;color:{{ pr.status_color }};font-weight:700;border:none">
+        <i class="bi bi-check-circle-fill"></i> Mark as Paid
+      </button>
+      {% endif %}
+      {% if pr.status not in 'paid,cancelled' and is_finance %}
+      <form method="post" action="{% url 'payment_request_cancel' pr.pk %}" style="display:inline"
+            onsubmit="return confirm('Cancel this payment request?')">
+        {% csrf_token %}
+        <button type="submit" class="eo-btn eo-btn-sm" style="background:rgba(0,0,0,.15);color:#fff;border:1px solid rgba(255,255,255,.2)">
+          <i class="bi bi-x-circle"></i> Cancel
+        </button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- ── LEFT ── -->
+  <div class="col-lg-8 d-flex flex-column gap-4">
+
+    <!-- Description -->
+    <div class="eo-card">
+      <h2 class="eo-card-title mb-3"><i class="bi bi-file-text me-2" style="color:var(--eo-primary)"></i>Description</h2>
+      <div style="font-size:.9rem;line-height:1.75;color:var(--eo-text);white-space:pre-wrap">{{ pr.description }}</div>
+    </div>
+
+    <!-- Documents -->
+    <div class="eo-card">
+      <h2 class="eo-card-title mb-3"><i class="bi bi-paperclip me-2" style="color:var(--eo-primary)"></i>Supporting Documents</h2>
+      {% if documents %}
+      <div style="display:flex;flex-direction:column;gap:8px">
+        {% for doc in documents %}
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <i class="bi bi-file-earmark-fill" style="font-size:1.3rem;color:var(--eo-primary);flex-shrink:0"></i>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.86rem;font-weight:600;color:var(--eo-text)">{{ doc.name }}</div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ doc.get_doc_type_display }} · {{ doc.uploaded_at|date:"N j, Y" }}</div>
+          </div>
+          <a href="{{ doc.file.url }}" target="_blank" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-download"></i>
+          </a>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:24px;color:var(--eo-text-muted);font-size:.84rem">
+        <i class="bi bi-file-earmark-x" style="font-size:1.8rem;display:block;margin-bottom:8px;opacity:.3"></i>
+        No supporting documents attached.
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Linked payment -->
+    {% if pr.linked_payment %}
+    <div class="eo-card" style="border:1.5px solid #10b98140">
+      <h2 class="eo-card-title mb-3"><i class="bi bi-check-circle-fill me-2" style="color:#10b981"></i>Payment Record</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:.87rem">
+        <div><span style="color:var(--eo-text-muted)">Reference:</span> <strong>{{ pr.linked_payment.reference }}</strong></div>
+        <div><span style="color:var(--eo-text-muted)">Method:</span> {{ pr.linked_payment.get_method_display }}</div>
+        <div><span style="color:var(--eo-text-muted)">Amount:</span> <strong style="font-size:1rem">{{ pr.linked_payment.currency }} {{ pr.linked_payment.amount|floatformat:2|intcomma }}</strong></div>
+        <div><span style="color:var(--eo-text-muted)">Paid On:</span> {{ pr.linked_payment.payment_date|date:"N j, Y" }}</div>
+        <div><span style="color:var(--eo-text-muted)">Processed By:</span> {{ pr.linked_payment.processed_by.full_name }}</div>
+        {% if pr.linked_payment.receipt %}
+        <div><a href="{{ pr.linked_payment.receipt.url }}" target="_blank" class="eo-btn eo-btn-secondary eo-btn-sm"><i class="bi bi-file-earmark-pdf"></i> Receipt</a></div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- ── RIGHT ── -->
+  <div class="col-lg-4 d-flex flex-column gap-4">
+
+    <!-- Amount summary -->
+    <div class="eo-card" style="background:linear-gradient(135deg,var(--eo-surface),var(--eo-bg))">
+      <div style="text-align:center;padding:8px 0 16px">
+        <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted);margin-bottom:6px">Payment Amount</div>
+        <div style="font-size:2.2rem;font-weight:900;color:var(--eo-text)">{{ pr.currency }} {{ pr.amount|floatformat:2|intcomma }}</div>
+        <div style="font-size:.8rem;color:var(--eo-text-muted);margin-top:4px">{{ pr.get_method_display }}</div>
+      </div>
+    </div>
+
+    <!-- Meta -->
+    <div class="eo-card">
+      <h3 class="eo-card-title mb-3">Details</h3>
+      <div style="display:flex;flex-direction:column;gap:10px;font-size:.84rem">
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Recipient Type</span>
+          <span style="font-weight:600">{{ pr.get_recipient_type_display }}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Payment Type</span>
+          <span style="font-weight:600">{{ pr.get_payment_type_display }}</span>
+        </div>
+        {% if pr.due_date %}
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Due Date</span>
+          <span style="font-weight:600">{{ pr.due_date|date:"N j, Y" }}</span>
+        </div>
+        {% endif %}
+        {% if pr.budget %}
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Budget</span>
+          <span style="font-weight:600">{{ pr.budget.name }}</span>
+        </div>
+        {% endif %}
+        {% if pr.project %}
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Project</span>
+          <a href="{% url 'project_detail' pr.project.pk %}" style="font-weight:600;color:var(--eo-primary)">{{ pr.project.name|truncatechars:20 }}</a>
+        </div>
+        {% endif %}
+        {% if pr.recipient_notes %}
+        <div style="padding-top:10px;border-top:1px solid var(--eo-border)">
+          <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--eo-text-muted);margin-bottom:5px">Bank / Payment Info</div>
+          <div style="font-size:.83rem;color:var(--eo-text);white-space:pre-wrap;line-height:1.6">{{ pr.recipient_notes }}</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if pr.notes %}
+    <div class="eo-card">
+      <h3 class="eo-card-title mb-2">Internal Notes</h3>
+      <div style="font-size:.84rem;color:var(--eo-text-muted);white-space:pre-wrap;line-height:1.6">{{ pr.notes }}</div>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     MARK AS PAID MODAL
+══════════════════════════════════ -->
+{% if pr.status != 'paid' and pr.status != 'cancelled' and is_finance %}
+<div id="markPaidModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1060;align-items:center;justify-content:center">
+  <div style="background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:16px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--eo-border)">
+      <div>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text)"><i class="bi bi-check-circle-fill me-2" style="color:#10b981"></i>Mark as Paid</div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px">{{ pr.title }}</div>
+      </div>
+      <button onclick="document.getElementById('markPaidModal').style.display='none'"
+              class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"><i class="bi bi-x-lg"></i></button>
+    </div>
+
+    <form method="post" action="{% url 'payment_request_mark_paid' pr.pk %}" enctype="multipart/form-data" style="padding:24px">
+      {% csrf_token %}
+
+      <!-- Confirm amount -->
+      <div class="eo-form-group">
+        <label class="eo-form-label">Amount Paid *</label>
+        <input type="number" name="amount" class="eo-form-control" required
+               value="{{ pr.amount }}" min="0.01" step="0.01"/>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-sm-6">
+          <label class="eo-form-label">Currency</label>
+          <input type="text" name="currency" class="eo-form-control" value="{{ pr.currency }}" maxlength="10"/>
+        </div>
+        <div class="col-sm-6">
+          <label class="eo-form-label">Payment Method</label>
+          <select name="method" class="eo-form-select">
+            {% for val, label in method_choices %}
+            <option value="{{ val }}" {% if pr.method == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="eo-form-group mt-3">
+        <label class="eo-form-label">Payment Date *</label>
+        <input type="date" name="payment_date" class="eo-form-control" required
+               value="{% now 'Y-m-d' %}"/>
+      </div>
+
+      <div class="eo-form-group">
+        <label class="eo-form-label">Receipt / Proof of Payment</label>
+        <input type="file" name="receipt" class="eo-form-control"/>
+      </div>
+
+      <!-- Attach additional docs -->
+      <div style="margin-top:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <label class="eo-form-label" style="margin:0">Additional Documents</label>
+          <button type="button" onclick="addPaidDocRow()" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-paperclip"></i> Add
+          </button>
+        </div>
+        <div id="paidDocRows"></div>
+      </div>
+
+      <div class="eo-form-group mt-3">
+        <label class="eo-form-label">Notes</label>
+        <textarea name="notes" class="eo-form-control" rows="2"
+                  placeholder="Payment notes, transaction ID, etc."></textarea>
+      </div>
+
+      <div style="padding:12px 14px;background:#d1fae5;border:1px solid #6ee7b7;border-radius:10px;font-size:.82rem;color:#065f46;margin-bottom:16px;line-height:1.6">
+        <i class="bi bi-envelope-check me-1"></i>
+        A <strong>payment confirmation email</strong> will automatically be sent to
+        <strong>{{ pr.effective_recipient_email|default:pr.effective_recipient_name }}</strong>
+        once you confirm.
+      </div>
+
+      <div style="display:flex;gap:10px">
+        <button type="submit" class="eo-btn eo-btn-primary flex-grow-1" style="padding:11px;background:#10b981;border-color:#10b981">
+          <i class="bi bi-check-circle-fill"></i> Confirm Payment &amp; Send Email
+        </button>
+        <button type="button" onclick="document.getElementById('markPaidModal').style.display='none'"
+                class="eo-btn eo-btn-secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+document.getElementById('markPaidModal') && document.getElementById('markPaidModal').addEventListener('click', function(e) {
+  if (e.target === this) this.style.display = 'none';
+});
+
+var paidDocIdx = 0;
+var docTypes = [{% for val, label in method_choices %}{# unused here #}{% endfor %}];
+var paidDocTypeOpts = [
+  {% for val, label in method_choices %}{# reusing method choices placeholder #}{% endfor %}
+];
+
+// Build doc type options manually
+var PAID_DOC_TYPES = [
+  ['invoice','Invoice'],['delivery_note','Delivery Note'],
+  ['receipt','Receipt'],['report','Report'],['contract','Contract'],['other','Other']
+];
+
+function addPaidDocRow() {
+  var idx = ++paidDocIdx;
+  var sel = PAID_DOC_TYPES.map(function(t) {
+    return '<option value="' + t[0] + '">' + t[1] + '</option>';
+  }).join('');
+  var div = document.createElement('div');
+  div.className = 'paid-doc-row';
+  div.style = 'display:grid;grid-template-columns:140px 1fr auto;gap:8px;align-items:center;margin-bottom:8px';
+  div.innerHTML =
+    '<select name="doc_type_' + idx + '" class="eo-form-select" style="font-size:.82rem">' + sel + '</select>' +
+    '<input type="file" name="doc_file_' + idx + '" class="eo-form-control" style="font-size:.82rem"/>' +
+    '<button type="button" onclick="this.closest(\'.paid-doc-row\').remove()" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" style="color:var(--eo-danger)"><i class="bi bi-trash"></i></button>';
+  document.getElementById('paidDocRows').appendChild(div);
+}
+</script>
+{% endif %}
+{% endblock %}

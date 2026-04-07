@@ -132,6 +132,19 @@ def _can_delete_folder(user, folder):
     return perm == 'full'
 
 
+def _editable_files_qs(user):
+    """
+    Files the user can edit: their own uploads PLUS any file where they have
+    'edit' or 'full' access via an explicit FileShareAccess row.
+    Used by tool pages (PDF tools, Quick Sign, Convert) so shared-edit users
+    see files they can act on.
+    """
+    return SharedFile.objects.filter(
+        Q(uploaded_by=user) |
+        Q(share_access__user=user, share_access__permission__in=('edit', 'full'))
+    ).distinct()
+
+
 def _log_file_history(file_obj, action, actor=None, notes=''):
     try:
         FileHistory.objects.create(
@@ -1484,7 +1497,10 @@ class FileHistoryView(LoginRequiredMixin, TemplateView):
 
 class ConvertToPDFView(LoginRequiredMixin, View):
     def post(self, request, pk):
-        sf = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+        sf = get_object_or_404(SharedFile, pk=pk)
+        if not _can_edit_file(request.user, sf):
+            messages.error(request, 'You do not have permission to convert this file.')
+            return redirect('file_manager')
 
         if not sf.is_convertible:
             messages.error(request, f'"{sf.name}" cannot be converted to PDF.')
@@ -1586,12 +1602,13 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
     def get(self, request, pk=None):
         document = None
         if pk:
-            document = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+            document = get_object_or_404(SharedFile, pk=pk)
+            if not _can_edit_file(request.user, document):
+                messages.error(request, 'You do not have permission to send this file for signature.')
+                return redirect('file_manager')
         ctx = {
             'document': document,
-            'my_files': _visible_files_qs(request.user).filter(
-                uploaded_by=request.user
-            ).order_by('-created_at')[:50],
+            'my_files': _editable_files_qs(request.user).order_by('-created_at')[:50],
             'all_staff': __import__('apps.core.models', fromlist=['User']).User.objects.filter(
                 is_active=True, status='active'
             ).exclude(id=request.user.id).order_by('first_name'),
@@ -1601,6 +1618,10 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
     def post(self, request, pk=None):
         doc_id = request.POST.get('document_id') or (str(pk) if pk else None)
         document = get_object_or_404(SharedFile, pk=doc_id)
+
+        if not _can_edit_file(request.user, document):
+            messages.error(request, 'You do not have permission to send this file for signature.')
+            return redirect('file_manager')
 
         # ── AUTO-CONVERT TO PDF ──────────────────────────────────────────────
         # Signature requests always use a PDF so signers can view in-browser.
@@ -2093,11 +2114,9 @@ class ConvertToPDFPageView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         user = self.request.user
-        all_mine = list(_visible_files_qs(user).filter(
-            uploaded_by=user
-        ).order_by('-created_at'))
-        ctx['convertible_files'] = [f for f in all_mine if f.is_convertible]
-        ctx['pdf_files']         = [f for f in all_mine if f.is_pdf]
+        all_editable = list(_editable_files_qs(user).order_by('-created_at'))
+        ctx['convertible_files'] = [f for f in all_editable if f.is_convertible]
+        ctx['pdf_files']         = [f for f in all_editable if f.is_pdf]
         return ctx
 
 
@@ -2493,7 +2512,10 @@ def parse_page_ranges(raw, max_pages):
 
 class PDFRemovePagesView(LoginRequiredMixin, View):
     def post(self, request, pk):
-        pdf = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+        pdf = get_object_or_404(SharedFile, pk=pk)
+        if not _can_edit_file(request.user, pdf):
+            messages.error(request, 'You do not have permission to edit this file.')
+            return redirect('pdf_tools_page')
 
         if not getattr(pdf, 'is_pdf', False):
             messages.error(request, 'This file is not a PDF.')
@@ -2546,7 +2568,10 @@ class PDFRemovePagesView(LoginRequiredMixin, View):
 
 class PDFSplitView(LoginRequiredMixin, View):
     def post(self, request, pk):
-        pdf = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+        pdf = get_object_or_404(SharedFile, pk=pk)
+        if not _can_edit_file(request.user, pdf):
+            messages.error(request, 'You do not have permission to edit this file.')
+            return redirect('pdf_tools_page')
 
         if not getattr(pdf, 'is_pdf', False):
             messages.error(request, 'This file is not a PDF.')
@@ -2598,7 +2623,10 @@ class PDFSplitView(LoginRequiredMixin, View):
 
 class PDFRotatePagesView(LoginRequiredMixin, View):
     def post(self, request, pk):
-        pdf = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+        pdf = get_object_or_404(SharedFile, pk=pk)
+        if not _can_edit_file(request.user, pdf):
+            messages.error(request, 'You do not have permission to edit this file.')
+            return redirect('pdf_tools_page')
 
         if not getattr(pdf, 'is_pdf', False):
             messages.error(request, 'This file is not a PDF.')
@@ -2650,7 +2678,10 @@ class PDFRotatePagesView(LoginRequiredMixin, View):
 
 class PDFReorderPagesView(LoginRequiredMixin, View):
     def post(self, request, pk):
-        pdf = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+        pdf = get_object_or_404(SharedFile, pk=pk)
+        if not _can_edit_file(request.user, pdf):
+            messages.error(request, 'You do not have permission to edit this file.')
+            return redirect('pdf_tools_page')
 
         if not getattr(pdf, 'is_pdf', False):
             messages.error(request, 'This file is not a PDF.')
@@ -2707,7 +2738,7 @@ class PDFToolsPageView(LoginRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         user = self.request.user
 
-        all_mine = _visible_files_qs(user).filter(uploaded_by=user).order_by('-created_at')
+        all_mine = _editable_files_qs(user).order_by('-created_at')
         pdf_files = [f for f in all_mine if getattr(f, 'is_pdf', False)]
 
         ctx.update({
@@ -2723,7 +2754,8 @@ class PDFMergeImagesView(LoginRequiredMixin, View):
             messages.error(request, 'Select images first.')
             return redirect('convert_pdf_page')
 
-        images = SharedFile.objects.filter(id__in=ids, uploaded_by=request.user)
+        images = [f for f in SharedFile.objects.filter(id__in=ids)
+                  if _can_edit_file(request.user, f)]
 
         from PIL import Image
         from io import BytesIO
@@ -2773,7 +2805,7 @@ class QuickSignView(LoginRequiredMixin, View):
           - folders:     list of { folder, pdfs }  (only folders that contain PDFs)
         """
         all_pdfs = [
-            f for f in _visible_files_qs(user).filter(uploaded_by=user)
+            f for f in _editable_files_qs(user)
                                               .select_related('folder')
                                               .order_by('name')
             if getattr(f, 'is_pdf', False)
@@ -2801,7 +2833,10 @@ class QuickSignView(LoginRequiredMixin, View):
     def get(self, request, pk=None):
         selected = None
         if pk:
-            selected = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
+            selected = get_object_or_404(SharedFile, pk=pk)
+            if not _can_edit_file(request.user, selected):
+                messages.error(request, 'You do not have permission to sign this file.')
+                return redirect('quick_sign')
             if not getattr(selected, 'is_pdf', False):
                 messages.error(request, 'Only PDF files can be quick-signed.')
                 return redirect('quick_sign')
@@ -2828,7 +2863,10 @@ class QuickSignView(LoginRequiredMixin, View):
             messages.error(request, 'Please select a file and provide your signature.')
             return redirect('quick_sign')
 
-        pdf = get_object_or_404(SharedFile, pk=file_id, uploaded_by=request.user)
+        pdf = get_object_or_404(SharedFile, pk=file_id)
+        if not _can_edit_file(request.user, pdf):
+            messages.error(request, 'You do not have permission to sign this file.')
+            return redirect('quick_sign')
         if not getattr(pdf, 'is_pdf', False):
             messages.error(request, 'Only PDF files can be quick-signed.')
             return redirect('quick_sign')
@@ -3247,10 +3285,11 @@ class NotesToPDFView(LoginRequiredMixin, View):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _get_user_pdf_tree(user):
-    """Return (root_pdfs, folders_with_pdfs) for the PDF picker."""
+    """Return (root_pdfs, folders_with_pdfs) for the PDF picker.
+    Includes files the user owns AND files shared with edit/full permission."""
     from collections import defaultdict
     all_pdfs = [
-        f for f in _visible_files_qs(user).filter(uploaded_by=user)
+        f for f in _editable_files_qs(user)
                                           .select_related('folder')
                                           .order_by('name')
         if getattr(f, 'is_pdf', False)
@@ -3337,7 +3376,10 @@ class PDFToWordView(LoginRequiredMixin, View):
             messages.error(request, 'Please select a PDF.')
             return redirect('pdf_to_word')
 
-        pdf = get_object_or_404(SharedFile, pk=file_id, uploaded_by=request.user)
+        pdf = get_object_or_404(SharedFile, pk=file_id)
+        if not _can_edit_file(request.user, pdf):
+            messages.error(request, 'You do not have permission to convert this file.')
+            return redirect('pdf_to_word')
         if not getattr(pdf, 'is_pdf', False):
             messages.error(request, 'Only PDF files can be converted.')
             return redirect('pdf_to_word')
@@ -3442,7 +3484,10 @@ class PDFToImageView(LoginRequiredMixin, View):
             messages.error(request, 'Please select a PDF.')
             return redirect('pdf_to_image')
 
-        pdf = get_object_or_404(SharedFile, pk=file_id, uploaded_by=request.user)
+        pdf = get_object_or_404(SharedFile, pk=file_id)
+        if not _can_edit_file(request.user, pdf):
+            messages.error(request, 'You do not have permission to convert this file.')
+            return redirect('pdf_to_image')
         if not getattr(pdf, 'is_pdf', False):
             messages.error(request, 'Only PDF files can be converted.')
             return redirect('pdf_to_image')

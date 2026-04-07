@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Payment Requests{% endblock %}
+{% block breadcrumb %}<a href="{% url 'finance_dashboard' %}">Finance</a> / Payment Requests{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Payment Requests</h1>
+    <p class="eo-page-subtitle">Manage outgoing payments to staff, individuals and vendors</p>
+  </div>
+  <a href="{% url 'payment_request_create' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-plus-lg"></i> New Payment Request
+  </a>
+</div>
+
+<!-- Stats row -->
+<div class="row g-3 mb-4">
+  {% for status_val, status_label, color in status_stats %}
+  <div class="col-sm-3">
+    <div class="eo-card" style="border-left:4px solid {{ color }}">
+      <div style="font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted)">{{ status_label }}</div>
+      <div style="font-size:1.4rem;font-weight:800;color:var(--eo-text);margin-top:4px">{{ status_val }}</div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Filters -->
+<div class="eo-card mb-4">
+  <form method="get" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+    <div style="position:relative;flex:1;min-width:200px;max-width:300px">
+      <i class="bi bi-search" style="position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.8rem;pointer-events:none"></i>
+      <input type="text" name="q" class="eo-form-control" style="padding-left:32px"
+             placeholder="Title, recipient, email…" value="{{ q }}"/>
+    </div>
+    <div>
+      <label class="eo-form-label">Status</label>
+      <select name="status" class="eo-form-select" onchange="this.form.submit()">
+        <option value="">All Status</option>
+        {% for val, label in status_choices %}
+        <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="eo-form-label">Recipient Type</label>
+      <select name="rtype" class="eo-form-select" onchange="this.form.submit()">
+        <option value="">All Types</option>
+        {% for val, label in rtype_choices %}
+        <option value="{{ val }}" {% if rtype_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
+    {% if q or status_filter or rtype_filter %}
+    <a href="{% url 'payment_request_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-x-circle"></i> Reset</a>
+    {% endif %}
+  </form>
+</div>
+
+{% if payment_requests %}
+<div style="overflow-x:auto;border:1px solid var(--eo-border);border-radius:var(--eo-radius);background:var(--eo-surface)">
+  <table class="eo-table" style="margin:0;min-width:820px">
+    <thead>
+      <tr>
+        <th style="padding-left:16px;min-width:220px">Title / Recipient</th>
+        <th>Type</th>
+        <th>Method</th>
+        <th>Due Date</th>
+        <th>Amount</th>
+        <th>Status</th>
+        <th>Created By</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for pr in payment_requests %}
+      <tr>
+        <td style="padding-left:16px">
+          <div style="font-weight:700;font-size:.88rem;color:var(--eo-text)">{{ pr.title|truncatechars:45 }}</div>
+          <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:2px">
+            <i class="bi bi-person me-1"></i>{{ pr.effective_recipient_name|truncatechars:30 }}
+            {% if pr.recipient_email %}
+            · <i class="bi bi-envelope me-1"></i>{{ pr.recipient_email }}
+            {% endif %}
+          </div>
+        </td>
+        <td>
+          <span style="font-size:.74rem;font-weight:700;padding:2px 9px;border-radius:12px;background:var(--eo-bg);border:1px solid var(--eo-border);color:var(--eo-text-muted)">
+            {{ pr.get_payment_type_display }}
+          </span>
+        </td>
+        <td style="font-size:.82rem;color:var(--eo-text-muted)">{{ pr.get_method_display }}</td>
+        <td style="font-size:.8rem;color:var(--eo-text-muted)">
+          {% if pr.due_date %}{{ pr.due_date|date:"N j, Y" }}{% else %}—{% endif %}
+        </td>
+        <td>
+          <div style="font-weight:800;font-size:.95rem;color:var(--eo-text)">{{ pr.currency }} {{ pr.amount|floatformat:2|intcomma }}</div>
+        </td>
+        <td>
+          <span style="font-size:.74rem;font-weight:700;padding:3px 10px;border-radius:20px;
+                       background:{{ pr.status_color }}18;color:{{ pr.status_color }}">
+            {{ pr.get_status_display }}
+          </span>
+        </td>
+        <td style="font-size:.8rem;color:var(--eo-text-muted)">{{ pr.requested_by.full_name }}</td>
+        <td>
+          <a href="{% url 'payment_request_detail' pr.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-eye"></i> View
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if total %}
+<div style="text-align:right;margin-top:10px;font-size:.85rem;color:var(--eo-text-muted)">
+  Total shown: <strong style="color:var(--eo-text)">{{ payment_requests.0.currency }} {{ total|floatformat:2|intcomma }}</strong>
+</div>
+{% endif %}
+
+{% else %}
+<div class="eo-card" style="text-align:center;padding:72px 32px">
+  <i class="bi bi-receipt-cutoff" style="font-size:3rem;display:block;margin-bottom:14px;opacity:.25;color:var(--eo-text-muted)"></i>
+  <div style="font-size:1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No payment requests found</div>
+  <p style="color:var(--eo-text-muted);font-size:.87rem;margin-bottom:20px">
+    {% if q or status_filter or rtype_filter %}Try adjusting your filters.{% else %}No payment requests have been created yet.{% endif %}
+  </p>
+  <a href="{% url 'payment_request_create' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-plus"></i> Create First Payment Request
+  </a>
+</div>
+{% endif %}
+{% endblock %}

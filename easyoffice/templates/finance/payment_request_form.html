@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}New Payment Request{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'finance_dashboard' %}">Finance</a> /
+  <a href="{% url 'payment_request_list' %}">Payment Requests</a> / New
+{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <h1 class="eo-page-title"><i class="bi bi-send-plus" style="color:var(--eo-primary)"></i> New Payment Request</h1>
+</div>
+
+<form method="post" enctype="multipart/form-data" id="prForm">
+  {% csrf_token %}
+  <div class="row g-4">
+
+    <!-- ── LEFT COLUMN ── -->
+    <div class="col-lg-8">
+
+      <!-- Basic details -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-4">Payment Details</h2>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Title / Purpose *</label>
+          <input type="text" name="title" class="eo-form-control" required
+                 placeholder="e.g. Invoice Payment — Office Supplies Q2"/>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Payment Type *</label>
+            <select name="payment_type" class="eo-form-select" required>
+              {% for val, label in payment_types %}
+              <option value="{{ val }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Payment Method *</label>
+            <select name="method" class="eo-form-select" required>
+              {% for val, label in method_choices %}
+              <option value="{{ val }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="row g-3 mt-1">
+          <div class="col-sm-4">
+            <label class="eo-form-label">Amount *</label>
+            <input type="number" name="amount" class="eo-form-control" required
+                   min="0.01" step="0.01" placeholder="0.00"/>
+          </div>
+          <div class="col-sm-3">
+            <label class="eo-form-label">Currency</label>
+            <input type="text" name="currency" class="eo-form-control" value="GMD" maxlength="10"/>
+          </div>
+          <div class="col-sm-5">
+            <label class="eo-form-label">Due Date</label>
+            <input type="date" name="due_date" class="eo-form-control"/>
+          </div>
+        </div>
+
+        <div class="eo-form-group mt-3">
+          <label class="eo-form-label">Description *</label>
+          <textarea name="description" class="eo-form-control" rows="4" required
+                    placeholder="Provide full context for this payment — what it covers, why it is being made…"></textarea>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Internal Notes</label>
+          <textarea name="notes" class="eo-form-control" rows="2"
+                    placeholder="Internal finance notes (not sent to recipient)"></textarea>
+        </div>
+      </div>
+
+      <!-- Recipient -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-3">Recipient</h2>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Recipient Type *</label>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            {% for val, label in rtype_choices %}
+            <label style="display:flex;align-items:center;gap:8px;padding:10px 16px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;flex:1;min-width:130px;transition:border-color .14s" class="rtype-opt">
+              <input type="radio" name="recipient_type" value="{{ val }}"
+                     {% if val == 'external' %}checked{% endif %}
+                     style="display:none" onchange="onRtypeChange(this)"/>
+              <i class="bi {% if val == 'staff' %}bi-person-badge{% elif val == 'vendor' %}bi-building{% else %}bi-person{% endif %}" style="font-size:1.1rem;color:var(--eo-primary)"></i>
+              <span style="font-weight:600;font-size:.87rem;color:var(--eo-text)">{{ label }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Staff picker (shown when type = staff) -->
+        <div id="staffPicker" style="display:none">
+          <label class="eo-form-label">Select Staff Member *</label>
+          <select name="recipient_user" class="eo-form-select">
+            <option value="">— Select staff member —</option>
+            {% for s in staff_list %}
+            <option value="{{ s.id }}">{{ s.full_name }}{% if s.staffprofile.position %} — {{ s.staffprofile.position }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- External / Vendor fields -->
+        <div id="externalFields">
+          <div class="row g-3">
+            <div class="col-sm-6">
+              <label class="eo-form-label">Full Name / Company *</label>
+              <input type="text" name="recipient_name" class="eo-form-control"
+                     placeholder="e.g. John Doe or Acme Ltd"/>
+            </div>
+            <div class="col-sm-6">
+              <label class="eo-form-label">Email Address</label>
+              <input type="email" name="recipient_email" class="eo-form-control"
+                     placeholder="recipient@example.com"/>
+            </div>
+          </div>
+        </div>
+
+        <div class="eo-form-group mt-3">
+          <label class="eo-form-label">Bank / Payment Details</label>
+          <textarea name="recipient_notes" class="eo-form-control" rows="3"
+                    placeholder="Bank name, account number, IBAN, address, or other delivery information…"></textarea>
+        </div>
+      </div>
+
+      <!-- Documents -->
+      <div class="eo-card mb-4">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <h2 class="eo-card-title" style="margin:0">Supporting Documents</h2>
+          <button type="button" onclick="addDocRow()" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-paperclip"></i> Attach
+          </button>
+        </div>
+        <div id="docRows">
+          <!-- Rows injected by JS -->
+        </div>
+        <div id="docEmpty" style="text-align:center;padding:20px;color:var(--eo-text-muted);font-size:.84rem">
+          <i class="bi bi-file-earmark-plus" style="font-size:1.6rem;display:block;margin-bottom:6px;opacity:.35"></i>
+          No documents attached. Click <strong>Attach</strong> to add invoices, delivery notes, reports, etc.
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── RIGHT COLUMN ── -->
+    <div class="col-lg-4">
+
+      <!-- Links -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-4">Link To</h2>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Budget</label>
+          <select name="budget" class="eo-form-select">
+            <option value="">— No budget —</option>
+            {% for b in budgets %}
+            <option value="{{ b.id }}">{{ b.name }} (FY{{ b.fiscal_year }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Project</label>
+          <select name="project" class="eo-form-select">
+            <option value="">— No project —</option>
+            {% for p in projects %}
+            <option value="{{ p.id }}">[{{ p.code }}] {{ p.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Purchase Request</label>
+          <select name="purchase_request" class="eo-form-select">
+            <option value="">— None —</option>
+            {% for pr in purchase_requests %}
+            <option value="{{ pr.id }}">{{ pr.title|truncatechars:45 }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="eo-card">
+        <h2 class="eo-card-title mb-4">Save &amp; Send</h2>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Initial Status</label>
+          <select name="status" class="eo-form-select">
+            <option value="draft">Draft — save without emailing</option>
+            <option value="sent">Sent — save and email recipient now</option>
+          </select>
+          <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:5px">
+            Choosing <strong>Sent</strong> immediately emails the recipient a professional payment notification.
+          </div>
+        </div>
+        <button type="submit" class="eo-btn eo-btn-primary w-100 mb-2" style="padding:11px">
+          <i class="bi bi-send"></i> Create Payment Request
+        </button>
+        <a href="{% url 'payment_request_list' %}" class="eo-btn eo-btn-secondary w-100">Cancel</a>
+      </div>
+
+    </div>
+  </div>
+</form>
+
+<script>
+// ── Recipient type toggle ───────────────────────────────────────────────────
+document.querySelectorAll('.rtype-opt').forEach(function(label) {
+  var radio = label.querySelector('input[type=radio]');
+  if (radio.checked) label.style.borderColor = 'var(--eo-primary)';
+  radio.addEventListener('change', onRtypeChange.bind(null, radio));
+});
+
+function onRtypeChange(radio) {
+  document.querySelectorAll('.rtype-opt').forEach(function(l) {
+    l.style.borderColor = 'var(--eo-border)';
+  });
+  if (radio.closest) radio.closest('.rtype-opt').style.borderColor = 'var(--eo-primary)';
+  var isStaff = radio.value === 'staff';
+  document.getElementById('staffPicker').style.display  = isStaff ? '' : 'none';
+  document.getElementById('externalFields').style.display = isStaff ? 'none' : '';
+}
+// init
+(function() {
+  var checked = document.querySelector('input[name=recipient_type]:checked');
+  if (checked) onRtypeChange(checked);
+})();
+
+// ── Document rows ───────────────────────────────────────────────────────────
+var docIdx = 0;
+var docTypes = [
+  {% for val, label in doc_type_choices %}['{{ val }}','{{ label }}'],{% endfor %}
+];
+
+function addDocRow() {
+  document.getElementById('docEmpty').style.display = 'none';
+  var idx = ++docIdx;
+  var sel = docTypes.map(function(t) {
+    return '<option value="' + t[0] + '">' + t[1] + '</option>';
+  }).join('');
+  var div = document.createElement('div');
+  div.className = 'doc-row';
+  div.style = 'display:grid;grid-template-columns:140px 1fr auto;gap:8px;align-items:center;margin-bottom:8px';
+  div.innerHTML =
+    '<select name="doc_type_' + idx + '" class="eo-form-select" style="font-size:.82rem">' + sel + '</select>' +
+    '<input type="file" name="doc_file_' + idx + '" class="eo-form-control" style="font-size:.82rem" onchange="autoName(this,' + idx + ')"/>' +
+    '<button type="button" onclick="this.closest(\'.doc-row\').remove();checkDocEmpty()" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" style="color:var(--eo-danger)"><i class="bi bi-trash"></i></button>';
+  document.getElementById('docRows').appendChild(div);
+}
+
+function autoName(input, idx) {
+  // no name field currently, but can be extended
+}
+
+function checkDocEmpty() {
+  var rows = document.querySelectorAll('.doc-row');
+  document.getElementById('docEmpty').style.display = rows.length ? 'none' : '';
+}
+</script>
+{% endblock %}

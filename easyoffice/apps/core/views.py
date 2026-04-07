@@ -130,6 +130,14 @@ class NotificationsView(LoginRequiredMixin, TemplateView):
 class MarkNotificationsReadView(LoginRequiredMixin, View):
     def post(self, request):
         request.user.core_notifications.filter(is_read=False).update(
-            is_read=True, read_at=timezone.now()
+            is_read=True,
+            read_at=timezone.now()
         )
-        return JsonResponse({'status': 'ok'})
+
+        # Detect AJAX request
+        if request.headers.get('x-requested-with') == 'XMLHttpRequest':
+            return JsonResponse({'status': 'ok'})
+
+        # Otherwise redirect back (normal request)
+        next_url = request.POST.get('next') or request.META.get('HTTP_REFERER') or '/dashboard/'
+        return redirect(next_url)

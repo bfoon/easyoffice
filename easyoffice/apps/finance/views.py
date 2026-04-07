@@ -144,6 +144,9 @@ class FinanceDashboardView(LoginRequiredMixin, TemplateView):
             'recent_payments': Payment.objects.select_related(
                 'paid_by', 'purchase_request', 'budget', 'employee', 'project'
             ).order_by('-payment_date', '-created_at')[:8],
+            'recent_payment_requests': PaymentRequest.objects.select_related(
+                'requested_by', 'recipient_user',
+            ).order_by('-created_at')[:5],
             'my_recent_requests': my_requests.select_related(
                 'department', 'budget', 'project'
             ).order_by('-created_at')[:6],
@@ -737,3 +740,506 @@ class PaymentListView(LoginRequiredMixin, TemplateView):
             'is_ceo': _is_ceo(self.request.user),
         })
         return ctx
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Payment Request — helpers & email templates
+# ─────────────────────────────────────────────────────────────────────────────
+
+from apps.finance.models import PaymentRequest, PaymentRequestDocument
+
+
+def _can_manage_payment_requests(user):
+    return _is_finance(user) or _is_ceo(user) or user.is_superuser
+
+
+def _send_payment_request_email(payment_request, request=None):
+    """Send a professional notification email to the recipient when a payment request is created/sent."""
+    from django.core.mail import EmailMessage
+    from django.conf import settings
+
+    recipient_email = payment_request.effective_recipient_email
+    if not recipient_email:
+        return
+
+    office_name = getattr(settings, 'OFFICE_NAME', 'EasyOffice')
+    org_name    = getattr(settings, 'ORGANISATION_NAME', office_name)
+    currency    = payment_request.currency
+    amount      = f'{payment_request.amount:,.2f}'
+    pay_method  = payment_request.get_method_display()
+    due_date    = payment_request.due_date.strftime('%d %B %Y') if payment_request.due_date else 'As soon as possible'
+    requester   = getattr(payment_request.requested_by, 'full_name', str(payment_request.requested_by))
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  body {{ margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif; }}
+  .wrapper {{ max-width:620px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08); }}
+  .header {{ background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%);padding:36px 40px 32px;text-align:center; }}
+  .header h1 {{ margin:0;font-size:22px;color:#fff;font-weight:700;letter-spacing:-.3px; }}
+  .header p  {{ margin:6px 0 0;font-size:13px;color:rgba(255,255,255,.75); }}
+  .badge {{ display:inline-block;background:rgba(255,255,255,.2);color:#fff;border-radius:20px;padding:4px 14px;font-size:12px;font-weight:700;margin-top:12px;letter-spacing:.5px; }}
+  .body {{ padding:36px 40px; }}
+  .greeting {{ font-size:16px;color:#1e293b;margin-bottom:20px;line-height:1.6; }}
+  .amount-box {{ background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;border-radius:12px;padding:20px 24px;text-align:center;margin:24px 0; }}
+  .amount-box .label {{ font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#1d4ed8;margin-bottom:6px; }}
+  .amount-box .value {{ font-size:32px;font-weight:800;color:#1e3a5f; }}
+  .detail-table {{ width:100%;border-collapse:collapse;margin:24px 0; }}
+  .detail-table td {{ padding:11px 14px;font-size:14px; }}
+  .detail-table tr:nth-child(odd) td {{ background:#f8fafc; }}
+  .detail-table td:first-child {{ font-weight:700;color:#475569;width:38%;border-radius:6px 0 0 6px; }}
+  .detail-table td:last-child {{ color:#1e293b;border-radius:0 6px 6px 0; }}
+  .divider {{ height:1px;background:#e2e8f0;margin:28px 0; }}
+  .footer {{ background:#f8fafc;padding:24px 40px;text-align:center;border-top:1px solid #e2e8f0; }}
+  .footer p {{ margin:0;font-size:12px;color:#94a3b8;line-height:1.7; }}
+  .footer strong {{ color:#64748b; }}
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <div class="header">
+    <h1>💳 Payment Notification</h1>
+    <p>{org_name} — Finance Department</p>
+    <span class="badge">{payment_request.get_payment_type_display()}</span>
+  </div>
+  <div class="body">
+    <p class="greeting">
+      Dear <strong>{payment_request.effective_recipient_name}</strong>,<br><br>
+      We are pleased to inform you that a payment has been initiated on your behalf by the Finance Department of <strong>{org_name}</strong>.
+      Please find the details below.
+    </p>
+
+    <div class="amount-box">
+      <div class="label">Payment Amount</div>
+      <div class="value">{currency} {amount}</div>
+    </div>
+
+    <table class="detail-table">
+      <tr><td>Reference</td><td>{payment_request.id}</td></tr>
+      <tr><td>Title</td><td>{payment_request.title}</td></tr>
+      <tr><td>Payment Type</td><td>{payment_request.get_payment_type_display()}</td></tr>
+      <tr><td>Payment Method</td><td>{pay_method}</td></tr>
+      <tr><td>Expected By</td><td>{due_date}</td></tr>
+      <tr><td>Authorised By</td><td>{requester}</td></tr>
+    </table>
+
+    {'<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 18px;font-size:14px;color:#92400e;margin:20px 0"><strong>Description:</strong><br>' + payment_request.description + '</div>' if payment_request.description else ''}
+
+    {'<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:14px 18px;font-size:14px;color:#14532d;margin:20px 0"><strong>Payment Details / Bank Information:</strong><br>' + payment_request.recipient_notes + '</div>' if payment_request.recipient_notes else ''}
+
+    <div class="divider"></div>
+    <p style="font-size:13px;color:#64748b;line-height:1.7">
+      If you have any questions regarding this payment, please contact the Finance Department directly.
+      Please do not reply to this automated email.
+    </p>
+  </div>
+  <div class="footer">
+    <p><strong>{org_name}</strong> · Finance &amp; Administration<br>
+    This is an automated notification. Please retain it for your records.</p>
+  </div>
+</div>
+</body>
+</html>"""
+
+    msg = EmailMessage(
+        subject=f'Payment Notification — {payment_request.title} | {org_name}',
+        body=html,
+        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', f'finance@{org_name.lower().replace(" ","")}.org'),
+        to=[recipient_email],
+    )
+    msg.content_subtype = 'html'
+    try:
+        msg.send()
+    except Exception:
+        pass
+
+
+def _send_payment_confirmation_email(payment_request):
+    """Send a professional thank-you / payment acknowledgement email after payment is marked paid."""
+    from django.core.mail import EmailMessage
+    from django.conf import settings
+
+    recipient_email = payment_request.effective_recipient_email
+    if not recipient_email:
+        return
+
+    office_name = getattr(settings, 'OFFICE_NAME', 'EasyOffice')
+    org_name    = getattr(settings, 'ORGANISATION_NAME', office_name)
+    currency    = payment_request.currency
+    amount      = f'{payment_request.amount:,.2f}'
+    pay_method  = payment_request.get_method_display()
+    paid_at     = payment_request.paid_at.strftime('%d %B %Y at %H:%M') if payment_request.paid_at else 'Today'
+    ref         = payment_request.linked_payment.reference if payment_request.linked_payment else str(payment_request.id)
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  body {{ margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif; }}
+  .wrapper {{ max-width:620px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08); }}
+  .header {{ background:linear-gradient(135deg,#064e3b 0%,#10b981 100%);padding:36px 40px 32px;text-align:center; }}
+  .header h1 {{ margin:0;font-size:22px;color:#fff;font-weight:700;letter-spacing:-.3px; }}
+  .header p  {{ margin:6px 0 0;font-size:13px;color:rgba(255,255,255,.75); }}
+  .checkmark {{ font-size:48px;margin-bottom:8px;display:block; }}
+  .body {{ padding:36px 40px; }}
+  .greeting {{ font-size:16px;color:#1e293b;margin-bottom:20px;line-height:1.6; }}
+  .amount-box {{ background:linear-gradient(135deg,#ecfdf5,#d1fae5);border:1px solid #6ee7b7;border-radius:12px;padding:20px 24px;text-align:center;margin:24px 0; }}
+  .amount-box .label {{ font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#065f46;margin-bottom:6px; }}
+  .amount-box .value {{ font-size:32px;font-weight:800;color:#064e3b; }}
+  .detail-table {{ width:100%;border-collapse:collapse;margin:24px 0; }}
+  .detail-table td {{ padding:11px 14px;font-size:14px; }}
+  .detail-table tr:nth-child(odd) td {{ background:#f8fafc; }}
+  .detail-table td:first-child {{ font-weight:700;color:#475569;width:38%;border-radius:6px 0 0 6px; }}
+  .detail-table td:last-child {{ color:#1e293b;border-radius:0 6px 6px 0; }}
+  .success-bar {{ background:#d1fae5;border-radius:10px;padding:14px 18px;text-align:center;font-size:14px;font-weight:700;color:#065f46;margin:20px 0;border:1px solid #6ee7b7; }}
+  .divider {{ height:1px;background:#e2e8f0;margin:28px 0; }}
+  .footer {{ background:#f8fafc;padding:24px 40px;text-align:center;border-top:1px solid #e2e8f0; }}
+  .footer p {{ margin:0;font-size:12px;color:#94a3b8;line-height:1.7; }}
+  .footer strong {{ color:#64748b; }}
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <div class="header">
+    <span class="checkmark">✅</span>
+    <h1>Payment Confirmed</h1>
+    <p>{org_name} — Finance Department</p>
+  </div>
+  <div class="body">
+    <p class="greeting">
+      Dear <strong>{payment_request.effective_recipient_name}</strong>,<br><br>
+      We are pleased to confirm that the following payment has been <strong>successfully processed</strong> by {org_name}.
+      Please retain this confirmation for your records.
+    </p>
+
+    <div class="amount-box">
+      <div class="label">Amount Paid</div>
+      <div class="value">{currency} {amount}</div>
+    </div>
+
+    <div class="success-bar">✓ Payment Successfully Processed on {paid_at}</div>
+
+    <table class="detail-table">
+      <tr><td>Payment Reference</td><td><strong>{ref}</strong></td></tr>
+      <tr><td>Title</td><td>{payment_request.title}</td></tr>
+      <tr><td>Payment Type</td><td>{payment_request.get_payment_type_display()}</td></tr>
+      <tr><td>Payment Method</td><td>{pay_method}</td></tr>
+      <tr><td>Date Processed</td><td>{paid_at}</td></tr>
+    </table>
+
+    <div class="divider"></div>
+    <p style="font-size:14px;color:#1e293b;line-height:1.8">
+      Thank you for your continued engagement with <strong>{org_name}</strong>.
+      If you believe this payment was made in error, or if you have any questions,
+      please contact the Finance Department immediately quoting the reference above.
+    </p>
+    <p style="font-size:13px;color:#64748b;line-height:1.7">
+      Please do not reply to this automated email.
+    </p>
+  </div>
+  <div class="footer">
+    <p><strong>{org_name}</strong> · Finance &amp; Administration<br>
+    This is an automated payment confirmation. Please retain it for your records.</p>
+  </div>
+</div>
+</body>
+</html>"""
+
+    msg = EmailMessage(
+        subject=f'Payment Confirmation — {ref} | {org_name}',
+        body=html,
+        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', f'finance@{org_name.lower().replace(" ","")}.org'),
+        to=[recipient_email],
+    )
+    msg.content_subtype = 'html'
+    try:
+        msg.send()
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Payment Request Views
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PaymentRequestListView(LoginRequiredMixin, TemplateView):
+    template_name = 'finance/payment_request_list.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_payment_requests(request.user):
+            messages.error(request, 'You do not have permission to view payment requests.')
+            return redirect('finance_dashboard')
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        q      = self.request.GET.get('q', '').strip()
+        status = self.request.GET.get('status', '').strip()
+        rtype  = self.request.GET.get('rtype', '').strip()
+
+        qs = PaymentRequest.objects.select_related(
+            'requested_by', 'recipient_user', 'budget', 'project', 'linked_payment'
+        ).order_by('-created_at')
+
+        if q:
+            qs = qs.filter(
+                Q(title__icontains=q) |
+                Q(recipient_name__icontains=q) |
+                Q(recipient_email__icontains=q) |
+                Q(description__icontains=q)
+            )
+        if status:
+            qs = qs.filter(status=status)
+        if rtype:
+            qs = qs.filter(recipient_type=rtype)
+
+        ctx.update({
+            'payment_requests': qs[:100],
+            'q': q,
+            'status_filter': status,
+            'rtype_filter': rtype,
+            'status_choices': PaymentRequest.Status.choices,
+            'rtype_choices': PaymentRequest.RecipientType.choices,
+            'total': qs.aggregate(t=Sum('amount'))['t'] or Decimal('0'),
+            'is_finance': _is_finance(self.request.user),
+            'is_ceo': _is_ceo(self.request.user),
+        })
+        return ctx
+
+
+class PaymentRequestCreateView(LoginRequiredMixin, View):
+    template_name = 'finance/payment_request_form.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_payment_requests(request.user):
+            messages.error(request, 'You do not have permission to create payment requests.')
+            return redirect('finance_dashboard')
+        return super().dispatch(request, *args, **kwargs)
+
+    def _ctx(self, request):
+        from apps.core.models import User as CoreUser
+        return {
+            'mode': 'create',
+            'staff_list':       CoreUser.objects.filter(is_active=True, status='active').order_by('first_name'),
+            'budgets':          Budget.objects.filter(status__in=['approved','active']).order_by('name'),
+            'projects':         __import__('apps.projects.models', fromlist=['Project']).Project.objects.filter(status='active').order_by('name'),
+            'purchase_requests': PurchaseRequest.objects.exclude(status__in=['closed','rejected']).order_by('-created_at')[:30],
+            'payment_types':    Payment.PaymentType.choices,
+            'method_choices':   Payment.Method.choices,
+            'rtype_choices':    PaymentRequest.RecipientType.choices,
+            'doc_type_choices': PaymentRequestDocument.DocType.choices,
+        }
+
+    def get(self, request):
+        return render(request, self.template_name, self._ctx(request))
+
+    def post(self, request):
+        try:
+            amount = _validate_decimal(request.POST.get('amount'), 'amount')
+        except ValueError as e:
+            messages.error(request, str(e))
+            return render(request, self.template_name, self._ctx(request))
+
+        rtype = request.POST.get('recipient_type', PaymentRequest.RecipientType.EXTERNAL)
+        recipient_user = None
+        recipient_name = request.POST.get('recipient_name', '').strip()
+        recipient_email = request.POST.get('recipient_email', '').strip()
+
+        if rtype == PaymentRequest.RecipientType.STAFF:
+            uid = request.POST.get('recipient_user')
+            if uid:
+                from apps.core.models import User as CoreUser
+                recipient_user = CoreUser.objects.filter(pk=uid).first()
+                if recipient_user:
+                    recipient_name  = getattr(recipient_user, 'full_name', str(recipient_user))
+                    recipient_email = recipient_email or recipient_user.email
+
+        pr = PaymentRequest.objects.create(
+            title           = request.POST.get('title', '').strip(),
+            description     = request.POST.get('description', '').strip(),
+            payment_type    = request.POST.get('payment_type', Payment.PaymentType.OTHER),
+            recipient_type  = rtype,
+            recipient_user  = recipient_user,
+            recipient_name  = recipient_name,
+            recipient_email = recipient_email,
+            recipient_notes = request.POST.get('recipient_notes', '').strip(),
+            amount          = amount,
+            currency        = request.POST.get('currency', 'GMD').strip().upper() or 'GMD',
+            method          = request.POST.get('method', Payment.Method.BANK_TRANSFER),
+            due_date        = request.POST.get('due_date') or None,
+            budget_id       = request.POST.get('budget') or None,
+            project_id      = request.POST.get('project') or None,
+            purchase_request_id = request.POST.get('purchase_request') or None,
+            status          = request.POST.get('status', PaymentRequest.Status.DRAFT),
+            requested_by    = request.user,
+            notes           = request.POST.get('notes', '').strip(),
+        )
+
+        # ── Upload documents ──────────────────────────────────────────────
+        for key in request.FILES:
+            if key.startswith('doc_file_'):
+                idx = key[len('doc_file_'):]
+                f = request.FILES[key]
+                dtype = request.POST.get(f'doc_type_{idx}', PaymentRequestDocument.DocType.OTHER)
+                dname = request.POST.get(f'doc_name_{idx}', f.name).strip() or f.name
+                doc = PaymentRequestDocument(
+                    payment_request=pr,
+                    doc_type=dtype,
+                    name=dname,
+                    uploaded_by=request.user,
+                )
+                doc.file.save(f.name, f, save=True)
+
+        # ── Send email if status = sent ───────────────────────────────────
+        if pr.status == PaymentRequest.Status.SENT:
+            _send_payment_request_email(pr, request)
+
+        messages.success(request, f'Payment request "{pr.title}" created.')
+        return redirect('payment_request_detail', pk=pr.pk)
+
+
+class PaymentRequestDetailView(LoginRequiredMixin, View):
+    template_name = 'finance/payment_request_detail.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_payment_requests(request.user):
+            messages.error(request, 'You do not have permission to view this.')
+            return redirect('finance_dashboard')
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, pk):
+        pr = get_object_or_404(PaymentRequest, pk=pk)
+        ctx = {
+            'pr': pr,
+            'documents': pr.documents.all(),
+            'method_choices': Payment.Method.choices,
+            'is_finance': _is_finance(request.user),
+            'is_ceo': _is_ceo(request.user),
+        }
+        return render(request, self.template_name, ctx)
+
+
+class PaymentRequestMarkPaidView(LoginRequiredMixin, View):
+    """Mark a payment request as paid, create the Payment record, send confirmation email."""
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _is_finance(request.user):
+            messages.error(request, 'Only Finance staff can mark payments as paid.')
+            return redirect('finance_dashboard')
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, pk):
+        pr = get_object_or_404(PaymentRequest, pk=pk)
+
+        if pr.status == PaymentRequest.Status.PAID:
+            messages.warning(request, 'This payment request is already marked as paid.')
+            return redirect('payment_request_detail', pk=pk)
+
+        try:
+            amount = _validate_decimal(
+                request.POST.get('amount') or pr.amount, 'amount')
+        except ValueError as e:
+            messages.error(request, str(e))
+            return redirect('payment_request_detail', pk=pk)
+
+        payment_date = request.POST.get('payment_date') or timezone.now().date()
+        method       = request.POST.get('method') or pr.method
+        notes        = request.POST.get('notes', '').strip()
+        currency     = request.POST.get('currency') or pr.currency
+
+        # Determine direction
+        if pr.recipient_type == PaymentRequest.RecipientType.STAFF:
+            direction = Payment.Direction.COMPANY_TO_STAFF
+        elif pr.recipient_type == PaymentRequest.RecipientType.VENDOR:
+            direction = Payment.Direction.COMPANY_TO_VENDOR
+        else:
+            direction = Payment.Direction.COMPANY_TO_VENDOR
+
+        payment = Payment.objects.create(
+            reference       = _generate_reference('PREQ'),
+            description     = pr.title,
+            purchase_request= pr.purchase_request,
+            amount          = amount,
+            currency        = currency,
+            method          = method,
+            direction       = direction,
+            payment_type    = pr.payment_type,
+            paid_by         = request.user,
+            processed_by    = request.user,
+            approved_by     = pr.approved_by or request.user,
+            employee        = pr.recipient_user,
+            recipient       = pr.effective_recipient_name,
+            payment_date    = payment_date,
+            budget          = pr.budget,
+            project         = pr.project,
+            notes           = notes,
+        )
+
+        if 'receipt' in request.FILES:
+            payment.receipt = request.FILES['receipt']
+            payment.save(update_fields=['receipt'])
+
+        # Attach any additional docs to the payment request
+        for key in request.FILES:
+            if key.startswith('doc_file_'):
+                idx   = key[len('doc_file_'):]
+                f     = request.FILES[key]
+                dtype = request.POST.get(f'doc_type_{idx}', PaymentRequestDocument.DocType.RECEIPT)
+                dname = request.POST.get(f'doc_name_{idx}', f.name).strip() or f.name
+                doc   = PaymentRequestDocument(
+                    payment_request=pr,
+                    doc_type=dtype,
+                    name=dname,
+                    uploaded_by=request.user,
+                )
+                doc.file.save(f.name, f, save=True)
+
+        _apply_payment_to_budget(payment)
+
+        pr.status         = PaymentRequest.Status.PAID
+        pr.linked_payment = payment
+        pr.paid_at        = timezone.now()
+        pr.approved_by    = pr.approved_by or request.user
+        pr.save(update_fields=['status', 'linked_payment', 'paid_at', 'approved_by', 'updated_at'])
+
+        # Send confirmation email to recipient
+        _send_payment_confirmation_email(pr)
+
+        messages.success(request, f'"{pr.title}" marked as paid. Confirmation email sent to {pr.effective_recipient_email or "recipient"}.')
+        return redirect('payment_request_detail', pk=pk)
+
+
+class PaymentRequestSendView(LoginRequiredMixin, View):
+    """Change status from Draft → Sent and email the recipient."""
+
+    def post(self, request, pk):
+        if not _can_manage_payment_requests(request.user):
+            messages.error(request, 'Permission denied.')
+            return redirect('finance_dashboard')
+
+        pr = get_object_or_404(PaymentRequest, pk=pk)
+        if pr.status != PaymentRequest.Status.DRAFT:
+            messages.warning(request, 'Only draft requests can be sent.')
+            return redirect('payment_request_detail', pk=pk)
+
+        pr.status = PaymentRequest.Status.SENT
+        pr.save(update_fields=['status', 'updated_at'])
+        _send_payment_request_email(pr, request)
+
+        messages.success(request, f'Payment request sent and email dispatched to {pr.effective_recipient_email or pr.effective_recipient_name}.')
+        return redirect('payment_request_detail', pk=pk)
+
+
+class PaymentRequestCancelView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        if not _can_manage_payment_requests(request.user):
+            messages.error(request, 'Permission denied.')
+            return redirect('finance_dashboard')
+        pr = get_object_or_404(PaymentRequest, pk=pk)
+        if pr.status == PaymentRequest.Status.PAID:
+            messages.error(request, 'Paid requests cannot be cancelled.')
+            return redirect('payment_request_detail', pk=pk)
+        pr.status = PaymentRequest.Status.CANCELLED
+        pr.save(update_fields=['status', 'updated_at'])
+        messages.warning(request, f'Payment request "{pr.title}" cancelled.')
+        return redirect('payment_request_list')

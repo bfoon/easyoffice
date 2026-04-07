@@ -302,3 +302,131 @@ class EmployeeLoanPayment(models.Model):
 
     def __str__(self):
         return f'{self.loan.employee} repayment — {self.amount}'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Payment Request (Finance/Admin/CEO → Staff, External, Vendor)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PaymentRequest(models.Model):
+    class RecipientType(models.TextChoices):
+        STAFF    = 'staff',    'Staff Member'
+        EXTERNAL = 'external', 'External Individual'
+        VENDOR   = 'vendor',   'Vendor / Company'
+
+    class Status(models.TextChoices):
+        DRAFT     = 'draft',     'Draft'
+        SENT      = 'sent',      'Sent'
+        PAID      = 'paid',      'Paid'
+        CANCELLED = 'cancelled', 'Cancelled'
+
+    id               = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title            = models.CharField(max_length=300)
+    description      = models.TextField(help_text='Full details of this payment')
+    payment_type     = models.CharField(
+        max_length=30,
+        choices=Payment.PaymentType.choices,
+        default=Payment.PaymentType.OTHER,
+    )
+
+    # ── Recipient ──────────────────────────────────────────────────────────
+    recipient_type   = models.CharField(max_length=20, choices=RecipientType.choices,
+                                        default=RecipientType.EXTERNAL)
+    recipient_user   = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='incoming_payment_requests',
+        help_text='Used when recipient is a staff member',
+    )
+    recipient_name   = models.CharField(max_length=200, blank=True,
+                                        help_text='For external/vendor recipients')
+    recipient_email  = models.EmailField(blank=True,
+                                         help_text='Notification and acknowledgement email')
+    recipient_notes  = models.TextField(blank=True,
+                                        help_text='Bank details, address, etc.')
+
+    # ── Financial ─────────────────────────────────────────────────────────
+    amount           = models.DecimalField(max_digits=12, decimal_places=2)
+    currency         = models.CharField(max_length=10, default='GMD')
+    method           = models.CharField(max_length=20, choices=Payment.Method.choices,
+                                        default=Payment.Method.BANK_TRANSFER)
+    due_date         = models.DateField(null=True, blank=True)
+
+    # ── Linking ───────────────────────────────────────────────────────────
+    budget           = models.ForeignKey(Budget, on_delete=models.SET_NULL,
+                                         null=True, blank=True,
+                                         related_name='payment_requests')
+    project          = models.ForeignKey('projects.Project', on_delete=models.SET_NULL,
+                                          null=True, blank=True,
+                                          related_name='payment_requests')
+    purchase_request = models.ForeignKey(PurchaseRequest, on_delete=models.SET_NULL,
+                                          null=True, blank=True,
+                                          related_name='payment_requests')
+
+    # ── Workflow ──────────────────────────────────────────────────────────
+    status           = models.CharField(max_length=20, choices=Status.choices,
+                                        default=Status.DRAFT)
+    requested_by     = models.ForeignKey(User, on_delete=models.CASCADE,
+                                          related_name='outgoing_payment_requests')
+    approved_by      = models.ForeignKey(User, on_delete=models.SET_NULL,
+                                          null=True, blank=True,
+                                          related_name='authorised_payment_requests')
+    # Once paid, link to the actual Payment record
+    linked_payment   = models.OneToOneField(Payment, on_delete=models.SET_NULL,
+                                             null=True, blank=True,
+                                             related_name='payment_request')
+    paid_at          = models.DateTimeField(null=True, blank=True)
+    notes            = models.TextField(blank=True)
+    created_at       = models.DateTimeField(auto_now_add=True)
+    updated_at       = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.title} — {self.amount} {self.currency}'
+
+    @property
+    def effective_recipient_name(self):
+        if self.recipient_user:
+            return getattr(self.recipient_user, 'full_name', str(self.recipient_user))
+        return self.recipient_name or '—'
+
+    @property
+    def effective_recipient_email(self):
+        if self.recipient_user:
+            return getattr(self.recipient_user, 'email', '')
+        return self.recipient_email
+
+    @property
+    def status_color(self):
+        return {
+            'draft':     '#94a3b8',
+            'sent':      '#f59e0b',
+            'paid':      '#10b981',
+            'cancelled': '#64748b',
+        }.get(self.status, '#64748b')
+
+
+class PaymentRequestDocument(models.Model):
+    class DocType(models.TextChoices):
+        INVOICE       = 'invoice',       'Invoice'
+        DELIVERY_NOTE = 'delivery_note', 'Delivery Note'
+        REPORT        = 'report',        'Report'
+        RECEIPT       = 'receipt',       'Receipt'
+        CONTRACT      = 'contract',      'Contract'
+        OTHER         = 'other',         'Other'
+
+    id              = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_request = models.ForeignKey(PaymentRequest, on_delete=models.CASCADE,
+                                         related_name='documents')
+    doc_type        = models.CharField(max_length=20, choices=DocType.choices,
+                                        default=DocType.OTHER)
+    name            = models.CharField(max_length=200)
+    file            = models.FileField(upload_to='payment_request_docs/%Y/%m/')
+    uploaded_by     = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    uploaded_at     = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['uploaded_at']
+
+    def __str__(self):
+        return f'{self.get_doc_type_display()} — {self.name}'

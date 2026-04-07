@@ -1122,7 +1122,7 @@
   <div class="fm-modal" style="width:420px">
     <div class="fm-modal-head">
       <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">New Folder</div>
-      <button onclick="closeModal('newFolderModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+      <button type="button" onclick="closeModal('newFolderModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
         <i class="bi bi-x-lg"></i>
       </button>
     </div>
@@ -1133,14 +1133,16 @@
         {% if current_folder %}
         <input type="hidden" name="parent_id" value="{{ current_folder.id }}"/>
         {% endif %}
+
         <div class="eo-form-group">
           <label class="eo-form-label">Folder Name *</label>
           <input type="text" name="name" class="eo-form-control" placeholder="e.g. HR Policies 2025" required autofocus/>
         </div>
+
         <div class="row g-3">
           <div class="col-sm-8">
             <label class="eo-form-label">Visibility</label>
-            <select name="visibility" class="eo-form-select">
+            <select name="visibility" class="eo-form-select" id="newFolderVisibility" onchange="toggleNewFolderScope()">
               <option value="private">Private (only me)</option>
               <option value="unit">Unit</option>
               <option value="department">Department</option>
@@ -1152,11 +1154,34 @@
             <input type="color" name="color" value="#f59e0b" class="eo-form-control" style="height:40px;cursor:pointer"/>
           </div>
         </div>
+
+        <div class="eo-form-group mt-3" id="newFolderUnitWrap" style="display:none">
+          <label class="eo-form-label">Unit</label>
+          <select name="unit_id" class="eo-form-select">
+            <option value="">— Select unit —</option>
+            {% for unit in all_units %}
+            <option value="{{ unit.id }}">{{ unit.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="eo-form-group mt-3" id="newFolderDeptWrap" style="display:none">
+          <label class="eo-form-label">Department</label>
+          <select name="dept_id" class="eo-form-select">
+            <option value="">— Select department —</option>
+            {% for dept in all_departments %}
+            <option value="{{ dept.id }}">{{ dept.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
         <div style="display:flex;gap:8px;margin-top:16px">
           <button type="submit" class="eo-btn eo-btn-primary flex-grow-1">
             <i class="bi bi-folder-plus"></i> Create Folder
           </button>
-          <button type="button" onclick="closeModal('newFolderModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+          <button type="button" onclick="closeModal('newFolderModal')" class="eo-btn eo-btn-secondary">
+            Cancel
+          </button>
         </div>
       </form>
     </div>
@@ -1167,38 +1192,50 @@
      SHARE MODAL
 ══════════════════════════════════ -->
 <div class="fm-modal-backdrop" id="shareModal">
-  <div class="fm-modal" style="width:500px">
+  <div class="fm-modal" style="width:560px">
     <div class="fm-modal-head">
       <div>
-        <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">Share File</div>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text)" id="shareModalTitle">Share Item</div>
         <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px" id="shareModalFileName"></div>
       </div>
-      <button onclick="closeModal('shareModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+      <button type="button" onclick="closeModal('shareModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
         <i class="bi bi-x-lg"></i>
       </button>
     </div>
+
     <div class="fm-modal-body">
       <form method="post" id="shareForm">
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
+        <input type="hidden" id="shareItemType" value="file"/>
 
         <div class="eo-form-group">
-          <label class="eo-form-label">Who can access this file?</label>
+          <label class="eo-form-label" id="shareModalQuestion">Who can access this file?</label>
+
           <div style="display:flex;flex-direction:column;gap:8px">
 
-            <label style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s" class="vis-opt" id="opt-private">
+            <!-- Private -->
+            <label class="vis-opt" id="opt-private"
+                   style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s">
               <input type="radio" name="visibility" value="private" style="margin-top:3px;flex-shrink:0" onchange="onVisChange(this)"/>
               <div>
-                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)"><i class="bi bi-lock me-1"></i> Only Me</div>
-                <div style="font-size:.75rem;color:var(--eo-text-muted)">Only you can see and download this file</div>
+                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">
+                  <i class="bi bi-lock me-1"></i> Only Me
+                </div>
+                <div style="font-size:.75rem;color:var(--eo-text-muted)">Only you can access this item</div>
               </div>
             </label>
 
-            <label style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s" class="vis-opt" id="opt-shared_with">
+            <!-- Specific people (files only) -->
+            <label class="vis-opt" id="opt-shared_with"
+                   style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s">
               <input type="radio" name="visibility" value="shared_with" style="margin-top:3px;flex-shrink:0" onchange="onVisChange(this)"/>
               <div style="flex:1;min-width:0">
-                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)"><i class="bi bi-people me-1"></i> Specific People</div>
+                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">
+                  <i class="bi bi-people me-1"></i> Specific People
+                </div>
                 <div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:8px">Choose individual staff members</div>
+
                 <div id="peoplePicker" style="display:none">
                   <div style="position:relative;margin-bottom:8px">
                     <i class="bi bi-search" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:.75rem;color:var(--eo-text-muted)"></i>
@@ -1206,26 +1243,33 @@
                            style="width:100%;padding:6px 10px 6px 28px;border:1px solid var(--eo-border);border-radius:7px;background:var(--eo-bg);color:var(--eo-text);font-size:.82rem;outline:none"
                            oninput="filterPeople(this.value)"/>
                   </div>
+
                   <div style="max-height:180px;overflow-y:auto;border:1px solid var(--eo-border);border-radius:8px" id="peopleList">
                     {% for staff in all_staff %}
                     <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;transition:background .1s"
-                           onmouseover="this.style.background='var(--eo-bg)'" onmouseout="this.style.background=''"
+                           onmouseover="this.style.background='var(--eo-bg)'"
+                           onmouseout="this.style.background=''"
                            data-name="{{ staff.full_name|lower }}">
                       <input type="checkbox" name="shared_with" value="{{ staff.id }}" style="flex-shrink:0" onchange="countSelected()"/>
                       {% if staff.avatar %}
-                        <img src="{{ staff.avatar.url }}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0"/>
+                      <img src="{{ staff.avatar.url }}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0"/>
                       {% else %}
-                        <div style="width:28px;height:28px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.65rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ staff.initials }}</div>
+                      <div style="width:28px;height:28px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.65rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                        {{ staff.initials }}
+                      </div>
                       {% endif %}
                       <div style="min-width:0">
                         <div style="font-size:.84rem;font-weight:600;color:var(--eo-text)">{{ staff.full_name }}</div>
-                        {% if staff.staffprofile.position %}<div style="font-size:.72rem;color:var(--eo-text-muted)">{{ staff.staffprofile.position.title }}</div>{% endif %}
+                        {% if staff.staffprofile.position %}
+                        <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ staff.staffprofile.position.title }}</div>
+                        {% endif %}
                       </div>
                     </label>
                     {% empty %}
                     <div style="padding:16px;text-align:center;font-size:.82rem;color:var(--eo-text-muted)">No staff available</div>
                     {% endfor %}
                   </div>
+
                   <div style="margin-top:6px;font-size:.72rem;color:var(--eo-text-muted)">
                     <span id="selectedCount">0</span> person(s) selected
                   </div>
@@ -1233,10 +1277,14 @@
               </div>
             </label>
 
-            <label style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s" class="vis-opt" id="opt-unit">
+            <!-- Unit -->
+            <label class="vis-opt" id="opt-unit"
+                   style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s">
               <input type="radio" name="visibility" value="unit" style="margin-top:3px;flex-shrink:0" onchange="onVisChange(this)"/>
               <div style="flex:1;min-width:0">
-                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)"><i class="bi bi-diagram-3 me-1"></i> Entire Unit</div>
+                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">
+                  <i class="bi bi-diagram-3 me-1"></i> Entire Unit
+                </div>
                 <div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:8px">Everyone in a specific unit</div>
                 <div id="unitPicker" style="display:none">
                   <select name="unit_id" class="eo-form-select" style="font-size:.82rem">
@@ -1249,10 +1297,14 @@
               </div>
             </label>
 
-            <label style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s" class="vis-opt" id="opt-department">
+            <!-- Department -->
+            <label class="vis-opt" id="opt-department"
+                   style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s">
               <input type="radio" name="visibility" value="department" style="margin-top:3px;flex-shrink:0" onchange="onVisChange(this)"/>
               <div style="flex:1;min-width:0">
-                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)"><i class="bi bi-building me-1"></i> Entire Department</div>
+                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">
+                  <i class="bi bi-building me-1"></i> Entire Department
+                </div>
                 <div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:8px">Everyone in a specific department</div>
                 <div id="deptPicker" style="display:none">
                   <select name="dept_id" class="eo-form-select" style="font-size:.82rem">
@@ -1265,30 +1317,44 @@
               </div>
             </label>
 
-            <label style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s" class="vis-opt" id="opt-office">
+            <!-- Office -->
+            <label class="vis-opt" id="opt-office"
+                   style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s">
               <input type="radio" name="visibility" value="office" style="margin-top:3px;flex-shrink:0" onchange="onVisChange(this)"/>
               <div>
-                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)"><i class="bi bi-globe me-1"></i> Everyone in the Office</div>
-                <div style="font-size:.75rem;color:var(--eo-text-muted)">All active staff can see and download</div>
+                <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">
+                  <i class="bi bi-globe me-1"></i> Everyone in the Office
+                </div>
+                <div style="font-size:.75rem;color:var(--eo-text-muted)">All active staff can access this item</div>
               </div>
             </label>
 
           </div>
         </div>
 
-        <div style="display:flex;gap:8px;margin-top:8px">
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
           <button type="submit" class="eo-btn eo-btn-primary flex-grow-1">
             <i class="bi bi-share"></i> Update Sharing
           </button>
-          <button type="button" onclick="closeModal('shareModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+
+          <button type="button" id="stopSharingBtn" onclick="stopSharingNow()" class="eo-btn eo-btn-danger" style="display:none">
+            <i class="bi bi-slash-circle"></i> Stop Sharing
+          </button>
+
+          <button type="button" onclick="closeModal('shareModal')" class="eo-btn eo-btn-secondary">
+            Cancel
+          </button>
         </div>
       </form>
     </div>
   </div>
 </div>
 
+<!-- ══════════════════════════════════
+     PREVIEW MODAL
+══════════════════════════════════ -->
 <div class="fm-modal-backdrop" id="previewModal">
-  <div class="fm-modal" style="width: min(1100px, 96vw);">
+  <div class="fm-modal" style="width:min(1100px,96vw);max-width:96vw">
     <div class="fm-modal-head">
       <div>
         <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">
@@ -1296,17 +1362,17 @@
         </div>
         <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px" id="previewModalFileName"></div>
       </div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;align-items:center">
         <a href="#" id="previewDownloadBtn" class="eo-btn eo-btn-secondary eo-btn-sm">
           <i class="bi bi-download"></i> Download
         </a>
-        <button onclick="closePreviewModal()" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <button type="button" onclick="closePreviewModal()" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
           <i class="bi bi-x-lg"></i>
         </button>
       </div>
     </div>
 
-    <div class="fm-modal-body" style="padding:0; height:min(78vh, 820px);">
+    <div class="fm-modal-body" style="padding:0;height:min(78vh,820px)">
       <div id="previewLoading"
            style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--eo-text-muted);font-size:.92rem;">
         <div style="text-align:center">
@@ -1319,256 +1385,340 @@
     </div>
   </div>
 </div>
-
-{% endblock content %}
-
+{% endblock %}
 {% block extra_js %}
 <script>
-// ── Share modal ──
-function openShareModal(id, name, currentVisibility, type) {
-  type = type || 'file';
-  // Set form action based on type
-  var baseUrl = type === 'folder' ? '/files/folder/' : '/files/';
-  document.getElementById('shareForm').action = baseUrl + id + '/share/';
-  // File name display
-  document.getElementById('shareModalFileName').textContent = name;
-  // "Specific People" row — folders don't support it
-  var sharedWithOpt = document.getElementById('opt-shared_with');
-  if (sharedWithOpt) sharedWithOpt.style.display = type === 'folder' ? 'none' : '';
-  // Reset all radio borders
-  document.querySelectorAll('.vis-opt').forEach(function(el) {
-    el.style.borderColor = 'var(--eo-border)';
-  });
-  // Pre-select current visibility (fall back to private if shared_with and it's a folder)
-  var vis = (type === 'folder' && currentVisibility === 'shared_with') ? 'private' : currentVisibility;
-  var radio = document.querySelector('input[name="visibility"][value="' + vis + '"]');
-  if (radio) {
-    radio.checked = true;
-    radio.closest('.vis-opt').style.borderColor = 'var(--eo-accent)';
-  }
-  showSubPickers(vis);
-  // Reset people checkboxes
-  document.querySelectorAll('#peopleList input[type="checkbox"]').forEach(function(cb) { cb.checked = false; });
-  countSelected();
-  openModal('shareModal');
+/* ─────────────────────────────────────────────
+   Helpers
+───────────────────────────────────────────── */
+function $(id) {
+  return document.getElementById(id);
 }
-
-function onVisChange(radio) {
-  document.querySelectorAll('.vis-opt').forEach(function(el) {
-    el.style.borderColor = 'var(--eo-border)';
-  });
-  radio.closest('.vis-opt').style.borderColor = 'var(--eo-accent)';
-  showSubPickers(radio.value);
-}
-
-function showSubPickers(vis) {
-  document.getElementById('peoplePicker').style.display = vis === 'shared_with' ? '' : 'none';
-  document.getElementById('unitPicker').style.display   = vis === 'unit'        ? '' : 'none';
-  document.getElementById('deptPicker').style.display   = vis === 'department'  ? '' : 'none';
-}
-
-function filterPeople(q) {
-  q = q.toLowerCase();
-  document.querySelectorAll('#peopleList label').forEach(function(el) {
-    el.style.display = el.dataset.name.includes(q) ? '' : 'none';
-  });
-}
-
-function countSelected() {
-  var n = document.querySelectorAll('#peopleList input[type="checkbox"]:checked').length;
-  document.getElementById('selectedCount').textContent = n;
-}
-
-
-var VIEW_KEY = 'eo_fm_view';
-function setView(v) {
-  document.getElementById('viewGrid').style.display = v === 'grid' ? '' : 'none';
-  document.getElementById('viewList').style.display = v === 'list' ? '' : 'none';
-  document.getElementById('btnGrid').classList.toggle('active', v === 'grid');
-  document.getElementById('btnList').classList.toggle('active', v === 'list');
-  localStorage.setItem(VIEW_KEY, v);
-}
-(function() {
-  var saved = localStorage.getItem(VIEW_KEY) || 'grid';
-  setView(saved);
-})();
-
-// ── Modals ──
-function openModal(id) { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-document.querySelectorAll('.fm-modal-backdrop').forEach(function(el) {
-  el.addEventListener('click', function(e) { if (e.target === el) el.classList.remove('open'); });
-});
-document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape') {
-    document.querySelectorAll('.fm-modal-backdrop.open').forEach(function(el) {
-      if (el.id === 'previewModal') {
-        closeModal('previewModal'); // uses patched version that stops media
-      } else {
-        el.classList.remove('open');
-      }
-    });
-  }
-});
-
-// ── File input ──
-function formatBytes(b) {
-  if (b < 1024) return b + ' B';
-  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
-  return (b/1048576).toFixed(1) + ' MB';
-}
-function handleFileChange(input) {
-  var f = input.files[0];
-  var sel = document.getElementById('selectedFile');
-  var uploadBtn = document.getElementById('uploadBtn');
-  if (f) {
-    document.getElementById('selectedFileName').textContent = f.name;
-    document.getElementById('selectedFileSize').textContent = formatBytes(f.size);
-    sel.style.display = 'flex';
-    uploadBtn.disabled = false;
-  } else {
-    sel.style.display = 'none';
-    uploadBtn.disabled = true;
-  }
-}
-
-// Drag & drop
-var dropZone = document.getElementById('dropZone');
-if (dropZone) {
-  ['dragenter','dragover'].forEach(function(evt) {
-    dropZone.addEventListener(evt, function(e) { e.preventDefault(); dropZone.classList.add('dragging'); });
-  });
-  ['dragleave','drop'].forEach(function(evt) {
-    dropZone.addEventListener(evt, function(e) { e.preventDefault(); dropZone.classList.remove('dragging'); });
-  });
-  dropZone.addEventListener('drop', function(e) {
-    var dt = e.dataTransfer;
-    if (dt.files.length) {
-      document.getElementById('fileInput').files = dt.files;
-      handleFileChange(document.getElementById('fileInput'));
-    }
-  });
-}
-
-// ── Move File Modal ───────────────────────────────────────────────────────────
-var _moveFileId     = null;
-var _moveFolderId   = null;
-var _moveFolderName = null;
-
-function openMoveModal(fileId, fileName) {
-  _moveFileId     = fileId;
-  _moveFolderId   = null;
-  _moveFolderName = null;
-  document.getElementById('moveModalFileName').textContent = fileName;
-  document.querySelectorAll('.move-folder-opt').forEach(function(b) {
-    b.style.borderColor = 'var(--eo-border)';
-    b.style.background  = 'var(--eo-bg)';
-  });
-  var btn = document.getElementById('moveConfirmBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<i class="bi bi-folder-symlink"></i> Move Here';
-  openModal('moveModal');
-}
-
-function selectMoveFolder(btn) {
-  document.querySelectorAll('.move-folder-opt').forEach(function(b) {
-    b.style.borderColor = 'var(--eo-border)';
-    b.style.background  = 'var(--eo-bg)';
-  });
-  btn.style.borderColor = 'var(--eo-accent)';
-  btn.style.background  = 'var(--eo-accent)08';
-  _moveFolderId   = btn.dataset.folderId   || null;
-  _moveFolderName = btn.dataset.folderName || 'My Drive';
-  var confirmBtn  = document.getElementById('moveConfirmBtn');
-  confirmBtn.disabled = false;
-  confirmBtn.innerHTML = '<i class="bi bi-folder-symlink"></i> Move to "' + _moveFolderName + '"';
-}
-
-function confirmMove() {
-  if (!_moveFileId) return;
-  var btn  = document.getElementById('moveConfirmBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<span style="display:inline-block;width:13px;height:13px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px"></span>Moving…';
-  var csrf = (document.cookie.match('(^|;)\s*csrftoken=([^;]*)') || [])[2] || '';
-  fetch('/files/' + _moveFileId + '/move/', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
-    body:    JSON.stringify({ folder_id: _moveFolderId || null }),
-  })
-  .then(function(r) { return r.json(); })
-  .then(function(data) {
-    closeModal('moveModal');
-    if (data.status === 'ok') {
-      fmToast(data.message, 'success');
-      var card = document.querySelector('[data-file-id="' + _moveFileId + '"]');
-      if (card) {
-        card.style.transition = 'opacity .25s,transform .25s';
-        card.style.opacity    = '0';
-        card.style.transform  = 'scale(.92)';
-        setTimeout(function() { card.remove(); }, 280);
-      }
-    } else {
-      fmToast(data.message || 'Move failed', 'error');
-    }
-    _moveFileId = _moveFolderId = _moveFolderName = null;
-  })
-  .catch(function() {
-    closeModal('moveModal');
-    fmToast('Move failed — please try again.', 'error');
-  });
-}
-
-function fmToast(msg, type) {
-  var old = document.getElementById('fmToast');
-  if (old) old.remove();
-  var t   = document.createElement('div');
-  t.id    = 'fmToast';
-  var isOk = (type === 'success');
-  t.style.cssText = [
-    'position:fixed','bottom:24px','right:24px','z-index:9999',
-    'padding:13px 20px','border-radius:10px',
-    'background:' + (isOk ? '#10b981' : '#ef4444'),
-    'color:#fff','font-size:.86rem','font-weight:600',
-    'box-shadow:0 8px 32px rgba(0,0,0,.20)',
-    'display:flex','align-items:center','gap:9px','max-width:360px',
-    'opacity:0','transform:translateY(10px)',
-    'transition:opacity .22s,transform .22s',
-  ].join(';');
-  t.innerHTML = '<i class="bi bi-' + (isOk ? 'check-circle-fill' : 'exclamation-circle-fill') + '"></i><span>' + msg + '</span>';
-  document.body.appendChild(t);
-  requestAnimationFrame(function() { t.style.opacity = '1'; t.style.transform = 'translateY(0)'; });
-  setTimeout(function() {
-    t.style.opacity = '0'; t.style.transform = 'translateY(10px)';
-    setTimeout(function() { t.remove(); }, 250);
-  }, 3800);
-}
-
-</script>
-<script>
-let currentMoveFileId = null;
-let selectedMoveFolderId = null;
 
 function getCsrfToken() {
   const match = document.cookie.match(/(^|;)\s*csrftoken=([^;]+)/);
   return match ? match[2] : '';
 }
 
+/* ─────────────────────────────────────────────
+   Generic modal controls
+───────────────────────────────────────────── */
 function openModal(id) {
-  const modal = document.getElementById(id);
+  const modal = $(id);
   if (modal) modal.classList.add('open');
 }
 
 function closeModal(id) {
-  const modal = document.getElementById(id);
+  const modal = $(id);
   if (modal) modal.classList.remove('open');
 }
+
+document.querySelectorAll('.fm-modal-backdrop').forEach(function(backdrop) {
+  backdrop.addEventListener('click', function(e) {
+    if (e.target === backdrop) {
+      if (backdrop.id === 'previewModal') {
+        closePreviewModal();
+      } else {
+        closeModal(backdrop.id);
+      }
+    }
+  });
+});
+
+document.addEventListener('keydown', function(e) {
+  if (e.key !== 'Escape') return;
+
+  document.querySelectorAll('.fm-modal-backdrop.open').forEach(function(modal) {
+    if (modal.id === 'previewModal') {
+      closePreviewModal();
+    } else {
+      closeModal(modal.id);
+    }
+  });
+});
+
+/* ─────────────────────────────────────────────
+   View toggle
+───────────────────────────────────────────── */
+var VIEW_KEY = 'eo_fm_view';
+
+function setView(v) {
+  if ($('viewGrid')) $('viewGrid').style.display = v === 'grid' ? '' : 'none';
+  if ($('viewList')) $('viewList').style.display = v === 'list' ? '' : 'none';
+  if ($('btnGrid')) $('btnGrid').classList.toggle('active', v === 'grid');
+  if ($('btnList')) $('btnList').classList.toggle('active', v === 'list');
+  localStorage.setItem(VIEW_KEY, v);
+}
+
+(function initSavedView() {
+  var saved = localStorage.getItem(VIEW_KEY) || 'grid';
+  setView(saved);
+})();
+
+/* ─────────────────────────────────────────────
+   Mobile sidebar
+───────────────────────────────────────────── */
+function toggleMobileSidebar() {
+  const sidebar = document.querySelector('.fm-sidebar');
+  const btn = $('sidebarToggle');
+  if (!sidebar) return;
+
+  const open = sidebar.classList.toggle('mob-open');
+  if (btn) btn.classList.toggle('active', open);
+}
+
+(function initMobileNav() {
+  const sidebar = document.querySelector('.fm-sidebar');
+  const btn = $('sidebarToggle');
+  if (!sidebar || !btn) return;
+
+  if (window.innerWidth > 768) {
+    sidebar.classList.add('mob-open');
+    btn.classList.add('active');
+  }
+
+  window.addEventListener('resize', function() {
+    if (window.innerWidth > 768) {
+      sidebar.classList.add('mob-open');
+      btn.classList.add('active');
+    }
+  });
+})();
+
+/* ─────────────────────────────────────────────
+   Upload file + drag/drop
+───────────────────────────────────────────── */
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  return (b / 1048576).toFixed(1) + ' MB';
+}
+
+function handleFileChange(input) {
+  var f = input.files && input.files[0];
+  var sel = $('selectedFile');
+  var uploadBtn = $('uploadBtn');
+
+  if (!sel || !uploadBtn) return;
+
+  if (f) {
+    if ($('selectedFileName')) $('selectedFileName').textContent = f.name;
+    if ($('selectedFileSize')) $('selectedFileSize').textContent = formatBytes(f.size);
+    sel.style.display = 'flex';
+    uploadBtn.disabled = false;
+  } else {
+    if ($('selectedFileName')) $('selectedFileName').textContent = '';
+    if ($('selectedFileSize')) $('selectedFileSize').textContent = '';
+    sel.style.display = 'none';
+    uploadBtn.disabled = true;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  var dropZone = $('dropZone');
+  var fileInput = $('fileInput');
+
+  if (!dropZone || !fileInput) return;
+
+  function preventDefaults(e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function addDragging() {
+    dropZone.classList.add('dragging');
+  }
+
+  function removeDragging() {
+    dropZone.classList.remove('dragging');
+  }
+
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(function(eventName) {
+    dropZone.addEventListener(eventName, preventDefaults, false);
+    document.body.addEventListener(eventName, preventDefaults, false);
+  });
+
+  ['dragenter', 'dragover'].forEach(function(eventName) {
+    dropZone.addEventListener(eventName, addDragging, false);
+  });
+
+  ['dragleave', 'drop'].forEach(function(eventName) {
+    dropZone.addEventListener(eventName, removeDragging, false);
+  });
+
+  dropZone.addEventListener('drop', function(e) {
+    removeDragging();
+
+    var files = e.dataTransfer && e.dataTransfer.files;
+    if (!files || !files.length) return;
+
+    try {
+      var dt = new DataTransfer();
+      for (var i = 0; i < files.length; i++) {
+        dt.items.add(files[i]);
+      }
+      fileInput.files = dt.files;
+    } catch (err) {
+      fileInput.files = files;
+    }
+
+    handleFileChange(fileInput);
+  }, false);
+
+  fileInput.addEventListener('change', function() {
+    handleFileChange(fileInput);
+  });
+});
+
+/* ─────────────────────────────────────────────
+   New folder modal helpers
+───────────────────────────────────────────── */
+function toggleNewFolderScope() {
+  var visEl = $('newFolderVisibility');
+  if (!visEl) return;
+
+  var vis = visEl.value;
+  if ($('newFolderUnitWrap')) $('newFolderUnitWrap').style.display = vis === 'unit' ? '' : 'none';
+  if ($('newFolderDeptWrap')) $('newFolderDeptWrap').style.display = vis === 'department' ? '' : 'none';
+}
+toggleNewFolderScope();
+
+/* ─────────────────────────────────────────────
+   Share modal
+───────────────────────────────────────────── */
+function getShareType() {
+  return $('shareItemType') ? $('shareItemType').value || 'file' : 'file';
+}
+
+function showSubPickers(vis) {
+  var isFolder = getShareType() === 'folder';
+
+  if ($('peoplePicker')) $('peoplePicker').style.display = (!isFolder && vis === 'shared_with') ? '' : 'none';
+  if ($('unitPicker')) $('unitPicker').style.display = vis === 'unit' ? '' : 'none';
+  if ($('deptPicker')) $('deptPicker').style.display = vis === 'department' ? '' : 'none';
+}
+
+function filterPeople(q) {
+  q = (q || '').toLowerCase();
+  document.querySelectorAll('#peopleList label[data-name]').forEach(function(el) {
+    el.style.display = el.dataset.name.indexOf(q) !== -1 ? '' : 'none';
+  });
+}
+
+function countSelected() {
+  var n = document.querySelectorAll('#peopleList input[type="checkbox"]:checked').length;
+  if ($('selectedCount')) $('selectedCount').textContent = n;
+}
+
+function updateStopSharingButton(vis) {
+  var btn = $('stopSharingBtn');
+  if (!btn) return;
+  btn.style.display = (vis && vis !== 'private') ? '' : 'none';
+}
+
+function onVisChange(radio) {
+  document.querySelectorAll('.vis-opt').forEach(function(el) {
+    el.style.borderColor = 'var(--eo-border)';
+  });
+
+  if (radio && radio.closest('.vis-opt')) {
+    radio.closest('.vis-opt').style.borderColor = 'var(--eo-accent)';
+    showSubPickers(radio.value);
+    updateStopSharingButton(radio.value);
+  }
+}
+
+function stopSharingNow() {
+  var privateRadio = document.querySelector('input[name="visibility"][value="private"]');
+  if (privateRadio) {
+    privateRadio.checked = true;
+    onVisChange(privateRadio);
+  }
+
+  document.querySelectorAll('#peopleList input[type="checkbox"]').forEach(function(cb) {
+    cb.checked = false;
+  });
+
+  var unitSelect = document.querySelector('#unitPicker select[name="unit_id"]');
+  if (unitSelect) unitSelect.value = '';
+
+  var deptSelect = document.querySelector('#deptPicker select[name="dept_id"]');
+  if (deptSelect) deptSelect.value = '';
+
+  countSelected();
+}
+
+function openShareModal(id, name, currentVisibility, type, sharedIds, unitId, deptId) {
+  type = type || 'file';
+  sharedIds = sharedIds || [];
+  unitId = unitId || '';
+  deptId = deptId || '';
+
+  var isFolder = type === 'folder';
+  var formAction = isFolder ? ('/files/folder/' + id + '/share/') : ('/files/' + id + '/share/');
+
+  if ($('shareForm')) $('shareForm').action = formAction;
+  if ($('shareItemType')) $('shareItemType').value = type;
+  if ($('shareModalFileName')) $('shareModalFileName').textContent = name;
+  if ($('shareModalTitle')) $('shareModalTitle').textContent = isFolder ? 'Share Folder' : 'Share File';
+  if ($('shareModalQuestion')) $('shareModalQuestion').textContent = isFolder
+    ? 'Who can access this folder?'
+    : 'Who can access this file?';
+
+  var sharedWithOpt = $('opt-shared_with');
+  if (sharedWithOpt) sharedWithOpt.style.display = isFolder ? 'none' : '';
+
+  document.querySelectorAll('.vis-opt').forEach(function(el) {
+    el.style.borderColor = 'var(--eo-border)';
+  });
+
+  var effectiveVisibility = (isFolder && currentVisibility === 'shared_with') ? 'private' : currentVisibility;
+  var radio = document.querySelector('input[name="visibility"][value="' + effectiveVisibility + '"]');
+
+  if (radio) {
+    radio.checked = true;
+    if (radio.closest('.vis-opt')) {
+      radio.closest('.vis-opt').style.borderColor = 'var(--eo-accent)';
+    }
+  } else {
+    var privateRadio = document.querySelector('input[name="visibility"][value="private"]');
+    if (privateRadio) {
+      privateRadio.checked = true;
+      if (privateRadio.closest('.vis-opt')) {
+        privateRadio.closest('.vis-opt').style.borderColor = 'var(--eo-accent)';
+      }
+      effectiveVisibility = 'private';
+    }
+  }
+
+  document.querySelectorAll('#peopleList input[type="checkbox"]').forEach(function(cb) {
+    cb.checked = sharedIds.indexOf(cb.value) !== -1;
+  });
+
+  var unitSelect = document.querySelector('#unitPicker select[name="unit_id"]');
+  if (unitSelect) unitSelect.value = unitId;
+
+  var deptSelect = document.querySelector('#deptPicker select[name="dept_id"]');
+  if (deptSelect) deptSelect.value = deptId;
+
+  showSubPickers(effectiveVisibility);
+  countSelected();
+  updateStopSharingButton(effectiveVisibility);
+  openModal('shareModal');
+}
+
+/* ─────────────────────────────────────────────
+   Move modal
+───────────────────────────────────────────── */
+let currentMoveFileId = null;
+let selectedMoveFolderId = null;
 
 function openMoveModal(fileId, fileName) {
   currentMoveFileId = fileId;
   selectedMoveFolderId = null;
 
-  document.getElementById('moveModalFileName').textContent = fileName;
-  document.getElementById('moveConfirmBtn').disabled = true;
+  if ($('moveModalFileName')) $('moveModalFileName').textContent = fileName;
+  if ($('moveConfirmBtn')) $('moveConfirmBtn').disabled = true;
 
   document.querySelectorAll('.move-folder-opt').forEach(function(btn) {
     btn.style.borderColor = 'var(--eo-border)';
@@ -1589,7 +1739,53 @@ function selectMoveFolder(el) {
   el.style.borderColor = 'var(--eo-accent)';
   el.style.background = 'rgba(59,130,246,.08)';
 
-  document.getElementById('moveConfirmBtn').disabled = false;
+  if ($('moveConfirmBtn')) $('moveConfirmBtn').disabled = false;
+}
+
+function fmToast(msg, type) {
+  var old = $('fmToast');
+  if (old) old.remove();
+
+  var t = document.createElement('div');
+  t.id = 'fmToast';
+
+  var isOk = (type === 'success');
+  t.style.cssText = [
+    'position:fixed',
+    'bottom:24px',
+    'right:24px',
+    'z-index:9999',
+    'padding:13px 20px',
+    'border-radius:10px',
+    'background:' + (isOk ? '#10b981' : '#ef4444'),
+    'color:#fff',
+    'font-size:.86rem',
+    'font-weight:600',
+    'box-shadow:0 8px 32px rgba(0,0,0,.20)',
+    'display:flex',
+    'align-items:center',
+    'gap:9px',
+    'max-width:360px',
+    'opacity:0',
+    'transform:translateY(10px)',
+    'transition:opacity .22s,transform .22s'
+  ].join(';');
+
+  t.innerHTML = '<i class="bi bi-' + (isOk ? 'check-circle-fill' : 'exclamation-circle-fill') + '"></i><span>' + msg + '</span>';
+  document.body.appendChild(t);
+
+  requestAnimationFrame(function() {
+    t.style.opacity = '1';
+    t.style.transform = 'translateY(0)';
+  });
+
+  setTimeout(function() {
+    t.style.opacity = '0';
+    t.style.transform = 'translateY(10px)';
+    setTimeout(function() {
+      t.remove();
+    }, 250);
+  }, 3800);
 }
 
 function confirmMove() {
@@ -1599,7 +1795,7 @@ function confirmMove() {
   formData.append('folder_id', selectedMoveFolderId || '');
   formData.append('csrfmiddlewaretoken', getCsrfToken());
 
-  fetch(`/files/${currentMoveFileId}/move/`, {
+  fetch('/files/' + currentMoveFileId + '/move/', {
     method: 'POST',
     headers: {
       'X-Requested-With': 'XMLHttpRequest'
@@ -1610,65 +1806,83 @@ function confirmMove() {
     return res.json();
   })
   .then(function(data) {
+    closeModal('moveModal');
     if (data.status === 'ok') {
-      closeModal('moveModal');
+      fmToast(data.message || 'File moved successfully.', 'success');
       window.location.reload();
     } else {
-      alert(data.message || 'Could not move file.');
+      fmToast(data.message || 'Could not move file.', 'error');
     }
   })
   .catch(function() {
-    alert('Move request failed.');
+    closeModal('moveModal');
+    fmToast('Move request failed.', 'error');
   });
 }
 
-// ─────────────────────────────────────────────
-// PREVIEW MODAL
-// ─────────────────────────────────────────────
+/* ─────────────────────────────────────────────
+   Preview modal
+───────────────────────────────────────────── */
 function openPreviewModal(fileId, fileName, extension) {
-  const modal = document.getElementById('previewModal');
-  const content = document.getElementById('previewContent');
-  const loading = document.getElementById('previewLoading');
-  const nameEl = document.getElementById('previewModalFileName');
-  const downloadBtn = document.getElementById('previewDownloadBtn');
+  const content = $('previewContent');
+  const loading = $('previewLoading');
+  const nameEl = $('previewModalFileName');
+  const downloadBtn = $('previewDownloadBtn');
 
-  nameEl.textContent = fileName;
-  downloadBtn.href = `/files/${fileId}/download/`;
+  if (!content || !loading) return;
+
+  if (nameEl) nameEl.textContent = fileName;
+  if (downloadBtn) downloadBtn.href = '/files/' + fileId + '/download/';
 
   content.innerHTML = '';
   content.style.display = 'none';
   loading.style.display = 'flex';
+  loading.innerHTML = `
+    <div style="text-align:center">
+      <i class="bi bi-hourglass-split" style="font-size:1.8rem;display:block;margin-bottom:10px"></i>
+      Loading preview...
+    </div>
+  `;
 
   openModal('previewModal');
 
   const ext = (extension || '').toLowerCase();
-  const previewUrl = `/files/${fileId}/preview/`;
+  const previewUrl = '/files/' + fileId + '/preview/';
 
-  // ── PDF: serve inline ─────────────────────────────────────────────────────
   if (ext === 'pdf') {
-    content.innerHTML = `<iframe class="preview-frame" src="${previewUrl}"></iframe>`;
+    content.innerHTML = `
+      <object class="preview-frame" data="${previewUrl}" type="application/pdf">
+        <div style="height:100%;display:flex;align-items:center;justify-content:center;color:#cbd5e1;text-align:center;padding:24px;">
+          <div>
+            <i class="bi bi-file-earmark-pdf" style="font-size:2rem;display:block;margin-bottom:10px;color:#ef4444;"></i>
+            <div style="font-weight:700;margin-bottom:6px;">PDF preview is unavailable in this browser.</div>
+            <a href="/files/${fileId}/download/" class="eo-btn eo-btn-secondary eo-btn-sm" style="margin-top:10px;">
+              <i class="bi bi-download"></i> Download PDF
+            </a>
+          </div>
+        </div>
+      </object>
+    `;
     loading.style.display = 'none';
     content.style.display = 'block';
     return;
   }
 
-  // ── Office documents: backend converts to PDF via LibreOffice ─────────────
-  const officeExts = ['doc','docx','odt','rtf','xls','xlsx','ods','ppt','pptx','odp'];
+  const officeExts = ['doc', 'docx', 'odt', 'rtf', 'xls', 'xlsx', 'ods', 'ppt', 'pptx', 'odp'];
   if (officeExts.includes(ext)) {
-    // Show a "Converting…" spinner while LibreOffice runs (can take 2-5s)
     loading.innerHTML = `
       <div style="text-align:center">
-        <div style="width:36px;height:36px;border:3px solid var(--eo-border);border-top-color:var(--eo-accent);
-                    border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 14px"></div>
+        <div style="width:36px;height:36px;border:3px solid var(--eo-border);border-top-color:var(--eo-accent);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 14px"></div>
         <div style="font-size:.9rem;font-weight:600;color:var(--eo-text);margin-bottom:4px">Converting to PDF…</div>
         <div style="font-size:.78rem;color:var(--eo-text-muted)">LibreOffice is rendering your document</div>
-      </div>`;
-    loading.style.display = 'flex';
+      </div>
+    `;
 
-    // Probe the preview endpoint — it returns 200+PDF or 422+text on failure
     fetch(previewUrl, { credentials: 'same-origin' })
       .then(function(res) {
-        if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+        if (!res.ok) {
+          return res.text().then(function(t) { throw new Error(t); });
+        }
         return res.blob();
       })
       .then(function(blob) {
@@ -1677,7 +1891,7 @@ function openPreviewModal(fileId, fileName, extension) {
         loading.style.display = 'none';
         content.style.display = 'block';
       })
-      .catch(function(err) {
+      .catch(function() {
         loading.style.display = 'none';
         content.style.display = 'block';
         content.innerHTML = `
@@ -1690,12 +1904,12 @@ function openPreviewModal(fileId, fileName, extension) {
                 <i class="bi bi-download"></i> Download file
               </a>
             </div>
-          </div>`;
+          </div>
+        `;
       });
     return;
   }
 
-  // ── Images ────────────────────────────────────────────────────────────────
   if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) {
     content.innerHTML = `<img class="preview-image" src="${previewUrl}" alt="">`;
     loading.style.display = 'none';
@@ -1703,7 +1917,6 @@ function openPreviewModal(fileId, fileName, extension) {
     return;
   }
 
-  // ── Video ─────────────────────────────────────────────────────────────────
   if (['mp4', 'webm', 'ogg', 'mov'].includes(ext)) {
     content.innerHTML = `
       <video class="preview-video" controls>
@@ -1716,11 +1929,10 @@ function openPreviewModal(fileId, fileName, extension) {
     return;
   }
 
-  // ── Audio ─────────────────────────────────────────────────────────────────
   if (['mp3', 'wav', 'm4a', 'ogg'].includes(ext)) {
     content.innerHTML = `
       <div class="preview-audio">
-        <audio controls style="width:min(720px, 92%)">
+        <audio controls style="width:min(720px,92%)">
           <source src="${previewUrl}">
           Your browser does not support audio preview.
         </audio>
@@ -1731,25 +1943,23 @@ function openPreviewModal(fileId, fileName, extension) {
     return;
   }
 
-  // ── Plain text / code ─────────────────────────────────────────────────────
   if (['txt', 'md', 'py', 'js', 'html', 'css', 'json', 'xml', 'sql', 'csv'].includes(ext)) {
     fetch(previewUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
-    .then(function(res) { return res.text(); })
-    .then(function(text) {
-      content.innerHTML = `<pre class="preview-text"></pre>`;
-      content.querySelector('.preview-text').textContent = text;
-      loading.style.display = 'none';
-      content.style.display = 'block';
-    })
-    .catch(function() {
-      content.innerHTML = `<div class="preview-text">Unable to preview this text file.</div>`;
-      loading.style.display = 'none';
-      content.style.display = 'block';
-    });
+      .then(function(res) { return res.text(); })
+      .then(function(text) {
+        content.innerHTML = `<pre class="preview-text"></pre>`;
+        content.querySelector('.preview-text').textContent = text;
+        loading.style.display = 'none';
+        content.style.display = 'block';
+      })
+      .catch(function() {
+        content.innerHTML = `<div class="preview-text">Unable to preview this text file.</div>`;
+        loading.style.display = 'none';
+        content.style.display = 'block';
+      });
     return;
   }
 
-  // ── No preview available ──────────────────────────────────────────────────
   content.innerHTML = `
     <div style="height:100%;display:flex;align-items:center;justify-content:center;color:#cbd5e1;text-align:center;padding:24px;">
       <div>
@@ -1764,35 +1974,22 @@ function openPreviewModal(fileId, fileName, extension) {
 }
 
 function closePreviewModal() {
-  const content = document.getElementById('previewContent');
-  content.innerHTML = '';
+  const content = $('previewContent');
+  const loading = $('previewLoading');
+  if (content) {
+    content.innerHTML = '';
+    content.style.display = 'none';
+  }
+  if (loading) {
+    loading.style.display = 'flex';
+    loading.innerHTML = `
+      <div style="text-align:center">
+        <i class="bi bi-hourglass-split" style="font-size:1.8rem;display:block;margin-bottom:10px"></i>
+        Loading preview...
+      </div>
+    `;
+  }
   closeModal('previewModal');
 }
-
-// ── Mobile sidebar toggle ────────────────────────────────────────────────────
-function toggleMobileSidebar() {
-  const sidebar = document.querySelector('.fm-sidebar');
-  const btn     = document.getElementById('sidebarToggle');
-  const open    = sidebar.classList.toggle('mob-open');
-  btn.classList.toggle('active', open);
-}
-
-(function initMobileNav() {
-  const sidebar = document.querySelector('.fm-sidebar');
-  const btn     = document.getElementById('sidebarToggle');
-  // Desktop (>768px): sidebar open by default
-  // Mobile (≤768px): sidebar closed by default
-  if (window.innerWidth > 768) {
-    sidebar.classList.add('mob-open');
-    btn.classList.add('active');
-  }
-  // On resize crossing the breakpoint, keep state sensible
-  window.addEventListener('resize', function() {
-    if (window.innerWidth > 768 && !sidebar.classList.contains('mob-open')) {
-      sidebar.classList.add('mob-open');
-      btn.classList.add('active');
-    }
-  });
-})();
 </script>
 {% endblock %}

@@ -159,6 +159,23 @@ def _push_notification(user, notif_type, title, body='', link='', icon='bi-bell-
     except Exception:
         pass
 
+def _store_notification(recipient, sender, notif_type, title, body='', link=''):
+    """
+    Store a persistent in-app notification for the main notification bell.
+    Mirrors what the meetings app is doing with CoreNotification.
+    """
+    try:
+        from apps.core.models import CoreNotification
+        CoreNotification.objects.create(
+            recipient=recipient,
+            sender=sender,
+            notification_type=notif_type,
+            title=title,
+            message=body,
+            link=link,
+        )
+    except Exception:
+        pass
 
 # Notification type → (icon, colour) — mirrors the consumer's expected payload
 _NOTIF_META = {
@@ -172,10 +189,27 @@ _NOTIF_META = {
 }
 
 
-def _notify(user, notif_type, title, body='', link=''):
-    """Convenience wrapper: push WS notification with correct icon/colour."""
+def _notify(user, notif_type, title, body='', link='', sender=None):
+    """
+    Send both:
+    1. real-time websocket notification
+    2. persistent database notification for the main bell
+    """
     icon, color = _NOTIF_META.get(notif_type, ('bi-bell-fill', '#64748b'))
+
+    # Real-time / websocket
     _push_notification(user, notif_type, title, body, link, icon, color)
+
+    # Persistent / main bell
+    if sender is not None:
+        _store_notification(
+            recipient=user,
+            sender=sender,
+            notif_type=notif_type,
+            title=title,
+            body=body,
+            link=link,
+        )
 
 
 def _get_sig_font_path(font_name='Dancing Script'):
@@ -879,38 +913,85 @@ class FileShareView(LoginRequiredMixin, View):
 
     def post(self, request, pk):
         f = get_object_or_404(SharedFile, pk=pk, uploaded_by=request.user)
-        f.visibility = request.POST.get('visibility', f.visibility)
-        f.save(update_fields=['visibility'])
+
+        vis = (request.POST.get('visibility') or f.visibility or 'private').strip()
+        allowed = {'private', 'shared_with', 'unit', 'department', 'office'}
+        if vis not in allowed:
+            vis = 'private'
+
+        previous_shared_ids = set(f.shared_with.values_list('id', flat=True))
+
+        # Reset old sharing configuration first
+        f.visibility = vis
+        f.unit = None
+        f.department = None
+        f.save(update_fields=['visibility', 'unit', 'department'])
+
+        # Clear old direct shares
         f.shared_with.clear()
-        for uid in request.POST.getlist('shared_with'):
-            try:
-                from apps.core.models import User
-                f.shared_with.add(User.objects.get(id=uid))
-            except Exception: pass
-        if f.visibility == 'unit':
-            uid2 = request.POST.get('unit_id')
+
+        added_recipients = []
+
+        if vis == 'shared_with':
+            from apps.core.models import User
+
+            for uid in request.POST.getlist('shared_with'):
+                try:
+                    recipient = User.objects.get(id=uid, is_active=True)
+                    if recipient != request.user:
+                        f.shared_with.add(recipient)
+                        if recipient.id not in previous_shared_ids:
+                            added_recipients.append(recipient)
+                except Exception:
+                    pass
+
+            if not f.shared_with.exists():
+                f.visibility = 'private'
+                f.save(update_fields=['visibility'])
+
+        elif vis == 'unit':
+            uid2 = (request.POST.get('unit_id') or '').strip()
             if uid2:
                 try:
                     from apps.organization.models import Unit
-                    f.unit = Unit.objects.get(id=uid2); f.save(update_fields=['unit'])
-                except Exception: pass
-        elif f.visibility == 'department':
-            did = request.POST.get('dept_id')
+                    f.unit = Unit.objects.get(id=uid2)
+                    f.save(update_fields=['unit'])
+                except Exception:
+                    f.visibility = 'private'
+                    f.save(update_fields=['visibility'])
+            else:
+                f.visibility = 'private'
+                f.save(update_fields=['visibility'])
+
+        elif vis == 'department':
+            did = (request.POST.get('dept_id') or '').strip()
             if did:
                 try:
                     from apps.organization.models import Department
-                    f.department = Department.objects.get(id=did); f.save(update_fields=['department'])
-                except Exception: pass
-        messages.success(request, f'Sharing updated for "{f.name}".')
+                    f.department = Department.objects.get(id=did)
+                    f.save(update_fields=['department'])
+                except Exception:
+                    f.visibility = 'private'
+                    f.save(update_fields=['visibility'])
+            else:
+                f.visibility = 'private'
+                f.save(update_fields=['visibility'])
 
-        # ── Notify users added to shared_with ──────────────────────────────
+        if f.visibility == 'private':
+            messages.success(request, f'Sharing stopped for "{f.name}".')
+        else:
+            messages.success(request, f'Sharing updated for "{f.name}".')
+
+        # Notify newly-added direct-share users
         if f.visibility == 'shared_with':
-            for recipient in f.shared_with.exclude(pk=request.user.pk):
+            for recipient in added_recipients:
                 _notify(
-                    recipient, 'file_shared',
+                    recipient,
+                    'file_shared',
                     title=f'{request.user.full_name} shared a file with you',
-                    body=f.name,
+                    body=f'"{f.name}" was shared with you.',
                     link=f'/files/{f.pk}/preview/',
+                    sender=request.user,
                 )
                 try:
                     send_mail(
@@ -927,9 +1008,9 @@ class FileShareView(LoginRequiredMixin, View):
                     )
                 except Exception:
                     pass
+
         next_url = request.POST.get('next', '')
         return redirect(next_url if next_url.startswith('/') else 'file_manager')
-
 
 class FolderCreateView(LoginRequiredMixin, View):
     def post(self, request):
@@ -964,27 +1045,106 @@ class FolderDeleteView(LoginRequiredMixin, View):
 class FolderShareView(LoginRequiredMixin, View):
     def post(self, request, pk):
         folder = get_object_or_404(FileFolder, pk=pk, owner=request.user)
-        vis = request.POST.get('visibility', folder.visibility)
-        folder.visibility = vis if vis in {'private','unit','department','office'} else 'private'
+
+        previous_visibility = folder.visibility
+        previous_unit_id = folder.unit_id
+        previous_department_id = folder.department_id
+
+        vis = (request.POST.get('visibility') or folder.visibility or 'private').strip()
+        allowed = {'private', 'unit', 'department', 'office'}
+        folder.visibility = vis if vis in allowed else 'private'
+
+        # Reset stale values first
+        folder.unit = None
+        folder.department = None
+
         if folder.visibility == 'unit':
-            uid = request.POST.get('unit_id')
+            uid = (request.POST.get('unit_id') or '').strip()
             if uid:
                 try:
                     from apps.organization.models import Unit
                     folder.unit = Unit.objects.get(id=uid)
-                except Exception: pass
+                except Exception:
+                    folder.visibility = 'private'
+            else:
+                folder.visibility = 'private'
+
         elif folder.visibility == 'department':
-            did = request.POST.get('dept_id')
+            did = (request.POST.get('dept_id') or '').strip()
             if did:
                 try:
                     from apps.organization.models import Department
                     folder.department = Department.objects.get(id=did)
-                except Exception: pass
+                except Exception:
+                    folder.visibility = 'private'
+            else:
+                folder.visibility = 'private'
+
         folder.save()
-        messages.success(request, f'Sharing updated for "{folder.name}".')
+
+        if folder.visibility == 'private':
+            messages.success(request, f'Sharing stopped for "{folder.name}".')
+        else:
+            messages.success(request, f'Sharing updated for "{folder.name}".')
+
+        # Notify users when folder scope changes
+        try:
+            from apps.core.models import User
+            recipients = User.objects.none()
+
+            changed = (
+                previous_visibility != folder.visibility or
+                previous_unit_id != folder.unit_id or
+                previous_department_id != folder.department_id
+            )
+
+            if changed:
+                if folder.visibility == 'unit' and folder.unit_id:
+                    recipients = User.objects.filter(
+                        is_active=True,
+                        staffprofile__unit_id=folder.unit_id
+                    ).exclude(id=request.user.id).distinct()
+
+                elif folder.visibility == 'department' and folder.department_id:
+                    recipients = User.objects.filter(
+                        is_active=True,
+                        staffprofile__department_id=folder.department_id
+                    ).exclude(id=request.user.id).distinct()
+
+                elif folder.visibility == 'office':
+                    recipients = User.objects.filter(
+                        is_active=True
+                    ).exclude(id=request.user.id).distinct()
+
+                for recipient in recipients:
+                    _notify(
+                        recipient,
+                        'file_shared',
+                        title=f'{request.user.full_name} shared a folder with you',
+                        body=f'Folder "{folder.name}" is now available to you.',
+                        link='/files/',
+                        sender=request.user,
+                    )
+                    try:
+                        send_mail(
+                            subject=f'[EasyOffice] {request.user.full_name} shared folder "{folder.name}" with you',
+                            message=(
+                                f'Hello {recipient.full_name},\n\n'
+                                f'{request.user.full_name} has shared the folder "{folder.name}" with you.\n\n'
+                                f'Open EasyOffice Files to access it.\n\n'
+                                f'— EasyOffice'
+                            ),
+                            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
+                            recipient_list=[recipient.email],
+                            fail_silently=True,
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
         next_url = request.POST.get('next', '')
         return redirect(next_url if next_url.startswith('/') else 'file_manager')
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PDF Conversion

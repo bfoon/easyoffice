@@ -3083,8 +3083,102 @@ class QuickSignView(LoginRequiredMixin, View):
             except Exception:
                 pass
 
-            messages.success(request, f'Signed copy saved as "{signed_name}".')
-            return redirect('file_manager')
+            from django.http import HttpResponse
+            file_manager_url = '/files/'
+            html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8"/>
+  <title>Document Signed</title>
+  <meta http-equiv="refresh" content="2;url={file_manager_url}"/>
+  <style>
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--eo-bg, #f1f5f9);
+      font-family: 'Outfit', 'Segoe UI', sans-serif;
+    }}
+    .card {{
+      background: #fff;
+      border-radius: 20px;
+      padding: 52px 56px;
+      text-align: center;
+      box-shadow: 0 8px 40px rgba(0,0,0,.10);
+      max-width: 420px;
+      width: 92vw;
+      animation: pop .35s cubic-bezier(.34,1.56,.64,1) both;
+    }}
+    @keyframes pop {{
+      from {{ opacity:0; transform:scale(.88) translateY(16px); }}
+      to   {{ opacity:1; transform:scale(1)   translateY(0);    }}
+    }}
+    .check-circle {{
+      width: 80px; height: 80px;
+      border-radius: 50%;
+      background: linear-gradient(135deg,#d1fae5,#6ee7b7);
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 24px;
+      font-size: 2.2rem;
+    }}
+    h1 {{ font-size: 1.45rem; font-weight: 800; color: #064e3b; margin-bottom: 10px; }}
+    .filename {{
+      font-size: .88rem; color: #475569; margin-bottom: 28px;
+      background: #f8fafc; border-radius: 8px; padding: 8px 14px;
+      font-weight: 600; word-break: break-all;
+    }}
+    .redirect-msg {{
+      font-size: .82rem; color: #94a3b8; margin-top: 10px;
+    }}
+    .bar-wrap {{
+      height: 4px; background: #e2e8f0; border-radius: 99px;
+      margin: 18px 0 0; overflow: hidden;
+    }}
+    .bar {{
+      height: 100%;
+      background: linear-gradient(90deg,#10b981,#34d399);
+      border-radius: 99px;
+      width: 100%;
+      animation: shrink 2s linear forwards;
+    }}
+    @keyframes shrink {{ from {{ width:100%; }} to {{ width:0%; }} }}
+    a.btn {{
+      display: inline-block; margin-top: 20px;
+      padding: 10px 24px;
+      background: #10b981; color: #fff;
+      border-radius: 10px; text-decoration: none;
+      font-weight: 700; font-size: .88rem;
+      transition: background .15s;
+    }}
+    a.btn:hover {{ background: #059669; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="check-circle">✅</div>
+    <h1>Document Signed!</h1>
+    <div class="filename">📄 {signed_name}</div>
+    <div class="redirect-msg">Taking you to File Manager in <span id="cnt">2</span>s…</div>
+    <div class="bar-wrap"><div class="bar"></div></div>
+    <a href="{file_manager_url}" class="btn">Go to Files now →</a>
+  </div>
+  <script>
+    var t = 2;
+    var el = document.getElementById('cnt');
+    var iv = setInterval(function() {{
+      t--;
+      if (el) el.textContent = t;
+      if (t <= 0) {{
+        clearInterval(iv);
+        window.location.href = '{file_manager_url}';
+      }}
+    }}, 1000);
+  </script>
+</body>
+</html>"""
+            return HttpResponse(html)
 
         except Exception as e:
             messages.error(request, f'Signing failed: {e}')

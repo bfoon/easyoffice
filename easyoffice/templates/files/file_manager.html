@@ -207,6 +207,27 @@
   display: flex;
   gap: 3px;
 }
+
+/* ── Shared indicator ── */
+.shared-active {
+  background: #16a34a !important;
+  color: #fff !important;
+  border-color: #16a34a !important;
+}
+.shared-active:hover {
+  background: #15803d !important;
+  border-color: #15803d !important;
+}
+
+.shared-active-list {
+  background: #16a34a !important;
+  color: #fff !important;
+  border-color: #16a34a !important;
+}
+.shared-active-list:hover {
+  background: #15803d !important;
+  border-color: #15803d !important;
+}
 /* Mouse devices: show on hover */
 .fm-folder-card:hover .fm-card-actions,
 .fm-file-card:hover .fm-card-actions { opacity: 1; }
@@ -515,6 +536,10 @@
          class="fm-nav-item {% if filter_mode == 'recent' %}active{% endif %}">
         <i class="bi bi-clock-history"></i> Recent
       </a>
+      <a href="{% url 'recycle_bin' %}"
+         class="fm-nav-item {% if request.resolver_match.url_name == 'recycle_bin' %}active{% endif %}">
+        <i class="bi bi-trash3"></i> Recycle Bin
+      </a>
     </div>
 
     <!-- Signatures -->
@@ -653,6 +678,9 @@
         <button class="eo-btn eo-btn-secondary eo-btn-sm" onclick="openModal('newFolderModal')">
           <i class="bi bi-folder-plus"></i> New Folder
         </button>
+        <a href="{% url 'recycle_bin' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-trash3"></i> Bin
+        </a>
         <button class="eo-btn eo-btn-primary eo-btn-sm" onclick="openModal('uploadModal')">
           <i class="bi bi-cloud-upload"></i> Upload
         </button>
@@ -734,7 +762,7 @@
           <div style="position:relative">
             <a href="?folder={{ folder.id }}" class="fm-folder-card" style="border-left:4px solid {{ folder.color }}">
               <i class="bi bi-folder-fill fm-card-icon" style="color:{{ folder.color }}"></i>
-              <div class="fm-card-name">{{ folder.name }}</div>
+              <div class="fm-card-name">{{ folder.name|truncatechars:40 }}</div>
               <div class="fm-card-meta">
                 <i class="bi bi-file2"></i>
                 {{ folder.file_count }} file{{ folder.file_count|pluralize }}
@@ -743,11 +771,13 @@
               </div>
             </a>
             <div class="fm-card-actions">
-              {% if folder.owner == request.user %}
-              <button class="fm-action-btn {% if file.visibility != 'private' %}shared-active{% endif %}" title="Share"
-                      onclick="event.preventDefault();openShareModal('{{ folder.id }}','{{ folder.name|escapejs }}','{{ folder.visibility }}','folder')">
+              {% if folder.user_permission == 'edit' or folder.user_permission == 'full' %}
+              <button class="fm-action-btn {% if folder.visibility != 'private' %}shared-active{% endif %}" title="Share"
+                      onclick="event.preventDefault();openShareModal('{{ folder.id }}','{{ folder.name|escapejs }}','{{ folder.visibility }}','folder',[],[],[],{},'{{ folder.user_permission }}')">
                 <i class="bi bi-share"></i>
               </button>
+              {% endif %}
+              {% if folder.user_permission == 'full' %}
               <form method="post" action="{% url 'folder_delete' folder.id %}" style="display:inline"
                     onsubmit="return confirm('Delete folder {{ folder.name|escapejs }}? Files inside will be moved to root.')">
                 {% csrf_token %}
@@ -771,7 +801,7 @@
             <a href="{% url 'file_download' file.pk %}" class="fm-file-card" title="{{ file.name }}">
               <span class="fm-vis-badge vis-{{ file.visibility }}">{{ file.get_visibility_display }}</span>
               <i class="bi {{ file.icon_class }} fm-card-icon" style="color:{{ file.icon_color }};margin-top:18px"></i>
-              <div class="fm-card-name">{{ file.name }}</div>
+              <div class="fm-card-name">{{ file.name|truncatechars:40 }}</div>
               <div class="fm-card-meta">
                 {{ file.size_display }}
                 {% if file.download_count %}· <i class="bi bi-download" style="font-size:.65rem"></i> {{ file.download_count }}{% endif %}
@@ -781,18 +811,23 @@
               </div>
             </a>
             <div class="fm-card-actions">
+              {# Download — always visible to anyone who can see the file #}
               <a href="{% url 'file_download' file.pk %}" class="fm-action-btn" title="Download">
                 <i class="bi bi-download"></i>
               </a>
-              {% if file.uploaded_by == request.user %}
-              <button class="fm-action-btn {% if folder.visibility != 'private' %}shared-active{% endif %}" title="Share"
-                      onclick="event.preventDefault();openShareModal('{{ file.id }}','{{ file.name|escapejs }}','{{ file.visibility }}')">
+              {% if file.user_permission == 'edit' or file.user_permission == 'full' %}
+              {# ── edit + full: share, move, history, convert, signature ── #}
+              <button class="fm-action-btn {% if file.visibility != 'private' %}shared-active{% endif %}" title="Share"
+                      onclick="event.preventDefault();openShareModal('{{ file.id }}','{{ file.name|escapejs }}','{{ file.visibility }}','file',{{ file.shared_user_ids|default:'[]' }},'','',{{ file.share_access_data|default:'{}' }},'{{ file.user_permission }}')">
                 <i class="bi bi-share"></i>
               </button>
               <button class="fm-action-btn" title="Move to folder"
                       onclick="event.preventDefault();openMoveModal('{{ file.id }}','{{ file.name|escapejs }}')">
                 <i class="bi bi-folder-symlink"></i>
               </button>
+              <a href="{% url 'file_history' file.pk %}" class="fm-action-btn" title="History">
+                <i class="bi bi-clock-history"></i>
+              </a>
               {% if file.is_convertible %}
               <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="display:inline">
                 {% csrf_token %}
@@ -806,6 +841,9 @@
                  class="fm-action-btn" title="Send for Signature" style="color:#8b5cf6">
                 <i class="bi bi-pen"></i>
               </a>
+              {% endif %}
+              {% if file.user_permission == 'full' %}
+              {# ── full only: delete ── #}
               <form method="post" action="{% url 'file_delete' file.pk %}" style="display:inline"
                     onsubmit="return confirm('Delete {{ file.name|escapejs }}? This cannot be undone.')">
                 {% csrf_token %}
@@ -845,7 +883,7 @@
                   <a href="?folder={{ folder.id }}" style="display:flex;align-items:center;gap:10px;text-decoration:none">
                     <i class="bi bi-folder-fill" style="font-size:1.2rem;color:{{ folder.color }};flex-shrink:0"></i>
                     <div>
-                      <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">{{ folder.name }}</div>
+                      <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">{{ folder.name|truncatechars:40 }}</div>
                       <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ folder.file_count }} file{{ folder.file_count|pluralize }}</div>
                     </div>
                   </a>
@@ -859,15 +897,18 @@
                 <td style="font-size:.8rem;color:var(--eo-text-muted)">{{ folder.created_at|date:"N j, Y" }}</td>
                 <td>—</td>
                 <td>
-                  {% if folder.owner == request.user %}
-                  <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon {% if file.visibility != 'private' %}shared-active-list{% endif %}" title="Share"
-                          onclick="openShareModal('{{ folder.id }}','{{ folder.name|escapejs }}','{{ folder.visibility }}','folder')">
+                  {% if folder.user_permission == 'edit' or folder.user_permission == 'full' %}
+                  <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon {% if folder.visibility != 'private' %}shared-active-list{% endif %}" title="Share"
+                          onclick="openShareModal('{{ folder.id }}','{{ folder.name|escapejs }}','{{ folder.visibility }}','folder',[],[],[],{},'{{ folder.user_permission }}')">
                     <i class="bi bi-share"></i>
                   </button>
+                  {% endif %}
+                  {% if folder.user_permission == 'full' %}
                   <form method="post" action="{% url 'folder_delete' folder.id %}" style="display:inline"
                         onsubmit="return confirm('Delete folder?')">
                     {% csrf_token %}
-                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" type="submit" title="Delete">
+                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" type="submit" title="Delete"
+                            style="color:var(--eo-danger);border-color:var(--eo-danger)">
                       <i class="bi bi-trash"></i>
                     </button>
                   </form>
@@ -882,7 +923,7 @@
                   <a href="{% url 'file_download' file.pk %}" style="display:flex;align-items:center;gap:10px;text-decoration:none">
                     <i class="bi {{ file.icon_class }}" style="font-size:1.3rem;color:{{ file.icon_color }};flex-shrink:0"></i>
                     <div>
-                      <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">{{ file.name }}</div>
+                      <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">{{ file.name|truncatechars:40 }}</div>
                       {% if file.description %}
                       <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ file.description|truncatechars:40 }}</div>
                       {% endif %}
@@ -912,22 +953,28 @@
                 <td style="font-size:.82rem;color:var(--eo-text-muted);text-align:center">{{ file.download_count }}</td>
                 <td>
                   <div style="display:flex;gap:5px;justify-content:flex-end">
-                     <button class="fm-action-btn" title="Preview"
-                            onclick="event.preventDefault(); openPreviewModal('{{ file.id }}', '{{ file.name|escapejs }}', '{{ file.extension|default:'' }}')">
+                    {# Preview — always #}
+                    <button class="fm-action-btn" title="Preview"
+                           onclick="event.preventDefault(); openPreviewModal('{{ file.id }}', '{{ file.name|escapejs }}', '{{ file.extension|default:'' }}')">
                       <i class="bi bi-eye"></i>
                     </button>
+                    {# Download — always #}
                     <a href="{% url 'file_download' file.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Download">
                       <i class="bi bi-download"></i>
                     </a>
-                    {% if file.uploaded_by == request.user %}
-                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon {% if folder.visibility != 'private' %}shared-active-list{% endif %}" title="Share"
-                            onclick="openShareModal('{{ file.id }}','{{ file.name|escapejs }}','{{ file.visibility }}')">
+                    {% if file.user_permission == 'edit' or file.user_permission == 'full' %}
+                    {# ── edit + full ── #}
+                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon {% if file.visibility != 'private' %}shared-active-list{% endif %}" title="Share"
+                            onclick="openShareModal('{{ file.id }}','{{ file.name|escapejs }}','{{ file.visibility }}','file',{{ file.shared_user_ids|default:'[]' }},'','',{{ file.share_access_data|default:'{}' }},'{{ file.user_permission }}')">
                       <i class="bi bi-share"></i>
                     </button>
                     <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Move to folder"
                             onclick="openMoveModal('{{ file.id }}','{{ file.name|escapejs }}')">
                       <i class="bi bi-folder-symlink"></i>
                     </button>
+                    <a href="{% url 'file_history' file.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="History">
+                      <i class="bi bi-clock-history"></i>
+                    </a>
                     {% if file.is_convertible %}
                     <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="display:inline">
                       {% csrf_token %}
@@ -943,6 +990,9 @@
                        style="color:#8b5cf6;border-color:#8b5cf630" title="Send for Signature">
                       <i class="bi bi-pen"></i>
                     </a>
+                    {% endif %}
+                    {% if file.user_permission == 'full' %}
+                    {# ── full only: delete ── #}
                     <form method="post" action="{% url 'file_delete' file.pk %}" style="display:inline"
                           onsubmit="return confirm('Delete {{ file.name|escapejs }}?')">
                       {% csrf_token %}
@@ -1188,11 +1238,11 @@
   </div>
 </div>
 
-<!-- ══════════════════════════════════
+<<!-- ══════════════════════════════════
      SHARE MODAL
 ══════════════════════════════════ -->
 <div class="fm-modal-backdrop" id="shareModal">
-  <div class="fm-modal" style="width:560px">
+  <div class="fm-modal" style="width:640px">
     <div class="fm-modal-head">
       <div>
         <div style="font-size:1rem;font-weight:700;color:var(--eo-text)" id="shareModalTitle">Share Item</div>
@@ -1208,6 +1258,21 @@
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
         <input type="hidden" id="shareItemType" value="file"/>
+
+        <!-- ── Your Permission banner (populated by JS) ── -->
+        <div id="yourPermBanner" style="display:none;align-items:center;gap:10px;
+             padding:10px 14px;border-radius:10px;margin-bottom:14px;
+             border:1px solid var(--eo-border);background:var(--eo-bg)">
+          <div id="yourPermIcon" style="width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <i class="bi bi-shield-check" style="font-size:1rem"></i>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.78rem;font-weight:700;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:1px">Your Permission</div>
+            <div id="yourPermLabel" style="font-size:.9rem;font-weight:700;color:var(--eo-text)"></div>
+            <div id="yourPermDesc"  style="font-size:.74rem;color:var(--eo-text-muted);margin-top:1px"></div>
+          </div>
+          <span id="yourPermBadge" style="font-size:.72rem;font-weight:700;padding:3px 10px;border-radius:12px;flex-shrink:0"></span>
+        </div>
 
         <div class="eo-form-group">
           <label class="eo-form-label" id="shareModalQuestion">Who can access this file?</label>
@@ -1226,7 +1291,7 @@
               </div>
             </label>
 
-            <!-- Specific people (files only) -->
+            <!-- Specific people -->
             <label class="vis-opt" id="opt-shared_with"
                    style="display:flex;align-items:flex-start;gap:12px;padding:12px;border:2px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .15s">
               <input type="radio" name="visibility" value="shared_with" style="margin-top:3px;flex-shrink:0" onchange="onVisChange(this)"/>
@@ -1234,7 +1299,9 @@
                 <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">
                   <i class="bi bi-people me-1"></i> Specific People
                 </div>
-                <div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:8px">Choose individual staff members</div>
+                <div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:8px">
+                  Choose individual staff members and assign permission
+                </div>
 
                 <div id="peoplePicker" style="display:none">
                   <div style="position:relative;margin-bottom:8px">
@@ -1244,27 +1311,55 @@
                            oninput="filterPeople(this.value)"/>
                   </div>
 
-                  <div style="max-height:180px;overflow-y:auto;border:1px solid var(--eo-border);border-radius:8px" id="peopleList">
+                  <div style="font-size:.72rem;color:var(--eo-text-muted);margin-bottom:6px">
+                    Select users and set their permission level
+                  </div>
+
+                  <div style="max-height:260px;overflow-y:auto;border:1px solid var(--eo-border);border-radius:8px" id="peopleList">
                     {% for staff in all_staff %}
-                    <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;transition:background .1s"
-                           onmouseover="this.style.background='var(--eo-bg)'"
-                           onmouseout="this.style.background=''"
-                           data-name="{{ staff.full_name|lower }}">
-                      <input type="checkbox" name="shared_with" value="{{ staff.id }}" style="flex-shrink:0" onchange="countSelected()"/>
-                      {% if staff.avatar %}
-                      <img src="{{ staff.avatar.url }}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0"/>
-                      {% else %}
-                      <div style="width:28px;height:28px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.65rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">
-                        {{ staff.initials }}
-                      </div>
-                      {% endif %}
-                      <div style="min-width:0">
-                        <div style="font-size:.84rem;font-weight:600;color:var(--eo-text)">{{ staff.full_name }}</div>
-                        {% if staff.staffprofile.position %}
-                        <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ staff.staffprofile.position.title }}</div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:1px solid var(--eo-border)"
+                         data-name="{{ staff.full_name|lower }} {{ staff.email|default:''|lower }}">
+
+                      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;flex:1;min-width:0;margin:0">
+                        <input type="checkbox"
+                               name="shared_with"
+                               value="{{ staff.id }}"
+                               style="flex-shrink:0"
+                               onchange="countSelected();togglePermission(this, '{{ staff.id }}')"/>
+
+                        {% if staff.avatar %}
+                        <img src="{{ staff.avatar.url }}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0"/>
+                        {% else %}
+                        <div style="width:28px;height:28px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.65rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                          {{ staff.initials }}
+                        </div>
                         {% endif %}
-                      </div>
-                    </label>
+
+                        <div style="min-width:0">
+                          <div style="font-size:.84rem;font-weight:600;color:var(--eo-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                            {{ staff.full_name }}
+                          </div>
+                          <div style="font-size:.72rem;color:var(--eo-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                            {% if staff.staffprofile.position %}
+                              {{ staff.staffprofile.position.title }}
+                            {% elif staff.email %}
+                              {{ staff.email }}
+                            {% else %}
+                              Staff Member
+                            {% endif %}
+                          </div>
+                        </div>
+                      </label>
+
+                      <select name="perm_{{ staff.id }}"
+                              id="perm_{{ staff.id }}"
+                              disabled
+                              style="min-width:96px;border:1px solid var(--eo-border);border-radius:6px;padding:5px 8px;font-size:.75rem;background:var(--eo-bg);color:var(--eo-text)">
+                        <option value="view">View</option>
+                        <option value="edit">Edit</option>
+                        <option value="full">Full</option>
+                      </select>
+                    </div>
                     {% empty %}
                     <div style="padding:16px;text-align:center;font-size:.82rem;color:var(--eo-text-muted)">No staff available</div>
                     {% endfor %}
@@ -1272,6 +1367,13 @@
 
                   <div style="margin-top:6px;font-size:.72rem;color:var(--eo-text-muted)">
                     <span id="selectedCount">0</span> person(s) selected
+                  </div>
+
+                  <div style="margin-top:8px;padding:10px 12px;background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:8px;font-size:.72rem;color:var(--eo-text-muted);line-height:1.5">
+                    <strong style="color:var(--eo-text)">Permission guide:</strong><br>
+                    <strong>View</strong> — can open, preview and download<br>
+                    <strong>Edit</strong> — can update and manage, but cannot delete<br>
+                    <strong>Full</strong> — full control including delete
                   </div>
                 </div>
               </div>
@@ -1584,10 +1686,19 @@ function toggleNewFolderScope() {
 toggleNewFolderScope();
 
 /* ─────────────────────────────────────────────
-   Share modal
+   Share modal + permissions
 ───────────────────────────────────────────── */
 function getShareType() {
   return $('shareItemType') ? $('shareItemType').value || 'file' : 'file';
+}
+
+function togglePermission(checkbox, userId) {
+  const select = $('perm_' + userId);
+  if (!select) return;
+  select.disabled = !checkbox.checked;
+  if (checkbox.checked && !select.value) {
+    select.value = 'view';
+  }
 }
 
 function showSubPickers(vis) {
@@ -1598,16 +1709,16 @@ function showSubPickers(vis) {
   if ($('deptPicker')) $('deptPicker').style.display = vis === 'department' ? '' : 'none';
 }
 
-function filterPeople(q) {
-  q = (q || '').toLowerCase();
-  document.querySelectorAll('#peopleList label[data-name]').forEach(function(el) {
-    el.style.display = el.dataset.name.indexOf(q) !== -1 ? '' : 'none';
+function filterPeople(query) {
+  query = (query || '').toLowerCase();
+  document.querySelectorAll('#peopleList [data-name]').forEach(function(row) {
+    row.style.display = row.dataset.name.indexOf(query) !== -1 ? '' : 'none';
   });
 }
 
 function countSelected() {
-  var n = document.querySelectorAll('#peopleList input[type="checkbox"]:checked').length;
-  if ($('selectedCount')) $('selectedCount').textContent = n;
+  var checked = document.querySelectorAll('#peopleList input[type="checkbox"]:checked');
+  if ($('selectedCount')) $('selectedCount').textContent = checked.length;
 }
 
 function updateStopSharingButton(vis) {
@@ -1629,7 +1740,7 @@ function onVisChange(radio) {
 }
 
 function stopSharingNow() {
-  var privateRadio = document.querySelector('input[name="visibility"][value="private"]');
+  var privateRadio = document.querySelector('#shareForm input[name="visibility"][value="private"]');
   if (privateRadio) {
     privateRadio.checked = true;
     onVisChange(privateRadio);
@@ -1637,6 +1748,11 @@ function stopSharingNow() {
 
   document.querySelectorAll('#peopleList input[type="checkbox"]').forEach(function(cb) {
     cb.checked = false;
+  });
+
+  document.querySelectorAll('#peopleList select[id^="perm_"]').forEach(function(sel) {
+    sel.disabled = true;
+    sel.value = 'view';
   });
 
   var unitSelect = document.querySelector('#unitPicker select[name="unit_id"]');
@@ -1648,11 +1764,13 @@ function stopSharingNow() {
   countSelected();
 }
 
-function openShareModal(id, name, currentVisibility, type, sharedIds, unitId, deptId) {
+function openShareModal(id, name, currentVisibility, type, sharedIds, unitId, deptId, permissions, viewerPermission) {
   type = type || 'file';
-  sharedIds = sharedIds || [];
+  sharedIds = Array.isArray(sharedIds) ? sharedIds : [];
   unitId = unitId || '';
   deptId = deptId || '';
+  permissions = permissions || {};
+  viewerPermission = viewerPermission || '';
 
   var isFolder = type === 'folder';
   var formAction = isFolder ? ('/files/folder/' + id + '/share/') : ('/files/' + id + '/share/');
@@ -1661,47 +1779,117 @@ function openShareModal(id, name, currentVisibility, type, sharedIds, unitId, de
   if ($('shareItemType')) $('shareItemType').value = type;
   if ($('shareModalFileName')) $('shareModalFileName').textContent = name;
   if ($('shareModalTitle')) $('shareModalTitle').textContent = isFolder ? 'Share Folder' : 'Share File';
-  if ($('shareModalQuestion')) $('shareModalQuestion').textContent = isFolder
-    ? 'Who can access this folder?'
-    : 'Who can access this file?';
+  if ($('shareModalQuestion')) {
+    $('shareModalQuestion').textContent = isFolder
+      ? 'Who can access this folder?'
+      : 'Who can access this file?';
+  }
+
+  // ── Your Permission banner ──────────────────────────────────────────────
+  var banner = $('yourPermBanner');
+  if (banner && viewerPermission) {
+    var permMeta = {
+      'full': {
+        label: 'Full Control',
+        desc:  'You can share, edit, manage, and delete this item.',
+        color: '#10b981',
+        bg:    '#d1fae5',
+        icon:  'bi-shield-fill-check',
+      },
+      'edit': {
+        label: 'Edit Access',
+        desc:  'You can share, move, convert and manage — but not delete.',
+        color: '#3b82f6',
+        bg:    '#dbeafe',
+        icon:  'bi-pencil-fill',
+      },
+      'view': {
+        label: 'View Only',
+        desc:  'You can preview and download this item.',
+        color: '#64748b',
+        bg:    '#f1f5f9',
+        icon:  'bi-eye-fill',
+      },
+    };
+    var meta = permMeta[viewerPermission] || permMeta['view'];
+    banner.style.display = 'flex';
+    banner.style.borderColor = meta.color + '40';
+    banner.style.background  = meta.bg + '60';
+
+    var iconWrap = $('yourPermIcon');
+    if (iconWrap) {
+      iconWrap.style.background = meta.color + '18';
+      iconWrap.innerHTML = '<i class="bi ' + meta.icon + '" style="font-size:1rem;color:' + meta.color + '"></i>';
+    }
+    if ($('yourPermLabel')) { $('yourPermLabel').textContent = meta.label; $('yourPermLabel').style.color = meta.color; }
+    if ($('yourPermDesc'))  $('yourPermDesc').textContent  = meta.desc;
+    var badge = $('yourPermBadge');
+    if (badge) {
+      badge.textContent = viewerPermission.charAt(0).toUpperCase() + viewerPermission.slice(1);
+      badge.style.background = meta.color + '18';
+      badge.style.color      = meta.color;
+    }
+  } else if (banner) {
+    banner.style.display = 'none';
+  }
+  // ───────────────────────────────────────────────────────────────────────
 
   var sharedWithOpt = $('opt-shared_with');
-  if (sharedWithOpt) sharedWithOpt.style.display = isFolder ? 'none' : '';
+  if (sharedWithOpt) {
+    sharedWithOpt.style.display = isFolder ? 'none' : '';
+  }
 
-  document.querySelectorAll('.vis-opt').forEach(function(el) {
+  // Reset radio styles
+  document.querySelectorAll('#shareForm .vis-opt').forEach(function(el) {
     el.style.borderColor = 'var(--eo-border)';
   });
 
-  var effectiveVisibility = (isFolder && currentVisibility === 'shared_with') ? 'private' : currentVisibility;
-  var radio = document.querySelector('input[name="visibility"][value="' + effectiveVisibility + '"]');
-
-  if (radio) {
-    radio.checked = true;
-    if (radio.closest('.vis-opt')) {
-      radio.closest('.vis-opt').style.borderColor = 'var(--eo-accent)';
-    }
-  } else {
-    var privateRadio = document.querySelector('input[name="visibility"][value="private"]');
-    if (privateRadio) {
-      privateRadio.checked = true;
-      if (privateRadio.closest('.vis-opt')) {
-        privateRadio.closest('.vis-opt').style.borderColor = 'var(--eo-accent)';
-      }
-      effectiveVisibility = 'private';
-    }
-  }
-
-  document.querySelectorAll('#peopleList input[type="checkbox"]').forEach(function(cb) {
-    cb.checked = sharedIds.indexOf(cb.value) !== -1;
+  // Reset radios
+  document.querySelectorAll('#shareForm input[name="visibility"]').forEach(function(r) {
+    r.checked = false;
   });
 
+  // Reset people checkboxes + permission selects
+  document.querySelectorAll('#peopleList input[type="checkbox"]').forEach(function(cb) {
+    cb.checked = false;
+  });
+
+  document.querySelectorAll('#peopleList select[id^="perm_"]').forEach(function(sel) {
+    sel.disabled = true;
+    sel.value = 'view';
+  });
+
+  // Restore direct shares and permissions
+  sharedIds.forEach(function(userId) {
+    var cb = document.querySelector('#peopleList input[type="checkbox"][value="' + userId + '"]');
+    if (cb) {
+      cb.checked = true;
+      togglePermission(cb, userId);
+
+      var permSelect = $('perm_' + userId);
+      if (permSelect && permissions[userId]) {
+        permSelect.value = permissions[userId];
+      }
+    }
+  });
+
+  // Restore unit / department
   var unitSelect = document.querySelector('#unitPicker select[name="unit_id"]');
   if (unitSelect) unitSelect.value = unitId;
 
   var deptSelect = document.querySelector('#deptPicker select[name="dept_id"]');
   if (deptSelect) deptSelect.value = deptId;
 
-  showSubPickers(effectiveVisibility);
+  // Restore visibility
+  var effectiveVisibility = (isFolder && currentVisibility === 'shared_with') ? 'private' : currentVisibility;
+  var targetRadio = document.querySelector('#shareForm input[name="visibility"][value="' + effectiveVisibility + '"]')
+                  || document.querySelector('#shareForm input[name="visibility"][value="private"]');
+
+  if (targetRadio) {
+    targetRadio.checked = true;
+    onVisChange(targetRadio);
+  }
+
   countSelected();
   updateStopSharingButton(effectiveVisibility);
   openModal('shareModal');

@@ -1,0 +1,444 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}File History{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'file_manager' %}">File Manager</a> /
+<span>File History</span>
+{% endblock %}
+
+{% block content %}
+<style>
+.fh-wrap {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) 1fr;
+  gap: 18px;
+}
+
+.fh-card {
+  background: var(--eo-surface);
+  border: 1px solid var(--eo-border);
+  border-radius: var(--eo-radius);
+  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.05);
+}
+
+.fh-card-head {
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--eo-border);
+}
+
+.fh-card-body {
+  padding: 16px 18px;
+}
+
+.fh-file-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.fh-file-icon {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+  background: var(--eo-bg);
+  border: 1px solid var(--eo-border);
+  flex-shrink: 0;
+}
+
+.fh-file-name {
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--eo-text);
+  word-break: break-word;
+  line-height: 1.35;
+}
+
+.fh-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.fh-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 700;
+  background: var(--eo-bg);
+  border: 1px solid var(--eo-border);
+  color: var(--eo-text-muted);
+}
+
+.fh-kv {
+  display: grid;
+  gap: 12px;
+}
+
+.fh-kv-row {
+  display: grid;
+  gap: 3px;
+}
+
+.fh-kv-label {
+  font-size: .7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--eo-text-muted);
+}
+
+.fh-kv-value {
+  font-size: .86rem;
+  color: var(--eo-text);
+  word-break: break-word;
+}
+
+.fh-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fh-entry {
+  position: relative;
+  display: grid;
+  grid-template-columns: 38px 1fr;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--eo-border);
+  border-radius: 12px;
+  background: var(--eo-surface);
+}
+
+.fh-entry:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 32px;
+  top: calc(100% + 2px);
+  width: 2px;
+  height: 10px;
+  background: var(--eo-border);
+}
+
+.fh-entry-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: .9rem;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.fh-entry-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.fh-entry-title strong {
+  font-size: .88rem;
+  color: var(--eo-text);
+}
+
+.fh-entry-time {
+  font-size: .74rem;
+  color: var(--eo-text-muted);
+  white-space: nowrap;
+}
+
+.fh-entry-sub {
+  margin-top: 4px;
+  font-size: .78rem;
+  color: var(--eo-text-muted);
+}
+
+.fh-entry-notes {
+  margin-top: 8px;
+  font-size: .82rem;
+  color: var(--eo-text);
+  background: var(--eo-bg);
+  border: 1px solid var(--eo-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.fh-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .01em;
+}
+
+.fh-badge-created { background: #dcfce7; color: #166534; }
+.fh-badge-updated { background: #dbeafe; color: #1d4ed8; }
+.fh-badge-renamed { background: #fef3c7; color: #92400e; }
+.fh-badge-moved { background: #ede9fe; color: #6d28d9; }
+.fh-badge-shared { background: #cffafe; color: #0f766e; }
+.fh-badge-permission_changed { background: #fae8ff; color: #a21caf; }
+.fh-badge-downloaded { background: #e0f2fe; color: #0369a1; }
+.fh-badge-restored { background: #dcfce7; color: #166534; }
+.fh-badge-deleted { background: #fee2e2; color: #991b1b; }
+.fh-badge-versioned { background: #f1f5f9; color: #475569; }
+
+.fh-empty {
+  padding: 56px 24px;
+  text-align: center;
+  color: var(--eo-text-muted);
+}
+
+.fh-empty i {
+  font-size: 2.8rem;
+  display: block;
+  margin-bottom: 10px;
+  opacity: .4;
+}
+
+@media (max-width: 900px) {
+  .fh-wrap {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">File History</h1>
+    <p class="eo-page-subtitle">Track activity and changes for this file</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-arrow-left"></i> Back to Files
+    </a>
+    <a href="{% url 'file_download' file_obj.pk %}" class="eo-btn eo-btn-primary">
+      <i class="bi bi-download"></i> Download
+    </a>
+  </div>
+</div>
+
+<div class="fh-wrap">
+
+  <!-- Left summary -->
+  <div class="fh-card">
+    <div class="fh-card-head">
+      <div class="fh-file-top">
+        <div class="fh-file-icon">
+          <i class="bi {{ file_obj.icon_class|default:'bi-file-earmark' }}" style="color:{{ file_obj.icon_color|default:'#64748b' }}"></i>
+        </div>
+        <div style="min-width:0">
+          <div class="fh-file-name">{{ file_obj.name }}</div>
+          <div class="fh-meta">
+            <span class="fh-chip">
+              <i class="bi bi-shield-lock"></i>
+              {{ file_obj.get_visibility_display|default:file_obj.visibility|capfirst }}
+            </span>
+            {% if file_obj.size_display %}
+            <span class="fh-chip">
+              <i class="bi bi-hdd"></i>
+              {{ file_obj.size_display }}
+            </span>
+            {% elif file_obj.file_size %}
+            <span class="fh-chip">
+              <i class="bi bi-hdd"></i>
+              {{ file_obj.file_size|filesizeformat }}
+            </span>
+            {% endif %}
+            <span class="fh-chip">
+              <i class="bi bi-download"></i>
+              {{ file_obj.download_count|default:0 }} download{{ file_obj.download_count|pluralize }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="fh-card-body">
+      <div class="fh-kv">
+        <div class="fh-kv-row">
+          <div class="fh-kv-label">Uploaded By</div>
+          <div class="fh-kv-value">
+            {{ file_obj.uploaded_by.full_name|default:file_obj.uploaded_by }}
+          </div>
+        </div>
+
+        <div class="fh-kv-row">
+          <div class="fh-kv-label">Created</div>
+          <div class="fh-kv-value">{{ file_obj.created_at|date:"F j, Y, g:i a" }}</div>
+        </div>
+
+        <div class="fh-kv-row">
+          <div class="fh-kv-label">Folder</div>
+          <div class="fh-kv-value">
+            {% if file_obj.folder %}
+              {{ file_obj.folder.name }}
+            {% else %}
+              My Drive
+            {% endif %}
+          </div>
+        </div>
+
+        {% if file_obj.description %}
+        <div class="fh-kv-row">
+          <div class="fh-kv-label">Description</div>
+          <div class="fh-kv-value">{{ file_obj.description }}</div>
+        </div>
+        {% endif %}
+
+        {% if file_obj.tags %}
+        <div class="fh-kv-row">
+          <div class="fh-kv-label">Tags</div>
+          <div class="fh-kv-value">{{ file_obj.tags }}</div>
+        </div>
+        {% endif %}
+
+        {% if file_obj.file_hash %}
+        <div class="fh-kv-row">
+          <div class="fh-kv-label">File Hash</div>
+          <div class="fh-kv-value" style="font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;font-size:.78rem">
+            {{ file_obj.file_hash }}
+          </div>
+        </div>
+        {% endif %}
+
+        <div class="fh-kv-row">
+          <div class="fh-kv-label">History Entries</div>
+          <div class="fh-kv-value">{{ history_rows|length }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right timeline -->
+  <div class="fh-card">
+    <div class="fh-card-head">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:1rem;font-weight:800;color:var(--eo-text)">Activity Timeline</div>
+          <div style="font-size:.8rem;color:var(--eo-text-muted)">Newest activity first</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="fh-card-body">
+      {% if history_rows %}
+        <div class="fh-list">
+          {% for row in history_rows %}
+            <div class="fh-entry">
+              <div class="fh-entry-icon
+                {% if row.action == 'created' %}fh-badge-created
+                {% elif row.action == 'updated' %}fh-badge-updated
+                {% elif row.action == 'renamed' %}fh-badge-renamed
+                {% elif row.action == 'moved' %}fh-badge-moved
+                {% elif row.action == 'shared' %}fh-badge-shared
+                {% elif row.action == 'permission_changed' %}fh-badge-permission_changed
+                {% elif row.action == 'downloaded' %}fh-badge-downloaded
+                {% elif row.action == 'restored' %}fh-badge-restored
+                {% elif row.action == 'deleted' %}fh-badge-deleted
+                {% else %}fh-badge-versioned{% endif %}">
+                {% if row.action == 'created' %}
+                  <i class="bi bi-plus-lg"></i>
+                {% elif row.action == 'updated' %}
+                  <i class="bi bi-pencil"></i>
+                {% elif row.action == 'renamed' %}
+                  <i class="bi bi-type"></i>
+                {% elif row.action == 'moved' %}
+                  <i class="bi bi-folder-symlink"></i>
+                {% elif row.action == 'shared' %}
+                  <i class="bi bi-share"></i>
+                {% elif row.action == 'permission_changed' %}
+                  <i class="bi bi-shield-lock"></i>
+                {% elif row.action == 'downloaded' %}
+                  <i class="bi bi-download"></i>
+                {% elif row.action == 'restored' %}
+                  <i class="bi bi-arrow-counterclockwise"></i>
+                {% elif row.action == 'deleted' %}
+                  <i class="bi bi-trash"></i>
+                {% else %}
+                  <i class="bi bi-clock-history"></i>
+                {% endif %}
+              </div>
+
+              <div>
+                <div class="fh-entry-title">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <strong>{{ row.get_action_display|default:row.action|capfirst }}</strong>
+                    <span class="fh-badge
+                      {% if row.action == 'created' %}fh-badge-created
+                      {% elif row.action == 'updated' %}fh-badge-updated
+                      {% elif row.action == 'renamed' %}fh-badge-renamed
+                      {% elif row.action == 'moved' %}fh-badge-moved
+                      {% elif row.action == 'shared' %}fh-badge-shared
+                      {% elif row.action == 'permission_changed' %}fh-badge-permission_changed
+                      {% elif row.action == 'downloaded' %}fh-badge-downloaded
+                      {% elif row.action == 'restored' %}fh-badge-restored
+                      {% elif row.action == 'deleted' %}fh-badge-deleted
+                      {% else %}fh-badge-versioned{% endif %}">
+                      {{ row.action|capfirst }}
+                    </span>
+                  </div>
+                  <div class="fh-entry-time">{{ row.created_at|naturaltime }}</div>
+                </div>
+
+                <div class="fh-entry-sub">
+                  {% if row.actor %}
+                    By <strong>{{ row.actor.full_name|default:row.actor }}</strong>
+                  {% else %}
+                    By system
+                  {% endif %}
+                  · {{ row.created_at|date:"F j, Y, g:i a" }}
+                </div>
+
+                {% if row.snapshot_name or row.snapshot_folder_name or row.snapshot_visibility %}
+                <div class="fh-entry-sub" style="margin-top:6px">
+                  {% if row.snapshot_name %}
+                    <span><i class="bi bi-file-earmark me-1"></i>{{ row.snapshot_name }}</span>
+                  {% endif %}
+                  {% if row.snapshot_folder_name %}
+                    <span style="margin-left:10px"><i class="bi bi-folder me-1"></i>{{ row.snapshot_folder_name }}</span>
+                  {% endif %}
+                  {% if row.snapshot_visibility %}
+                    <span style="margin-left:10px"><i class="bi bi-eye me-1"></i>{{ row.snapshot_visibility|capfirst }}</span>
+                  {% endif %}
+                </div>
+                {% endif %}
+
+                {% if row.notes %}
+                  <div class="fh-entry-notes">{{ row.notes }}</div>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="fh-empty">
+          <i class="bi bi-clock-history"></i>
+          <div style="font-size:1rem;font-weight:800;color:var(--eo-text);margin-bottom:6px">No history yet</div>
+          <div style="font-size:.84rem">
+            Activity for this file will appear here once changes, downloads, shares, moves, or other tracked events happen.
+          </div>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

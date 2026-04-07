@@ -121,35 +121,50 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         if project.tags:
             project_tags = [tag.strip() for tag in project.tags.split(",") if tag.strip()]
 
-        # Finance data linked to this project
-        purchase_requests = (
-            PurchaseRequest.objects
-            .filter(project=project)
-            .select_related('requested_by', 'department', 'budget')
-            .order_by('-created_at')
-        )
+        # ── Linked meetings ─────────────────────────────────────────────
+        try:
+            from apps.meetings.models import Meeting
+            project_meetings = Meeting.objects.filter(project=project).select_related(
+                'organizer', 'project'
+            ).order_by('-start_datetime')
+            upcoming_meetings = project_meetings.filter(
+                start_datetime__gte=timezone.now()
+            ).order_by('start_datetime')[:5]
+            recent_meetings = project_meetings[:5]
+            meeting_count = project_meetings.count()
+        except Exception:
+            project_meetings = []
+            upcoming_meetings = []
+            recent_meetings = []
+            meeting_count = 0
 
-        project_payments = (
-            Payment.objects
-            .filter(project=project)
-            .select_related('paid_by', 'employee', 'budget', 'purchase_request', 'employee_request')
-            .order_by('-payment_date', '-created_at')
-        )
+        # ── Linked finance data ─────────────────────────────────────────
+        purchase_requests = project.purchase_requests.select_related(
+            'requested_by', 'budget', 'approved_by'
+        ).order_by('-created_at')[:8]
 
-        employee_finance_requests = (
-            EmployeeFinanceRequest.objects
-            .filter(project=project)
-            .select_related('employee', 'approved_by')
-            .order_by('-created_at')
-        )
+        try:
+            from apps.finance.models import Payment
+            project_payments = Payment.objects.filter(project=project).select_related(
+                'paid_by', 'budget', 'purchase_request'
+            ).order_by('-payment_date', '-created_at')[:8]
+            finance_totals = Payment.objects.filter(project=project).aggregate(
+                total_spent=Sum('amount')
+            )
+        except Exception:
+            project_payments = []
+            finance_totals = {'total_spent': 0}
 
-        # Aggregated totals for the finance section header
-        total_spent = (
-                project_payments.aggregate(t=Sum('amount'))['t'] or 0
-        )
-        total_purchase_est = (
-                purchase_requests.aggregate(t=Sum('estimated_cost'))['t'] or 0
-        )
+        try:
+            from apps.finance.models import EmployeeFinanceRequest
+            employee_finance_requests = EmployeeFinanceRequest.objects.filter(
+                project=project
+            ).select_related('employee', 'budget', 'approved_by').order_by('-created_at')[:8]
+        except Exception:
+            employee_finance_requests = []
+
+        total_purchase_est = purchase_requests.aggregate(t=Sum('estimated_cost'))['t'] if purchase_requests else 0
+        finance_totals['total_purchase_est'] = total_purchase_est or 0
 
         ctx.update({
             'milestones': milestones,
@@ -176,14 +191,17 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             'milestone_statuses': Milestone.Status.choices,
             'staff_list': User.objects.filter(status='active', is_active=True).order_by('first_name'),
 
-            # Finance
+            # finance
             'purchase_requests': purchase_requests,
             'project_payments': project_payments,
             'employee_finance_requests': employee_finance_requests,
-            'finance_totals': {
-                'total_spent': total_spent,
-                'total_purchase_est': total_purchase_est,
-            },
+            'finance_totals': finance_totals,
+
+            # meetings
+            'project_meetings': project_meetings,
+            'upcoming_meetings': upcoming_meetings,
+            'recent_meetings': recent_meetings,
+            'meeting_count': meeting_count,
         })
         return ctx
 

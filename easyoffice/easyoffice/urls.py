@@ -24,6 +24,9 @@ urlpatterns = [
     # Tasks
     path('tasks/', include('apps.tasks.urls')),
 
+    # Meeting
+    path('meetings/', include('apps.meetings.urls')),
+
     # Projects
     path('projects/', include('apps.projects.urls')),
 

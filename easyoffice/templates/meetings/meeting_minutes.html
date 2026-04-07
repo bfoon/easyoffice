@@ -1,0 +1,325 @@
+{% extends 'base.html' %}
+{% load humanize %}
+{% block title %}Minutes — {{ meeting.title }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'meeting_list' %}">Meetings</a> /
+  <a href="{% url 'meeting_detail' meeting.pk %}">{{ meeting.title|truncatechars:30 }}</a> / Minutes
+{% endblock %}
+
+{% block content %}
+<style>
+.mn-layout { display:grid; grid-template-columns:1fr 300px; gap:20px; align-items:start; }
+@media(max-width:860px){ .mn-layout{ grid-template-columns:1fr; } }
+
+.mn-editor {
+  background:var(--eo-surface);
+  border:1px solid var(--eo-border);
+  border-radius:12px;
+  overflow:hidden;
+}
+.mn-toolbar {
+  display:flex; align-items:center; gap:4px;
+  padding:8px 12px; border-bottom:1px solid var(--eo-border);
+  background:var(--eo-bg); flex-wrap:wrap;
+}
+.mn-btn {
+  width:30px;height:30px;border-radius:6px;border:1px solid transparent;
+  background:none;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  font-size:.8rem;color:var(--eo-text-muted);transition:background .1s,color .1s;font-family:inherit;
+}
+.mn-btn:hover{ background:var(--eo-bg);border-color:var(--eo-border);color:var(--eo-text); }
+.mn-btn.wide{ width:auto;padding:0 10px;font-size:.75rem;font-weight:700; }
+.mn-sep{ width:1px;height:18px;background:var(--eo-border);margin:0 4px; }
+
+.mn-section-label {
+  font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--eo-text-muted);padding:14px 18px 4px;background:var(--eo-bg);
+  border-top:1px solid var(--eo-border);
+}
+
+textarea.mn-area {
+  width:100%;border:none;outline:none;
+  padding:14px 18px;font-size:.95rem;line-height:1.75;
+  color:var(--eo-text);background:var(--eo-surface);
+  font-family:inherit;resize:none;min-height:220px;
+}
+textarea.mn-area::placeholder{ color:var(--eo-text-muted); }
+
+/* Action items table */
+.ai-row { display:grid; grid-template-columns:1fr 160px 130px 36px; gap:8px; align-items:center; margin-bottom:8px; }
+@media(max-width:640px){ .ai-row{ grid-template-columns:1fr; } }
+</style>
+
+<!-- Header -->
+<div style="background:{{ meeting.type_color }};border-radius:var(--eo-radius);padding:20px 24px;margin-bottom:20px">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <div>
+      <div style="font-size:.78rem;color:rgba(255,255,255,.7);margin-bottom:4px">
+        <i class="bi {{ meeting.type_icon }} me-1"></i>{{ meeting.get_meeting_type_display }}
+        &nbsp;·&nbsp;{{ meeting.start_datetime|date:"N j, Y · H:i" }}
+      </div>
+      <h1 style="font-size:1.3rem;font-weight:800;color:#fff;margin:0">{{ meeting.title }}</h1>
+    </div>
+    <a href="{% url 'meeting_detail' meeting.pk %}" class="eo-btn eo-btn-sm"
+       style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.35)">
+      <i class="bi bi-arrow-left"></i> Back to Meeting
+    </a>
+  </div>
+</div>
+
+{% if minutes.is_final and not request.user.is_superuser %}
+<!-- Read-only view -->
+<div style="padding:12px 16px;border-radius:10px;margin-bottom:16px;background:#d1fae5;border:1px solid #6ee7b7;color:#065f46;font-size:.87rem">
+  <i class="bi bi-lock-fill me-2"></i>These minutes have been <strong>finalised</strong> and are read-only.
+  <a href="{% url 'meeting_minutes_pdf' meeting.pk %}" class="ms-3" style="color:#065f46;font-weight:700">
+    <i class="bi bi-download me-1"></i>Download PDF
+  </a>
+</div>
+<!-- Show read-only content -->
+<div class="mn-layout">
+  <div>
+    {% if minutes.content %}
+    <div class="eo-card mb-4">
+      <h3 class="eo-card-title mb-3">Meeting Notes</h3>
+      <div style="white-space:pre-wrap;font-size:.9rem;line-height:1.75;color:var(--eo-text)">{{ minutes.content }}</div>
+    </div>
+    {% endif %}
+    {% if minutes.decisions %}
+    <div class="eo-card mb-4">
+      <h3 class="eo-card-title mb-3">Decisions Made</h3>
+      <div style="white-space:pre-wrap;font-size:.9rem;line-height:1.75;color:var(--eo-text)">{{ minutes.decisions }}</div>
+    </div>
+    {% endif %}
+    {% if action_items %}
+    <div class="eo-card">
+      <h3 class="eo-card-title mb-3">Action Items</h3>
+      {% for ai in action_items %}
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border);{% endif %}">
+        <i class="bi bi-{% if ai.is_done %}check-circle-fill{% else %}circle{% endif %}"
+           style="color:{% if ai.is_done %}#10b981{% else %}var(--eo-text-muted){% endif %};flex-shrink:0"></i>
+        <span style="flex:1;font-size:.87rem;{% if ai.is_done %}text-decoration:line-through;color:var(--eo-text-muted){% else %}color:var(--eo-text){% endif %}">{{ ai.description }}</span>
+        {% if ai.assigned_to %}<span style="font-size:.78rem;color:var(--eo-text-muted)">{{ ai.assigned_to.full_name }}</span>{% endif %}
+        {% if ai.due_date %}<span style="font-size:.76rem;color:var(--eo-text-muted)">{{ ai.due_date|date:"N j" }}</span>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  <div>
+    <div class="eo-card">
+      <h3 class="eo-card-title mb-2">PDF Available</h3>
+      <p style="font-size:.82rem;color:var(--eo-text-muted);margin-bottom:12px">These minutes are finalised and have been saved as a PDF.</p>
+      <a href="{% url 'meeting_minutes_pdf' meeting.pk %}" class="eo-btn eo-btn-primary w-100">
+        <i class="bi bi-file-earmark-pdf-fill"></i> Download PDF
+      </a>
+    </div>
+  </div>
+</div>
+
+{% else %}
+<!-- ── EDITABLE FORM ── -->
+<form method="post" id="minutesForm">
+  {% csrf_token %}
+  <div class="mn-layout">
+
+    <!-- Editor -->
+    <div>
+      <div class="mn-editor mb-4">
+        <!-- Toolbar -->
+        <div class="mn-toolbar">
+          <button type="button" class="mn-btn wide" onclick="ins(notesArea,'# ','')">H1</button>
+          <button type="button" class="mn-btn wide" onclick="ins(notesArea,'## ','')">H2</button>
+          <div class="mn-sep"></div>
+          <button type="button" class="mn-btn" onclick="wrap(notesArea,'**','**')" title="Bold"><b>B</b></button>
+          <button type="button" class="mn-btn" onclick="wrap(notesArea,'*','*')" title="Italic"><i>I</i></button>
+          <div class="mn-sep"></div>
+          <button type="button" class="mn-btn" onclick="ins(notesArea,'- ','')" title="Bullet"><i class="bi bi-list-ul"></i></button>
+          <button type="button" class="mn-btn" onclick="ins(notesArea,'1. ','')" title="Numbered"><i class="bi bi-list-ol"></i></button>
+        </div>
+
+        <div class="mn-section-label">Meeting Notes</div>
+        <textarea class="mn-area" name="content" id="notesArea"
+                  placeholder="Record what was discussed…&#10;&#10;Use markdown:&#10;# Heading   **bold**   *italic*   - bullet">{{ minutes.content }}</textarea>
+
+        <div class="mn-section-label">Decisions Made</div>
+        <textarea class="mn-area" name="decisions" id="decisionsArea"
+                  style="min-height:120px"
+                  placeholder="List the key decisions agreed upon in this meeting…">{{ minutes.decisions }}</textarea>
+      </div>
+
+      <!-- Action Items -->
+      <div class="eo-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <h2 class="eo-card-title" style="margin:0">Action Items</h2>
+          <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="addActionRow()">
+            <i class="bi bi-plus"></i> Add
+          </button>
+        </div>
+
+        <!-- Column headers -->
+        <div class="ai-row" style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:4px">
+          <span>Action / Task</span>
+          <span>Assigned To</span>
+          <span>Due Date</span>
+          <span></span>
+        </div>
+
+        <div id="aiContainer">
+          {% for ai in action_items %}
+          <div class="ai-row ai-item">
+            <input type="text" name="ai_description" class="eo-form-control"
+                   placeholder="What needs to be done?" value="{{ ai.description }}"/>
+            <select name="ai_owner" class="eo-form-select">
+              <option value="">— Anyone —</option>
+              {% for s in staff_list %}
+              <option value="{{ s.id }}" {% if ai.assigned_to_id == s.id %}selected{% endif %}>{{ s.full_name }}</option>
+              {% endfor %}
+            </select>
+            <input type="date" name="ai_due" class="eo-form-control"
+                   value="{{ ai.due_date|date:'Y-m-d'|default:'' }}"/>
+            <button type="button" onclick="this.closest('.ai-item').remove()"
+                    class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" style="color:var(--eo-danger)">
+              <i class="bi bi-trash"></i>
+            </button>
+          </div>
+          {% endfor %}
+        </div>
+
+        <div id="aiEmpty" style="text-align:center;padding:18px;color:var(--eo-text-muted);font-size:.84rem{% if action_items %};display:none{% endif %}">
+          <i class="bi bi-check2-square" style="font-size:1.4rem;display:block;margin-bottom:6px;opacity:.3"></i>
+          No action items yet. Click <strong>Add</strong> to add one.
+        </div>
+      </div>
+    </div>
+
+    <!-- Side panel -->
+    <div style="display:flex;flex-direction:column;gap:16px">
+
+      <div class="eo-card">
+        <h3 class="eo-card-title mb-3">Save Minutes</h3>
+
+        <button type="submit" name="action" value="save"
+                class="eo-btn eo-btn-secondary w-100 mb-2">
+          <i class="bi bi-floppy"></i> Save Draft
+        </button>
+
+        <button type="button" onclick="confirmFinalise()"
+                class="eo-btn eo-btn-primary w-100">
+          <i class="bi bi-file-earmark-pdf-fill"></i> Finalise &amp; Save PDF
+        </button>
+        <div style="margin-top:8px;font-size:.74rem;color:var(--eo-text-muted);line-height:1.5">
+          Finalising locks the minutes and saves a PDF to the File Manager. Attendees will be notified.
+        </div>
+
+        {% if minutes.updated_at %}
+        <div style="margin-top:12px;font-size:.74rem;color:var(--eo-text-muted)">
+          Last saved {{ minutes.updated_at|naturaltime }}
+          {% if minutes.author %}by {{ minutes.author.full_name }}{% endif %}
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Meeting quick info -->
+      <div class="eo-card">
+        <h3 class="eo-card-title mb-3">Attendees</h3>
+        {% for att in meeting.attendees.all %}
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border);{% endif %}">
+          <div style="width:24px;height:24px;border-radius:50%;background:{{ meeting.type_color }};color:#fff;font-size:.6rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ att.user.initials }}</div>
+          <span style="font-size:.82rem;color:var(--eo-text);flex:1">{{ att.user.full_name }}</span>
+          <span style="font-size:.68rem;color:{{ att.rsvp_color }}">{{ att.get_rsvp_display }}</span>
+        </div>
+        {% endfor %}
+      </div>
+
+    </div>
+  </div>
+
+  <input type="hidden" name="action" id="formAction" value="save"/>
+</form>
+
+<!-- Finalise confirmation modal -->
+<div id="finaliseModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1060;align-items:center;justify-content:center">
+  <div style="background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:14px;width:440px;max-width:95vw;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+    <h3 style="font-size:1.05rem;font-weight:700;color:var(--eo-text);margin:0 0 10px">Finalise Minutes?</h3>
+    <p style="font-size:.86rem;color:var(--eo-text-muted);margin-bottom:20px;line-height:1.6">
+      This will lock the minutes, generate a PDF, and save it to the File Manager. All attendees will be notified. This action cannot be undone without superuser access.
+    </p>
+    <div style="display:flex;gap:10px">
+      <button type="button" onclick="doFinalise()" class="eo-btn eo-btn-primary flex-grow-1">
+        <i class="bi bi-file-earmark-check-fill"></i> Yes, Finalise
+      </button>
+      <button type="button" onclick="document.getElementById('finaliseModal').style.display='none'"
+              class="eo-btn eo-btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+{% endif %}
+
+<script>
+var notesArea     = document.getElementById('notesArea');
+var decisionsArea = document.getElementById('decisionsArea');
+
+// ── Formatting helpers ────────────────────────────────────────────────────────
+function ins(ta, prefix, suffix) {
+  if (!ta) return;
+  var s = ta.selectionStart, e = ta.selectionEnd;
+  var before = ta.value.slice(0, s);
+  var pre = (before.length && !before.endsWith('\n')) ? '\n' : '';
+  var repl = pre + prefix + ta.value.slice(s, e) + suffix;
+  ta.value = before + repl + ta.value.slice(e);
+  ta.selectionStart = ta.selectionEnd = s + repl.length;
+  ta.focus();
+}
+function wrap(ta, open, close) {
+  if (!ta) return;
+  var s = ta.selectionStart, e = ta.selectionEnd;
+  var sel = ta.value.slice(s, e) || 'text';
+  ta.value = ta.value.slice(0, s) + open + sel + close + ta.value.slice(e);
+  ta.selectionStart = s + open.length;
+  ta.selectionEnd   = s + open.length + sel.length;
+  ta.focus();
+}
+
+// ── Action items ──────────────────────────────────────────────────────────────
+var staffOptions = `
+  <option value="">— Anyone —</option>
+  {% for s in staff_list %}<option value="{{ s.id }}">{{ s.full_name }}</option>{% endfor %}
+`;
+
+function addActionRow() {
+  document.getElementById('aiEmpty').style.display = 'none';
+  var div = document.createElement('div');
+  div.className = 'ai-row ai-item';
+  div.innerHTML =
+    '<input type="text" name="ai_description" class="eo-form-control" placeholder="What needs to be done?"/>' +
+    '<select name="ai_owner" class="eo-form-select">' + staffOptions + '</select>' +
+    '<input type="date" name="ai_due" class="eo-form-control"/>' +
+    '<button type="button" onclick="removeRow(this)" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" style="color:var(--eo-danger)"><i class="bi bi-trash"></i></button>';
+  document.getElementById('aiContainer').appendChild(div);
+  div.querySelector('input').focus();
+}
+
+function removeRow(btn) {
+  btn.closest('.ai-item').remove();
+  if (!document.querySelectorAll('.ai-item').length) {
+    document.getElementById('aiEmpty').style.display = '';
+  }
+}
+
+// ── Finalise flow ─────────────────────────────────────────────────────────────
+function confirmFinalise() {
+  document.getElementById('finaliseModal').style.display = 'flex';
+}
+function doFinalise() {
+  document.getElementById('formAction').value = 'finalise';
+  document.getElementById('finaliseModal').style.display = 'none';
+  document.getElementById('minutesForm').submit();
+}
+
+// Close modal on backdrop click
+document.getElementById('finaliseModal') && document.getElementById('finaliseModal').addEventListener('click', function(e) {
+  if (e.target === this) this.style.display = 'none';
+});
+</script>
+{% endblock %}

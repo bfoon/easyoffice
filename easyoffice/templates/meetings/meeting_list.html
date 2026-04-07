@@ -1,0 +1,184 @@
+{% extends 'base.html' %}
+{% load humanize %}
+{% block title %}Meetings{% endblock %}
+{% block breadcrumb %}<span>Meetings</span>{% endblock %}
+{% block content %}
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Meetings</h1>
+    <p class="eo-page-subtitle">
+      {{ my_upcoming_count }} upcoming
+      {% if pending_rsvp %}&nbsp;·&nbsp;<span style="color:#f59e0b;font-weight:600">{{ pending_rsvp }} pending RSVP</span>{% endif %}
+    </p>
+  </div>
+  <a href="{% url 'meeting_create' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-plus-lg"></i> New Meeting
+  </a>
+</div>
+
+<div class="eo-card mb-4">
+  <form method="get" class="row g-3 align-items-end">
+    <div class="col-sm-4">
+      <label class="eo-form-label">Search</label>
+      <input type="text" name="q" class="eo-form-control" placeholder="Meeting title…" value="{{ q }}"/>
+    </div>
+    <div class="col-sm-3">
+      <label class="eo-form-label">Type</label>
+      <select name="type" class="eo-form-select">
+        <option value="">All Types</option>
+        {% for val, label in meeting_types %}
+        <option value="{{ val }}" {% if type_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-sm-2">
+      <label class="eo-form-label">Show</label>
+      <select name="view" class="eo-form-select">
+        <option value="upcoming" {% if view == 'upcoming' %}selected{% endif %}>Upcoming</option>
+        <option value="past"     {% if view == 'past'     %}selected{% endif %}>Past</option>
+      </select>
+    </div>
+    <div class="col-auto d-flex gap-2">
+      <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
+      <a href="{% url 'meeting_list' %}" class="eo-btn eo-btn-secondary">Reset</a>
+    </div>
+  </form>
+</div>
+
+{% if view == 'past' %}
+  {% with display_meetings=past %}
+  {% if display_meetings %}
+  <div class="row g-3">
+    {% for meeting in display_meetings %}
+    <div class="col-sm-6 col-xl-4">
+      <a href="{% url 'meeting_detail' meeting.pk %}" style="text-decoration:none;display:block;height:100%">
+        <div class="eo-card" style="height:100%;border-left:4px solid {{ meeting.type_color }};
+                                    transition:box-shadow .15s,transform .15s;cursor:pointer"
+             onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 24px rgba(0,0,0,.1)'"
+             onmouseout="this.style.transform='';this.style.boxShadow=''">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <span style="display:inline-flex;align-items:center;gap:6px;font-size:.74rem;font-weight:700;
+                         padding:3px 10px;border-radius:20px;background:{{ meeting.type_color }}18;color:{{ meeting.type_color }}">
+              <i class="bi {{ meeting.type_icon }}"></i>{{ meeting.get_meeting_type_display }}
+            </span>
+            <span class="eo-status eo-status-{{ meeting.status }}">{{ meeting.get_status_display }}</span>
+          </div>
+          <h3 style="font-size:.97rem;font-weight:700;color:var(--eo-text);margin:0 0 6px;line-height:1.3">
+            {{ meeting.title|truncatechars:60 }}
+          </h3>
+          {% if meeting.description %}
+          <p style="font-size:.8rem;color:var(--eo-text-muted);margin:0 0 10px;line-height:1.5;
+                    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
+            {{ meeting.description }}
+          </p>
+          {% endif %}
+          <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px;font-size:.8rem;color:var(--eo-text-muted)">
+            <span style="display:flex;align-items:center;gap:7px">
+              <i class="bi bi-calendar-event" style="color:{{ meeting.type_color }}"></i>
+              {{ meeting.start_datetime|date:"N j, Y · H:i" }} – {{ meeting.end_datetime|date:"H:i" }}
+              <span style="font-size:.72rem">({{ meeting.duration_minutes }}m)</span>
+            </span>
+            {% if meeting.location %}
+            <span><i class="bi bi-geo-alt me-1" style="color:{{ meeting.type_color }}"></i>{{ meeting.location|truncatechars:40 }}</span>
+            {% endif %}
+            {% if meeting.virtual_link %}
+            <span><i class="bi bi-camera-video me-1" style="color:{{ meeting.type_color }}"></i>Virtual</span>
+            {% endif %}
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid var(--eo-border);font-size:.78rem;color:var(--eo-text-muted)">
+            <span style="display:flex;align-items:center;gap:6px">
+              {% if meeting.organizer.avatar %}
+                <img src="{{ meeting.organizer.avatar.url }}" style="width:22px;height:22px;border-radius:50%;object-fit:cover"/>
+              {% else %}
+                <div style="width:22px;height:22px;border-radius:50%;background:{{ meeting.type_color }};color:#fff;font-size:.6rem;font-weight:700;display:flex;align-items:center;justify-content:center">{{ meeting.organizer.initials }}</div>
+              {% endif %}
+              {{ meeting.organizer.full_name }}
+            </span>
+            <span><i class="bi bi-people me-1"></i>{{ meeting.attendees.count }}{% if meeting.minutes %}&nbsp;<i class="bi bi-journal-check" title="Minutes available" style="color:#10b981"></i>{% endif %}</span>
+          </div>
+        </div>
+      </a>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="eo-card" style="text-align:center;padding:64px 32px">
+    <i class="bi bi-calendar-x" style="font-size:3rem;opacity:.25;display:block;margin-bottom:14px;color:var(--eo-text-muted)"></i>
+    <h3 style="font-size:1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No meetings found</h3>
+    <p style="color:var(--eo-text-muted);font-size:.87rem;margin-bottom:20px">
+      {% if q %}Try adjusting your search.{% else %}No past meetings yet.{% endif %}
+    </p>
+    <a href="{% url 'meeting_create' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus"></i> Schedule a Meeting</a>
+  </div>
+  {% endif %}
+  {% endwith %}
+{% else %}
+  {% with display_meetings=upcoming %}
+  {% if display_meetings %}
+  <div class="row g-3">
+    {% for meeting in display_meetings %}
+    <div class="col-sm-6 col-xl-4">
+      <a href="{% url 'meeting_detail' meeting.pk %}" style="text-decoration:none;display:block;height:100%">
+        <div class="eo-card" style="height:100%;border-left:4px solid {{ meeting.type_color }};
+                                    transition:box-shadow .15s,transform .15s;cursor:pointer"
+             onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 24px rgba(0,0,0,.1)'"
+             onmouseout="this.style.transform='';this.style.boxShadow=''">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <span style="display:inline-flex;align-items:center;gap:6px;font-size:.74rem;font-weight:700;
+                         padding:3px 10px;border-radius:20px;background:{{ meeting.type_color }}18;color:{{ meeting.type_color }}">
+              <i class="bi {{ meeting.type_icon }}"></i>{{ meeting.get_meeting_type_display }}
+            </span>
+            <span class="eo-status eo-status-{{ meeting.status }}">{{ meeting.get_status_display }}</span>
+          </div>
+          <h3 style="font-size:.97rem;font-weight:700;color:var(--eo-text);margin:0 0 6px;line-height:1.3">
+            {{ meeting.title|truncatechars:60 }}
+          </h3>
+          {% if meeting.description %}
+          <p style="font-size:.8rem;color:var(--eo-text-muted);margin:0 0 10px;line-height:1.5;
+                    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
+            {{ meeting.description }}
+          </p>
+          {% endif %}
+          <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px;font-size:.8rem;color:var(--eo-text-muted)">
+            <span style="display:flex;align-items:center;gap:7px">
+              <i class="bi bi-calendar-event" style="color:{{ meeting.type_color }}"></i>
+              {{ meeting.start_datetime|date:"N j, Y · H:i" }} – {{ meeting.end_datetime|date:"H:i" }}
+              <span style="font-size:.72rem">({{ meeting.duration_minutes }}m)</span>
+            </span>
+            {% if meeting.location %}
+            <span><i class="bi bi-geo-alt me-1" style="color:{{ meeting.type_color }}"></i>{{ meeting.location|truncatechars:40 }}</span>
+            {% endif %}
+            {% if meeting.virtual_link %}
+            <span><i class="bi bi-camera-video me-1" style="color:{{ meeting.type_color }}"></i>Virtual</span>
+            {% endif %}
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid var(--eo-border);font-size:.78rem;color:var(--eo-text-muted)">
+            <span style="display:flex;align-items:center;gap:6px">
+              {% if meeting.organizer.avatar %}
+                <img src="{{ meeting.organizer.avatar.url }}" style="width:22px;height:22px;border-radius:50%;object-fit:cover"/>
+              {% else %}
+                <div style="width:22px;height:22px;border-radius:50%;background:{{ meeting.type_color }};color:#fff;font-size:.6rem;font-weight:700;display:flex;align-items:center;justify-content:center">{{ meeting.organizer.initials }}</div>
+              {% endif %}
+              {{ meeting.organizer.full_name }}
+            </span>
+            <span><i class="bi bi-people me-1"></i>{{ meeting.attendees.count }}{% if meeting.minutes %}&nbsp;<i class="bi bi-journal-check" title="Minutes available" style="color:#10b981"></i>{% endif %}</span>
+          </div>
+        </div>
+      </a>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="eo-card" style="text-align:center;padding:64px 32px">
+    <i class="bi bi-calendar-x" style="font-size:3rem;opacity:.25;display:block;margin-bottom:14px;color:var(--eo-text-muted)"></i>
+    <h3 style="font-size:1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No meetings found</h3>
+    <p style="color:var(--eo-text-muted);font-size:.87rem;margin-bottom:20px">
+      {% if q %}Try adjusting your search.{% else %}No upcoming meetings scheduled.{% endif %}
+    </p>
+    <a href="{% url 'meeting_create' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus"></i> Schedule a Meeting</a>
+  </div>
+  {% endif %}
+  {% endwith %}
+{% endif %}
+{% endblock %}

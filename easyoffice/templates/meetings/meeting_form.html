@@ -1,0 +1,259 @@
+{% extends 'base.html' %}
+{% block title %}{% if mode == 'create' %}New Meeting{% else %}Edit Meeting{% endif %}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'meeting_list' %}">Meetings</a> /
+  {% if mode == 'create' %}New Meeting{% else %}Edit{{ meeting.title|truncatechars:30 }}{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <h1 class="eo-page-title">
+    <i class="bi bi-calendar-plus" style="color:var(--eo-primary)"></i>
+    {% if mode == 'create' %}Schedule New Meeting{% else %}Edit Meeting{% endif %}
+  </h1>
+</div>
+
+<form method="post">
+  {% csrf_token %}
+  <div class="row g-4">
+
+    <!-- ── LEFT ── -->
+    <div class="col-lg-8">
+
+      <!-- Basic Info -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-4">Meeting Details</h2>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Meeting Title *</label>
+          <input type="text" name="title" class="eo-form-control" required
+                 placeholder="e.g. Weekly Team Sync" value="{{ meeting.title|default:'' }}"/>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Meeting Type *</label>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+            {% for val, label in meeting_types %}
+            <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1.5px solid var(--eo-border);
+                          border-radius:10px;cursor:pointer;transition:border-color .14s,background .14s"
+                   class="meeting-type-opt">
+              <input type="radio" name="meeting_type" value="{{ val }}"
+                     {% if meeting.meeting_type == val or not meeting and val == 'team' %}checked{% endif %}
+                     style="display:none" onchange="onTypeChange(this)"/>
+              <div>
+                <div style="font-size:.85rem;font-weight:600;color:var(--eo-text)">{{ label }}</div>
+              </div>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Description / Purpose</label>
+          <textarea name="description" class="eo-form-control" rows="3"
+                    placeholder="What is this meeting about?">{{ meeting.description|default:'' }}</textarea>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Agenda</label>
+          <textarea name="agenda" class="eo-form-control" rows="4"
+                    placeholder="List agenda items, e.g.:&#10;1. Review last week's actions&#10;2. Project status updates&#10;3. AOB">{{ meeting.agenda|default:'' }}</textarea>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Start Date &amp; Time *</label>
+            <input type="datetime-local" name="start_datetime" class="eo-form-control" required
+                   value="{{ meeting.start_datetime|date:'Y-m-d\\TH:i'|default:'' }}"/>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">End Date &amp; Time *</label>
+            <input type="datetime-local" name="end_datetime" class="eo-form-control" required
+                   value="{{ meeting.end_datetime|date:'Y-m-d\\TH:i'|default:'' }}"/>
+          </div>
+        </div>
+
+        <div class="row g-3 mt-1">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Location <span style="font-weight:400;color:var(--eo-text-muted)">(room or address)</span></label>
+            <input type="text" name="location" class="eo-form-control"
+                   placeholder="e.g. Conference Room A, or Virtual"
+                   value="{{ meeting.location|default:'' }}"/>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Virtual Link <span style="font-weight:400;color:var(--eo-text-muted)">(Zoom/Meet/Teams)</span></label>
+            <input type="url" name="virtual_link" class="eo-form-control"
+                   placeholder="https://zoom.us/j/…"
+                   value="{{ meeting.virtual_link|default:'' }}"/>
+          </div>
+        </div>
+      </div>
+
+      <!-- Attendees -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-1">Invite Attendees</h2>
+        <p style="font-size:.82rem;color:var(--eo-text-muted);margin-bottom:14px">
+          You (as organiser) are automatically included. Select additional participants.
+        </p>
+
+        <div style="position:relative;margin-bottom:10px">
+          <i class="bi bi-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.8rem"></i>
+          <input type="text" id="attendeeSearch" placeholder="Search staff…"
+                 style="width:100%;padding:8px 12px 8px 32px;border:1px solid var(--eo-border);border-radius:8px;
+                        background:var(--eo-bg);color:var(--eo-text);font-size:.84rem;outline:none"/>
+        </div>
+
+        <div style="max-height:260px;overflow-y:auto;border:1px solid var(--eo-border);border-radius:10px" id="attendeeList">
+          {% for user in staff_list %}
+          <label style="display:flex;align-items:center;gap:12px;padding:9px 14px;cursor:pointer;
+                        border-bottom:1px solid var(--eo-border);transition:background .1s"
+                 onmouseover="this.style.background='var(--eo-bg)'" onmouseout="this.style.background=''"
+                 data-name="{{ user.full_name|lower }}">
+            <input type="checkbox" name="attendees" value="{{ user.id }}"
+                   {% if user.id in current_attendee_ids %}checked{% endif %}
+                   style="flex-shrink:0" onchange="updateCount()"/>
+            {% if user.avatar %}
+              <img src="{{ user.avatar.url }}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;flex-shrink:0"/>
+            {% else %}
+              <div style="width:30px;height:30px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.7rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ user.initials }}</div>
+            {% endif %}
+            <div style="min-width:0">
+              <div style="font-size:.86rem;font-weight:600;color:var(--eo-text)">{{ user.full_name }}</div>
+              {% if user.staffprofile.position %}<div style="font-size:.72rem;color:var(--eo-text-muted)">{{ user.staffprofile.position }}</div>{% endif %}
+            </div>
+          </label>
+          {% empty %}
+          <div style="padding:20px;text-align:center;color:var(--eo-text-muted)">No active staff found</div>
+          {% endfor %}
+        </div>
+        <div style="margin-top:6px;font-size:.74rem;color:var(--eo-text-muted)">
+          <span id="attendeeCount">0</span> attendee(s) selected
+        </div>
+      </div>
+
+      <!-- Link to Tasks -->
+      {% if available_tasks %}
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-3">Link Tasks</h2>
+        <select name="linked_tasks" class="eo-form-select" multiple style="height:140px">
+          {% for task in available_tasks %}
+          <option value="{{ task.id }}" {% if task.id in linked_task_ids %}selected{% endif %}>
+            [{{ task.get_status_display }}] {{ task.title|truncatechars:60 }}
+          </option>
+          {% endfor %}
+        </select>
+        <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:5px">Hold Ctrl/Cmd to select multiple</div>
+      </div>
+      {% endif %}
+
+    </div>
+
+    <!-- ── RIGHT ── -->
+    <div class="col-lg-4">
+
+      <!-- Options -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-4">Options</h2>
+
+        {% if mode == 'edit' %}
+        <div class="eo-form-group">
+          <label class="eo-form-label">Status</label>
+          <select name="status" class="eo-form-select">
+            <option value="scheduled"   {% if meeting.status == 'scheduled'   %}selected{% endif %}>Scheduled</option>
+            <option value="in_progress" {% if meeting.status == 'in_progress' %}selected{% endif %}>In Progress</option>
+            <option value="completed"   {% if meeting.status == 'completed'   %}selected{% endif %}>Completed</option>
+            <option value="cancelled"   {% if meeting.status == 'cancelled'   %}selected{% endif %}>Cancelled</option>
+          </select>
+        </div>
+        {% endif %}
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Link to Project</label>
+          <select name="project" class="eo-form-select">
+            <option value="">— No project —</option>
+            {% for proj in projects %}
+            <option value="{{ proj.id }}" {% if meeting.project_id == proj.id %}selected{% endif %}>
+              [{{ proj.code }}] {{ proj.name }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        {% if units %}
+        <div class="eo-form-group">
+          <label class="eo-form-label">Unit <span style="font-weight:400;color:var(--eo-text-muted)">(for unit meetings)</span></label>
+          <select name="unit" class="eo-form-select">
+            <option value="">— None —</option>
+            {% for unit in units %}
+            <option value="{{ unit.id }}" {% if meeting.unit_id == unit.id %}selected{% endif %}>{{ unit.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+
+        {% if departments %}
+        <div class="eo-form-group">
+          <label class="eo-form-label">Department</label>
+          <select name="department" class="eo-form-select">
+            <option value="">— None —</option>
+            {% for dept in departments %}
+            <option value="{{ dept.id }}" {% if meeting.department_id == dept.id %}selected{% endif %}>{{ dept.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px 0">
+          <input type="checkbox" name="is_private" {% if meeting.is_private %}checked{% endif %}
+                 style="width:18px;height:18px;cursor:pointer"/>
+          <div>
+            <div style="font-size:.86rem;font-weight:600;color:var(--eo-text)">Private meeting</div>
+            <div style="font-size:.73rem;color:var(--eo-text-muted)">Only invitees can see this meeting</div>
+          </div>
+        </label>
+      </div>
+
+      <!-- Actions -->
+      <div class="eo-card">
+        <button type="submit" class="eo-btn eo-btn-primary w-100 mb-2" style="padding:11px">
+          <i class="bi bi-{% if mode == 'create' %}calendar-plus{% else %}floppy{% endif %}"></i>
+          {% if mode == 'create' %}Schedule Meeting{% else %}Save Changes{% endif %}
+        </button>
+        <a href="{% if mode == 'edit' %}{% url 'meeting_detail' meeting.pk %}{% else %}{% url 'meeting_list' %}{% endif %}"
+           class="eo-btn eo-btn-secondary w-100">Cancel</a>
+      </div>
+
+    </div>
+  </div>
+</form>
+
+<script>
+// Highlight selected meeting type radio
+document.querySelectorAll('.meeting-type-opt').forEach(function(label) {
+  var radio = label.querySelector('input[type=radio]');
+  if (radio.checked) label.style.borderColor = 'var(--eo-primary)';
+  radio.addEventListener('change', function() {
+    document.querySelectorAll('.meeting-type-opt').forEach(function(l) {
+      l.style.borderColor = 'var(--eo-border)';
+      l.style.background  = '';
+    });
+    label.style.borderColor = 'var(--eo-primary)';
+    label.style.background  = 'var(--eo-primary)08';
+  });
+});
+
+// Attendee search
+document.getElementById('attendeeSearch').addEventListener('input', function() {
+  var q = this.value.toLowerCase();
+  document.querySelectorAll('#attendeeList label').forEach(function(el) {
+    el.style.display = el.dataset.name.includes(q) ? '' : 'none';
+  });
+});
+
+function updateCount() {
+  var n = document.querySelectorAll('#attendeeList input:checked').length;
+  document.getElementById('attendeeCount').textContent = n;
+}
+updateCount();
+</script>
+{% endblock %}

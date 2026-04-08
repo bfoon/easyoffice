@@ -430,3 +430,154 @@ class PaymentRequestDocument(models.Model):
 
     def __str__(self):
         return f'{self.get_doc_type_display()} — {self.name}'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Incoming Payment Request (Company → Customer: "Please pay us")
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _next_invoice_number():
+    """Generate sequential invoice numbers like INV-2025-0042."""
+    year = timezone.now().year
+    last = IncomingPaymentRequest.objects.filter(
+        invoice_number__startswith=f'INV-{year}-'
+    ).order_by('-invoice_number').first()
+    if last:
+        try:
+            seq = int(last.invoice_number.split('-')[-1]) + 1
+        except (ValueError, IndexError):
+            seq = 1
+    else:
+        seq = 1
+    return f'INV-{year}-{seq:04d}'
+
+
+class IncomingPaymentRequest(models.Model):
+
+    class Status(models.TextChoices):
+        DRAFT     = 'draft',     'Draft'
+        SENT      = 'sent',      'Invoice Sent'
+        OVERDUE   = 'overdue',   'Overdue'
+        PAID      = 'paid',      'Paid'
+        CANCELLED = 'cancelled', 'Cancelled'
+
+    id              = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    invoice_number  = models.CharField(max_length=30, unique=True, blank=True)
+    title           = models.CharField(max_length=300,
+                                       help_text='Brief description, e.g. "Consulting Services Q2"')
+    description     = models.TextField(blank=True,
+                                       help_text='Full scope of work / goods supplied')
+
+    # ── Customer / Payer ──────────────────────────────────────────────────
+    customer_name    = models.CharField(max_length=200)
+    customer_email   = models.EmailField(blank=True)
+    customer_phone   = models.CharField(max_length=50, blank=True)
+    customer_company = models.CharField(max_length=200, blank=True)
+    customer_address = models.TextField(blank=True)
+
+    # ── Financial ─────────────────────────────────────────────────────────
+    amount           = models.DecimalField(max_digits=14, decimal_places=2)
+    tax_amount       = models.DecimalField(max_digits=12, decimal_places=2,
+                                           default=Decimal('0'))
+    discount_amount  = models.DecimalField(max_digits=12, decimal_places=2,
+                                           default=Decimal('0'))
+    currency         = models.CharField(max_length=10, default='GMD')
+
+    # ── Dates ─────────────────────────────────────────────────────────────
+    issue_date       = models.DateField(default=timezone.now)
+    due_date         = models.DateField(null=True, blank=True)
+    paid_at          = models.DateTimeField(null=True, blank=True)
+
+    # ── Payment instructions sent to customer ─────────────────────────────
+    payment_instructions = models.TextField(
+        blank=True,
+        help_text='Bank name, account number, IBAN, mobile money, etc.'
+    )
+    notes           = models.TextField(blank=True,
+                                        help_text='Internal notes — not sent to customer')
+
+    # ── Linking ───────────────────────────────────────────────────────────
+    project         = models.ForeignKey('projects.Project', on_delete=models.SET_NULL,
+                                         null=True, blank=True,
+                                         related_name='incoming_payment_requests')
+    budget          = models.ForeignKey(Budget, on_delete=models.SET_NULL,
+                                         null=True, blank=True,
+                                         related_name='incoming_payment_requests')
+
+    # ── Workflow ──────────────────────────────────────────────────────────
+    status          = models.CharField(max_length=20, choices=Status.choices,
+                                        default=Status.DRAFT)
+    created_by      = models.ForeignKey(User, on_delete=models.CASCADE,
+                                         related_name='created_invoices')
+
+    # ── Reminder tracking ─────────────────────────────────────────────────
+    last_reminder_sent = models.DateTimeField(null=True, blank=True)
+    reminder_count     = models.PositiveSmallIntegerField(default=0)
+
+    created_at      = models.DateTimeField(auto_now_add=True)
+    updated_at      = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.invoice_number} — {self.customer_name}'
+
+    def save(self, *args, **kwargs):
+        if not self.invoice_number:
+            self.invoice_number = _next_invoice_number()
+        super().save(*args, **kwargs)
+
+    @property
+    def total_amount(self):
+        return self.amount + self.tax_amount - self.discount_amount
+
+    @property
+    def is_overdue(self):
+        if self.status in ('paid', 'cancelled'):
+            return False
+        return bool(self.due_date and self.due_date < timezone.now().date())
+
+    @property
+    def status_color(self):
+        return {
+            'draft':     '#94a3b8',
+            'sent':      '#3b82f6',
+            'overdue':   '#ef4444',
+            'paid':      '#10b981',
+            'cancelled': '#64748b',
+        }.get(self.status, '#64748b')
+
+    @property
+    def days_overdue(self):
+        if self.due_date and self.status not in ('paid', 'cancelled'):
+            delta = (timezone.now().date() - self.due_date).days
+            return max(0, delta)
+        return 0
+
+
+class IncomingPaymentDocument(models.Model):
+    class DocType(models.TextChoices):
+        INVOICE       = 'invoice',       'Invoice'
+        DELIVERY_NOTE = 'delivery_note', 'Delivery Note'
+        QUOTATION     = 'quotation',     'Quotation'
+        CONTRACT      = 'contract',      'Contract'
+        REPORT        = 'report',        'Report'
+        RECEIPT       = 'receipt',       'Receipt'
+        OTHER         = 'other',         'Other'
+
+    id              = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_request = models.ForeignKey(IncomingPaymentRequest, on_delete=models.CASCADE,
+                                         related_name='documents')
+    doc_type        = models.CharField(max_length=20, choices=DocType.choices,
+                                        default=DocType.INVOICE)
+    name            = models.CharField(max_length=200)
+    file            = models.FileField(upload_to='incoming_payment_docs/%Y/%m/')
+    uploaded_by     = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    uploaded_at     = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['doc_type', 'uploaded_at']
+
+    def __str__(self):
+        return f'{self.get_doc_type_display()} — {self.name}'

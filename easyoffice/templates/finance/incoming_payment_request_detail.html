@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ ipr.invoice_number }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'finance_dashboard' %}">Finance</a> /
+  <a href="{% url 'incoming_payment_request_list' %}">Invoices</a> /
+  {{ ipr.invoice_number }}
+{% endblock %}
+
+{% block content %}
+<!-- Header banner -->
+<div style="background:{{ ipr.status_color }};border-radius:var(--eo-radius);padding:24px 28px 20px;margin-bottom:24px;position:relative;overflow:hidden">
+  <div style="position:absolute;right:-20px;top:-20px;width:160px;height:160px;border-radius:50%;background:rgba(255,255,255,.08)"></div>
+  <div style="position:relative;z-index:1;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+    <div>
+      <div style="display:inline-flex;gap:8px;margin-bottom:8px">
+        <span style="background:rgba(255,255,255,.2);color:#fff;border-radius:20px;padding:3px 12px;font-size:.75rem;font-weight:700;font-family:monospace">
+          {{ ipr.invoice_number }}
+        </span>
+        <span style="background:rgba(255,255,255,.25);color:#fff;border-radius:20px;padding:3px 12px;font-size:.75rem;font-weight:700">
+          {{ ipr.get_status_display }}
+        </span>
+      </div>
+      <h1 style="font-size:1.4rem;font-weight:800;color:#fff;margin:0 0 6px">{{ ipr.title }}</h1>
+      <div style="font-size:.84rem;color:rgba(255,255,255,.8)">
+        <i class="bi bi-building me-1"></i>{{ ipr.customer_name }}
+        {% if ipr.customer_company %} · {{ ipr.customer_company }}{% endif %}
+        {% if ipr.customer_email %} · <i class="bi bi-envelope me-1"></i>{{ ipr.customer_email }}{% endif %}
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start">
+      <!-- Send / Resend -->
+      {% if ipr.status != 'paid' and ipr.status != 'cancelled' and ipr.customer_email and is_finance %}
+      <form method="post" action="{% url 'incoming_payment_request_send' ipr.pk %}" style="display:inline">
+        {% csrf_token %}
+        <button type="submit" class="eo-btn eo-btn-sm" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.35)">
+          <i class="bi bi-envelope-arrow-up"></i>
+          {% if ipr.status == 'draft' %}Send Invoice{% else %}Resend Invoice{% endif %}
+        </button>
+      </form>
+      <!-- Reminder -->
+      <form method="post" action="{% url 'incoming_payment_request_reminder' ipr.pk %}" style="display:inline">
+        {% csrf_token %}
+        <button type="submit" class="eo-btn eo-btn-sm" style="background:rgba(255,165,0,.3);color:#fff;border:1px solid rgba(255,165,0,.5)"
+                onclick="return confirm('Send payment reminder to {{ ipr.customer_email|escapejs }}?')">
+          <i class="bi bi-bell"></i> Send Reminder
+          {% if ipr.reminder_count %}({{ ipr.reminder_count }}){% endif %}
+        </button>
+      </form>
+      {% endif %}
+      <!-- Mark paid -->
+      {% if ipr.status != 'paid' and ipr.status != 'cancelled' and is_finance %}
+      <button onclick="document.getElementById('markPaidModal').style.display='flex'"
+              class="eo-btn eo-btn-sm" style="background:#fff;color:{{ ipr.status_color }};font-weight:700;border:none">
+        <i class="bi bi-check-circle-fill"></i> Mark as Paid
+      </button>
+      {% endif %}
+      <!-- Cancel -->
+      {% if ipr.status not in 'paid,cancelled' and is_finance %}
+      <form method="post" action="{% url 'incoming_payment_request_cancel' ipr.pk %}" style="display:inline"
+            onsubmit="return confirm('Cancel invoice {{ ipr.invoice_number }}?')">
+        {% csrf_token %}
+        <button type="submit" class="eo-btn eo-btn-sm" style="background:rgba(0,0,0,.15);color:#fff;border:1px solid rgba(255,255,255,.2)">
+          <i class="bi bi-x-circle"></i> Cancel
+        </button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Overdue alert -->
+{% if ipr.is_overdue %}
+<div style="padding:12px 18px;background:#fef2f2;border:1px solid #fca5a5;border-radius:10px;margin-bottom:20px;font-size:.87rem;color:#991b1b;display:flex;align-items:center;gap:10px">
+  <i class="bi bi-exclamation-triangle-fill" style="font-size:1.1rem;flex-shrink:0"></i>
+  <span>This invoice is <strong>{{ ipr.days_overdue }} day{{ ipr.days_overdue|pluralize }}</strong> overdue. Consider sending a reminder.
+  {% if ipr.last_reminder_sent %}Last reminder sent: {{ ipr.last_reminder_sent|date:"N j, Y" }}.{% endif %}
+  </span>
+</div>
+{% endif %}
+
+<div class="row g-4">
+  <!-- ── LEFT ── -->
+  <div class="col-lg-8 d-flex flex-column gap-4">
+
+    <!-- Description -->
+    {% if ipr.description %}
+    <div class="eo-card">
+      <h2 class="eo-card-title mb-3"><i class="bi bi-file-text me-2" style="color:var(--eo-primary)"></i>Description</h2>
+      <div style="font-size:.9rem;line-height:1.75;color:var(--eo-text);white-space:pre-wrap">{{ ipr.description }}</div>
+    </div>
+    {% endif %}
+
+    <!-- Payment instructions -->
+    {% if ipr.payment_instructions %}
+    <div class="eo-card" style="border:1.5px solid #86efac">
+      <h2 class="eo-card-title mb-3"><i class="bi bi-bank me-2" style="color:#10b981"></i>Payment Instructions</h2>
+      <div style="font-size:.9rem;line-height:1.8;color:var(--eo-text);white-space:pre-wrap">{{ ipr.payment_instructions }}</div>
+    </div>
+    {% endif %}
+
+    <!-- Attachments -->
+    <div class="eo-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <h2 class="eo-card-title" style="margin:0"><i class="bi bi-paperclip me-2" style="color:var(--eo-primary)"></i>Attached Documents</h2>
+        {% if is_finance %}
+        <button onclick="document.getElementById('addDocsModal').style.display='flex'"
+                class="eo-btn eo-btn-secondary eo-btn-sm"><i class="bi bi-plus"></i> Add</button>
+        {% endif %}
+      </div>
+      {% if documents %}
+      <div style="display:flex;flex-direction:column;gap:8px">
+        {% for doc in documents %}
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <i class="bi bi-file-earmark-fill" style="font-size:1.3rem;color:var(--eo-primary);flex-shrink:0"></i>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.86rem;font-weight:600;color:var(--eo-text)">{{ doc.name }}</div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ doc.get_doc_type_display }} · {{ doc.uploaded_at|date:"N j, Y" }}</div>
+          </div>
+          <a href="{{ doc.file.url }}" target="_blank" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-download"></i>
+          </a>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:24px;color:var(--eo-text-muted);font-size:.84rem">
+        <i class="bi bi-file-earmark-x" style="font-size:1.8rem;display:block;margin-bottom:6px;opacity:.3"></i>
+        No documents attached.
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Reminder history -->
+    {% if ipr.reminder_count %}
+    <div class="eo-card">
+      <h2 class="eo-card-title mb-3"><i class="bi bi-bell-history me-2" style="color:#f59e0b"></i>Reminder History</h2>
+      <div style="font-size:.86rem;color:var(--eo-text-muted)">
+        <strong>{{ ipr.reminder_count }}</strong> reminder{{ ipr.reminder_count|pluralize }} sent.
+        Last sent: <strong>{{ ipr.last_reminder_sent|date:"N j, Y · H:i" }}</strong>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- ── RIGHT ── -->
+  <div class="col-lg-4 d-flex flex-column gap-4">
+
+    <!-- Amount summary -->
+    <div class="eo-card">
+      <h3 class="eo-card-title mb-3">Invoice Summary</h3>
+      <div style="display:flex;flex-direction:column;gap:8px;font-size:.86rem">
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Subtotal</span>
+          <span>{{ ipr.currency }} {{ ipr.amount|floatformat:2|intcomma }}</span>
+        </div>
+        {% if ipr.tax_amount %}
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Tax / VAT</span>
+          <span>{{ ipr.currency }} {{ ipr.tax_amount|floatformat:2|intcomma }}</span>
+        </div>
+        {% endif %}
+        {% if ipr.discount_amount %}
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Discount</span>
+          <span style="color:#ef4444">- {{ ipr.currency }} {{ ipr.discount_amount|floatformat:2|intcomma }}</span>
+        </div>
+        {% endif %}
+        <div style="display:flex;justify-content:space-between;border-top:2px solid var(--eo-border);padding-top:10px;margin-top:4px">
+          <span style="font-weight:800;color:var(--eo-text)">Total Due</span>
+          <span style="font-size:1.2rem;font-weight:900;color:var(--eo-text)">{{ ipr.currency }} {{ ipr.total_amount|floatformat:2|intcomma }}</span>
+        </div>
+      </div>
+      {% if ipr.status == 'paid' %}
+      <div style="margin-top:14px;padding:10px 14px;background:#d1fae5;border-radius:9px;text-align:center;font-size:.85rem;font-weight:700;color:#065f46">
+        ✅ Paid {{ ipr.paid_at|date:"N j, Y" }}
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Meta -->
+    <div class="eo-card">
+      <h3 class="eo-card-title mb-3">Details</h3>
+      <div style="display:flex;flex-direction:column;gap:10px;font-size:.84rem">
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Issue Date</span>
+          <span style="font-weight:600">{{ ipr.issue_date|date:"N j, Y" }}</span>
+        </div>
+        {% if ipr.due_date %}
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Due Date</span>
+          <span style="font-weight:600;{% if ipr.is_overdue %}color:#ef4444{% endif %}">{{ ipr.due_date|date:"N j, Y" }}</span>
+        </div>
+        {% endif %}
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Created By</span>
+          <span style="font-weight:600">{{ ipr.created_by.full_name }}</span>
+        </div>
+        {% if ipr.project %}
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Project</span>
+          <a href="{% url 'project_detail' ipr.project.pk %}" style="font-weight:600;color:var(--eo-primary)">{{ ipr.project.name|truncatechars:20 }}</a>
+        </div>
+        {% endif %}
+        {% if ipr.budget %}
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--eo-text-muted)">Budget</span>
+          <span style="font-weight:600">{{ ipr.budget.name|truncatechars:20 }}</span>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if ipr.notes %}
+    <div class="eo-card">
+      <h3 class="eo-card-title mb-2">Internal Notes</h3>
+      <div style="font-size:.84rem;color:var(--eo-text-muted);white-space:pre-wrap;line-height:1.6">{{ ipr.notes }}</div>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+<!-- ── MARK PAID MODAL ── -->
+{% if ipr.status != 'paid' and ipr.status != 'cancelled' and is_finance %}
+<div id="markPaidModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1060;align-items:center;justify-content:center">
+  <div style="background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:16px;width:420px;max-width:95vw;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <div style="font-size:1rem;font-weight:700;color:var(--eo-text)"><i class="bi bi-check-circle-fill me-2" style="color:#10b981"></i>Mark Invoice as Paid</div>
+      <button onclick="document.getElementById('markPaidModal').style.display='none'" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <form method="post" action="{% url 'incoming_payment_request_mark_paid' ipr.pk %}">
+      {% csrf_token %}
+      <div style="padding:12px 14px;background:#d1fae5;border:1px solid #6ee7b7;border-radius:10px;margin-bottom:16px;font-size:.84rem;color:#065f46">
+        Confirming that <strong>{{ ipr.currency }} {{ ipr.total_amount|floatformat:2|intcomma }}</strong> has been received from <strong>{{ ipr.customer_name }}</strong>.
+      </div>
+      <div style="display:flex;gap:10px">
+        <button type="submit" class="eo-btn eo-btn-primary flex-grow-1" style="padding:11px;background:#10b981;border-color:#10b981">
+          <i class="bi bi-check-circle-fill"></i> Confirm — Mark Paid
+        </button>
+        <button type="button" onclick="document.getElementById('markPaidModal').style.display='none'" class="eo-btn eo-btn-secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── ADD DOCS MODAL ── -->
+{% if is_finance %}
+<div id="addDocsModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1060;align-items:center;justify-content:center">
+  <div style="background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:16px;width:500px;max-width:95vw;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div style="font-size:1rem;font-weight:700;color:var(--eo-text)"><i class="bi bi-paperclip me-2"></i>Attach Documents</div>
+      <button onclick="document.getElementById('addDocsModal').style.display='none'" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <form method="post" action="{% url 'incoming_payment_request_add_docs' ipr.pk %}" enctype="multipart/form-data">
+      {% csrf_token %}
+      <div id="addDocRows"></div>
+      <div id="addDocEmpty" style="padding:14px;text-align:center;color:var(--eo-text-muted);font-size:.84rem">Click Add to attach a document</div>
+      <div style="display:flex;justify-content:flex-end;margin:12px 0 16px">
+        <button type="button" onclick="addModalDoc()" class="eo-btn eo-btn-secondary eo-btn-sm"><i class="bi bi-plus"></i> Add File</button>
+      </div>
+      <div style="display:flex;gap:10px">
+        <button type="submit" class="eo-btn eo-btn-primary flex-grow-1"><i class="bi bi-upload"></i> Upload</button>
+        <button type="button" onclick="document.getElementById('addDocsModal').style.display='none'" class="eo-btn eo-btn-secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+var modalDocIdx = 0;
+var MDOC_TYPES = [{% for val, label in doc_type_choices %}['{{ val }}','{{ label }}'],{% endfor %}];
+
+function addModalDoc() {
+  document.getElementById('addDocEmpty').style.display = 'none';
+  var idx = ++modalDocIdx;
+  var sel = MDOC_TYPES.map(function(t){ return '<option value="'+t[0]+'">'+t[1]+'</option>'; }).join('');
+  var div = document.createElement('div');
+  div.style = 'display:grid;grid-template-columns:150px 1fr auto;gap:8px;align-items:center;margin-bottom:8px';
+  div.innerHTML =
+    '<select name="doc_type_'+idx+'" class="eo-form-select" style="font-size:.82rem">'+sel+'</select>'+
+    '<input type="file" name="doc_file_'+idx+'" class="eo-form-control" style="font-size:.82rem" required/>'+
+    '<button type="button" onclick="this.closest(\'div\').remove()" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" style="color:var(--eo-danger)"><i class="bi bi-trash"></i></button>';
+  document.getElementById('addDocRows').appendChild(div);
+}
+
+[document.getElementById('markPaidModal'), document.getElementById('addDocsModal')].forEach(function(m) {
+  if (m) m.addEventListener('click', function(e) { if (e.target === m) m.style.display = 'none'; });
+});
+</script>
+{% endif %}
+{% endblock %}

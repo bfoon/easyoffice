@@ -24,4 +24,12 @@ urlpatterns = [
     path('payment-requests/<uuid:pk>/mark-paid/',       views.PaymentRequestMarkPaidView.as_view(),  name='payment_request_mark_paid'),
     path('payment-requests/<uuid:pk>/send/',            views.PaymentRequestSendView.as_view(),      name='payment_request_send'),
     path('payment-requests/<uuid:pk>/cancel/',          views.PaymentRequestCancelView.as_view(),    name='payment_request_cancel'),
+    path('invoices/',                                       views.IncomingPaymentRequestListView.as_view(),      name='incoming_payment_request_list'),
+    path('invoices/new/',                                   views.IncomingPaymentRequestCreateView.as_view(),    name='incoming_payment_request_create'),
+    path('invoices/<uuid:pk>/',                             views.IncomingPaymentRequestDetailView.as_view(),    name='incoming_payment_request_detail'),
+    path('invoices/<uuid:pk>/send/',                        views.IncomingPaymentRequestSendView.as_view(),      name='incoming_payment_request_send'),
+    path('invoices/<uuid:pk>/reminder/',                    views.IncomingPaymentRequestReminderView.as_view(),  name='incoming_payment_request_reminder'),
+    path('invoices/<uuid:pk>/mark-paid/',                   views.IncomingPaymentRequestMarkPaidView.as_view(),  name='incoming_payment_request_mark_paid'),
+    path('invoices/<uuid:pk>/add-docs/',                    views.IncomingPaymentRequestAddDocView.as_view(),    name='incoming_payment_request_add_docs'),
+    path('invoices/<uuid:pk>/cancel/',                      views.IncomingPaymentRequestCancelView.as_view(),    name='incoming_payment_request_cancel'),
 ]

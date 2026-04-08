@@ -1243,3 +1243,616 @@ class PaymentRequestCancelView(LoginRequiredMixin, View):
         pr.save(update_fields=['status', 'updated_at'])
         messages.warning(request, f'Payment request "{pr.title}" cancelled.')
         return redirect('payment_request_list')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Incoming Payment Request (Company → Customer invoicing)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from apps.finance.models import IncomingPaymentRequest, IncomingPaymentDocument
+
+
+def _send_invoice_email(ipr, request=None):
+    """
+    Send a professional invoice email to the customer.
+    Attaches all documents uploaded to the request.
+    """
+    from django.core.mail import EmailMessage
+    from django.conf import settings
+
+    if not ipr.customer_email:
+        return
+
+    office_name = getattr(settings, 'OFFICE_NAME', 'EasyOffice')
+    org_name    = getattr(settings, 'ORGANISATION_NAME', office_name)
+    org_email   = getattr(settings, 'DEFAULT_FROM_EMAIL',
+                          f'finance@{org_name.lower().replace(" ","")}.org')
+    org_address = getattr(settings, 'ORGANISATION_ADDRESS', '')
+    org_phone   = getattr(settings, 'ORGANISATION_PHONE', '')
+
+    currency    = ipr.currency
+    subtotal    = f'{ipr.amount:,.2f}'
+    tax         = f'{ipr.tax_amount:,.2f}'
+    discount    = f'{ipr.discount_amount:,.2f}'
+    total       = f'{ipr.total_amount:,.2f}'
+    due_date    = ipr.due_date.strftime('%d %B %Y') if ipr.due_date else 'Upon receipt'
+    issue_date  = ipr.issue_date.strftime('%d %B %Y')
+
+    tax_row = ''
+    if ipr.tax_amount:
+        tax_row = f'<tr><td style="padding:8px 0;color:#64748b">Tax / VAT</td><td style="text-align:right;padding:8px 0;color:#64748b">{currency} {tax}</td></tr>'
+    disc_row = ''
+    if ipr.discount_amount:
+        disc_row = f'<tr><td style="padding:8px 0;color:#64748b">Discount</td><td style="text-align:right;padding:8px 0;color:#ef4444">- {currency} {discount}</td></tr>'
+
+    customer_block = ipr.customer_name
+    if ipr.customer_company and ipr.customer_company != ipr.customer_name:
+        customer_block = f'{ipr.customer_name}<br>{ipr.customer_company}'
+    if ipr.customer_address:
+        customer_block += f'<br><span style="color:#94a3b8;font-size:13px">{ipr.customer_address.replace(chr(10),"<br>")}</span>'
+
+    org_footer_block = org_name
+    if org_address:
+        org_footer_block += f'<br>{org_address}'
+    if org_phone:
+        org_footer_block += f'<br>{org_phone}'
+
+    pay_inst_block = ''
+    if ipr.payment_instructions:
+        pay_inst_block = f"""
+<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:12px;padding:20px 24px;margin:24px 0">
+  <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#065f46;margin-bottom:10px">
+    Payment Instructions
+  </div>
+  <div style="font-size:14px;color:#1e293b;line-height:1.8;white-space:pre-line">{ipr.payment_instructions}</div>
+</div>"""
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  body {{ margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif; }}
+  .wrapper {{ max-width:660px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08); }}
+  .header {{ background:linear-gradient(135deg,#1e3a5f 0%,#1d4ed8 100%);padding:0; }}
+  .header-inner {{ padding:36px 44px 28px; }}
+  .header h1 {{ margin:0 0 4px;font-size:28px;color:#fff;font-weight:900;letter-spacing:-.5px; }}
+  .header-sub {{ font-size:13px;color:rgba(255,255,255,.7); }}
+  .inv-bar {{ background:rgba(255,255,255,.12);padding:14px 44px;display:flex;justify-content:space-between;font-size:13px; }}
+  .inv-bar .lbl {{ color:rgba(255,255,255,.65);font-weight:600;text-transform:uppercase;letter-spacing:.05em;font-size:11px; }}
+  .inv-bar .val {{ color:#fff;font-weight:700;margin-top:3px; }}
+  .body {{ padding:36px 44px; }}
+  .bill-grid {{ display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:32px; }}
+  .bill-box .lbl {{ font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;margin-bottom:8px; }}
+  .bill-box .val {{ font-size:14px;color:#1e293b;line-height:1.7; }}
+  .bill-box .org {{ font-weight:700;font-size:16px;color:#1e3a5f; }}
+  .desc-box {{ background:#f8fafc;border-radius:10px;padding:18px 20px;margin-bottom:28px;font-size:14px;color:#475569;line-height:1.7; }}
+  .totals {{ border-top:2px solid #e2e8f0;padding-top:16px;margin-top:4px; }}
+  .totals table {{ width:100%;border-collapse:collapse; }}
+  .total-row td {{ font-size:16px;font-weight:800;color:#1e3a5f;padding:12px 0 0;border-top:2px solid #e2e8f0; }}
+  .due-banner {{ background:linear-gradient(135deg,#fffbeb,#fef3c7);border:1px solid #fde68a;border-radius:12px;padding:16px 20px;margin:24px 0;display:flex;align-items:center;gap:14px; }}
+  .due-banner .icon {{ font-size:24px; }}
+  .due-banner .text {{ font-size:14px;color:#92400e; }}
+  .due-banner .amount {{ font-size:22px;font-weight:900;color:#78350f; }}
+  .attach-note {{ font-size:13px;color:#64748b;margin-top:8px;font-style:italic; }}
+  .footer {{ background:#f8fafc;padding:24px 44px;border-top:1px solid #e2e8f0;text-align:center; }}
+  .footer p {{ margin:0;font-size:12px;color:#94a3b8;line-height:1.8; }}
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <div class="header">
+    <div class="header-inner">
+      <h1>INVOICE</h1>
+      <div class="header-sub">{org_name}</div>
+    </div>
+    <div class="inv-bar">
+      <div><div class="lbl">Invoice No.</div><div class="val">{ipr.invoice_number}</div></div>
+      <div><div class="lbl">Issue Date</div><div class="val">{issue_date}</div></div>
+      <div><div class="lbl">Due Date</div><div class="val">{due_date}</div></div>
+      <div><div class="lbl">Status</div><div class="val">AWAITING PAYMENT</div></div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="bill-grid">
+      <div class="bill-box">
+        <div class="lbl">From</div>
+        <div class="val"><span class="org">{org_name}</span><br>
+          <span style="color:#64748b;font-size:13px">{org_address.replace(chr(10),'<br>') if org_address else ''}</span>
+        </div>
+      </div>
+      <div class="bill-box">
+        <div class="lbl">Bill To</div>
+        <div class="val"><span class="org">{customer_block}</span></div>
+      </div>
+    </div>
+
+    <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;margin-bottom:8px">Description</div>
+    <div class="desc-box">
+      <strong style="color:#1e293b">{ipr.title}</strong>
+      {'<br><br>' + ipr.description.replace(chr(10),'<br>') if ipr.description else ''}
+    </div>
+
+    <div class="totals">
+      <table>
+        <tr><td style="padding:8px 0;color:#475569">Subtotal</td><td style="text-align:right;padding:8px 0;color:#475569">{currency} {subtotal}</td></tr>
+        {tax_row}
+        {disc_row}
+        <tr class="total-row"><td>Total Due</td><td style="text-align:right">{currency} {total}</td></tr>
+      </table>
+    </div>
+
+    <div class="due-banner">
+      <div class="icon">💳</div>
+      <div>
+        <div class="text">Amount due by <strong>{due_date}</strong></div>
+        <div class="amount">{currency} {total}</div>
+      </div>
+    </div>
+
+    {pay_inst_block}
+
+    {'<div class="attach-note">📎 Supporting documents (invoice, delivery note, etc.) are attached to this email.</div>' if ipr.documents.exists() else ''}
+  </div>
+
+  <div class="footer">
+    <p><strong>{org_name}</strong><br>
+    {org_footer_block}<br>
+    This is an official invoice. Please quote <strong>{ipr.invoice_number}</strong> in all correspondence.</p>
+  </div>
+</div>
+</body>
+</html>"""
+
+    msg = EmailMessage(
+        subject=f'Invoice {ipr.invoice_number} — {ipr.title} | {org_name}',
+        body=html,
+        from_email=org_email,
+        to=[ipr.customer_email],
+    )
+    msg.content_subtype = 'html'
+
+    # ── Attach documents ──────────────────────────────────────────────────
+    for doc in ipr.documents.all():
+        try:
+            doc.file.open('rb')
+            msg.attach(doc.name, doc.file.read(),
+                       'application/octet-stream')
+            doc.file.close()
+        except Exception:
+            pass
+
+    try:
+        msg.send()
+    except Exception:
+        pass
+
+
+def _send_invoice_reminder_email(ipr):
+    """
+    Send a polite but firm payment reminder email to the customer.
+    Escalates in tone based on reminder_count.
+    """
+    from django.core.mail import EmailMessage
+    from django.conf import settings
+
+    if not ipr.customer_email:
+        return
+
+    office_name = getattr(settings, 'OFFICE_NAME', 'EasyOffice')
+    org_name    = getattr(settings, 'ORGANISATION_NAME', office_name)
+    org_email   = getattr(settings, 'DEFAULT_FROM_EMAIL',
+                          f'finance@{org_name.lower().replace(" ","")}.org')
+
+    currency   = ipr.currency
+    total      = f'{ipr.total_amount:,.2f}'
+    due_date   = ipr.due_date.strftime('%d %B %Y') if ipr.due_date else 'as soon as possible'
+    days_late  = ipr.days_overdue
+    count      = ipr.reminder_count + 1  # upcoming count
+
+    # Escalate tone: 1st gentle, 2nd firm, 3rd urgent
+    if count == 1:
+        tone_subject  = f'Friendly Reminder — Invoice {ipr.invoice_number} Due'
+        tone_heading  = 'Friendly Payment Reminder'
+        tone_color    = '#3b82f6'
+        tone_bg       = 'linear-gradient(135deg,#eff6ff,#dbeafe)'
+        tone_border   = '#bfdbfe'
+        tone_icon     = '📋'
+        tone_body     = (
+            f'We hope this message finds you well. This is a friendly reminder that invoice '
+            f'<strong>{ipr.invoice_number}</strong> for <strong>{currency} {total}</strong> '
+            f'was due on <strong>{due_date}</strong> and has not yet been received.'
+        )
+        tone_closing  = 'If you have already made this payment, please disregard this message and accept our thanks.'
+    elif count == 2:
+        tone_subject  = f'Second Notice — Payment Overdue: Invoice {ipr.invoice_number}'
+        tone_heading  = 'Payment Overdue — Second Notice'
+        tone_color    = '#f59e0b'
+        tone_bg       = 'linear-gradient(135deg,#fffbeb,#fef3c7)'
+        tone_border   = '#fde68a'
+        tone_icon     = '⚠️'
+        tone_body     = (
+            f'Our records show that invoice <strong>{ipr.invoice_number}</strong> for '
+            f'<strong>{currency} {total}</strong>, due on <strong>{due_date}</strong>, '
+            f'remains unpaid ({days_late} days overdue). We kindly request that you arrange '
+            f'payment at your earliest convenience.'
+        )
+        tone_closing  = 'Please contact us immediately if there is a dispute or if you require assistance.'
+    else:
+        tone_subject  = f'URGENT — Final Notice: Invoice {ipr.invoice_number} Seriously Overdue'
+        tone_heading  = 'Final Payment Notice'
+        tone_color    = '#ef4444'
+        tone_bg       = 'linear-gradient(135deg,#fef2f2,#fee2e2)'
+        tone_border   = '#fca5a5'
+        tone_icon     = '🔴'
+        tone_body     = (
+            f'Despite previous reminders, invoice <strong>{ipr.invoice_number}</strong> for '
+            f'<strong>{currency} {total}</strong> remains unpaid. This account is now '
+            f'<strong>{days_late} days overdue</strong>. Immediate payment is required. '
+            f'Failure to settle this invoice may result in further action.'
+        )
+        tone_closing  = 'Please contact us urgently to resolve this matter.'
+
+    pay_inst_block = ''
+    if ipr.payment_instructions:
+        pay_inst_block = f"""
+<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:12px;padding:18px 22px;margin:24px 0">
+  <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#065f46;margin-bottom:8px">Payment Instructions</div>
+  <div style="font-size:14px;color:#1e293b;line-height:1.8;white-space:pre-line">{ipr.payment_instructions}</div>
+</div>"""
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  body {{ margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif; }}
+  .wrapper {{ max-width:620px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08); }}
+  .header {{ background:{tone_color};padding:32px 40px;text-align:center; }}
+  .header .icon {{ font-size:40px;margin-bottom:10px;display:block; }}
+  .header h1 {{ margin:0;font-size:22px;color:#fff;font-weight:800; }}
+  .header p {{ margin:6px 0 0;font-size:13px;color:rgba(255,255,255,.8); }}
+  .body {{ padding:36px 40px; }}
+  .summary-box {{ background:{tone_bg};border:1px solid {tone_border};border-radius:12px;padding:20px 24px;margin:20px 0;text-align:center; }}
+  .summary-box .inv {{ font-size:13px;color:#64748b;margin-bottom:6px; }}
+  .summary-box .amount {{ font-size:32px;font-weight:900;color:#1e293b; }}
+  .summary-box .due {{ font-size:13px;color:{tone_color};font-weight:700;margin-top:4px; }}
+  .detail-table {{ width:100%;border-collapse:collapse;margin:20px 0; }}
+  .detail-table td {{ padding:10px 14px;font-size:14px; }}
+  .detail-table tr:nth-child(odd) td {{ background:#f8fafc; }}
+  .detail-table td:first-child {{ font-weight:700;color:#475569;width:40%; }}
+  .footer {{ background:#f8fafc;padding:22px 40px;border-top:1px solid #e2e8f0;text-align:center; }}
+  .footer p {{ margin:0;font-size:12px;color:#94a3b8;line-height:1.7; }}
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <div class="header">
+    <span class="icon">{tone_icon}</span>
+    <h1>{tone_heading}</h1>
+    <p>{org_name} — Finance Department</p>
+  </div>
+
+  <div class="body">
+    <p style="font-size:15px;color:#1e293b;line-height:1.7;margin-bottom:16px">
+      Dear <strong>{ipr.customer_name}</strong>,
+    </p>
+    <p style="font-size:14px;color:#475569;line-height:1.8">{tone_body}</p>
+
+    <div class="summary-box">
+      <div class="inv">Invoice {ipr.invoice_number} · {ipr.title}</div>
+      <div class="amount">{currency} {total}</div>
+      <div class="due">{'⚠ ' + str(days_late) + ' days overdue' if days_late else 'Due: ' + due_date}</div>
+    </div>
+
+    <table class="detail-table">
+      <tr><td>Invoice Number</td><td><strong>{ipr.invoice_number}</strong></td></tr>
+      <tr><td>Amount Due</td><td><strong>{currency} {total}</strong></td></tr>
+      <tr><td>Original Due Date</td><td>{due_date}</td></tr>
+      {'<tr><td>Days Overdue</td><td style="color:#ef4444;font-weight:700">' + str(days_late) + ' days</td></tr>' if days_late else ''}
+      <tr><td>Reminder #</td><td>{count}</td></tr>
+    </table>
+
+    {pay_inst_block}
+
+    <p style="font-size:14px;color:#475569;line-height:1.8">{tone_closing}</p>
+    <p style="font-size:13px;color:#64748b;margin-top:16px">
+      Please do not reply to this automated message — contact us directly at
+      <a href="mailto:{org_email}" style="color:{tone_color}">{org_email}</a>.
+    </p>
+  </div>
+
+  <div class="footer">
+    <p><strong>{org_name}</strong> · Finance &amp; Administration<br>
+    Invoice reference: {ipr.invoice_number}</p>
+  </div>
+</div>
+</body>
+</html>"""
+
+    msg = EmailMessage(
+        subject=tone_subject,
+        body=html,
+        from_email=org_email,
+        to=[ipr.customer_email],
+    )
+    msg.content_subtype = 'html'
+
+    # Re-attach documents with reminder
+    for doc in ipr.documents.all():
+        try:
+            doc.file.open('rb')
+            msg.attach(doc.name, doc.file.read(), 'application/octet-stream')
+            doc.file.close()
+        except Exception:
+            pass
+
+    try:
+        msg.send()
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Incoming Payment Request Views
+# ─────────────────────────────────────────────────────────────────────────────
+
+class IncomingPaymentRequestListView(LoginRequiredMixin, TemplateView):
+    template_name = 'finance/incoming_payment_request_list.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_payment_requests(request.user):
+            messages.error(request, 'You do not have permission to view invoices.')
+            return redirect('finance_dashboard')
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        q      = self.request.GET.get('q', '').strip()
+        status = self.request.GET.get('status', '').strip()
+
+        qs = IncomingPaymentRequest.objects.select_related(
+            'created_by', 'project', 'budget'
+        ).order_by('-created_at')
+
+        if q:
+            qs = qs.filter(
+                Q(invoice_number__icontains=q) |
+                Q(customer_name__icontains=q)  |
+                Q(customer_email__icontains=q) |
+                Q(customer_company__icontains=q)|
+                Q(title__icontains=q)
+            )
+        if status:
+            qs = qs.filter(status=status)
+
+        # Auto-mark overdue
+        for ipr in qs:
+            if ipr.is_overdue and ipr.status == IncomingPaymentRequest.Status.SENT:
+                ipr.status = IncomingPaymentRequest.Status.OVERDUE
+                ipr.save(update_fields=['status', 'updated_at'])
+
+        total_outstanding = qs.exclude(
+            status__in=['paid', 'cancelled']
+        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+
+        ctx.update({
+            'invoices':          qs[:100],
+            'q':                 q,
+            'status_filter':     status,
+            'status_choices':    IncomingPaymentRequest.Status.choices,
+            'total_outstanding': total_outstanding,
+            'overdue_count':     qs.filter(status='overdue').count(),
+            'paid_count':        qs.filter(status='paid').count(),
+            'sent_count':        qs.filter(status='sent').count(),
+            'is_finance':        _is_finance(self.request.user),
+            'is_ceo':            _is_ceo(self.request.user),
+        })
+        return ctx
+
+
+class IncomingPaymentRequestCreateView(LoginRequiredMixin, View):
+    template_name = 'finance/incoming_payment_request_form.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_payment_requests(request.user):
+            messages.error(request, 'You do not have permission to create invoices.')
+            return redirect('finance_dashboard')
+        return super().dispatch(request, *args, **kwargs)
+
+    def _ctx(self, request):
+        return {
+            'mode':    'create',
+            'budgets': Budget.objects.filter(status__in=['approved','active']).order_by('name'),
+            'projects': __import__('apps.projects.models', fromlist=['Project']).Project.objects.filter(
+                status='active').order_by('name'),
+            'doc_type_choices': IncomingPaymentDocument.DocType.choices,
+        }
+
+    def get(self, request):
+        return render(request, self.template_name, self._ctx(request))
+
+    def post(self, request):
+        try:
+            amount = _validate_decimal(request.POST.get('amount'), 'amount')
+            tax    = _validate_decimal(request.POST.get('tax_amount') or '0', 'tax')
+            disc   = _validate_decimal(request.POST.get('discount_amount') or '0', 'discount')
+        except ValueError as e:
+            messages.error(request, str(e))
+            return render(request, self.template_name, self._ctx(request))
+
+        ipr = IncomingPaymentRequest.objects.create(
+            title                = request.POST.get('title', '').strip(),
+            description          = request.POST.get('description', '').strip(),
+            customer_name        = request.POST.get('customer_name', '').strip(),
+            customer_email       = request.POST.get('customer_email', '').strip(),
+            customer_phone       = request.POST.get('customer_phone', '').strip(),
+            customer_company     = request.POST.get('customer_company', '').strip(),
+            customer_address     = request.POST.get('customer_address', '').strip(),
+            amount               = amount,
+            tax_amount           = tax,
+            discount_amount      = disc,
+            currency             = request.POST.get('currency', 'GMD').strip().upper() or 'GMD',
+            issue_date           = request.POST.get('issue_date') or timezone.now().date(),
+            due_date             = request.POST.get('due_date') or None,
+            payment_instructions = request.POST.get('payment_instructions', '').strip(),
+            notes                = request.POST.get('notes', '').strip(),
+            project_id           = request.POST.get('project') or None,
+            budget_id            = request.POST.get('budget') or None,
+            status               = request.POST.get('status', IncomingPaymentRequest.Status.DRAFT),
+            created_by           = request.user,
+        )
+
+        # Attach documents
+        for key in request.FILES:
+            if key.startswith('doc_file_'):
+                idx   = key[len('doc_file_'):]
+                f     = request.FILES[key]
+                dtype = request.POST.get(f'doc_type_{idx}',
+                                         IncomingPaymentDocument.DocType.INVOICE)
+                dname = request.POST.get(f'doc_name_{idx}', f.name).strip() or f.name
+                doc   = IncomingPaymentDocument(
+                    payment_request=ipr, doc_type=dtype,
+                    name=dname, uploaded_by=request.user,
+                )
+                doc.file.save(f.name, f, save=True)
+
+        if ipr.status == IncomingPaymentRequest.Status.SENT:
+            _send_invoice_email(ipr, request)
+            messages.success(request, f'Invoice {ipr.invoice_number} created and emailed to {ipr.customer_email}.')
+        else:
+            messages.success(request, f'Invoice {ipr.invoice_number} saved as draft.')
+
+        return redirect('incoming_payment_request_detail', pk=ipr.pk)
+
+
+class IncomingPaymentRequestDetailView(LoginRequiredMixin, View):
+    template_name = 'finance/incoming_payment_request_detail.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_payment_requests(request.user):
+            messages.error(request, 'Permission denied.')
+            return redirect('finance_dashboard')
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, pk):
+        ipr = get_object_or_404(IncomingPaymentRequest, pk=pk)
+        return render(request, self.template_name, {
+            'ipr':       ipr,
+            'documents': ipr.documents.all(),
+            'is_finance': _is_finance(request.user),
+            'is_ceo':    _is_ceo(request.user),
+            'doc_type_choices': IncomingPaymentDocument.DocType.choices,
+        })
+
+
+class IncomingPaymentRequestSendView(LoginRequiredMixin, View):
+    """Send/resend the invoice email to the customer."""
+
+    def post(self, request, pk):
+        if not _can_manage_payment_requests(request.user):
+            messages.error(request, 'Permission denied.')
+            return redirect('finance_dashboard')
+
+        ipr = get_object_or_404(IncomingPaymentRequest, pk=pk)
+        if ipr.status == IncomingPaymentRequest.Status.PAID:
+            messages.warning(request, 'Invoice is already paid.')
+            return redirect('incoming_payment_request_detail', pk=pk)
+
+        ipr.status = IncomingPaymentRequest.Status.SENT
+        ipr.save(update_fields=['status', 'updated_at'])
+        _send_invoice_email(ipr, request)
+        messages.success(request,
+            f'Invoice {ipr.invoice_number} emailed to {ipr.customer_email or ipr.customer_name}.')
+        return redirect('incoming_payment_request_detail', pk=pk)
+
+
+class IncomingPaymentRequestReminderView(LoginRequiredMixin, View):
+    """Send a payment reminder (escalates in tone each time)."""
+
+    def post(self, request, pk):
+        if not _can_manage_payment_requests(request.user):
+            messages.error(request, 'Permission denied.')
+            return redirect('finance_dashboard')
+
+        ipr = get_object_or_404(IncomingPaymentRequest, pk=pk)
+        if ipr.status in (IncomingPaymentRequest.Status.PAID,
+                          IncomingPaymentRequest.Status.CANCELLED):
+            messages.warning(request, 'Cannot send reminder for a paid or cancelled invoice.')
+            return redirect('incoming_payment_request_detail', pk=pk)
+
+        _send_invoice_reminder_email(ipr)
+        ipr.reminder_count     += 1
+        ipr.last_reminder_sent  = timezone.now()
+        if ipr.status == IncomingPaymentRequest.Status.DRAFT:
+            ipr.status = IncomingPaymentRequest.Status.SENT
+        ipr.save(update_fields=['reminder_count', 'last_reminder_sent', 'status', 'updated_at'])
+
+        ordinals = {1: '1st', 2: '2nd', 3: '3rd'}
+        label = ordinals.get(ipr.reminder_count, f'{ipr.reminder_count}th')
+        messages.success(request,
+            f'{label} reminder emailed to {ipr.customer_email or ipr.customer_name}.')
+        return redirect('incoming_payment_request_detail', pk=pk)
+
+
+class IncomingPaymentRequestMarkPaidView(LoginRequiredMixin, View):
+    """Record that the customer has paid."""
+
+    def post(self, request, pk):
+        if not _is_finance(request.user):
+            messages.error(request, 'Only Finance staff can mark invoices as paid.')
+            return redirect('finance_dashboard')
+
+        ipr = get_object_or_404(IncomingPaymentRequest, pk=pk)
+        if ipr.status == IncomingPaymentRequest.Status.PAID:
+            messages.warning(request, 'Invoice already marked as paid.')
+            return redirect('incoming_payment_request_detail', pk=pk)
+
+        ipr.status  = IncomingPaymentRequest.Status.PAID
+        ipr.paid_at = timezone.now()
+        ipr.save(update_fields=['status', 'paid_at', 'updated_at'])
+
+        messages.success(request,
+            f'Invoice {ipr.invoice_number} marked as paid. '
+            f'Amount: {ipr.currency} {ipr.total_amount:,.2f}.')
+        return redirect('incoming_payment_request_detail', pk=pk)
+
+
+class IncomingPaymentRequestAddDocView(LoginRequiredMixin, View):
+    """Upload additional documents to an existing invoice."""
+
+    def post(self, request, pk):
+        if not _can_manage_payment_requests(request.user):
+            messages.error(request, 'Permission denied.')
+            return redirect('finance_dashboard')
+
+        ipr = get_object_or_404(IncomingPaymentRequest, pk=pk)
+        for key in request.FILES:
+            if key.startswith('doc_file_'):
+                idx   = key[len('doc_file_'):]
+                f     = request.FILES[key]
+                dtype = request.POST.get(f'doc_type_{idx}',
+                                         IncomingPaymentDocument.DocType.OTHER)
+                dname = request.POST.get(f'doc_name_{idx}', f.name).strip() or f.name
+                doc   = IncomingPaymentDocument(
+                    payment_request=ipr, doc_type=dtype,
+                    name=dname, uploaded_by=request.user,
+                )
+                doc.file.save(f.name, f, save=True)
+
+        messages.success(request, 'Documents uploaded.')
+        return redirect('incoming_payment_request_detail', pk=pk)
+
+
+class IncomingPaymentRequestCancelView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        if not _can_manage_payment_requests(request.user):
+            messages.error(request, 'Permission denied.')
+            return redirect('finance_dashboard')
+        ipr = get_object_or_404(IncomingPaymentRequest, pk=pk)
+        if ipr.status == IncomingPaymentRequest.Status.PAID:
+            messages.error(request, 'Paid invoices cannot be cancelled.')
+            return redirect('incoming_payment_request_detail', pk=pk)
+        ipr.status = IncomingPaymentRequest.Status.CANCELLED
+        ipr.save(update_fields=['status', 'updated_at'])
+        messages.warning(request, f'Invoice {ipr.invoice_number} cancelled.')
+        return redirect('incoming_payment_request_list')

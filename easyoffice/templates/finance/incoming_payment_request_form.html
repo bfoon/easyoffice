@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}New Invoice{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'finance_dashboard' %}">Finance</a> /
+  <a href="{% url 'incoming_payment_request_list' %}">Invoices</a> / New
+{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <h1 class="eo-page-title"><i class="bi bi-file-earmark-text" style="color:var(--eo-primary)"></i> New Invoice</h1>
+</div>
+
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  <div class="row g-4">
+
+    <!-- ── LEFT ── -->
+    <div class="col-lg-8">
+
+      <!-- Invoice details -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-4">Invoice Details</h2>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Title / Service Description *</label>
+          <input type="text" name="title" class="eo-form-control" required
+                 placeholder="e.g. Consulting Services Q2 2025, Supply of Office Furniture"/>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Full Description</label>
+          <textarea name="description" class="eo-form-control" rows="4"
+                    placeholder="Detailed scope of work, goods supplied, deliverables, period covered…"></textarea>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Issue Date *</label>
+            <input type="date" name="issue_date" class="eo-form-control" required
+                   value="{% now 'Y-m-d' %}"/>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Due Date</label>
+            <input type="date" name="due_date" class="eo-form-control"/>
+          </div>
+        </div>
+      </div>
+
+      <!-- Customer -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-4"><i class="bi bi-person-lines-fill me-2" style="color:var(--eo-primary)"></i>Bill To (Customer)</h2>
+        <div class="row g-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Customer Name *</label>
+            <input type="text" name="customer_name" class="eo-form-control" required
+                   placeholder="Full name or company name"/>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Company / Organisation</label>
+            <input type="text" name="customer_company" class="eo-form-control"
+                   placeholder="Company name (if different from above)"/>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Email Address</label>
+            <input type="email" name="customer_email" class="eo-form-control"
+                   placeholder="customer@example.com"/>
+            <div style="font-size:.73rem;color:var(--eo-text-muted);margin-top:4px">Invoice and reminders will be sent here</div>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Phone</label>
+            <input type="text" name="customer_phone" class="eo-form-control" placeholder="+220 …"/>
+          </div>
+          <div class="col-12">
+            <label class="eo-form-label">Address</label>
+            <textarea name="customer_address" class="eo-form-control" rows="2"
+                      placeholder="Street, city, country"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- Amounts -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-4"><i class="bi bi-currency-exchange me-2" style="color:var(--eo-primary)"></i>Amount</h2>
+        <div class="row g-3">
+          <div class="col-sm-4">
+            <label class="eo-form-label">Subtotal *</label>
+            <input type="number" name="amount" class="eo-form-control" required
+                   min="0.01" step="0.01" placeholder="0.00" id="amtSubtotal" oninput="calcTotal()"/>
+          </div>
+          <div class="col-sm-4">
+            <label class="eo-form-label">Tax / VAT</label>
+            <input type="number" name="tax_amount" class="eo-form-control"
+                   min="0" step="0.01" value="0" placeholder="0.00" id="amtTax" oninput="calcTotal()"/>
+          </div>
+          <div class="col-sm-4">
+            <label class="eo-form-label">Discount</label>
+            <input type="number" name="discount_amount" class="eo-form-control"
+                   min="0" step="0.01" value="0" placeholder="0.00" id="amtDiscount" oninput="calcTotal()"/>
+          </div>
+          <div class="col-sm-4">
+            <label class="eo-form-label">Currency</label>
+            <input type="text" name="currency" class="eo-form-control" value="GMD" maxlength="10"/>
+          </div>
+          <div class="col-sm-8">
+            <label class="eo-form-label">Total Due (auto-calculated)</label>
+            <div style="padding:10px 14px;background:var(--eo-bg);border:2px solid var(--eo-primary);border-radius:9px;font-size:1.2rem;font-weight:800;color:var(--eo-text)" id="totalDisplay">0.00</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Payment instructions -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-3"><i class="bi bi-bank me-2" style="color:var(--eo-primary)"></i>Payment Instructions</h2>
+        <textarea name="payment_instructions" class="eo-form-control" rows="5"
+                  placeholder="Bank Name: …&#10;Account Name: …&#10;Account Number: …&#10;IBAN / Sort Code: …&#10;Mobile Money: …&#10;&#10;Please quote invoice number when making payment."></textarea>
+        <div style="font-size:.73rem;color:var(--eo-text-muted);margin-top:5px">Sent directly to the customer in the invoice email</div>
+      </div>
+
+      <!-- Documents -->
+      <div class="eo-card mb-4">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <h2 class="eo-card-title" style="margin:0">Attachments</h2>
+          <button type="button" onclick="addDocRow()" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-paperclip"></i> Attach Document
+          </button>
+        </div>
+        <div id="docRows"></div>
+        <div id="docEmpty" style="text-align:center;padding:20px;color:var(--eo-text-muted);font-size:.84rem">
+          <i class="bi bi-file-earmark-plus" style="font-size:1.6rem;display:block;margin-bottom:6px;opacity:.3"></i>
+          Attach your invoice PDF, delivery note, quotation, contract, etc.
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── RIGHT ── -->
+    <div class="col-lg-4">
+
+      <!-- Links -->
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-4">Link To</h2>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Project</label>
+          <select name="project" class="eo-form-select">
+            <option value="">— None —</option>
+            {% for p in projects %}
+            <option value="{{ p.id }}">[{{ p.code }}] {{ p.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Budget</label>
+          <select name="budget" class="eo-form-select">
+            <option value="">— None —</option>
+            {% for b in budgets %}
+            <option value="{{ b.id }}">{{ b.name }} (FY{{ b.fiscal_year }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Internal Notes</label>
+          <textarea name="notes" class="eo-form-control" rows="2"
+                    placeholder="Not sent to customer"></textarea>
+        </div>
+      </div>
+
+      <!-- Save -->
+      <div class="eo-card">
+        <h2 class="eo-card-title mb-4">Save Invoice</h2>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Status</label>
+          <select name="status" class="eo-form-select">
+            <option value="draft">Draft — save without emailing</option>
+            <option value="sent">Send now — email invoice to customer</option>
+          </select>
+          <div style="font-size:.73rem;color:var(--eo-text-muted);margin-top:4px">
+            Choosing <strong>Send now</strong> emails the invoice with all attached documents to the customer immediately.
+          </div>
+        </div>
+        <button type="submit" class="eo-btn eo-btn-primary w-100 mb-2" style="padding:11px">
+          <i class="bi bi-file-earmark-arrow-up"></i> Create Invoice
+        </button>
+        <a href="{% url 'incoming_payment_request_list' %}" class="eo-btn eo-btn-secondary w-100">Cancel</a>
+      </div>
+
+    </div>
+  </div>
+</form>
+
+<script>
+function calcTotal() {
+  var sub  = parseFloat(document.getElementById('amtSubtotal').value) || 0;
+  var tax  = parseFloat(document.getElementById('amtTax').value)      || 0;
+  var disc = parseFloat(document.getElementById('amtDiscount').value) || 0;
+  var total = sub + tax - disc;
+  document.getElementById('totalDisplay').textContent = total.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+var docIdx = 0;
+var DOC_TYPES = [
+  {% for val, label in doc_type_choices %}['{{ val }}','{{ label }}'],{% endfor %}
+];
+
+function addDocRow() {
+  document.getElementById('docEmpty').style.display = 'none';
+  var idx = ++docIdx;
+  var sel = DOC_TYPES.map(function(t){ return '<option value="'+t[0]+'">'+t[1]+'</option>'; }).join('');
+  var div = document.createElement('div');
+  div.className = 'doc-row';
+  div.style = 'display:grid;grid-template-columns:150px 1fr auto;gap:8px;align-items:center;margin-bottom:8px';
+  div.innerHTML =
+    '<select name="doc_type_'+idx+'" class="eo-form-select" style="font-size:.82rem">'+sel+'</select>'+
+    '<input type="file" name="doc_file_'+idx+'" class="eo-form-control" style="font-size:.82rem"/>'+
+    '<button type="button" onclick="this.closest(\'.doc-row\').remove();checkEmpty()" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" style="color:var(--eo-danger)"><i class="bi bi-trash"></i></button>';
+  document.getElementById('docRows').appendChild(div);
+}
+
+function checkEmpty() {
+  var rows = document.querySelectorAll('.doc-row');
+  document.getElementById('docEmpty').style.display = rows.length ? 'none' : '';
+}
+</script>
+{% endblock %}

@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Invoices{% endblock %}
+{% block breadcrumb %}<a href="{% url 'finance_dashboard' %}">Finance</a> / Invoices{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Invoices</h1>
+    <p class="eo-page-subtitle">Outgoing invoices — payments owed to {{ OFFICE_CONFIG.NAME }}</p>
+  </div>
+  <a href="{% url 'incoming_payment_request_create' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-plus-lg"></i> New Invoice
+  </a>
+</div>
+
+<!-- Stats row -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-xl-3">
+    <div class="eo-card" style="border-left:4px solid #3b82f6">
+      <div style="font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted)">Sent</div>
+      <div style="font-size:1.6rem;font-weight:800;color:var(--eo-text);margin-top:4px">{{ sent_count }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-xl-3">
+    <div class="eo-card" style="border-left:4px solid #ef4444">
+      <div style="font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted)">Overdue</div>
+      <div style="font-size:1.6rem;font-weight:800;color:#ef4444;margin-top:4px">{{ overdue_count }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-xl-3">
+    <div class="eo-card" style="border-left:4px solid #10b981">
+      <div style="font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted)">Paid</div>
+      <div style="font-size:1.6rem;font-weight:800;color:#10b981;margin-top:4px">{{ paid_count }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-xl-3">
+    <div class="eo-card" style="border-left:4px solid #f59e0b">
+      <div style="font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted)">Outstanding</div>
+      <div style="font-size:1.3rem;font-weight:800;color:#f59e0b;margin-top:4px">D{{ total_outstanding|floatformat:0|intcomma }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="eo-card mb-4">
+  <form method="get" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+    <div style="position:relative;flex:1;min-width:200px;max-width:320px">
+      <i class="bi bi-search" style="position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.8rem;pointer-events:none"></i>
+      <input type="text" name="q" class="eo-form-control" style="padding-left:32px"
+             placeholder="Invoice #, customer, company…" value="{{ q }}"/>
+    </div>
+    <div>
+      <label class="eo-form-label">Status</label>
+      <select name="status" class="eo-form-select" onchange="this.form.submit()">
+        <option value="">All Status</option>
+        {% for val, label in status_choices %}
+        <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
+    {% if q or status_filter %}
+    <a href="{% url 'incoming_payment_request_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-x-circle"></i> Reset</a>
+    {% endif %}
+  </form>
+</div>
+
+{% if invoices %}
+<div style="overflow-x:auto;border:1px solid var(--eo-border);border-radius:var(--eo-radius);background:var(--eo-surface)">
+  <table class="eo-table" style="margin:0;min-width:860px">
+    <thead>
+      <tr>
+        <th style="padding-left:16px;min-width:120px">Invoice #</th>
+        <th style="min-width:200px">Customer</th>
+        <th>Title</th>
+        <th>Issue Date</th>
+        <th>Due Date</th>
+        <th>Amount</th>
+        <th>Status</th>
+        <th>Reminders</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ipr in invoices %}
+      <tr {% if ipr.status == 'overdue' %}style="background:#fef2f2"{% endif %}>
+        <td style="padding-left:16px">
+          <span style="font-family:monospace;font-size:.82rem;font-weight:700;color:var(--eo-primary)">{{ ipr.invoice_number }}</span>
+        </td>
+        <td>
+          <div style="font-weight:700;font-size:.88rem;color:var(--eo-text)">{{ ipr.customer_name }}</div>
+          {% if ipr.customer_company %}<div style="font-size:.73rem;color:var(--eo-text-muted)">{{ ipr.customer_company }}</div>{% endif %}
+          {% if ipr.customer_email %}<div style="font-size:.71rem;color:var(--eo-text-muted)">{{ ipr.customer_email }}</div>{% endif %}
+        </td>
+        <td style="font-size:.84rem;color:var(--eo-text)">{{ ipr.title|truncatechars:40 }}</td>
+        <td style="font-size:.8rem;color:var(--eo-text-muted)">{{ ipr.issue_date|date:"N j, Y" }}</td>
+        <td style="font-size:.8rem;{% if ipr.is_overdue %}color:#ef4444;font-weight:700{% else %}color:var(--eo-text-muted){% endif %}">
+          {% if ipr.due_date %}{{ ipr.due_date|date:"N j, Y" }}{% if ipr.days_overdue %} <span style="font-size:.7rem">({{ ipr.days_overdue }}d late)</span>{% endif %}{% else %}—{% endif %}
+        </td>
+        <td>
+          <div style="font-weight:800;font-size:.92rem;color:var(--eo-text)">{{ ipr.currency }} {{ ipr.total_amount|floatformat:2|intcomma }}</div>
+        </td>
+        <td>
+          <span style="font-size:.74rem;font-weight:700;padding:3px 10px;border-radius:20px;background:{{ ipr.status_color }}18;color:{{ ipr.status_color }}">
+            {{ ipr.get_status_display }}
+          </span>
+        </td>
+        <td style="font-size:.8rem;color:var(--eo-text-muted);text-align:center">
+          {% if ipr.reminder_count %}
+          <span title="Last sent {{ ipr.last_reminder_sent|date:'N j, Y' }}">{{ ipr.reminder_count }}</span>
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          <a href="{% url 'incoming_payment_request_detail' ipr.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-eye"></i> View
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="eo-card" style="text-align:center;padding:72px 32px">
+  <i class="bi bi-file-earmark-text" style="font-size:3rem;display:block;margin-bottom:14px;opacity:.2;color:var(--eo-text-muted)"></i>
+  <div style="font-size:1rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">No invoices found</div>
+  <p style="color:var(--eo-text-muted);font-size:.87rem;margin-bottom:20px">
+    {% if q or status_filter %}Try adjusting your filters.{% else %}No invoices have been created yet.{% endif %}
+  </p>
+  <a href="{% url 'incoming_payment_request_create' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-plus"></i> Create First Invoice
+  </a>
+</div>
+{% endif %}
+{% endblock %}

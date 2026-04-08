@@ -113,6 +113,7 @@ class MeetingAttendee(models.Model):
                                    help_text='e.g. Presenter, Note-taker, Observer')
     notes       = models.TextField(blank=True)
     responded_at= models.DateTimeField(null=True, blank=True)
+    checked_in_at = models.DateTimeField(null=True, blank=True)
     created_at  = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -132,6 +133,44 @@ class MeetingAttendee(models.Model):
             'no_show':   '#94a3b8',
         }.get(self.rsvp, '#64748b')
 
+class MeetingExternalAttendee(models.Model):
+    class RSVP(models.TextChoices):
+        INVITED    = 'invited',    _('Invited')
+        ACCEPTED   = 'accepted',   _('Accepted')
+        DECLINED   = 'declined',   _('Declined')
+        TENTATIVE  = 'tentative',  _('Tentative')
+        ATTENDED   = 'attended',   _('Attended')
+        NO_SHOW    = 'no_show',    _('No Show')
+
+    id           = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    meeting      = models.ForeignKey(Meeting, on_delete=models.CASCADE, related_name='external_attendees')
+    full_name    = models.CharField(max_length=255)
+    email        = models.EmailField()
+    organisation = models.CharField(max_length=255, blank=True)
+    role         = models.CharField(max_length=100, blank=True, help_text='e.g. Client, Consultant, Donor')
+    rsvp         = models.CharField(max_length=20, choices=RSVP.choices, default=RSVP.INVITED)
+    is_required  = models.BooleanField(default=True)
+    notes        = models.TextField(blank=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+    checked_in_at = models.DateTimeField(null=True, blank=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [('meeting', 'email')]
+        ordering = ['full_name']
+
+    def __str__(self):
+        return f'{self.full_name} @ {self.meeting}'
+
+    @property
+    def rsvp_color(self):
+        return {
+            'accepted':  '#10b981',
+            'declined':  '#ef4444',
+            'tentative': '#f59e0b',
+            'attended':  '#3b82f6',
+            'no_show':   '#94a3b8',
+        }.get(self.rsvp, '#64748b')
 
 class MeetingMinutes(models.Model):
     id          = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

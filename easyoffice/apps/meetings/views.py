@@ -8,11 +8,13 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.http import JsonResponse, HttpResponseForbidden, HttpResponse
 from django.contrib import messages
 from django.utils import timezone
+from django.core.mail import send_mail
+from django.conf import settings
 from django.db.models import Q
 from django.core.files.base import ContentFile
 
 from apps.meetings.models import (
-    Meeting, MeetingAttendee, MeetingMinutes, MeetingActionItem
+    Meeting, MeetingAttendee, MeetingExternalAttendee, MeetingMinutes, MeetingActionItem
 )
 from apps.core.models import User
 
@@ -53,6 +55,18 @@ def _notify_attendees(meeting, sender, title, message, exclude_ids=None):
             link=f'/meetings/{meeting.id}/',
         )
 
+def _notify_external_attendees(meeting, sender, title, message):
+    for att in meeting.external_attendees.all():
+        try:
+            send_mail(
+                subject=title,
+                message=message,
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
+                recipient_list=[att.email],
+                fail_silently=True,
+            )
+        except Exception:
+            pass
 
 def _parse_meeting_datetime(value):
     """
@@ -374,6 +388,7 @@ def _meeting_form_context(request, meeting=None):
         'meeting': meeting,
         'mode': 'edit' if meeting else 'create',
         'selected_project_id': selected_project_id,
+        'external_attendees': meeting.external_attendees.all() if meeting else [],
     }
 
     if meeting:
@@ -459,17 +474,51 @@ class MeetingCreateView(LoginRequiredMixin, View):
             defaults={'rsvp': 'accepted', 'is_required': True, 'role': 'Organiser'}
         )
 
+        # External attendees
+        ext_names = request.POST.getlist('external_name')
+        ext_emails = request.POST.getlist('external_email')
+        ext_orgs = request.POST.getlist('external_organisation')
+        ext_roles = request.POST.getlist('external_role')
+
+        for i, email in enumerate(ext_emails):
+            email = (email or '').strip()
+            name = (ext_names[i] if i < len(ext_names) else '').strip()
+            organisation = (ext_orgs[i] if i < len(ext_orgs) else '').strip()
+            role = (ext_roles[i] if i < len(ext_roles) else '').strip()
+
+            if not email or not name:
+                continue
+
+            MeetingExternalAttendee.objects.get_or_create(
+                meeting=meeting,
+                email=email,
+                defaults={
+                    'full_name': name,
+                    'organisation': organisation,
+                    'role': role,
+                    'is_required': True,
+                }
+            )
+
         task_ids = request.POST.getlist('linked_tasks')
         if task_ids:
             from apps.tasks.models import Task
             meeting.linked_tasks.set(Task.objects.filter(pk__in=task_ids))
 
         start_text = timezone.localtime(meeting.start_datetime).strftime("%d %b %Y at %H:%M")
+
         _notify_attendees(
             meeting,
             request.user,
             f'Meeting invitation: {meeting.title}',
             f'{request.user.full_name} invited you to "{meeting.title}" on {start_text}.',
+        )
+
+        _notify_external_attendees(
+            meeting,
+            request.user,
+            f'Meeting invitation: {meeting.title}',
+            f'You have been invited to "{meeting.title}" on {start_text}.'
         )
 
         messages.success(request, f'Meeting "{meeting.title}" created.')
@@ -544,21 +593,110 @@ class MeetingUpdateView(LoginRequiredMixin, View):
             except User.DoesNotExist:
                 pass
 
+        # Rebuild external attendees
+        meeting.external_attendees.all().delete()
+
+        ext_names = request.POST.getlist('external_name')
+        ext_emails = request.POST.getlist('external_email')
+        ext_orgs = request.POST.getlist('external_organisation')
+        ext_roles = request.POST.getlist('external_role')
+
+        for i, email in enumerate(ext_emails):
+            email = (email or '').strip()
+            name = (ext_names[i] if i < len(ext_names) else '').strip()
+            organisation = (ext_orgs[i] if i < len(ext_orgs) else '').strip()
+            role = (ext_roles[i] if i < len(ext_roles) else '').strip()
+
+            if not email or not name:
+                continue
+
+            MeetingExternalAttendee.objects.create(
+                meeting=meeting,
+                full_name=name,
+                email=email,
+                organisation=organisation,
+                role=role,
+                is_required=True,
+            )
+
         task_ids = request.POST.getlist('linked_tasks')
         from apps.tasks.models import Task
         meeting.linked_tasks.set(Task.objects.filter(pk__in=task_ids) if task_ids else [])
 
-        if new_ids:
+        if new_ids or meeting.external_attendees.exists():
             _notify_attendees(
                 meeting,
                 request.user,
                 f'Meeting updated: {meeting.title}',
                 f'The meeting "{meeting.title}" has been updated.',
             )
+            _notify_external_attendees(
+                meeting,
+                request.user,
+                f'Meeting updated: {meeting.title}',
+                f'The meeting "{meeting.title}" has been updated.'
+            )
 
         messages.success(request, 'Meeting updated.')
         return redirect('meeting_detail', pk=meeting.pk)
 
+
+class MeetingAttendanceUpdateView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        meeting = get_object_or_404(Meeting, pk=pk)
+        if not _can_edit_meeting(request.user, meeting):
+            return HttpResponseForbidden('Only the organiser can manage attendance.')
+
+        attendee_type = request.POST.get('attendee_type', 'internal')
+        attendee_id = request.POST.get('attendee_id')
+        status = request.POST.get('status')
+
+        allowed = {'attended', 'no_show', 'accepted', 'declined', 'tentative'}
+        if status not in allowed:
+            messages.error(request, 'Invalid attendance status.')
+            return redirect('meeting_detail', pk=pk)
+
+        if attendee_type == 'external':
+            attendee = get_object_or_404(MeetingExternalAttendee, pk=attendee_id, meeting=meeting)
+        else:
+            attendee = get_object_or_404(MeetingAttendee, pk=attendee_id, meeting=meeting)
+
+        attendee.rsvp = status
+        if status == 'attended':
+            attendee.checked_in_at = timezone.now()
+        attendee.responded_at = timezone.now()
+        attendee.save(update_fields=['rsvp', 'checked_in_at', 'responded_at'])
+
+        messages.success(request, 'Attendance updated.')
+        return redirect('meeting_detail', pk=pk)
+
+class ShareMeetingMinutesView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        meeting = get_object_or_404(Meeting, pk=pk)
+        if not _can_edit_meeting(request.user, meeting):
+            return HttpResponseForbidden('Only the organiser can share minutes.')
+
+        minutes = getattr(meeting, 'minutes', None)
+        if not minutes:
+            messages.error(request, 'No meeting minutes available yet.')
+            return redirect('meeting_detail', pk=pk)
+
+        _notify_attendees(
+            meeting,
+            request.user,
+            f'Meeting minutes shared: {meeting.title}',
+            f'The minutes for "{meeting.title}" are now available.',
+        )
+
+        _notify_external_attendees(
+            meeting,
+            request.user,
+            f'Meeting minutes shared: {meeting.title}',
+            f'The minutes for "{meeting.title}" are now available.'
+        )
+
+        messages.success(request, 'Meeting minutes shared with all attendees.')
+        return redirect('meeting_detail', pk=pk)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Detail
@@ -578,6 +716,7 @@ class MeetingDetailView(LoginRequiredMixin, View):
         ctx = {
             'meeting': meeting,
             'attendees': meeting.attendees.select_related('user').all(),
+            'external_attendees': meeting.external_attendees.all(),
             'my_invite': my_invite,
             'minutes': minutes,
             'action_items': minutes.action_items.select_related(
@@ -585,9 +724,9 @@ class MeetingDetailView(LoginRequiredMixin, View):
             ).all() if minutes else [],
             'can_edit': _can_edit_meeting(request.user, meeting),
             'can_take_minutes': (
-                request.user.is_superuser or
-                meeting.organizer_id == request.user.id or
-                meeting.attendees.filter(user=request.user).exists()
+                    request.user.is_superuser or
+                    meeting.organizer_id == request.user.id or
+                    meeting.attendees.filter(user=request.user).exists()
             ),
             'linked_tasks': meeting.linked_tasks.select_related('assigned_to').all(),
             'rsvp_choices': MeetingAttendee.RSVP.choices,

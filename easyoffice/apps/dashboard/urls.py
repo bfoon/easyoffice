@@ -4,4 +4,5 @@ from apps.dashboard import views
 urlpatterns = [
     path('', views.DashboardView.as_view(), name='dashboard'),
     path('admin/', views.AdminDashboardView.as_view(), name='admin_dashboard'),
+    path('task-followup/', views.TaskFollowUpView.as_view(), name='task_followup'),
 ]

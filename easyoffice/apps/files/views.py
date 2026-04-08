@@ -1034,12 +1034,24 @@ class FileManagerView(LoginRequiredMixin, TemplateView):
                 files = files.filter(ext_q)
 
         allowed_sorts = {
-            'name':'-name','created_at':'created_at','-created_at':'-created_at',
-            'file_size':'file_size','-file_size':'-file_size',
-            'download_count':'download_count','-download_count':'-download_count',
-            '-name':'-name',
+            'name':           'name',
+            '-name':          '-name',
+            'created_at':     'created_at',
+            '-created_at':    '-created_at',
+            'file_size':      'file_size',
+            '-file_size':     '-file_size',
+            'download_count': 'download_count',
+            '-download_count':'-download_count',
         }
-        files = files.order_by(allowed_sorts.get(sort, '-created_at'))
+        sort_field = allowed_sorts.get(sort, '-created_at')
+        files = files.order_by(sort_field)
+
+        # Sort folders by the same column where possible
+        folder_sort_map = {
+            'name': 'name', '-name': '-name',
+            'created_at': 'created_at', '-created_at': '-created_at',
+        }
+        folders = folders.order_by(folder_sort_map.get(sort, 'name'))
 
         # ── Annotate each file/folder with the requesting user's permission ──
         # This lets the template show/hide buttons based on 'view'/'edit'/'full'
@@ -1076,9 +1088,13 @@ class FileManagerView(LoginRequiredMixin, TemplateView):
         for folder in folder_list:
             folder.is_pinned = str(folder.id) in pinned_folder_ids
 
-        # Re-sort: pinned first within each group
-        file_list   = sorted(file_list,   key=lambda x: (not x.is_pinned, x.created_at), reverse=False)
-        folder_list = sorted(folder_list, key=lambda x: (not x.is_pinned, x.name))
+        # Re-sort: pinned items float to top, but within pinned AND within
+        # unpinned groups the user's chosen sort order is preserved.
+        # Python's sort is stable so we only need one key: (not is_pinned, original_index)
+        file_list   = sorted(enumerate(file_list),   key=lambda t: (not t[1].is_pinned, t[0]))
+        file_list   = [f for _, f in file_list]
+        folder_list = sorted(enumerate(folder_list), key=lambda t: (not t[1].is_pinned, t[0]))
+        folder_list = [f for _, f in folder_list]
 
         # Pending signatures count for badge
         pending_sigs   = SignatureRequestSigner.objects.filter(

@@ -13,14 +13,18 @@
     <a href="{% url 'reports_dashboard' %}" class="eo-btn eo-btn-secondary">
       <i class="bi bi-bar-chart-line"></i> Reports
     </a>
+    <a href="{% url 'task_list' %}?view=all" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-check2-square"></i> All Tasks
+    </a>
     <a href="{% url 'project_create' %}" class="eo-btn eo-btn-primary">
       <i class="bi bi-plus"></i> New Project
     </a>
   </div>
 </div>
 
+<!-- ── STAT CARDS ── -->
 <div class="row g-3 mb-4">
-  <div class="col-sm-6 col-lg-3">
+  <div class="col-sm-6 col-lg-2">
     <div class="eo-stat eo-stat-primary">
       <div class="eo-stat-label">Total Staff</div>
       <div class="eo-stat-value">{{ total_staff }}</div>
@@ -28,7 +32,7 @@
       <i class="bi bi-people eo-stat-icon"></i>
     </div>
   </div>
-  <div class="col-sm-6 col-lg-3">
+  <div class="col-sm-6 col-lg-2">
     <div class="eo-stat eo-stat-success">
       <div class="eo-stat-label">Active Projects</div>
       <div class="eo-stat-value">{{ total_active_projects }}</div>
@@ -36,7 +40,7 @@
       <i class="bi bi-kanban eo-stat-icon"></i>
     </div>
   </div>
-  <div class="col-sm-6 col-lg-3">
+  <div class="col-sm-6 col-lg-2">
     <div class="eo-stat eo-stat-info">
       <div class="eo-stat-label">Open Tasks</div>
       <div class="eo-stat-value">{{ total_tasks_open }}</div>
@@ -44,18 +48,283 @@
       <i class="bi bi-check2-square eo-stat-icon"></i>
     </div>
   </div>
-  <div class="col-sm-6 col-lg-3">
+  <div class="col-sm-6 col-lg-2">
     <div class="eo-stat eo-stat-danger">
-      <div class="eo-stat-label">Tasks Overdue</div>
+      <div class="eo-stat-label">Overdue</div>
       <div class="eo-stat-value">{{ total_tasks_overdue }}</div>
       <div class="eo-stat-change">need urgent attention</div>
       <i class="bi bi-alarm eo-stat-icon"></i>
     </div>
   </div>
+  <div class="col-sm-6 col-lg-2">
+    <div class="eo-stat eo-stat-warning">
+      <div class="eo-stat-label">Due Today</div>
+      <div class="eo-stat-value">{{ total_tasks_due_today }}</div>
+      <div class="eo-stat-change">deadline is today</div>
+      <i class="bi bi-calendar-event eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-sm-6 col-lg-2">
+    <div class="eo-stat">
+      <div class="eo-stat-label">Leave Queue</div>
+      <div class="eo-stat-value">{{ office_pending_leave_requests }}</div>
+      <div class="eo-stat-change">awaiting approval</div>
+      <i class="bi bi-calendar-check eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
+<!-- ── PRIORITY PILLS ── -->
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;align-items:center">
+  <span style="font-size:.74rem;font-weight:700;color:var(--eo-text-muted)">Priority breakdown:</span>
+  {% if priority_counts.critical %}<span style="padding:4px 12px;border-radius:20px;font-size:.78rem;font-weight:700;background:#fee2e2;color:#991b1b">🔴 Critical: {{ priority_counts.critical }}</span>{% endif %}
+  {% if priority_counts.urgent %}<span style="padding:4px 12px;border-radius:20px;font-size:.78rem;font-weight:700;background:#fee2e2;color:#b91c1c">🟠 Urgent: {{ priority_counts.urgent }}</span>{% endif %}
+  {% if priority_counts.high %}<span style="padding:4px 12px;border-radius:20px;font-size:.78rem;font-weight:700;background:#fef3c7;color:#92400e">🟡 High: {{ priority_counts.high }}</span>{% endif %}
+  <span style="padding:4px 12px;border-radius:20px;font-size:.78rem;font-weight:700;background:#dbeafe;color:#1e40af">🔵 Medium: {{ priority_counts.medium }}</span>
+  <span style="padding:4px 12px;border-radius:20px;font-size:.78rem;font-weight:700;background:#f1f5f9;color:#475569">⚪ Low: {{ priority_counts.low }}</span>
 </div>
 
 <div class="row g-4">
-  <div class="col-lg-8">
+  <!-- ── LEFT MAIN ── -->
+  <div class="col-lg-8 d-flex flex-column gap-4">
+
+    <!-- UNIT TASK OVERVIEW -->
+    {% if unit_task_data %}
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title"><i class="bi bi-diagram-3 me-2" style="color:var(--eo-primary)"></i>Tasks by Unit</h2>
+          <p class="eo-card-subtitle">Open task load and overdue count per organisational unit</p>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="eo-table" style="margin:0">
+          <thead>
+            <tr>
+              <th>Unit</th>
+              <th>Unit Head</th>
+              <th style="text-align:center">Open</th>
+              <th style="text-align:center">Overdue</th>
+              <th style="text-align:center">Critical / Urgent</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in unit_task_data %}
+            <tr {% if row.overdue %}style="background:{% if row.overdue > 3 %}#fff5f5{% else %}#fffbf5{% endif %}"{% endif %}>
+              <td style="font-weight:700;font-size:.88rem">{{ row.unit.name }}</td>
+              <td>
+                {% if row.head %}
+                <div style="font-size:.84rem;color:var(--eo-text)">{{ row.head.full_name }}</div>
+                <div style="font-size:.71rem;color:var(--eo-text-muted)">{{ row.head.email }}</div>
+                {% else %}
+                <span style="font-size:.8rem;color:var(--eo-text-muted)">—</span>
+                {% endif %}
+              </td>
+              <td style="text-align:center;font-size:1.1rem;font-weight:800;color:var(--eo-text)">{{ row.total }}</td>
+              <td style="text-align:center">
+                {% if row.overdue %}
+                <span style="font-size:1rem;font-weight:800;color:#ef4444">{{ row.overdue }}</span>
+                {% else %}
+                <span style="color:#10b981">✓</span>
+                {% endif %}
+              </td>
+              <td style="text-align:center">
+                {% if row.critical %}
+                <span style="font-size:.9rem;font-weight:700;color:#ef4444">{{ row.critical }}</span>
+                {% else %}
+                <span style="color:var(--eo-text-muted)">—</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if row.head %}
+                <button class="eo-btn eo-btn-secondary eo-btn-sm"
+                        onclick="openFollowupModal('{{ row.unit.name|escapejs }} — overdue tasks','','unit_head','{{ row.unit.name|escapejs }} Head','')">
+                  <i class="bi bi-envelope-arrow-up"></i> Follow Up
+                </button>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- OVERDUE TASKS -->
+    {% if overdue_tasks %}
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title"><i class="bi bi-alarm me-2" style="color:#ef4444"></i>Overdue Tasks — Action Required</h2>
+          <p class="eo-card-subtitle">{{ total_tasks_overdue }} task{{ total_tasks_overdue|pluralize }} past their due date</p>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column">
+        {% for task in overdue_tasks %}
+        <div style="display:flex;align-items:flex-start;gap:14px;padding:14px 0;
+                    {% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
+          <div style="width:4px;border-radius:4px;align-self:stretch;min-height:48px;flex-shrink:0;
+                      background:{% if task.priority == 'critical' %}#dc2626{% elif task.priority == 'urgent' %}#ea580c{% elif task.priority == 'high' %}#d97706{% else %}#3b82f6{% endif %}"></div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:5px">
+              <a href="{% url 'task_detail' task.pk %}"
+                 style="font-weight:700;font-size:.9rem;color:var(--eo-text);text-decoration:none;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                {{ task.title|truncatechars:55 }}
+              </a>
+              <div style="display:flex;gap:5px;flex-shrink:0">
+                <span class="eo-status eo-status-{{ task.status }}" style="font-size:.68rem">{{ task.get_status_display }}</span>
+                <span class="eo-priority eo-priority-{{ task.priority }}" style="font-size:.68rem"><i class="bi bi-flag-fill"></i> {{ task.get_priority_display }}</span>
+              </div>
+            </div>
+            <div style="font-size:.75rem;color:var(--eo-text-muted);display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px">
+              <span><i class="bi bi-person me-1"></i>{{ task.assigned_to.full_name }}</span>
+              {% if task.assigned_to.staffprofile.unit %}<span><i class="bi bi-diagram-3 me-1"></i>{{ task.assigned_to.staffprofile.unit.name }}</span>{% endif %}
+              {% if task.project %}<span><i class="bi bi-kanban me-1"></i>{{ task.project.name|truncatechars:20 }}</span>{% endif %}
+              <span style="color:#ef4444;font-weight:700"><i class="bi bi-alarm me-1"></i>{{ task.due_date|timesince }} overdue</span>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="eo-btn eo-btn-secondary eo-btn-sm" style="font-size:.74rem"
+                      onclick="openFollowupModal('{{ task.title|escapejs }}','{{ task.pk }}','assigned_to','{{ task.assigned_to.full_name|escapejs }}','{{ task.due_date|date:"N j, Y" }}')">
+                <i class="bi bi-person-exclamation"></i> Notify Assignee
+              </button>
+              {% if task.assigned_to.staffprofile.supervisor %}
+              <button class="eo-btn eo-btn-secondary eo-btn-sm" style="font-size:.74rem"
+                      onclick="openFollowupModal('{{ task.title|escapejs }}','{{ task.pk }}','supervisor','{{ task.assigned_to.staffprofile.supervisor.full_name|escapejs }}','{{ task.due_date|date:"N j, Y" }}')">
+                <i class="bi bi-envelope-arrow-up"></i> Alert Supervisor
+              </button>
+              {% endif %}
+              {% if task.assigned_to.staffprofile.unit %}
+              <button class="eo-btn eo-btn-secondary eo-btn-sm" style="font-size:.74rem"
+                      onclick="openFollowupModal('{{ task.title|escapejs }}','{{ task.pk }}','unit_head','{{ task.assigned_to.staffprofile.unit.name|escapejs }} Head','{{ task.due_date|date:"N j, Y" }}')">
+                <i class="bi bi-building"></i> Alert Unit Head
+              </button>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- ALL ACTIVE TASKS (filterable) -->
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title"><i class="bi bi-check2-square me-2" style="color:var(--eo-primary)"></i>All Active Tasks</h2>
+          <p class="eo-card-subtitle">{{ all_tasks_count }} task{{ all_tasks_count|pluralize }} — showing up to 50</p>
+        </div>
+      </div>
+
+      <form method="get" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+        <div style="position:relative;flex:1;min-width:180px">
+          <i class="bi bi-search" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.78rem"></i>
+          <input type="text" name="tq" class="eo-form-control" style="padding-left:30px;font-size:.82rem"
+                 placeholder="Search tasks, assignee, project…" value="{{ search_q }}"/>
+        </div>
+        <select name="task_status" class="eo-form-select" style="min-width:130px;font-size:.82rem">
+          <option value="">All Status</option>
+          {% for val, label in status_choices %}
+          <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <select name="task_priority" class="eo-form-select" style="min-width:120px;font-size:.82rem">
+          <option value="">All Priority</option>
+          {% for val, label in priority_choices %}
+          <option value="{{ val }}" {% if priority_filter == val %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {% if filter_units %}
+        <select name="unit" class="eo-form-select" style="min-width:130px;font-size:.82rem">
+          <option value="">All Units</option>
+          {% for unit in filter_units %}
+          <option value="{{ unit.id }}" {% if unit_filter == unit.id|stringformat:"s" %}selected{% endif %}>{{ unit.name }}</option>
+          {% endfor %}
+        </select>
+        {% endif %}
+        <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm"><i class="bi bi-funnel"></i> Filter</button>
+        {% if search_q or status_filter or priority_filter or unit_filter %}
+        <a href="{% url 'admin_dashboard' %}" class="eo-btn eo-btn-secondary eo-btn-sm"><i class="bi bi-x-circle"></i> Clear</a>
+        {% endif %}
+      </form>
+
+      {% if all_active_tasks %}
+      <div style="overflow-x:auto;border:1px solid var(--eo-border);border-radius:var(--eo-radius)">
+        <table class="eo-table" style="margin:0;min-width:700px">
+          <thead>
+            <tr>
+              <th style="padding-left:14px">Task</th>
+              <th>Assignee / Supervisor</th>
+              <th>Unit</th>
+              <th>Priority</th>
+              <th>Due Date</th>
+              <th>Progress</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for task in all_active_tasks %}
+            <tr {% if task.is_overdue %}style="background:#fff5f5"{% endif %}>
+              <td style="padding-left:14px;max-width:240px">
+                <a href="{% url 'task_detail' task.pk %}"
+                   style="font-weight:600;font-size:.86rem;color:var(--eo-text);text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                  {{ task.title|truncatechars:45 }}
+                </a>
+                <span class="eo-status eo-status-{{ task.status }}" style="font-size:.66rem;margin-top:2px;display:inline-block">{{ task.get_status_display }}</span>
+              </td>
+              <td>
+                <div style="font-size:.84rem;font-weight:600;color:var(--eo-text)">{{ task.assigned_to.full_name }}</div>
+                {% if task.assigned_to.staffprofile.supervisor %}
+                <div style="font-size:.71rem;color:var(--eo-text-muted)">Sup: {{ task.assigned_to.staffprofile.supervisor.full_name }}</div>
+                {% endif %}
+              </td>
+              <td style="font-size:.82rem;color:var(--eo-text-muted)">{{ task.assigned_to.staffprofile.unit.name|default:"—" }}</td>
+              <td>
+                <span class="eo-priority eo-priority-{{ task.priority }}" style="font-size:.7rem">
+                  <i class="bi bi-flag-fill"></i> {{ task.get_priority_display }}
+                </span>
+              </td>
+              <td style="font-size:.8rem;{% if task.is_overdue %}color:#ef4444;font-weight:700{% else %}color:var(--eo-text-muted){% endif %}">
+                {% if task.due_date %}
+                {% if task.is_overdue %}<i class="bi bi-exclamation-triangle-fill me-1"></i>{% endif %}
+                {{ task.due_date|date:"N j, Y" }}
+                {% else %}—{% endif %}
+              </td>
+              <td style="min-width:100px">
+                {% if task.progress_pct > 0 %}
+                <div style="display:flex;align-items:center;gap:6px">
+                  <div class="eo-progress" style="flex:1;height:6px">
+                    <div class="eo-progress-bar" style="width:{{ task.progress_pct }}%;{% if task.progress_pct == 100 %}background:#10b981{% endif %}"></div>
+                  </div>
+                  <span style="font-size:.7rem;color:var(--eo-text-muted);width:30px">{{ task.progress_pct }}%</span>
+                </div>
+                {% else %}
+                <span style="font-size:.78rem;color:var(--eo-text-muted)">Not started</span>
+                {% endif %}
+              </td>
+              <td>
+                <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Send follow-up"
+                        onclick="openFollowupModal('{{ task.title|escapejs }}','{{ task.pk }}','supervisor','{{ task.assigned_to.staffprofile.supervisor.full_name|default:task.assigned_to.full_name|escapejs }}','{{ task.due_date|date:"N j, Y"|default:"" }}')">
+                  <i class="bi bi-envelope-arrow-up"></i>
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:40px;color:var(--eo-text-muted)">
+        <i class="bi bi-check2-all" style="font-size:2.5rem;display:block;margin-bottom:12px;opacity:.3"></i>
+        <div style="font-weight:700">No tasks match your filters</div>
+        <a href="{% url 'admin_dashboard' %}" class="eo-btn eo-btn-secondary eo-btn-sm mt-3">Clear filters</a>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- PROJECTS -->
     <div class="eo-card">
       <div class="eo-card-header">
         <div>
@@ -64,17 +333,9 @@
         </div>
         <a href="{% url 'project_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">All Projects</a>
       </div>
-
       <div class="table-responsive">
         <table class="eo-table">
-          <thead>
-            <tr>
-              <th>Project</th>
-              <th>Manager</th>
-              <th>Status</th>
-              <th>Progress</th>
-            </tr>
-          </thead>
+          <thead><tr><th>Project</th><th>Manager</th><th>Status</th><th>Progress</th></tr></thead>
           <tbody>
             {% for p in latest_projects %}
             <tr>
@@ -86,9 +347,7 @@
                 <div style="font-size:.74rem;color:var(--eo-text-muted)">[{{ p.code }}]</div>
               </td>
               <td style="font-size:.85rem">{{ p.project_manager.full_name|default:"—" }}</td>
-              <td>
-                <span class="eo-status eo-status-{{ p.status }}">{{ p.get_status_display }}</span>
-              </td>
+              <td><span class="eo-status eo-status-{{ p.status }}">{{ p.get_status_display }}</span></td>
               <td style="min-width:140px">
                 <div style="display:flex;align-items:center;gap:8px">
                   <div class="eo-progress" style="flex:1">
@@ -100,18 +359,15 @@
               </td>
             </tr>
             {% empty %}
-            <tr>
-              <td colspan="4" style="text-align:center;color:var(--eo-text-muted);padding:24px">
-                No active projects
-              </td>
-            </tr>
+            <tr><td colspan="4" style="text-align:center;color:var(--eo-text-muted);padding:24px">No active projects</td></tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
     </div>
 
-    <div class="eo-card mt-4">
+    <!-- LEAVE -->
+    <div class="eo-card">
       <div class="eo-card-header">
         <div>
           <h2 class="eo-card-title">Recent Leave Requests</h2>
@@ -119,29 +375,17 @@
         </div>
         <a href="{% url 'leave_approval' %}" class="eo-btn eo-btn-secondary eo-btn-sm">Open Queue</a>
       </div>
-
       {% if office_recent_leave_requests %}
       <div class="table-responsive">
         <table class="eo-table">
-          <thead>
-            <tr>
-              <th>Staff</th>
-              <th>Type</th>
-              <th>Period</th>
-              <th>Status</th>
-            </tr>
-          </thead>
+          <thead><tr><th>Staff</th><th>Type</th><th>Period</th><th>Status</th></tr></thead>
           <tbody>
             {% for lr in office_recent_leave_requests %}
             <tr>
               <td style="font-weight:600">{{ lr.staff.full_name }}</td>
               <td>{{ lr.leave_type.name }}</td>
-              <td style="font-size:.82rem;color:var(--eo-text-muted)">
-                {{ lr.start_date|date:"N j" }} — {{ lr.end_date|date:"N j, Y" }}
-              </td>
-              <td>
-                <span class="eo-status eo-status-{{ lr.status }}">{{ lr.get_status_display }}</span>
-              </td>
+              <td style="font-size:.82rem;color:var(--eo-text-muted)">{{ lr.start_date|date:"N j" }} — {{ lr.end_date|date:"N j, Y" }}</td>
+              <td><span class="eo-status eo-status-{{ lr.status }}">{{ lr.get_status_display }}</span></td>
             </tr>
             {% endfor %}
           </tbody>
@@ -151,14 +395,14 @@
       <p style="font-size:.87rem;color:var(--eo-text-muted)">No recent leave requests.</p>
       {% endif %}
     </div>
+
   </div>
 
-  <div class="col-lg-4">
-    <div class="eo-card">
-      <div class="eo-card-header">
-        <h2 class="eo-card-title">Projects by Status</h2>
-      </div>
+  <!-- ── RIGHT SIDEBAR ── -->
+  <div class="col-lg-4 d-flex flex-column gap-4">
 
+    <div class="eo-card">
+      <div class="eo-card-header"><h2 class="eo-card-title">Projects by Status</h2></div>
       {% for item in projects_by_status %}
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--eo-border)">
         <span class="eo-status eo-status-{{ item.status }}">{{ item.status|title }}</span>
@@ -169,10 +413,8 @@
       {% endfor %}
     </div>
 
-    <div class="eo-card mt-4">
-      <div class="eo-card-header">
-        <h2 class="eo-card-title">Leave Queue</h2>
-      </div>
+    <div class="eo-card">
+      <div class="eo-card-header"><h2 class="eo-card-title">Leave Queue</h2></div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0">
         <span style="color:var(--eo-text-muted)">Pending approvals</span>
         <strong style="font-size:1.2rem;color:var(--eo-text)">{{ office_pending_leave_requests }}</strong>
@@ -182,28 +424,125 @@
       </a>
     </div>
 
-    <div class="eo-card mt-4">
-      <div class="eo-card-header">
-        <h2 class="eo-card-title">Quick Navigation</h2>
-      </div>
+    <div class="eo-card">
+      <div class="eo-card-header"><h2 class="eo-card-title">Quick Navigation</h2></div>
       <div class="d-grid gap-2">
-        <a href="{% url 'staff_directory' %}" class="eo-btn eo-btn-secondary">
-          <i class="bi bi-people"></i> Staff Directory
-        </a>
-        <a href="{% url 'hr_dashboard' %}" class="eo-btn eo-btn-secondary">
-          <i class="bi bi-person-badge"></i> HR Dashboard
-        </a>
-        <a href="{% url 'finance_dashboard' %}" class="eo-btn eo-btn-secondary">
-          <i class="bi bi-cash-stack"></i> Finance
-        </a>
-        <a href="{% url 'it_dashboard' %}" class="eo-btn eo-btn-secondary">
-          <i class="bi bi-pc-display-horizontal"></i> IT Support
-        </a>
-        <a href="{% url 'project_list' %}" class="eo-btn eo-btn-secondary">
-          <i class="bi bi-kanban"></i> Project Portfolio
-        </a>
+        <a href="{% url 'staff_directory' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-people"></i> Staff Directory</a>
+        <a href="{% url 'hr_dashboard' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-person-badge"></i> HR Dashboard</a>
+        <a href="{% url 'finance_dashboard' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-cash-stack"></i> Finance</a>
+        <a href="{% url 'it_dashboard' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-pc-display-horizontal"></i> IT Support</a>
+        <a href="{% url 'project_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-kanban"></i> Project Portfolio</a>
+        <a href="{% url 'task_list' %}?view=all" class="eo-btn eo-btn-secondary"><i class="bi bi-check2-square"></i> All Tasks</a>
       </div>
     </div>
+
   </div>
 </div>
+
+<!-- ══ FOLLOW-UP MODAL ══ -->
+<div id="followupModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1060;align-items:center;justify-content:center">
+  <div style="background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:16px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--eo-border)">
+      <div>
+        <div style="font-size:1rem;font-weight:800;color:var(--eo-text)"><i class="bi bi-envelope-arrow-up me-2" style="color:var(--eo-primary)"></i>Send Follow-Up</div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px" id="fuModalSubtitle">Task follow-up notification</div>
+      </div>
+      <button onclick="closeFollowupModal()" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"><i class="bi bi-x-lg"></i></button>
+    </div>
+
+    <form method="post" action="{% url 'task_followup' %}" style="padding:24px">
+      {% csrf_token %}
+      <input type="hidden" name="task_id" id="fuTaskId"/>
+
+      <div id="fuTaskSummary" style="padding:12px 14px;background:var(--eo-bg);border-radius:10px;margin-bottom:16px;font-size:.84rem;border-left:3px solid var(--eo-primary)">
+        <div id="fuTaskTitle" style="font-weight:700;color:var(--eo-text)"></div>
+        <div id="fuTaskDue" style="color:var(--eo-text-muted);font-size:.76rem;margin-top:3px"></div>
+      </div>
+
+      <div class="eo-form-group">
+        <label class="eo-form-label">Send follow-up to</label>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <label class="fu-radio-label" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1.5px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .12s">
+            <input type="radio" name="recipient_type" value="supervisor" checked onchange="onRecipientChange(this)"/>
+            <div>
+              <div style="font-size:.86rem;font-weight:700;color:var(--eo-text)"><i class="bi bi-person-badge me-1"></i> Supervisor</div>
+              <div style="font-size:.73rem;color:var(--eo-text-muted)">Direct supervisor of the assigned staff member</div>
+            </div>
+          </label>
+          <label class="fu-radio-label" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1.5px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .12s">
+            <input type="radio" name="recipient_type" value="unit_head" onchange="onRecipientChange(this)"/>
+            <div>
+              <div style="font-size:.86rem;font-weight:700;color:var(--eo-text)"><i class="bi bi-building me-1"></i> Unit Head</div>
+              <div style="font-size:.73rem;color:var(--eo-text-muted)">Head of the assignee's organisational unit</div>
+            </div>
+          </label>
+          <label class="fu-radio-label" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1.5px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:border-color .12s">
+            <input type="radio" name="recipient_type" value="assigned_to" onchange="onRecipientChange(this)"/>
+            <div>
+              <div style="font-size:.86rem;font-weight:700;color:var(--eo-text)"><i class="bi bi-person me-1"></i> Directly to Assignee</div>
+              <div style="font-size:.73rem;color:var(--eo-text-muted)">Email the staff member directly</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div class="eo-form-group">
+        <label class="eo-form-label">Additional message <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span></label>
+        <textarea name="note" class="eo-form-control" rows="3"
+                  placeholder="Add context, instructions, or specific questions…"></textarea>
+        <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:4px">
+          You will be CC'd on the email automatically.
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px">
+        <button type="submit" class="eo-btn eo-btn-primary flex-grow-1" style="padding:11px">
+          <i class="bi bi-send-fill"></i> Send Follow-Up Email
+        </button>
+        <button type="button" onclick="closeFollowupModal()" class="eo-btn eo-btn-secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function openFollowupModal(taskTitle, taskId, defaultRecipient, recipientName, dueDate) {
+  document.getElementById('fuTaskId').value          = taskId || '';
+  document.getElementById('fuTaskTitle').textContent = taskTitle;
+  document.getElementById('fuTaskDue').textContent   = dueDate ? 'Due: ' + dueDate : '';
+  document.getElementById('fuModalSubtitle').textContent = recipientName
+    ? 'Sending to: ' + recipientName : 'Task follow-up notification';
+
+  document.querySelectorAll('input[name="recipient_type"]').forEach(function(r) {
+    r.checked = (r.value === defaultRecipient);
+    highlightRadioLabel(r);
+  });
+  document.getElementById('followupModal').style.display = 'flex';
+}
+
+function closeFollowupModal() {
+  document.getElementById('followupModal').style.display = 'none';
+}
+
+function highlightRadioLabel(radio) {
+  var label = radio.closest('.fu-radio-label');
+  if (!label) return;
+  label.style.borderColor = radio.checked ? 'var(--eo-primary)' : 'var(--eo-border)';
+  label.style.background  = radio.checked ? 'var(--eo-primary)06' : '';
+}
+
+function onRecipientChange(radio) {
+  document.querySelectorAll('input[name="recipient_type"]').forEach(highlightRadioLabel);
+}
+
+document.getElementById('followupModal').addEventListener('click', function(e) {
+  if (e.target === this) closeFollowupModal();
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeFollowupModal();
+});
+
+// Highlight the first radio on load
+document.querySelectorAll('input[name="recipient_type"]').forEach(highlightRadioLabel);
+</script>
 {% endblock %}

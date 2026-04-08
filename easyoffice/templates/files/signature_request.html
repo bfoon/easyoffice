@@ -286,6 +286,25 @@
               <i class="bi bi-shield-check me-2" style="color:var(--eo-accent)"></i>
               Each signer will receive a secure email with a unique signing link. All actions are recorded in a tamper-evident audit trail.
             </div>
+
+            <!-- ── CC / Viewer ── -->
+            <div style="margin-bottom:16px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <div style="font-size:.82rem;font-weight:700;color:var(--eo-text)">
+                  <i class="bi bi-person-lines-fill me-1" style="color:var(--eo-primary)"></i>
+                  CC &amp; Viewers <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span>
+                </div>
+                <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="addCCRow()">
+                  <i class="bi bi-plus"></i> Add
+                </button>
+              </div>
+              <div id="ccRows" style="display:flex;flex-direction:column;gap:8px"></div>
+              <div style="font-size:.73rem;color:var(--eo-text-muted);margin-top:6px;line-height:1.5">
+                <strong>CC</strong> — receives email updates only.<br>
+                <strong>Viewer</strong> — gets a private link to track signing progress without logging in.
+              </div>
+            </div>
+
             <div style="display:flex;gap:10px;flex-direction:column">
               <button type="submit" class="eo-btn eo-btn-primary" style="padding:13px">
                 <i class="bi bi-send-fill"></i> Send for Signature
@@ -747,5 +766,48 @@ document.getElementById('sigForm').addEventListener('submit', function(e) {
 
 // Init: add first signer automatically
 addSigner();
+
+// ── CC / Viewer rows ──────────────────────────────────────────────────────
+var ccIdx = 0;
+
+// Pre-build staff options for CC autocomplete
+var staffList = [
+  {% for s in all_staff %}{name:'{{ s.full_name|escapejs }}', email:'{{ s.email|escapejs }}'},{% endfor %}
+];
+
+function addCCRow() {
+  var idx = ++ccIdx;
+  var staffOpts = staffList.map(function(s) {
+    return '<option value="' + s.email + '" data-name="' + s.name + '">' + s.name + ' &lt;' + s.email + '&gt;</option>';
+  }).join('');
+
+  var div = document.createElement('div');
+  div.className = 'cc-row';
+  div.style.cssText = 'display:grid;grid-template-columns:1fr 110px auto;gap:6px;align-items:center';
+  div.innerHTML =
+    '<div>' +
+      '<input type="email" name="cc_email" placeholder="Email address…" list="ccSuggestions_' + idx + '"' +
+      '  class="eo-form-control" style="font-size:.82rem" onchange="fillCCName(this,' + idx + ')"/>' +
+      '<datalist id="ccSuggestions_' + idx + '">' + staffOpts + '</datalist>' +
+      '<input type="text" name="cc_name" placeholder="Name" class="eo-form-control mt-1" id="cc_name_' + idx + '" style="font-size:.78rem"/>' +
+    '</div>' +
+    '<select name="cc_role" class="eo-form-select" style="font-size:.8rem">' +
+      '<option value="cc">CC only</option>' +
+      '<option value="viewer">Viewer</option>' +
+    '</select>' +
+    '<button type="button" onclick="this.closest(\'.cc-row\').remove()"' +
+    '  class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" style="color:var(--eo-danger)">' +
+    '  <i class="bi bi-trash"></i></button>';
+  document.getElementById('ccRows').appendChild(div);
+}
+
+function fillCCName(emailInput, idx) {
+  var val = emailInput.value.trim().toLowerCase();
+  var match = staffList.find(function(s) { return s.email.toLowerCase() === val; });
+  var nameField = document.getElementById('cc_name_' + idx);
+  if (match && nameField && !nameField.value) {
+    nameField.value = match.name;
+  }
+}
 </script>
 {% endblock %}

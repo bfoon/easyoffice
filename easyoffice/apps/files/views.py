@@ -26,6 +26,9 @@ from apps.files.models import (
     FileShareAccess,
     FolderShareAccess,
     FileHistory,
+    FilePinnedItem,
+    SignatureCC,
+    FilePublicToken,
 )
 
 
@@ -214,26 +217,260 @@ def _convert_image_to_pdf(source_path):
         return buffer
 
 def _notify_signer(signer, base_url):
-    """Send an email notification to a signer."""
+    """Send a professional HTML signing invitation email to a signer."""
+    from django.core.mail import EmailMessage
     sign_url = base_url.rstrip('/') + signer.signing_url
+    org_name = getattr(settings, 'ORGANISATION_NAME',
+                       getattr(settings, 'OFFICE_NAME', 'EasyOffice'))
+    org_email = getattr(settings, 'DEFAULT_FROM_EMAIL', f'noreply@{org_name.lower().replace(" ","")}.org')
+    requester = signer.request.created_by.full_name
+    title     = signer.request.title
+    message   = signer.request.message or ''
+    expires   = (signer.request.expires_at.strftime('%d %B %Y')
+                 if signer.request.expires_at else None)
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif;}}
+  .w{{max-width:600px;margin:28px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08);}}
+  .hdr{{background:linear-gradient(135deg,#1e3a5f,#7c3aed);padding:36px 40px;text-align:center;}}
+  .hdr h1{{margin:0 0 4px;font-size:22px;color:#fff;font-weight:800;}}
+  .hdr p{{margin:0;font-size:13px;color:rgba(255,255,255,.75);}}
+  .pen{{font-size:40px;display:block;margin-bottom:12px;}}
+  .body{{padding:32px 40px;}}
+  .greeting{{font-size:16px;color:#1e293b;line-height:1.7;margin-bottom:20px;}}
+  .doc-box{{background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:12px;padding:16px 20px;margin:20px 0;display:flex;align-items:center;gap:14px;}}
+  .doc-box i{{font-size:2rem;color:#ef4444;flex-shrink:0;}}
+  .doc-name{{font-weight:700;font-size:15px;color:#1e293b;}}
+  .doc-from{{font-size:13px;color:#64748b;margin-top:3px;}}
+  .msg-box{{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 18px;font-size:14px;color:#78350f;margin:16px 0;line-height:1.6;font-style:italic;}}
+  .cta{{text-align:center;margin:28px 0;}}
+  .btn{{display:inline-block;background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff!important;padding:14px 36px;border-radius:12px;text-decoration:none;font-weight:800;font-size:16px;letter-spacing:-.2px;box-shadow:0 4px 16px rgba(124,58,237,.35);}}
+  .url-note{{font-size:12px;color:#94a3b8;text-align:center;margin-top:8px;word-break:break-all;}}
+  .warn{{background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;font-size:13px;color:#991b1b;margin-top:20px;}}
+  .expire{{background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px 14px;font-size:13px;color:#9a3412;margin-top:10px;}}
+  .footer{{background:#f8fafc;padding:20px 40px;text-align:center;border-top:1px solid #e2e8f0;}}
+  .footer p{{margin:0;font-size:12px;color:#94a3b8;line-height:1.8;}}
+</style></head>
+<body>
+<div class="w">
+  <div class="hdr">
+    <span class="pen">✍️</span>
+    <h1>Signature Required</h1>
+    <p>{org_name} — Document Signing Request</p>
+  </div>
+  <div class="body">
+    <p class="greeting">Dear <strong>{signer.name}</strong>,<br><br>
+    <strong>{requester}</strong> has requested your digital signature on the following document.</p>
+
+    <div class="doc-box">
+      <div style="font-size:2rem;color:#ef4444">📄</div>
+      <div>
+        <div class="doc-name">{title}</div>
+        <div class="doc-from">From {requester} · {org_name}</div>
+      </div>
+    </div>
+
+    {'<div class="msg-box">💬 ' + message + '</div>' if message else ''}
+
+    <div class="cta">
+      <a href="{sign_url}" class="btn">🖊 Review &amp; Sign Document</a>
+      <div class="url-note">Or copy this link: {sign_url}</div>
+    </div>
+
+    {'<div class="expire">⏰ This request expires on <strong>' + expires + '</strong>. Please sign before then.</div>' if expires else ''}
+
+    <div class="warn">🔒 This signing link is <strong>unique to you</strong> and should not be shared with anyone else. No login is required — clicking the link will take you directly to the document.</div>
+  </div>
+  <div class="footer">
+    <p><strong>{org_name}</strong><br>This is an automated signing request. Please do not reply to this email.</p>
+  </div>
+</div>
+</body></html>"""
+
+    msg = EmailMessage(
+        subject=f'Action Required: Please sign "{title}" | {org_name}',
+        body=html,
+        from_email=org_email,
+        to=[signer.email],
+    )
+    msg.content_subtype = 'html'
+    # Attach the document so signer can review it in their email client too
     try:
-        send_mail(
-            subject=f'Please sign: {signer.request.title}',
-            message=(
-                f'Hello {signer.name},\n\n'
-                f'{signer.request.created_by.full_name} has requested your digital signature on:\n'
-                f'"{signer.request.title}"\n\n'
-                f'{signer.request.message}\n\n'
-                f'Click the link below to review and sign the document:\n{sign_url}\n\n'
-                f'This link is unique to you. Do not share it.\n\n'
-                f'— EasyOffice'
-            ),
-            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
-            recipient_list=[signer.email],
-            fail_silently=True,
-        )
+        doc = signer.request.document
+        doc.file.open('rb')
+        msg.attach(doc.name, doc.file.read(), 'application/octet-stream')
+        doc.file.close()
     except Exception:
         pass
+    try:
+        msg.send()
+    except Exception:
+        pass
+
+
+def _notify_cc_recipient(cc, base_url, event='sent'):
+    """Notify CC/viewer recipients when a signature request is sent or completed."""
+    from django.core.mail import EmailMessage
+    org_name  = getattr(settings, 'ORGANISATION_NAME',
+                        getattr(settings, 'OFFICE_NAME', 'EasyOffice'))
+    org_email = getattr(settings, 'DEFAULT_FROM_EMAIL', f'noreply@{org_name.lower().replace(" ","")}.org')
+    req       = cc.request
+    view_url  = base_url.rstrip('/') + cc.view_url if cc.role == 'viewer' else ''
+
+    if event == 'sent':
+        subject_line = f'You are CC\'d on: "{req.title}" | {org_name}'
+        body_intro   = f'You have been copied on a document signing request sent by <strong>{req.created_by.full_name}</strong>.'
+        action_block = (
+            f'<div style="text-align:center;margin:24px 0"><a href="{view_url}" style="display:inline-block;background:#3b82f6;color:#fff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:700">View Signing Progress</a></div>'
+            if view_url else ''
+        )
+    else:  # completed
+        subject_line = f'Signing Complete: "{req.title}" | {org_name}'
+        body_intro   = f'All signers have completed signing <strong>"{req.title}"</strong>. The signed document is attached below.'
+        action_block = (
+            f'<div style="text-align:center;margin:24px 0"><a href="{view_url}" style="display:inline-block;background:#10b981;color:#fff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:700">View Signed Document</a></div>'
+            if view_url else ''
+        )
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/>
+<style>
+  body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif;}}
+  .w{{max-width:600px;margin:28px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08);}}
+  .hdr{{background:linear-gradient(135deg,#1e3a5f,#3b82f6);padding:32px 40px;text-align:center;}}
+  .hdr h1{{margin:0;font-size:20px;color:#fff;font-weight:800;}}
+  .hdr p{{margin:6px 0 0;font-size:13px;color:rgba(255,255,255,.75);}}
+  .body{{padding:28px 40px;font-size:15px;color:#1e293b;line-height:1.7;}}
+  .footer{{background:#f8fafc;padding:18px 40px;text-align:center;border-top:1px solid #e2e8f0;font-size:12px;color:#94a3b8;}}
+</style></head>
+<body>
+<div class="w">
+  <div class="hdr">
+    <h1>{'📋 Document Signing Update' if event == 'sent' else '✅ Signing Complete'}</h1>
+    <p>{org_name}</p>
+  </div>
+  <div class="body">
+    <p>Dear <strong>{cc.name}</strong>,</p>
+    <p>{body_intro}</p>
+    <p><strong>Document:</strong> {req.title}<br>
+    <strong>Requested by:</strong> {req.created_by.full_name}</p>
+    {action_block}
+  </div>
+  <div class="footer">{org_name} · Document Signing System. This is an automated notification.</div>
+</div>
+</body></html>"""
+
+    msg = EmailMessage(subject=subject_line, body=html, from_email=org_email, to=[cc.email])
+    msg.content_subtype = 'html'
+    # Attach signed doc if completed
+    if event == 'completed':
+        try:
+            doc = req.document
+            doc.file.open('rb')
+            msg.attach(doc.name, doc.file.read(), 'application/octet-stream')
+            doc.file.close()
+        except Exception:
+            pass
+    try:
+        msg.send()
+    except Exception:
+        pass
+
+
+def _send_completion_email(sig_req, base_url):
+    """
+    Send a professional completion email to the creator and all signers
+    with the signed document attached and a public no-login download link.
+    """
+    from django.core.mail import EmailMessage
+    from datetime import timedelta
+    org_name  = getattr(settings, 'ORGANISATION_NAME',
+                        getattr(settings, 'OFFICE_NAME', 'EasyOffice'))
+    org_email = getattr(settings, 'DEFAULT_FROM_EMAIL', f'noreply@{org_name.lower().replace(" ","")}.org')
+
+    # Create a public download token valid for 30 days
+    token_obj = FilePublicToken.objects.create(
+        file       = sig_req.document,
+        label      = f'Signed copy — {sig_req.title}',
+        created_by = sig_req.created_by,
+        expires_at = timezone.now() + timedelta(days=30),
+    )
+    public_url = base_url.rstrip('/') + token_obj.public_url
+
+    recipients = [sig_req.created_by.email] if sig_req.created_by.email else []
+    for signer in sig_req.signers.filter(status='signed'):
+        if signer.email and signer.email not in recipients:
+            recipients.append(signer.email)
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/>
+<style>
+  body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif;}}
+  .w{{max-width:600px;margin:28px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08);}}
+  .hdr{{background:linear-gradient(135deg,#064e3b,#10b981);padding:36px 40px;text-align:center;}}
+  .hdr h1{{margin:0;font-size:22px;color:#fff;font-weight:800;}}
+  .hdr p{{margin:6px 0 0;font-size:13px;color:rgba(255,255,255,.8);}}
+  .check{{font-size:48px;display:block;margin-bottom:10px;}}
+  .body{{padding:32px 40px;}}
+  .summary{{background:#ecfdf5;border:1.5px solid #6ee7b7;border-radius:12px;padding:16px 20px;margin:20px 0;}}
+  .summary h3{{margin:0 0 10px;font-size:15px;font-weight:700;color:#065f46;}}
+  .signer-row{{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:14px;color:#064e3b;}}
+  .cta{{text-align:center;margin:28px 0;}}
+  .btn{{display:inline-block;background:linear-gradient(135deg,#10b981,#059669);color:#fff!important;padding:13px 32px;border-radius:12px;text-decoration:none;font-weight:800;font-size:15px;}}
+  .expire-note{{font-size:12px;color:#6b7280;text-align:center;margin-top:8px;}}
+  .attach-note{{background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px 14px;font-size:13px;color:#065f46;margin-top:16px;}}
+  .footer{{background:#f8fafc;padding:18px 40px;text-align:center;border-top:1px solid #e2e8f0;font-size:12px;color:#94a3b8;}}
+</style></head>
+<body>
+<div class="w">
+  <div class="hdr">
+    <span class="check">✅</span>
+    <h1>Document Fully Signed</h1>
+    <p>{org_name} · Signing Complete</p>
+  </div>
+  <div class="body">
+    <p style="font-size:16px;color:#1e293b;line-height:1.7">
+      All parties have signed <strong>"{sig_req.title}"</strong>.
+      The signed document is attached to this email and can also be downloaded via the link below.
+    </p>
+
+    <div class="summary">
+      <h3>✍ Signatories</h3>
+      {''.join(f'<div class="signer-row">✓ <strong>{s.name}</strong> &lt;{s.email}&gt; — signed {s.signed_at.strftime("%d %b %Y at %H:%M") if s.signed_at else ""}</div>' for s in sig_req.signers.filter(status="signed"))}
+    </div>
+
+    <div class="cta">
+      <a href="{public_url}" class="btn">⬇️ Download Signed Document</a>
+      <div class="expire-note">This download link expires in 30 days. No login required.</div>
+    </div>
+
+    <div class="attach-note">📎 The signed document is also attached directly to this email for your records.</div>
+  </div>
+  <div class="footer">{org_name} · Document Signing System<br>This is an automated notification. Reference: {sig_req.id}</div>
+</div>
+</body></html>"""
+
+    for recipient_email in recipients:
+        msg = EmailMessage(
+            subject=f'✅ Signing Complete: "{sig_req.title}" | {org_name}',
+            body=html,
+            from_email=org_email,
+            to=[recipient_email],
+        )
+        msg.content_subtype = 'html'
+        # Attach the document
+        try:
+            sig_req.document.file.open('rb')
+            msg.attach(sig_req.document.name, sig_req.document.file.read(), 'application/octet-stream')
+            sig_req.document.file.close()
+        except Exception:
+            pass
+        try:
+            msg.send()
+        except Exception:
+            pass
 
 
 def _push_notification(user, notif_type, title, body='', link='', icon='bi-bell-fill', color='#3b82f6'):
@@ -828,6 +1065,20 @@ class FileManagerView(LoginRequiredMixin, TemplateView):
 
         my_qs          = _visible_files_qs(user).filter(uploaded_by=user)
         my_total_size  = my_qs.aggregate(s=Sum('file_size'))['s'] or 0
+
+        # ── Pinned items ──────────────────────────────────────────────────────
+        pinned_qs = FilePinnedItem.objects.filter(user=user).select_related('file','folder')
+        pinned_file_ids   = {str(p.file_id)   for p in pinned_qs if p.file_id}
+        pinned_folder_ids = {str(p.folder_id) for p in pinned_qs if p.folder_id}
+
+        for f in file_list:
+            f.is_pinned = str(f.id) in pinned_file_ids
+        for folder in folder_list:
+            folder.is_pinned = str(folder.id) in pinned_folder_ids
+
+        # Re-sort: pinned first within each group
+        file_list   = sorted(file_list,   key=lambda x: (not x.is_pinned, x.created_at), reverse=False)
+        folder_list = sorted(folder_list, key=lambda x: (not x.is_pinned, x.name))
 
         # Pending signatures count for badge
         pending_sigs   = SignatureRequestSigner.objects.filter(
@@ -1765,6 +2016,28 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
                 pass
 
         messages.success(request, f'Signature request "{sig_req.title}" sent to {sig_req.signers.count()} signer(s).')
+
+        # ── Save CC / viewer recipients ───────────────────────────────────────
+        cc_names  = request.POST.getlist('cc_name')
+        cc_emails = request.POST.getlist('cc_email')
+        cc_roles  = request.POST.getlist('cc_role')
+        for i, email in enumerate(cc_emails):
+            email = email.strip()
+            if not email:
+                continue
+            name  = (cc_names[i].strip()  if i < len(cc_names)  else '') or email
+            role  = (cc_roles[i].strip()  if i < len(cc_roles)  else '') or 'cc'
+            from apps.core.models import User as CoreUser
+            internal_user = CoreUser.objects.filter(email__iexact=email).first()
+            cc_obj = SignatureCC.objects.create(
+                request=sig_req,
+                user=internal_user,
+                email=email,
+                name=name,
+                role=role,
+            )
+            _notify_cc_recipient(cc_obj, base_url, event='sent')
+
         return redirect('signature_request_detail', pk=sig_req.pk)
 
 
@@ -2006,16 +2279,13 @@ class SignDocumentView(View):
                     link=f'/files/signatures/{sig_req.pk}/',
                 )
                 try:
-                    send_mail(
-                        subject=f'✓ All signatures collected: {sig_req.title}',
-                        message=(
-                            f'Your document "{sig_req.title}" has been signed by all parties.\n\n'
-                            f'You can view the signed PDF and audit trail in EasyOffice Files.'
-                        ),
-                        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
-                        recipient_list=[sig_req.created_by.email],
-                        fail_silently=True,
-                    )
+                    _send_completion_email(sig_req, request.build_absolute_uri('/'))
+                except Exception:
+                    pass
+                # Notify CC recipients of completion
+                try:
+                    for cc in sig_req.cc_recipients.all():
+                        _notify_cc_recipient(cc, request.build_absolute_uri('/'), event='completed')
                 except Exception:
                     pass
 
@@ -2041,19 +2311,15 @@ class SignDocumentView(View):
                     link=f'/files/signatures/{sig_req.pk}/',
                 )
                 try:
-                    send_mail(
-                        subject=f'[EasyOffice] {signer.name} declined to sign "{sig_req.title}"',
-                        message=(
-                            f'Hello {sig_req.created_by.full_name},\n\n'
-                            f'{signer.name} has declined to sign "{sig_req.title}".'
-                            + (f'\n\nReason: {signer.decline_reason}' if signer.decline_reason else '')
-                            + f'\n\nView the request:\n/files/signatures/{sig_req.pk}/\n\n'
-                            f'— EasyOffice'
-                        ),
-                        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
-                        recipient_list=[sig_req.created_by.email],
-                        fail_silently=True,
-                    )
+                    from django.core.mail import EmailMessage as _EM
+                    _org = getattr(settings,'ORGANISATION_NAME',getattr(settings,'OFFICE_NAME','EasyOffice'))
+                    _from = getattr(settings,'DEFAULT_FROM_EMAIL',f'noreply@{_org.lower().replace(" ","")}.org')
+                    _reason_html = f'<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 16px;font-size:14px;color:#991b1b;margin:14px 0"><strong>Reason:</strong> {signer.decline_reason}</div>' if signer.decline_reason else ''
+                    _detail_url = request.build_absolute_uri(f'/files/signatures/{sig_req.pk}/')
+                    _html = f'''<!DOCTYPE html><html><head><meta charset="UTF-8"/><style>body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif;}} .w{{max-width:580px;margin:28px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08);}} .hdr{{background:linear-gradient(135deg,#7f1d1d,#ef4444);padding:32px 36px;text-align:center;}} .hdr h1{{margin:0;color:#fff;font-size:20px;font-weight:800;}} .hdr p{{margin:6px 0 0;color:rgba(255,255,255,.75);font-size:13px;}} .body{{padding:28px 36px;font-size:15px;color:#1e293b;line-height:1.7;}} .btn{{display:inline-block;background:#3b82f6;color:#fff;padding:11px 26px;border-radius:10px;text-decoration:none;font-weight:700;}} .footer{{background:#f8fafc;padding:16px 36px;border-top:1px solid #e2e8f0;text-align:center;font-size:12px;color:#94a3b8;}}</style></head><body><div class="w"><div class="hdr"><h1>❌ Signing Declined</h1><p>{_org}</p></div><div class="body"><p>Dear <strong>{sig_req.created_by.full_name}</strong>,</p><p><strong>{signer.name}</strong> ({signer.email}) has <strong>declined</strong> to sign <em>"{sig_req.title}"</em>.</p>{_reason_html}<div style="text-align:center;margin:20px 0"><a href="{_detail_url}" class="btn">View Signature Request →</a></div></div><div class="footer">{_org} · Document Signing System</div></div></body></html>'''
+                    _m = _EM(subject=f'Declined: {signer.name} declined to sign "{sig_req.title}"',body=_html,from_email=_from,to=[sig_req.created_by.email])
+                    _m.content_subtype='html'
+                    _m.send()
                 except Exception:
                     pass
 
@@ -3623,3 +3889,76 @@ class PDFToImageView(LoginRequiredMixin, View):
         except Exception as e:
             messages.error(request, f'Conversion failed: {e}')
             return redirect('pdf_to_image')
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pin / Unpin
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PinToggleView(LoginRequiredMixin, View):
+    """Toggle pin state for a file or folder. Returns JSON."""
+    def post(self, request):
+        item_type = request.POST.get('type')   # 'file' or 'folder'
+        item_id   = request.POST.get('id', '').strip()
+        user      = request.user
+
+        if item_type == 'file':
+            obj = get_object_or_404(SharedFile, pk=item_id)
+            if not _file_permission_for(user, obj):
+                return JsonResponse({'error': 'Permission denied'}, status=403)
+            existing = FilePinnedItem.objects.filter(user=user, file=obj).first()
+            if existing:
+                existing.delete()
+                return JsonResponse({'pinned': False})
+            FilePinnedItem.objects.create(user=user, file=obj)
+            return JsonResponse({'pinned': True})
+
+        elif item_type == 'folder':
+            obj = get_object_or_404(FileFolder, pk=item_id)
+            if not _folder_permission_for(user, obj):
+                return JsonResponse({'error': 'Permission denied'}, status=403)
+            existing = FilePinnedItem.objects.filter(user=user, folder=obj).first()
+            if existing:
+                existing.delete()
+                return JsonResponse({'pinned': False})
+            FilePinnedItem.objects.create(user=user, folder=obj)
+            return JsonResponse({'pinned': True})
+
+        return JsonResponse({'error': 'Invalid type'}, status=400)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public (no-login) file download via token
+# ─────────────────────────────────────────────────────────────────────────────
+
+class FilePublicDownloadView(View):
+    """Download a file via a public token — no login required."""
+    def get(self, request, token):
+        pt = get_object_or_404(FilePublicToken, token=token)
+        if pt.is_expired:
+            from django.http import HttpResponse
+            return HttpResponse('This download link has expired.', status=410)
+        f = pt.file
+        pt.download_count += 1
+        pt.save(update_fields=['download_count'])
+        import mimetypes as _mimetypes
+        content_type, _ = _mimetypes.guess_type(f.name)
+        response = FileResponse(f.file.open('rb'), content_type=content_type or 'application/octet-stream')
+        response['Content-Disposition'] = f'attachment; filename="{f.name}"'
+        return response
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Signature view-only (CC viewer role — no login, no signing)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SignatureViewOnlyView(View):
+    """Let a CC viewer see the signing status without login."""
+    def get(self, request, token):
+        cc  = get_object_or_404(SignatureCC, view_token=token)
+        req = cc.request
+        return render(request, 'files/signature_view_only.html', {
+            'sig_req':  req,
+            'signers':  req.signers.all(),
+            'cc':       cc,
+            'audit':    req.audit_trail.order_by('timestamp')[:20],
+        })

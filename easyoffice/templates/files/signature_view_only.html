@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Signing Progress — {{ sig_req.title }}</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #f1f5f9;
+      min-height: 100vh;
+      padding: 32px 16px;
+      color: #1e293b;
+    }
+    .container { max-width: 680px; margin: 0 auto; }
+    .header {
+      background: linear-gradient(135deg, #1e3a5f, #2563eb);
+      border-radius: 16px;
+      padding: 28px 32px;
+      margin-bottom: 20px;
+      color: #fff;
+    }
+    .header-top {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+    .header-icon {
+      width: 52px; height: 52px;
+      border-radius: 14px;
+      background: rgba(255,255,255,.18);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.5rem;
+      flex-shrink: 0;
+    }
+    .header h1 { font-size: 1.25rem; font-weight: 800; }
+    .header p  { font-size: .84rem; opacity: .75; margin-top: 4px; }
+    .viewer-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: rgba(255,255,255,.18); border-radius: 20px;
+      padding: 4px 12px; font-size: .74rem; font-weight: 700;
+      margin-top: 12px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 2px 12px rgba(0,0,0,.05);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .card-head {
+      padding: 16px 20px;
+      border-bottom: 1px solid #f1f5f9;
+      font-weight: 700;
+      font-size: .94rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-body { padding: 16px 20px; }
+
+    /* Progress bar */
+    .progress-wrap { margin-bottom: 10px; }
+    .progress-bar-bg {
+      height: 10px;
+      background: #e2e8f0;
+      border-radius: 9px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 9px;
+      transition: width .6s ease;
+    }
+    .progress-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: .74rem;
+      color: #64748b;
+      margin-top: 6px;
+    }
+    .progress-pct {
+      font-size: 2rem;
+      font-weight: 900;
+      text-align: center;
+      margin: 12px 0 4px;
+    }
+
+    /* Status badge */
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 12px; border-radius: 20px;
+      font-size: .76rem; font-weight: 700;
+    }
+
+    /* Signer rows */
+    .signer-row {
+      display: flex; align-items: center; gap: 14px;
+      padding: 12px 0;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .signer-row:last-child { border-bottom: none; }
+    .signer-num {
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      background: #3b82f6; color: #fff;
+      font-size: .74rem; font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .signer-info { flex: 1; min-width: 0; }
+    .signer-name { font-weight: 700; font-size: .88rem; }
+    .signer-email { font-size: .74rem; color: #64748b; }
+    .signer-meta { font-size: .72rem; color: #64748b; margin-top: 3px; }
+
+    .pill {
+      font-size: .7rem; font-weight: 700; padding: 3px 10px;
+      border-radius: 20px; flex-shrink: 0;
+    }
+    .pill-pending  { background: #f1f5f9; color: #475569; }
+    .pill-viewed   { background: #dbeafe; color: #1e40af; }
+    .pill-signed   { background: #d1fae5; color: #065f46; }
+    .pill-declined { background: #fee2e2; color: #991b1b; }
+
+    /* Audit */
+    .audit-row {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid #f8fafc;
+      font-size: .82rem;
+    }
+    .audit-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      flex-shrink: 0; margin-top: 5px;
+    }
+    .audit-text { flex: 1; color: #1e293b; }
+    .audit-time { font-size: .7rem; color: #94a3b8; white-space: nowrap; }
+
+    /* Doc box */
+    .doc-box {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 14px;
+      background: #f8fafc; border: 1px solid #e2e8f0;
+      border-radius: 10px;
+    }
+    .doc-icon { font-size: 1.8rem; color: #ef4444; flex-shrink: 0; }
+    .doc-name { font-weight: 700; font-size: .9rem; }
+    .doc-meta { font-size: .74rem; color: #64748b; }
+
+    .viewer-notice {
+      background: #fffbeb; border: 1px solid #fde68a;
+      border-radius: 10px; padding: 12px 16px;
+      font-size: .82rem; color: #78350f;
+      margin-top: 16px;
+    }
+
+    .footer-note {
+      text-align: center; font-size: .74rem; color: #94a3b8;
+      margin-top: 24px; line-height: 1.7;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-top">
+      <div class="header-icon">📋</div>
+      <div>
+        <h1>{{ sig_req.title }}</h1>
+        <p>Signature request by {{ sig_req.created_by.full_name }}</p>
+      </div>
+    </div>
+    <span class="viewer-badge">
+      <i class="bi bi-eye-fill"></i>
+      Viewing as {{ cc.get_role_display }} — {{ cc.name }}
+    </span>
+  </div>
+
+  <!-- Status + Progress -->
+  <div class="card">
+    <div class="card-head" style="justify-content:space-between">
+      <span><i class="bi bi-activity"></i> Signing Status</span>
+      {% with sc=sig_req.status_color %}
+      <span class="status-badge" style="background:{{ sc }}18;color:{{ sc }}">
+        <i class="bi bi-circle-fill" style="font-size:.5rem"></i>
+        {{ sig_req.get_status_display }}
+      </span>
+      {% endwith %}
+    </div>
+    <div class="card-body">
+      <div class="progress-pct" style="color:{{ sig_req.status_color }}">{{ sig_req.progress_pct }}%</div>
+      <div class="progress-wrap">
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" style="width:{{ sig_req.progress_pct }}%;background:{{ sig_req.status_color }}"></div>
+        </div>
+        <div class="progress-labels">
+          <span>{{ signers|length }} signer{{ signers|length|pluralize }}</span>
+          <span>
+            {% if sig_req.completed_at %}Completed{% elif sig_req.expires_at %}Expires {{ sig_req.expires_at|date:"N j, Y" }}{% else %}In progress{% endif %}
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Document -->
+  <div class="card">
+    <div class="card-head"><i class="bi bi-file-earmark-text"></i> Document</div>
+    <div class="card-body">
+      <div class="doc-box">
+        <div class="doc-icon">📄</div>
+        <div>
+          <div class="doc-name">{{ sig_req.document.name }}</div>
+          <div class="doc-meta">{{ sig_req.document.size_display }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Signers -->
+  <div class="card">
+    <div class="card-head"><i class="bi bi-people-fill"></i> Signatories</div>
+    <div class="card-body">
+      {% for signer in signers %}
+      <div class="signer-row">
+        <div class="signer-num">{{ signer.order }}</div>
+        <div class="signer-info">
+          <div class="signer-name">{{ signer.name }}</div>
+          <div class="signer-email">{{ signer.email }}</div>
+          {% if signer.signed_at %}
+          <div class="signer-meta" style="color:#10b981">
+            <i class="bi bi-check2-circle me-1"></i>Signed {{ signer.signed_at|date:"N j, Y \a\t H:i" }}
+          </div>
+          {% elif signer.viewed_at %}
+          <div class="signer-meta" style="color:#3b82f6">
+            <i class="bi bi-eye me-1"></i>Viewed {{ signer.viewed_at|date:"N j, Y \a\t H:i" }}
+          </div>
+          {% endif %}
+          {% if signer.decline_reason %}
+          <div class="signer-meta" style="color:#ef4444;margin-top:4px">
+            Declined: {{ signer.decline_reason|truncatechars:60 }}
+          </div>
+          {% endif %}
+        </div>
+        <span class="pill
+          {% if signer.status == 'signed' %}pill-signed
+          {% elif signer.status == 'viewed' %}pill-viewed
+          {% elif signer.status == 'declined' %}pill-declined
+          {% else %}pill-pending{% endif %}">
+          {{ signer.get_status_display }}
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Audit trail -->
+  {% if audit %}
+  <div class="card">
+    <div class="card-head"><i class="bi bi-shield-check"></i> Audit Trail</div>
+    <div class="card-body">
+      {% for event in audit %}
+      <div class="audit-row">
+        <div class="audit-dot" style="background:
+          {% if event.event == 'signed' %}#10b981
+          {% elif event.event == 'declined' %}#ef4444
+          {% elif event.event == 'completed' %}#8b5cf6
+          {% else %}#3b82f6{% endif %}"></div>
+        <div class="audit-text">
+          <strong>{{ event.get_event_display }}</strong>
+          {% if event.signer_name %} — {{ event.signer_name }}{% endif %}
+          {% if event.notes %}<br><span style="color:#64748b">{{ event.notes|truncatechars:80 }}</span>{% endif %}
+        </div>
+        <div class="audit-time">{{ event.timestamp|date:"N j · H:i" }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="viewer-notice">
+    <i class="bi bi-eye me-1"></i>
+    You are viewing this page as a <strong>{{ cc.get_role_display }}</strong>. This link is private to you.
+    You cannot sign this document from this page.
+  </div>
+
+  <div class="footer-note">
+    This page refreshes automatically every 60 seconds.<br>
+    You were added as a {{ cc.get_role_display }} by {{ sig_req.created_by.full_name }}.
+  </div>
+
+</div>
+
+<script>
+// Auto-refresh every 60 seconds to show updated signing status
+setTimeout(function() { window.location.reload(); }, 60000);
+</script>
+</body>
+</html>

@@ -17,7 +17,26 @@
   background: var(--eo-surface);
 }
 
-/* ── Sidebar — collapsible at all screen sizes via hamburger ── */
+/* ── Pinned section label ───────────────────────────────────────────── */
+.fm-pinned-label {
+  font-size: .7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--eo-accent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  margin-top: 4px;
+}
+.fm-pinned-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--eo-accent);
+  opacity: .2;
+}
 .fm-sidebar {
   width: 220px;
   flex-shrink: 0;
@@ -756,9 +775,21 @@
 
         <!-- Folders row -->
         {% if folders %}
+        {% with has_pinned=folders|dictsort:"is_pinned" %}
         <div style="font-size:.75rem;font-weight:700;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Folders</div>
+        {% endwith %}
         <div class="fm-grid" style="margin-bottom:20px">
           {% for folder in folders %}
+          {% if forloop.first and folder.is_pinned %}
+          <div style="grid-column:1/-1" class="fm-pinned-label"><i class="bi bi-pin-angle-fill"></i> Pinned</div>
+          {% endif %}
+          {% if not folder.is_pinned and forloop.counter > 1 %}
+          {% with prev=folders|slice:forloop.counter0|last %}
+          {% if prev.is_pinned %}
+          <div style="grid-column:1/-1" class="fm-pinned-label" style="color:var(--eo-text-muted)"><i class="bi bi-files"></i> All Folders</div>
+          {% endif %}
+          {% endwith %}
+          {% endif %}
           <div style="position:relative">
             <a href="?folder={{ folder.id }}" class="fm-folder-card" style="border-left:4px solid {{ folder.color }}">
               <i class="bi bi-folder-fill fm-card-icon" style="color:{{ folder.color }}"></i>
@@ -771,6 +802,12 @@
               </div>
             </a>
             <div class="fm-card-actions">
+              <!-- Pin button -->
+              <button class="fm-action-btn {% if folder.is_pinned %}shared-active{% endif %}"
+                      title="{% if folder.is_pinned %}Unpin{% else %}Pin to top{% endif %}"
+                      onclick="event.preventDefault();togglePin('folder','{{ folder.id }}',this)">
+                <i class="bi bi-pin-angle{% if folder.is_pinned %}-fill{% endif %}"></i>
+              </button>
               {% if folder.user_permission == 'edit' or folder.user_permission == 'full' %}
               <button class="fm-action-btn {% if folder.visibility != 'private' %}shared-active{% endif %}" title="Share"
                       onclick="event.preventDefault();openShareModal('{{ folder.id }}','{{ folder.name|escapejs }}','{{ folder.visibility }}','folder',[],[],[],{},'{{ folder.user_permission }}')">
@@ -815,6 +852,12 @@
               <a href="{% url 'file_download' file.pk %}" class="fm-action-btn" title="Download">
                 <i class="bi bi-download"></i>
               </a>
+              <!-- Pin button -->
+              <button class="fm-action-btn {% if file.is_pinned %}shared-active{% endif %}"
+                      title="{% if file.is_pinned %}Unpin{% else %}Pin to top{% endif %}"
+                      onclick="event.preventDefault();togglePin('file','{{ file.id }}',this)">
+                <i class="bi bi-pin-angle{% if file.is_pinned %}-fill{% endif %}"></i>
+              </button>
               {% if file.user_permission == 'edit' or file.user_permission == 'full' %}
               {# ── edit + full: share, move, history, convert, signature ── #}
               <button class="fm-action-btn {% if file.visibility != 'private' %}shared-active{% endif %}" title="Share"
@@ -897,6 +940,11 @@
                 <td style="font-size:.8rem;color:var(--eo-text-muted)">{{ folder.created_at|date:"N j, Y" }}</td>
                 <td>—</td>
                 <td>
+                  <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon {% if folder.is_pinned %}shared-active-list{% endif %}"
+                          title="{% if folder.is_pinned %}Unpin{% else %}Pin to top{% endif %}"
+                          onclick="togglePin('folder','{{ folder.id }}',this)">
+                    <i class="bi bi-pin-angle{% if folder.is_pinned %}-fill{% endif %}"></i>
+                  </button>
                   {% if folder.user_permission == 'edit' or folder.user_permission == 'full' %}
                   <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon {% if folder.visibility != 'private' %}shared-active-list{% endif %}" title="Share"
                           onclick="openShareModal('{{ folder.id }}','{{ folder.name|escapejs }}','{{ folder.visibility }}','folder',[],[],[],{},'{{ folder.user_permission }}')">
@@ -953,6 +1001,12 @@
                 <td style="font-size:.82rem;color:var(--eo-text-muted);text-align:center">{{ file.download_count }}</td>
                 <td>
                   <div style="display:flex;gap:5px;justify-content:flex-end">
+                    {# Pin #}
+                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon {% if file.is_pinned %}shared-active-list{% endif %}"
+                            title="{% if file.is_pinned %}Unpin{% else %}Pin to top{% endif %}"
+                            onclick="togglePin('file','{{ file.id }}',this)">
+                      <i class="bi bi-pin-angle{% if file.is_pinned %}-fill{% endif %}"></i>
+                    </button>
                     {# Preview — always #}
                     <button class="fm-action-btn" title="Preview"
                            onclick="event.preventDefault(); openPreviewModal('{{ file.id }}', '{{ file.name|escapejs }}', '{{ file.extension|default:'' }}')">
@@ -2177,6 +2231,36 @@ function closePreviewModal() {
     `;
   }
   closeModal('previewModal');
+}
+
+/* ── Pin / Unpin ──────────────────────────────────────────────────────── */
+function togglePin(type, id, btn) {
+  var csrfToken = document.cookie.match(/(^|;)\s*csrftoken=([^;]+)/);
+  csrfToken = csrfToken ? csrfToken[2] : '';
+  var fd = new FormData();
+  fd.append('type', type);
+  fd.append('id', id);
+  fd.append('csrfmiddlewaretoken', csrfToken);
+  fetch('/files/pin/', { method: 'POST', body: fd, credentials: 'same-origin' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var icon = btn.querySelector('i');
+      if (data.pinned) {
+        btn.classList.add('shared-active', 'shared-active-list');
+        btn.title = 'Unpin';
+        if (icon) { icon.className = icon.className.replace('bi-pin-angle', 'bi-pin-angle-fill'); }
+        // Show toast
+        fmToast('📌 Pinned to top', 'success');
+      } else {
+        btn.classList.remove('shared-active', 'shared-active-list');
+        btn.title = 'Pin to top';
+        if (icon) { icon.className = icon.className.replace('bi-pin-angle-fill', 'bi-pin-angle'); }
+        fmToast('📌 Unpinned', 'info');
+      }
+      // Reload after short delay so sort order updates
+      setTimeout(function() { window.location.reload(); }, 800);
+    })
+    .catch(function() { fmToast('Failed to update pin', 'error'); });
 }
 </script>
 {% endblock %}

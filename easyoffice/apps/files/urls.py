@@ -48,4 +48,8 @@ urlpatterns = [
     path('tools/notes/',        views.NotesToPDFView.as_view(),  name='notes_to_pdf'),
     path('tools/pdf-to-word/',  views.PDFToWordView.as_view(),   name='pdf_to_word'),
     path('tools/pdf-to-image/', views.PDFToImageView.as_view(),  name='pdf_to_image'),
+
+    path('pin/',                           views.PinToggleView.as_view(),            name='pin_toggle'),
+    path('public/<uuid:token>/',           views.FilePublicDownloadView.as_view(),   name='file_public_download'),
+    path('signatures/view/<uuid:token>/',  views.SignatureViewOnlyView.as_view(),    name='signature_view_only'),
 ]

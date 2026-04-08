@@ -541,3 +541,94 @@ class SavedSignature(models.Model):
                 user=self.user, is_default=True
             ).exclude(pk=self.pk).update(is_default=False)
         super().save(*args, **kwargs)
+
+# ── Pin support ───────────────────────────────────────────────────────────────
+
+class FilePinnedItem(models.Model):
+    """Tracks which files/folders a user has pinned to the top."""
+    user       = models.ForeignKey(User, on_delete=models.CASCADE, related_name='pinned_items')
+    file       = models.ForeignKey('SharedFile', on_delete=models.CASCADE,
+                                   null=True, blank=True, related_name='pins')
+    folder     = models.ForeignKey('FileFolder', on_delete=models.CASCADE,
+                                   null=True, blank=True, related_name='pins')
+    pinned_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['pinned_at']
+        constraints = [
+            models.UniqueConstraint(fields=['user','file'],   name='unique_pin_file',
+                                    condition=models.Q(file__isnull=False)),
+            models.UniqueConstraint(fields=['user','folder'], name='unique_pin_folder',
+                                    condition=models.Q(folder__isnull=False)),
+        ]
+
+    def __str__(self):
+        return f'{self.user} pinned {self.file or self.folder}'
+
+
+# ── Signature CC / Viewer ─────────────────────────────────────────────────────
+
+class SignatureCC(models.Model):
+    """
+    CC recipients for a signature request.
+    They receive email updates (sent, completed) but do NOT sign.
+    """
+    class Role(models.TextChoices):
+        CC     = 'cc',     'CC (notified only)'
+        VIEWER = 'viewer', 'Viewer (can view progress)'
+
+    id         = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    request    = models.ForeignKey('SignatureRequest', on_delete=models.CASCADE,
+                                    related_name='cc_recipients')
+    user       = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name='signature_cc')
+    email      = models.EmailField()
+    name       = models.CharField(max_length=200)
+    role       = models.CharField(max_length=10, choices=Role.choices, default=Role.CC)
+    # Viewer-only token for passwordless access to view (not sign) the document
+    view_token = models.UUIDField(default=uuid.uuid4, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return f'{self.name} <{self.email}> [{self.role}]'
+
+    @property
+    def view_url(self):
+        from django.urls import reverse
+        return reverse('signature_view_only', kwargs={'token': self.view_token})
+
+
+# ── Public download token (no-login download for signed docs) ─────────────────
+
+class FilePublicToken(models.Model):
+    """
+    Allows downloading a specific file without being logged in.
+    Used in signature completion emails so recipients can get the signed copy.
+    """
+    id         = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    file       = models.ForeignKey('SharedFile', on_delete=models.CASCADE,
+                                    related_name='public_tokens')
+    token      = models.UUIDField(default=uuid.uuid4, unique=True)
+    label      = models.CharField(max_length=200, blank=True)  # e.g. "Signed copy"
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    download_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'Public token for {self.file.name}'
+
+    @property
+    def is_expired(self):
+        return bool(self.expires_at and timezone.now() > self.expires_at)
+
+    @property
+    def public_url(self):
+        from django.urls import reverse
+        return reverse('file_public_download', kwargs={'token': self.token})

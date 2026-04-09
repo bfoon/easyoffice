@@ -35,4 +35,7 @@ urlpatterns = [
     path('<uuid:pk>/locations/<uuid:lid>/delete/', views.ProjectLocationDeleteView.as_view(), name='location_delete'),
     path('<uuid:pk>/locations/export/html/', views.LocationMapHTMLExportView.as_view(), name='location_export_html'),
     path('<uuid:pk>/locations/export/pdf/', views.LocationMapPDFExportView.as_view(), name='location_export_pdf'),
+
+    path('<uuid:pk>/documents/link/', views.ProjectDocumentLinkView.as_view(), name='project_document_link'),
+    path('<uuid:pk>/documents/unlink/<uuid:file_id>/', views.ProjectDocumentUnlinkView.as_view(), name='project_document_unlink'),
 ]

@@ -784,9 +784,115 @@
     {% endif %}
   </div>
   {% endif %}
-</div>
-</div>
-</div>
+    </div>
+
+    <div class="eo-card mb-4">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+        <div>
+          <h3 style="margin:0;font-size:1rem;font-weight:700;color:var(--eo-text)">
+            <i class="bi bi-folder2-open me-2"></i>Project Documents
+          </h3>
+          <p style="margin:4px 0 0;font-size:.8rem;color:var(--eo-text-muted)">
+            Files linked to this project from the Files module
+            {% if project_documents_count %}· {{ project_documents_count }} file{{ project_documents_count|pluralize }}{% endif %}
+          </p>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <a href="{% url 'file_manager' %}"
+             class="eo-btn eo-btn-sm eo-btn-secondary"
+             title="Open Files">
+            <i class="bi bi-folder"></i>
+          </a>
+
+          {% if is_member %}
+          <button type="button"
+                  onclick="openModal('projectFileUploadModal')"
+                  class="eo-btn eo-btn-sm eo-btn-primary"
+                  title="Upload File">
+            <i class="bi bi-upload"></i>
+          </button>
+
+          <button type="button"
+                  onclick="openModal('linkProjectFileModal')"
+                  class="eo-btn eo-btn-sm eo-btn-secondary"
+                  title="Link Existing File">
+            <i class="bi bi-link-45deg"></i>
+          </button>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if recent_project_documents %}
+        <div style="display:flex;flex-direction:column;gap:10px">
+          {% for doc in recent_project_documents %}
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid var(--eo-border);border-radius:12px;background:var(--eo-bg);flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:12px;min-width:0;flex:1">
+              <div style="width:40px;height:40px;border-radius:10px;background:#eff6ff;display:flex;align-items:center;justify-content:center;flex-shrink:0"
+                   title="{{ doc.name }}">
+                <i class="bi {{ doc.icon_class }}" style="font-size:1.1rem;color:{{ doc.icon_color|default:'#2563eb' }}"></i>
+              </div>
+
+              <div style="min-width:0;flex:1">
+                <div style="font-size:.9rem;font-weight:700;color:var(--eo-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+                     title="{{ doc.name }}">
+                  {{ doc.name }}
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <a href="{% url 'file_preview' doc.pk %}"
+                 target="_blank"
+                 class="eo-btn eo-btn-sm eo-btn-secondary"
+                 title="Preview">
+                <i class="bi bi-eye"></i>
+              </a>
+
+              <a href="{% url 'file_download' doc.pk %}"
+                 class="eo-btn eo-btn-sm eo-btn-secondary"
+                 title="Download">
+                <i class="bi bi-download"></i>
+              </a>
+
+              <a href="{% url 'file_history' doc.pk %}"
+                 class="eo-btn eo-btn-sm eo-btn-secondary"
+                 title="History">
+                <i class="bi bi-clock-history"></i>
+              </a>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+
+        {% if project_documents_count > 8 %}
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--eo-border);text-align:right">
+          <a href="{% url 'file_manager' %}?project={{ project.pk }}"
+             class="eo-btn eo-btn-sm eo-btn-secondary"
+             title="View All Project Files">
+            <i class="bi bi-list-ul"></i>
+          </a>
+        </div>
+        {% endif %}
+      {% else %}
+        <div style="text-align:center;padding:26px 16px;color:var(--eo-text-muted);border:1px dashed var(--eo-border);border-radius:12px;background:var(--eo-bg)">
+          <i class="bi bi-file-earmark-text" style="font-size:1.8rem;opacity:.28;display:block;margin-bottom:8px"></i>
+          <p style="font-size:.82rem;margin:0 0 12px">No project documents uploaded yet.</p>
+          {% if is_member %}
+          <button type="button"
+                  onclick="openModal('projectFileUploadModal')"
+                  class="eo-btn eo-btn-sm eo-btn-primary"
+                  title="Upload First File">
+            <i class="bi bi-upload"></i>
+          </button>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    </div>
+    </div>
+
 
 
 <!-- ═══════════════════════════════════════════════════════════════
@@ -1347,6 +1453,175 @@
   </div>
 </div>
 
+<!-- Document -->
+{% if is_member %}
+<div class="proj-modal-backdrop" id="projectFileUploadModal">
+  <div class="proj-modal" style="width:580px">
+    <div class="proj-modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:28px;height:28px;border-radius:7px;background:#e0f2fe;display:flex;align-items:center;justify-content:center">
+          <i class="bi bi-upload" style="color:#0284c7;font-size:.85rem"></i>
+        </div>
+        <span style="font-size:1rem;font-weight:700">Upload Project Document</span>
+      </div>
+      <button onclick="closeModal('projectFileUploadModal')"
+              style="background:none;border:none;cursor:pointer;font-size:1.3rem;color:var(--eo-text-muted);padding:0 4px">&times;</button>
+    </div>
+
+    <div class="proj-modal-body">
+      <form method="post" action="{% url 'file_upload' %}" enctype="multipart/form-data">
+        {% csrf_token %}
+        <input type="hidden" name="project_id" value="{{ project.pk }}">
+        <input type="hidden" name="next" value="{% url 'project_detail' project.pk %}">
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">File *</label>
+          <input type="file" name="file" class="eo-form-control" required>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Display Name</label>
+          <input type="text" name="name" class="eo-form-control" placeholder="Optional custom name">
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Description</label>
+          <textarea name="description" class="eo-form-control" rows="3" placeholder="Short description of the document"></textarea>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Tags</label>
+          <input type="text" name="tags" class="eo-form-control" placeholder="e.g. contract, report, design">
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Visibility</label>
+          <select name="visibility" class="eo-form-select">
+            <option value="private">Private</option>
+            <option value="shared_with">Specific People</option>
+            <option value="unit">Unit</option>
+            <option value="department">Department</option>
+            <option value="office">Office-wide</option>
+          </select>
+        </div>
+
+        <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">
+          <button type="submit" class="eo-btn eo-btn-primary">
+            <i class="bi bi-upload"></i> Upload File
+          </button>
+          <button type="button" onclick="closeModal('projectFileUploadModal')" class="eo-btn eo-btn-secondary">
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if is_member %}
+<div class="proj-modal-backdrop" id="linkProjectFileModal">
+  <div class="proj-modal" style="width:680px;max-width:96vw">
+    <div class="proj-modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:28px;height:28px;border-radius:7px;background:#eef2ff;display:flex;align-items:center;justify-content:center">
+          <i class="bi bi-link-45deg" style="color:#4f46e5;font-size:.9rem"></i>
+        </div>
+        <span style="font-size:1rem;font-weight:700">Link File From Files App</span>
+      </div>
+      <button onclick="closeModal('linkProjectFileModal')"
+              style="background:none;border:none;cursor:pointer;font-size:1.25rem;color:var(--eo-text-muted)">&times;</button>
+    </div>
+
+    <div class="proj-modal-body">
+      <div class="eo-form-group">
+        <label class="eo-form-label">Search files</label>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="projectFileSearchInput" class="eo-form-control"
+                 placeholder="Search by file name, description, or tags">
+          <button type="button" class="eo-btn eo-btn-secondary" onclick="searchProjectFiles()">
+            <i class="bi bi-search"></i> Search
+          </button>
+        </div>
+      </div>
+
+      <div id="projectFileSearchResults"
+           style="margin-top:12px;max-height:420px;overflow:auto;display:flex;flex-direction:column;gap:10px">
+        <div style="text-align:center;padding:28px 12px;color:var(--eo-text-muted);border:1px dashed var(--eo-border);border-radius:12px">
+          Search files to link them to this project.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+<script>
+function searchProjectFiles() {
+  const q = document.getElementById('projectFileSearchInput').value || '';
+  const resultsEl = document.getElementById('projectFileSearchResults');
+
+  resultsEl.innerHTML = '<div style="padding:18px;color:var(--eo-text-muted)">Searching...</div>';
+
+  fetch('{% url "project_document_link" project.pk %}?q=' + encodeURIComponent(q), {
+    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data.results || !data.results.length) {
+      resultsEl.innerHTML = `
+        <div style="text-align:center;padding:28px 12px;color:var(--eo-text-muted);border:1px dashed var(--eo-border);border-radius:12px">
+          No matching files found.
+        </div>`;
+      return;
+    }
+
+    resultsEl.innerHTML = data.results.map(f => `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid var(--eo-border);border-radius:12px;background:var(--eo-bg);flex-wrap:wrap">
+        <div style="display:flex;align-items:flex-start;gap:12px;min-width:0;flex:1">
+          <div style="width:40px;height:40px;border-radius:10px;background:#eff6ff;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <i class="bi ${f.icon_class}" style="font-size:1.1rem;color:${f.icon_color}"></i>
+          </div>
+          <div style="min-width:0;flex:1">
+            <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">${f.name}</div>
+            <div style="font-size:.76rem;color:var(--eo-text-muted);margin-top:4px;display:flex;gap:10px;flex-wrap:wrap">
+              ${f.uploaded_by ? `<span><i class="bi bi-person me-1"></i>${f.uploaded_by}</span>` : ''}
+              ${f.folder ? `<span><i class="bi bi-folder2 me-1"></i>${f.folder}</span>` : ''}
+              ${f.size ? `<span><i class="bi bi-hdd me-1"></i>${f.size}</span>` : ''}
+              ${f.created_at ? `<span><i class="bi bi-clock me-1"></i>${f.created_at}</span>` : ''}
+            </div>
+            ${f.description ? `<div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:6px">${f.description}</div>` : ''}
+          </div>
+        </div>
+
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <a href="/files/${f.id}/preview/" target="_blank" class="eo-btn eo-btn-sm eo-btn-secondary">
+            <i class="bi bi-eye"></i> Preview
+          </a>
+          ${f.is_linked ? `
+            <span class="eo-btn eo-btn-sm eo-btn-secondary" style="pointer-events:none;opacity:.7">
+              <i class="bi bi-check2-circle"></i> Linked
+            </span>
+          ` : `
+            <form method="post" action="{% url 'project_document_link' project.pk %}" style="margin:0">
+              {% csrf_token %}
+              <input type="hidden" name="file_id" value="${f.id}">
+              <button type="submit" class="eo-btn eo-btn-sm eo-btn-primary">
+                <i class="bi bi-link-45deg"></i> Link
+              </button>
+            </form>
+          `}
+        </div>
+      </div>
+    `).join('');
+  })
+  .catch(() => {
+    resultsEl.innerHTML = `
+      <div style="text-align:center;padding:28px 12px;color:var(--eo-danger);border:1px dashed var(--eo-border);border-radius:12px">
+        Could not load files.
+      </div>`;
+  });
+}
+</script>
 {% endblock %}
 
 {% block extra_js %}

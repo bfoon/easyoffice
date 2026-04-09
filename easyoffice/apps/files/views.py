@@ -1149,31 +1149,71 @@ class FileUploadView(LoginRequiredMixin, View):
         if not f:
             messages.error(request, 'No file selected.')
             return redirect('file_manager')
+
         folder_id = request.POST.get('folder_id')
         folder = None
         if folder_id:
-            try: folder = FileFolder.objects.get(id=folder_id)
-            except FileFolder.DoesNotExist: pass
+            try:
+                folder = FileFolder.objects.get(id=folder_id)
+            except FileFolder.DoesNotExist:
+                folder = None
+
+        project = None
+        project_id = request.POST.get('project_id')
+        if project_id:
+            try:
+                from apps.projects.models import Project
+                project = Project.objects.get(id=project_id)
+            except Project.DoesNotExist:
+                project = None
+
+        original_name = os.path.basename(f.name or '').strip()
+        typed_name = request.POST.get('name', '').strip()
+
+        # Preserve extension from uploaded file
+        original_root, original_ext = os.path.splitext(original_name)
+        original_ext = original_ext or ''
+
+        if typed_name:
+            typed_root, typed_ext = os.path.splitext(typed_name)
+            if typed_ext:
+                final_name = typed_name
+            else:
+                final_name = f'{typed_name}{original_ext}'
+        else:
+            final_name = original_name or f'upload{original_ext or ""}'
+
         sf = SharedFile.objects.create(
-            name=request.POST.get('name', f.name).strip() or f.name,
-            file=f, folder=folder, uploaded_by=request.user,
+            name=final_name,
+            file=f,
+            folder=folder,
+            project=project,
+            uploaded_by=request.user,
             visibility=request.POST.get('visibility', 'private'),
             description=request.POST.get('description', ''),
             tags=request.POST.get('tags', ''),
-            file_size=f.size, file_type=f.content_type,
+            file_size=f.size,
+            file_type=f.content_type or '',
         )
-        # Compute hash in background (don't fail on error)
+
         try:
             sf.file_hash = sf.compute_hash()
             sf.save(update_fields=['file_hash'])
         except Exception:
             pass
-        messages.success(request, f'"{f.name}" uploaded.')
+
+        messages.success(request, f'"{sf.name}" uploaded successfully.')
+
         next_url = request.POST.get('next', '')
         if next_url and next_url.startswith('/'):
             return redirect(next_url)
-        if folder_id:
-            return redirect(f'/files/?folder={folder_id}')
+
+        if project:
+            return redirect('project_detail', pk=project.id)
+
+        if folder:
+            return redirect(f'/files/?folder={folder.id}')
+
         return redirect('file_manager')
 
 

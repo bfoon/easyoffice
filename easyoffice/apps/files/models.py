@@ -2,7 +2,7 @@ import os, uuid, hashlib, json
 from django.db import models
 from django.utils import timezone
 from apps.core.models import User
-
+from apps.projects.models import Project
 
 # ── Folder ──────────────────────────────────────────────────────────────────
 
@@ -113,6 +113,10 @@ class SharedFile(models.Model):
     file             = models.FileField(upload_to='shared_files/%Y/%m/')
     folder           = models.ForeignKey(FileFolder, on_delete=models.SET_NULL, null=True, blank=True,
                                           related_name='files')
+    project = models.ForeignKey(
+        Project, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='documents'
+    )
     uploaded_by      = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_files')
     visibility       = models.CharField(max_length=20, choices=Visibility.choices, default=Visibility.PRIVATE)
     shared_with      = models.ManyToManyField(User, related_name='files_shared_with', blank=True)

@@ -285,17 +285,24 @@
             {% for col in columns %}
             <div class="col-item">
               <span class="drag-handle">≡</span>
+
+              <input type="hidden" name="col_key" value="{{ col.key }}"/>
+
               <input type="text" name="col_label" value="{{ col.label }}"
                      class="eo-form-control" style="flex:1" placeholder="Column name"/>
+
               <select name="col_type" class="eo-form-select" style="width:120px;font-size:.82rem">
-                <option value="text"     {% if col.type == 'text'     %}selected{% endif %}>Text</option>
-                <option value="number"   {% if col.type == 'number'   %}selected{% endif %}>Number</option>
-                <option value="date"     {% if col.type == 'date'     %}selected{% endif %}>Date</option>
-                <option value="status"   {% if col.type == 'status'   %}selected{% endif %}>Status</option>
+                <option value="text"     {% if col.type == 'text' %}selected{% endif %}>Text</option>
+                <option value="number"   {% if col.type == 'number' %}selected{% endif %}>Number</option>
+                <option value="date"     {% if col.type == 'date' %}selected{% endif %}>Date</option>
+                <option value="status"   {% if col.type == 'status' %}selected{% endif %}>Status</option>
                 <option value="checkbox" {% if col.type == 'checkbox' %}selected{% endif %}>Checkbox</option>
               </select>
+
               <button type="button" onclick="this.closest('.col-item').remove()"
-                      style="background:none;border:none;cursor:pointer;color:var(--eo-text-muted);font-size:1rem;padding:2px 4px">×</button>
+                      style="background:none;border:none;cursor:pointer;color:var(--eo-text-muted);font-size:1rem;padding:2px 4px">
+                ×
+              </button>
             </div>
             {% endfor %}
           </div>
@@ -412,16 +419,23 @@ document.querySelectorAll('.proj-modal-backdrop').forEach(function(el){
 function addColumn() {
   var hint = document.getElementById('noColHint');
   if (hint) hint.style.display = 'none';
+
   var div = document.createElement('div');
   div.className = 'col-item';
-  div.innerHTML = '<span class="drag-handle">≡</span>'
+  div.innerHTML =
+      '<span class="drag-handle">≡</span>'
+    + '<input type="hidden" name="col_key" value="">'
     + '<input type="text" name="col_label" class="eo-form-control" style="flex:1" placeholder="Column name"/>'
     + '<select name="col_type" class="eo-form-select" style="width:120px;font-size:.82rem">'
-    + '<option value="text">Text</option><option value="number">Number</option>'
-    + '<option value="date">Date</option><option value="status">Status</option>'
-    + '<option value="checkbox">Checkbox</option></select>'
+    + '<option value="text">Text</option>'
+    + '<option value="number">Number</option>'
+    + '<option value="date">Date</option>'
+    + '<option value="status">Status</option>'
+    + '<option value="checkbox">Checkbox</option>'
+    + '</select>'
     + '<button type="button" onclick="this.closest(\'.col-item\').remove()"'
     + ' style="background:none;border:none;cursor:pointer;color:var(--eo-text-muted);font-size:1rem;padding:2px 4px">×</button>';
+
   document.getElementById('colList').appendChild(div);
 }
 
@@ -431,23 +445,34 @@ var CSRF = "{{ csrf_token }}";
 var BASE_URL = "/projects/{{ project.pk }}/tracking/row/";
 
 // ── Open edit modal — reads data from <tr data-row="..."> ─────────────────────
+var COLS = [{% for col in columns %}{"key":"{{ col.key }}","label":"{{ col.label|escapejs }}","type":"{{ col.type }}"},{% endfor %}];
+var CSRF = "{{ csrf_token }}";
+var BASE_URL = "/projects/{{ project.pk }}/tracking/row/";
+
 function openEditRow(btn) {
-  var tr   = btn.closest('tr');
-  var pk   = tr.dataset.pk;
+  var tr = btn.closest('tr');
+  var pk = tr.dataset.pk;
   var data = {};
-  try { data = JSON.parse(tr.dataset.row); } catch(e) {}
+
+  try {
+    data = JSON.parse(tr.dataset.row || '{}');
+  } catch (e) {
+    data = {};
+  }
 
   var html = '<form method="post" action="' + BASE_URL + pk + '/edit/">';
   html += '<input type="hidden" name="csrfmiddlewaretoken" value="' + CSRF + '">';
 
   COLS.forEach(function(col) {
-    var val = data[col.key] || '';
-    html += '<div class="eo-form-group"><label class="eo-form-label">' + col.label + '</label>';
+    var val = Object.prototype.hasOwnProperty.call(data, col.key) ? data[col.key] : '';
+
+    html += '<div class="eo-form-group">';
+    html += '<label class="eo-form-label">' + col.label + '</label>';
 
     if (col.type === 'date') {
-      html += '<input type="date" name="data_' + col.key + '" class="eo-form-control" value="' + val + '"/>';
+      html += '<input type="date" name="data_' + col.key + '" class="eo-form-control" value="' + (val || '') + '"/>';
     } else if (col.type === 'number') {
-      html += '<input type="number" name="data_' + col.key + '" class="eo-form-control" value="' + val + '" step="any"/>';
+      html += '<input type="number" name="data_' + col.key + '" class="eo-form-control" value="' + (val ?? '') + '" step="any"/>';
     } else if (col.type === 'status') {
       html += '<select name="data_' + col.key + '" class="eo-form-select">';
       ['', 'Pending', 'In Progress', 'Done', 'Blocked'].forEach(function(s) {
@@ -455,20 +480,27 @@ function openEditRow(btn) {
       });
       html += '</select>';
     } else if (col.type === 'checkbox') {
+      html += '<input type="hidden" name="data_' + col.key + '" value="">';
       html += '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:.88rem;'
-            + 'padding:10px 14px;border:1px solid var(--eo-border);border-radius:8px">'
-            + '<input type="checkbox" name="data_' + col.key + '" value="true" style="width:16px;height:16px;accent-color:#0284c7"'
-            + (val ? ' checked' : '') + '/> Mark as checked</label>';
+           + 'padding:10px 14px;border:1px solid var(--eo-border);border-radius:8px;'
+           + 'background:' + (val ? '#e0f2fe' : '') + '">';
+      html += '<input type="checkbox" name="data_' + col.key + '" value="true"'
+           + (val ? ' checked' : '')
+           + ' style="width:16px;height:16px;accent-color:#0284c7"'
+           + ' onchange="this.closest(\'label\').style.background=this.checked?\'#e0f2fe\':\'\'">';
+      html += 'Mark as checked</label>';
     } else {
-      html += '<input type="text" name="data_' + col.key + '" class="eo-form-control" value="' + val + '" placeholder="' + col.label + '..."/>';
+      html += '<input type="text" name="data_' + col.key + '" class="eo-form-control" value="' + (val ?? '') + '"/>';
     }
+
     html += '</div>';
   });
 
   html += '<div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">';
   html += '<button type="submit" class="eo-btn eo-btn-primary">Save Changes</button>';
   html += '<button type="button" onclick="closeModal(\'editRowModal\')" class="eo-btn eo-btn-secondary">Cancel</button>';
-  html += '</div></form>';
+  html += '</div>';
+  html += '</form>';
 
   document.getElementById('editRowBody').innerHTML = html;
   openModal('editRowModal');

@@ -14,6 +14,8 @@ from collections import Counter
 from apps.core.models import User
 from django.db.models import Sum
 from apps.finance.models import PurchaseRequest, Payment, EmployeeFinanceRequest
+from django.http import JsonResponse
+from apps.files.models import SharedFile
 import io
 from datetime import date, timedelta
 from django.http import HttpResponse, HttpResponseForbidden
@@ -127,6 +129,36 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         if project.tags:
             project_tags = [tag.strip() for tag in project.tags.split(",") if tag.strip()]
 
+        # ── Linked project documents ───────────────────────────────────────
+        try:
+            from apps.files.models import SharedFile
+
+            profile = getattr(user, 'staffprofile', None)
+            unit = profile.unit if profile else None
+            dept = profile.department if profile else None
+
+            project_documents = SharedFile.objects.filter(
+                project=project,
+                is_latest=True,
+            ).filter(
+                Q(uploaded_by=user) |
+                Q(visibility='office') |
+                Q(visibility='unit', unit=unit) |
+                Q(visibility='department', department=dept) |
+                Q(shared_with=user) |
+                Q(share_access__user=user) |
+                Q(project__project_manager=user) |
+                Q(project__team_members=user) |
+                Q(project__is_public=True)
+            ).distinct().select_related('uploaded_by', 'folder').order_by('-created_at')
+
+            recent_project_documents = project_documents[:8]
+            project_documents_count = project_documents.count()
+        except Exception:
+            project_documents = []
+            recent_project_documents = []
+            project_documents_count = 0
+
         # ── Linked meetings ─────────────────────────────────────────────
         try:
             from apps.meetings.models import Meeting
@@ -208,6 +240,11 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             'upcoming_meetings': upcoming_meetings,
             'recent_meetings': recent_meetings,
             'meeting_count': meeting_count,
+
+            # Document
+            'project_documents': project_documents,
+            'recent_project_documents': recent_project_documents,
+            'project_documents_count': project_documents_count,
         })
         return ctx
 
@@ -816,6 +853,99 @@ def _build_gantt_pdf(project, milestones):
     c.save()
     return buf.getvalue()
 
+# =============================================================================
+# Document Upload VIEWS
+# =============================================================================
+class ProjectDocumentLinkView(LoginRequiredMixin, View):
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+
+        q = request.GET.get('q', '').strip()
+
+        profile = getattr(request.user, 'staffprofile', None)
+        unit = profile.unit if profile else None
+        dept = profile.department if profile else None
+
+        files = SharedFile.objects.filter(
+            Q(uploaded_by=request.user) |
+            Q(visibility='office') |
+            Q(visibility='unit', unit=unit) |
+            Q(visibility='department', department=dept) |
+            Q(shared_with=request.user) |
+            Q(share_access__user=request.user)
+        ).distinct().select_related('uploaded_by', 'folder').order_by('-created_at')
+
+        if q:
+            files = files.filter(
+                Q(name__icontains=q) |
+                Q(description__icontains=q) |
+                Q(tags__icontains=q)
+            )
+
+        results = []
+        for f in files[:30]:
+            results.append({
+                'id': str(f.id),
+                'name': f.name,
+                'description': f.description or '',
+                'uploaded_by': f.uploaded_by.full_name if f.uploaded_by else '',
+                'folder': f.folder.name if f.folder else '',
+                'created_at': timezone.localtime(f.created_at).strftime('%d %b %Y %H:%M'),
+                'size': getattr(f, 'size_display', ''),
+                'icon_class': f.icon_class,
+                'icon_color': f.icon_color,
+                'is_linked': str(getattr(f, 'project_id', '') or '') == str(project.id),
+            })
+
+        return JsonResponse({'results': results})
+
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+
+        file_id = request.POST.get('file_id', '').strip()
+        if not file_id:
+            messages.error(request, 'No file selected.')
+            return redirect('project_detail', pk=pk)
+
+        profile = getattr(request.user, 'staffprofile', None)
+        unit = profile.unit if profile else None
+        dept = profile.department if profile else None
+
+        file_obj = get_object_or_404(
+            SharedFile.objects.filter(
+                Q(uploaded_by=request.user) |
+                Q(visibility='office') |
+                Q(visibility='unit', unit=unit) |
+                Q(visibility='department', department=dept) |
+                Q(shared_with=request.user) |
+                Q(share_access__user=request.user)
+            ).distinct(),
+            pk=file_id
+        )
+
+        file_obj.project = project
+        file_obj.save(update_fields=['project'])
+
+        messages.success(request, f'"{file_obj.name}" linked to project.')
+        return redirect('project_detail', pk=pk)
+
+
+class ProjectDocumentUnlinkView(LoginRequiredMixin, View):
+    def post(self, request, pk, file_id):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+
+        file_obj = get_object_or_404(SharedFile, pk=file_id, project=project)
+        file_obj.project = None
+        file_obj.save(update_fields=['project'])
+
+        messages.success(request, f'"{file_obj.name}" removed from this project.')
+        return redirect('project_detail', pk=pk)
 
 # =============================================================================
 # SURVEY VIEWS
@@ -1102,19 +1232,41 @@ class TrackingSheetUpdateColumnsView(LoginRequiredMixin, View):
             return HttpResponseForbidden()
 
         sheet, _ = TrackingSheet.objects.get_or_create(
-            project=project, defaults={'created_by': request.user}
+            project=project,
+            defaults={'created_by': request.user}
         )
+
         sheet.title = request.POST.get('sheet_title', sheet.title).strip() or sheet.title
 
         labels = request.POST.getlist('col_label')
         types = request.POST.getlist('col_type')
+        keys = request.POST.getlist('col_key')  # preserve existing keys
+
         cols = []
         for i, (label, ctype) in enumerate(zip(labels, types)):
-            if label.strip():
-                safe = label.strip().lower().replace(' ', '_')
-                cols.append({'key': f'c{i}_{safe}', 'label': label.strip(), 'type': ctype})
+            label = (label or '').strip()
+            if not label:
+                continue
+
+            old_key = ''
+            if i < len(keys):
+                old_key = (keys[i] or '').strip()
+
+            if old_key:
+                key = old_key
+            else:
+                safe = label.lower().replace(' ', '_')
+                key = f'c{i}_{safe}'
+
+            cols.append({
+                'key': key,
+                'label': label,
+                'type': ctype,
+            })
+
         sheet.set_columns(cols)
         sheet.save()
+
         messages.success(request, 'Columns updated.')
         return redirect('project_tracking', pk=pk)
 
@@ -1143,10 +1295,21 @@ class TrackingRowEditView(LoginRequiredMixin, View):
         project = get_object_or_404(Project, pk=pk)
         if not _is_project_member(request.user, project):
             return HttpResponseForbidden()
+
         row = get_object_or_404(TrackingRow, pk=rid, sheet__project=project)
-        data = {col['key']: request.POST.get(f'data_{col["key"]}', '') for col in row.sheet.get_columns()}
+
+        data = {}
+        for col in row.sheet.get_columns():
+            field_name = f'data_{col["key"]}'
+
+            if col['type'] == 'checkbox':
+                data[col['key']] = request.POST.get(field_name) == 'true'
+            else:
+                data[col['key']] = request.POST.get(field_name, '')
+
         row.data_json = json.dumps(data)
         row.save(update_fields=['data_json'])
+
         messages.success(request, 'Row updated.')
         return redirect('project_tracking', pk=pk)
 
@@ -1218,7 +1381,11 @@ class ProjectLocationAddView(LoginRequiredMixin, View):
             messages.error(request, 'Valid latitude and longitude are required.')
             return redirect('project_locations', pk=pk)
 
-        assigned = User.objects.filter(pk=request.POST.get('assigned_to')).first()
+        assigned_id = request.POST.get('assigned_to') or None
+
+        assigned = None
+        if assigned_id:
+            assigned = User.objects.filter(pk=assigned_id).first()
         ProjectLocation.objects.create(
             project=project,
             name=request.POST.get('name', '').strip(),
@@ -1285,21 +1452,26 @@ class LocationMapHTMLExportView(LoginRequiredMixin, View):
     def get(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
         locations = project.locations.select_related('assigned_to').order_by('name')
-        status_labels = dict(ProjectLocation.Status.choices)
+
+        # Convert lazy labels to plain strings
+        status_labels = {
+            value: str(label)
+            for value, label in ProjectLocation.Status.choices
+        }
 
         loc_data = [
             {
-                'name': loc.name,
-                'description': loc.description,
-                'address': loc.address,
+                'name': str(loc.name or ''),
+                'description': str(loc.description or ''),
+                'address': str(loc.address or ''),
                 'lat': float(loc.latitude),
                 'lng': float(loc.longitude),
-                'category': loc.category,
-                'status': loc.status,
-                'statusLabel': status_labels.get(loc.status, loc.status),
+                'category': str(loc.category or ''),
+                'status': str(loc.status or ''),
+                'statusLabel': str(status_labels.get(loc.status, loc.status)),
                 'color': self._STATUS_COLORS.get(loc.status, '#64748b'),
-                'assignedTo': loc.assigned_to.get_full_name() if loc.assigned_to else '',
-                'notes': loc.notes,
+                'assignedTo': str(loc.assigned_to.get_full_name() if loc.assigned_to else ''),
+                'notes': str(loc.notes or ''),
             }
             for loc in locations
         ]
@@ -1311,124 +1483,140 @@ class LocationMapHTMLExportView(LoginRequiredMixin, View):
 
     def _render_html(self, project, loc_data):
         import json as _json
-        count = len(loc_data)
         from django.utils.timezone import now
+        from django.utils.html import escape
+
+        count = len(loc_data)
         exported = now().strftime('%d %b %Y')
-        colors = self._STATUS_COLORS
+
+        project_name = escape(str(project.name))
+        project_code = escape(str(project.code))
+        cover_color = escape(str(project.cover_color or '#1e3a5f'))
 
         return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>{project.name} — Location Map</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-<style>
-  *{{box-sizing:border-box;margin:0;padding:0}}
-  body{{font-family:system-ui,-apple-system,sans-serif;background:#f8fafc;display:flex;flex-direction:column;height:100vh}}
-  header{{background:{project.cover_color};color:#fff;padding:14px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}}
-  header h1{{font-size:1.1rem;font-weight:800;margin-bottom:2px}}
-  header p{{font-size:.75rem;opacity:.75}}
-  #map{{flex:1}}
-  .legend{{background:#fff;padding:12px 16px;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.15);font-size:.78rem;line-height:1.8}}
-  .legend b{{display:block;margin-bottom:6px;font-size:.75rem;letter-spacing:.05em;color:#64748b}}
-  .legend-item{{display:flex;align-items:center;gap:8px}}
-  .ldot{{width:11px;height:11px;border-radius:50%;flex-shrink:0}}
-  .popup-name{{font-weight:700;font-size:.92rem;margin-bottom:5px}}
-  .popup-badge{{display:inline-block;padding:2px 8px;border-radius:5px;font-size:.7rem;font-weight:600;margin-bottom:7px}}
-  .popup-row{{font-size:.8rem;color:#475569;margin-bottom:3px;display:flex;gap:5px}}
-  .popup-row b{{color:#1e293b;flex-shrink:0}}
-  .popup-coords{{font-size:.7rem;color:#94a3b8;margin-top:7px;font-family:monospace}}
-  .sidebar{{position:absolute;top:10px;left:10px;z-index:900;max-height:calc(100% - 20px);overflow-y:auto;background:#fff;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.15);width:240px}}
-  .sidebar-header{{padding:12px 14px 8px;border-bottom:1px solid #e2e8f0;font-size:.8rem;font-weight:700;color:#1e293b}}
-  .sidebar-item{{padding:9px 14px;border-bottom:1px solid #f1f5f9;cursor:pointer;transition:background .1s}}
-  .sidebar-item:hover{{background:#f8fafc}}
-  .sidebar-name{{font-size:.82rem;font-weight:600;color:#1e293b}}
-  .sidebar-sub{{font-size:.72rem;color:#94a3b8;margin-top:1px}}
-  .sidebar-dot{{width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:4px}}
-</style>
-</head>
-<body>
-<header>
-  <div>
-    <h1>{project.name}</h1>
-    <p>{project.code} · {count} location(s) · Exported {exported}</p>
-  </div>
-  <div style="font-size:.75rem;opacity:.6">Interactive — click pins for details</div>
-</header>
-<div style="position:relative;flex:1;display:flex">
-  <div id="map"></div>
-  <div class="sidebar" id="sidebar">
-    <div class="sidebar-header">📍 Locations ({count})</div>
-    <div id="sidebar-list"></div>
-  </div>
-</div>
-<script>
-var LOCS = {_json.dumps(loc_data)};
-var DEFAULT_CENTER = [13.4549, -16.5790];
-var map = L.map('map');
+    <html lang="en">
+    <head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <title>{project_name} — Location Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <style>
+      *{{box-sizing:border-box;margin:0;padding:0}}
+      body{{font-family:system-ui,-apple-system,sans-serif;background:#f8fafc;display:flex;flex-direction:column;height:100vh}}
+      header{{background:{cover_color};color:#fff;padding:14px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}}
+      header h1{{font-size:1.1rem;font-weight:700}}
+      header p{{font-size:.82rem;opacity:.92;margin-top:2px}}
+      .wrap{{display:grid;grid-template-columns:340px 1fr;min-height:0;flex:1}}
+      .sidebar{{background:#fff;border-right:1px solid #e2e8f0;overflow:auto}}
+      .sidebar-head{{padding:14px 16px;border-bottom:1px solid #e2e8f0}}
+      .sidebar-head h2{{font-size:.92rem;font-weight:700;color:#0f172a}}
+      .sidebar-head p{{font-size:.76rem;color:#64748b;margin-top:4px}}
+      .list{{padding:12px;display:flex;flex-direction:column;gap:10px}}
+      .card{{border:1px solid #e2e8f0;border-radius:12px;padding:12px;cursor:pointer;transition:.15s}}
+      .card:hover{{border-color:#3b82f6;box-shadow:0 3px 14px rgba(0,0,0,.06)}}
+      .card-title{{font-size:.88rem;font-weight:700;color:#0f172a}}
+      .card-meta{{font-size:.75rem;color:#64748b;margin-top:4px}}
+      .badge{{display:inline-block;padding:3px 8px;border-radius:999px;font-size:.68rem;font-weight:700;margin-top:8px}}
+      #map{{height:100%;width:100%}}
+      @media (max-width: 900px) {{
+        .wrap{{grid-template-columns:1fr}}
+        .sidebar{{max-height:40vh}}
+      }}
+    </style>
+    </head>
+    <body>
+    <header>
+      <div>
+        <h1>{project_name} — Location Map</h1>
+        <p>{count} location{"s" if count != 1 else ""} • Exported {exported}</p>
+      </div>
+      <div style="font-size:.8rem;opacity:.9">{project_code}</div>
+    </header>
 
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{
-  attribution:'© <a href="https://www.openstreetmap.org">OpenStreetMap</a> contributors',
-  maxZoom:19
-}}).addTo(map);
+    <div class="wrap">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <h2>Locations</h2>
+          <p>Click a location to focus it on the map.</p>
+        </div>
+        <div class="list" id="loc-list"></div>
+      </aside>
+      <main id="map"></main>
+    </div>
 
-function makeIcon(color){{
-  var svg='<svg xmlns="http://www.w3.org/2000/svg" width="30" height="38" viewBox="0 0 30 38">'
-    +'<path d="M15 0C7 0 0 7 0 15c0 10 15 23 15 23S30 25 30 15C30 7 23 0 15 0z" fill="'+color+'" stroke="#fff" stroke-width="1.5"/>'
-    +'<circle cx="15" cy="15" r="6" fill="white"/>'
-    +'</svg>';
-  return L.divIcon({{html:svg,className:'',iconSize:[30,38],iconAnchor:[15,38],popupAnchor:[0,-40]}});
-}}
+    <script>
+    var LOCS = {_json.dumps(loc_data, ensure_ascii=False)};
+    var STATUS_COLORS = {{
+      pending: '#94a3b8',
+      in_progress: '#3b82f6',
+      completed: '#10b981',
+      on_hold: '#f59e0b'
+    }};
 
-var markers = [];
-var bounds  = [];
-var sidebarList = document.getElementById('sidebar-list');
+    function makeIcon(color) {{
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36">'
+        + '<path d="M14 0C6.3 0 0 6.3 0 14c0 9.3 14 22 14 22S28 23.3 28 14C28 6.3 21.7 0 14 0z" fill="'+color+'" stroke="#fff" stroke-width="1.5"/>'
+        + '<circle cx="14" cy="14" r="5.5" fill="white"/></svg>';
+      return L.divIcon({{html:svg, className:'', iconSize:[28,36], iconAnchor:[14,36], popupAnchor:[0,-38]}});
+    }}
 
-LOCS.forEach(function(loc, i){{
-  var m = L.marker([loc.lat, loc.lng], {{icon:makeIcon(loc.color)}}).addTo(map);
-  var popup = '<div class="popup-name">'+loc.name+'</div>'
-    + '<span class="popup-badge" style="background:'+loc.color+'20;color:'+loc.color+'">'+loc.statusLabel+'</span>';
-  if(loc.category) popup+='<div class="popup-row"><b>Category:</b>'+loc.category+'</div>';
-  if(loc.address)  popup+='<div class="popup-row"><b>Address:</b>'+loc.address+'</div>';
-  if(loc.assignedTo) popup+='<div class="popup-row"><b>Assigned:</b>'+loc.assignedTo+'</div>';
-  if(loc.description) popup+='<div class="popup-row">'+loc.description+'</div>';
-  if(loc.notes) popup+='<div class="popup-row" style="font-style:italic;color:#64748b">'+loc.notes+'</div>';
-  popup+='<div class="popup-coords">'+loc.lat.toFixed(5)+', '+loc.lng.toFixed(5)+'</div>';
-  m.bindPopup(popup,{{maxWidth:270}});
-  markers.push(m);
-  bounds.push([loc.lat, loc.lng]);
+    var map = L.map('map');
+    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+      subdomains: 'abcd',
+      maxZoom: 20
+    }}).addTo(map);
 
-  // Sidebar item
-  var div = document.createElement('div');
-  div.className='sidebar-item';
-  div.innerHTML='<div style="display:flex;gap:8px"><div class="sidebar-dot" style="background:'+loc.color+'"></div>'
-    +'<div><div class="sidebar-name">'+loc.name+'</div>'
-    +'<div class="sidebar-sub">'+loc.statusLabel+(loc.category?' · '+loc.category:'')+'</div></div></div>';
-  div.onclick=function(){{map.setView([loc.lat,loc.lng],16);m.openPopup();}};
-  sidebarList.appendChild(div);
-}});
+    var bounds = [];
+    var markers = [];
+    var listEl = document.getElementById('loc-list');
 
-if(bounds.length>1) map.fitBounds(bounds,{{padding:[40,40]}});
-else if(bounds.length===1) map.setView(bounds[0],15);
-else map.setView(DEFAULT_CENTER,8);
+    LOCS.forEach(function(loc, idx) {{
+      var color = loc.color || STATUS_COLORS[loc.status] || '#64748b';
 
-// Legend
-var legend=L.control({{position:'bottomright'}});
-legend.onAdd=function(){{
-  var d=L.DomUtil.create('div','legend');
-  d.innerHTML='<b>STATUS</b>';
-  [{{'color':'{colors["pending"]}','label':'Pending'}},{{'color':'{colors["in_progress"]}','label':'In Progress'}},{{'color':'{colors["completed"]}','label':'Completed'}},{{'color':'{colors["on_hold"]}','label':'On Hold'}}]
-    .forEach(function(s){{
-      d.innerHTML+='<div class="legend-item"><div class="ldot" style="background:'+s.color+'"></div>'+s.label+'</div>';
+      var popup = '<div style="font-weight:700;font-size:.92rem;margin-bottom:6px">' + (loc.name || '') + '</div>'
+        + '<span style="font-size:.7rem;font-weight:700;padding:2px 7px;border-radius:999px;background:'+color+'20;color:'+color+'">' + (loc.statusLabel || '') + '</span>';
+
+      if (loc.category) popup += '<div style="font-size:.78rem;color:#475569;margin-top:6px"><b>Category:</b> ' + loc.category + '</div>';
+      if (loc.address) popup += '<div style="font-size:.78rem;color:#475569"><b>Address:</b> ' + loc.address + '</div>';
+      if (loc.assignedTo) popup += '<div style="font-size:.78rem;color:#475569"><b>Assigned:</b> ' + loc.assignedTo + '</div>';
+      if (loc.description) popup += '<div style="font-size:.78rem;color:#475569;margin-top:4px">' + loc.description + '</div>';
+      if (loc.notes) popup += '<div style="font-size:.78rem;color:#475569;margin-top:4px"><b>Notes:</b> ' + loc.notes + '</div>';
+      popup += '<div style="font-size:.72rem;color:#94a3b8;margin-top:6px;font-family:monospace">' + loc.lat + ', ' + loc.lng + '</div>';
+
+      var marker = L.marker([loc.lat, loc.lng], {{icon: makeIcon(color)}}).addTo(map);
+      marker.bindPopup(popup, {{maxWidth: 280}});
+      markers.push(marker);
+      bounds.push([loc.lat, loc.lng]);
+
+      var badgeBg = color + '20';
+      var card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML =
+          '<div class="card-title">' + (loc.name || '') + '</div>'
+        + (loc.category ? '<div class="card-meta">' + loc.category + '</div>' : '')
+        + '<span class="badge" style="background:'+badgeBg+';color:'+color+'">' + (loc.statusLabel || '') + '</span>'
+        + (loc.address ? '<div class="card-meta">' + loc.address + '</div>' : '');
+
+      card.addEventListener('click', function() {{
+        map.flyTo([loc.lat, loc.lng], 16, {{duration: 0.8}});
+        setTimeout(function() {{ marker.openPopup(); }}, 500);
+      }});
+
+      listEl.appendChild(card);
     }});
-  return d;
-}};
-legend.addTo(map);
-</script>
-</body>
-</html>"""
+
+    if (bounds.length > 1) {{
+      map.fitBounds(bounds, {{padding:[40,40]}});
+    }} else if (bounds.length === 1) {{
+      map.setView(bounds[0], 15);
+    }} else {{
+      map.setView([13.4549, -16.5790], 8);
+    }}
+    </script>
+    </body>
+    </html>"""
 
 
 class LocationMapPDFExportView(LoginRequiredMixin, View):

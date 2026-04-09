@@ -1,0 +1,426 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Location Map — {{ project.name }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'project_list' %}">Projects</a> /
+  <a href="{% url 'project_detail' project.pk %}">{{ project.name }}</a> /
+  Location Map
+{% endblock %}
+
+{% block content %}
+<style>
+/* ── Shared modal system (matches project_detail.html) ── */
+.proj-modal-backdrop {
+  position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1050;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .18s;
+}
+.proj-modal-backdrop.open { opacity:1;pointer-events:all; }
+.proj-modal {
+  background:var(--eo-surface);border-radius:var(--eo-radius);
+  border:1px solid var(--eo-border);width:520px;max-width:96vw;
+  max-height:88vh;overflow-y:auto;
+  box-shadow:0 24px 64px rgba(0,0,0,.18);
+  transform:translateY(14px);transition:transform .18s;
+}
+.proj-modal-backdrop.open .proj-modal { transform:translateY(0); }
+.proj-modal-head {
+  padding:18px 22px 14px;
+  display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--eo-border);
+}
+.proj-modal-body { padding:20px 22px; }
+</style>
+
+
+<style>
+/* Leaflet needs height on its container */
+#leaflet-map { height:480px; border-radius:var(--eo-radius); z-index:1; }
+.loc-status { font-size:.72rem; font-weight:700; padding:3px 9px; border-radius:20px; }
+.loc-status-pending      { background:#f1f5f9; color:#64748b; }
+.loc-status-in_progress  { background:#dbeafe; color:#1e40af; }
+.loc-status-completed    { background:#d1fae5; color:#065f46; }
+.loc-status-on_hold      { background:#fef3c7; color:#92400e; }
+.loc-card {
+  padding:14px;border:1px solid var(--eo-border);border-radius:10px;
+  cursor:pointer;transition:box-shadow .12s,border-color .12s;
+}
+.loc-card:hover { box-shadow:0 2px 12px rgba(0,0,0,.08); border-color:var(--eo-accent); }
+</style>
+{# Leaflet CSS loaded in extra_css block below #}
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Location Map</h1>
+    <p class="eo-page-subtitle">{{ project.name }} · {{ location_count }} location{{ location_count|pluralize }}</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    {% if location_count %}
+    <a href="{% url 'location_export_html' project.pk %}" class="eo-btn eo-btn-sm eo-btn-secondary">
+      <i class="bi bi-filetype-html"></i> Export HTML
+    </a>
+    <a href="{% url 'location_export_pdf' project.pk %}" class="eo-btn eo-btn-sm eo-btn-secondary">
+      <i class="bi bi-file-earmark-pdf"></i> Export PDF
+    </a>
+    {% endif %}
+    {% if is_member %}
+    <button onclick="openModal('addLocModal')" class="eo-btn eo-btn-sm eo-btn-primary">
+      <i class="bi bi-plus-lg"></i> Add Location
+    </button>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Map ──────────────────────────────────────────────────────────────────── #}
+<div class="eo-card mb-4" style="padding:0;overflow:hidden">
+  {% if location_count == 0 %}
+  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:300px;color:var(--eo-text-muted)">
+    <i class="bi bi-geo-alt" style="font-size:3rem;opacity:.3;margin-bottom:14px"></i>
+    <p style="font-size:.9rem;margin-bottom:16px">No locations pinned yet.</p>
+    {% if is_member %}
+    <button onclick="openModal('addLocModal')" class="eo-btn eo-btn-primary">
+      <i class="bi bi-plus"></i> Add First Location
+    </button>
+    {% endif %}
+  </div>
+  {% else %}
+  <div id="leaflet-map"></div>
+  {% endif %}
+</div>
+
+{# ── Location List ─────────────────────────────────────────────────────────── #}
+{% if locations %}
+<div class="row g-3">
+  {% for loc in locations %}
+  <div class="col-sm-6 col-xl-4">
+    <div class="loc-card" onclick="flyTo({{ loc.latitude }}, {{ loc.longitude }}, '{{ loc.pk }}')">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">{{ loc.name }}</div>
+          {% if loc.category %}
+          <div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:2px">{{ loc.category }}</div>
+          {% endif %}
+        </div>
+        <span class="loc-status loc-status-{{ loc.status }}">{{ loc.get_status_display }}</span>
+      </div>
+
+      {% if loc.address %}
+      <div style="font-size:.78rem;color:var(--eo-text-muted);margin-bottom:6px;display:flex;gap:5px;align-items:flex-start">
+        <i class="bi bi-geo-alt" style="flex-shrink:0;margin-top:1px"></i>
+        <span>{{ loc.address }}</span>
+      </div>
+      {% endif %}
+
+      {% if loc.description %}
+      <div style="font-size:.78rem;color:var(--eo-text-muted);margin-bottom:6px;line-height:1.5">
+        {{ loc.description|truncatechars:80 }}
+      </div>
+      {% endif %}
+
+      {% if loc.assigned_to %}
+      <div style="font-size:.76rem;color:var(--eo-text-muted);margin-bottom:8px">
+        <i class="bi bi-person me-1"></i>{{ loc.assigned_to.full_name }}
+      </div>
+      {% endif %}
+
+      <div style="font-size:.72rem;color:var(--eo-text-muted);font-family:monospace;margin-bottom:10px">
+        {{ loc.latitude }}, {{ loc.longitude }}
+      </div>
+
+      {% if is_member %}
+      <div style="display:flex;gap:6px;border-top:1px solid var(--eo-border);padding-top:10px" onclick="event.stopPropagation()">
+        <button onclick="openEdit('{{ loc.pk }}','{{ loc.name|escapejs }}','{{ loc.description|escapejs }}','{{ loc.address|escapejs }}',{{ loc.latitude }},{{ loc.longitude }},'{{ loc.category|escapejs }}','{{ loc.status }}','{% if loc.assigned_to %}{{ loc.assigned_to.pk }}{% endif %}','{{ loc.notes|escapejs }}')"
+                class="eo-btn eo-btn-sm eo-btn-secondary">
+          <i class="bi bi-pencil"></i> Edit
+        </button>
+        <form method="post" action="{% url 'location_delete' project.pk loc.pk %}" style="display:inline"
+              onsubmit="return confirm('Remove {{ loc.name|escapejs }}?')">
+          {% csrf_token %}
+          <button type="submit" class="eo-btn eo-btn-sm" style="color:var(--eo-danger)">
+            <i class="bi bi-trash3"></i>
+          </button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ═══ Add Location Modal ════════════════════════════════════════════════════ #}
+{% if is_member %}
+<div class="proj-modal-backdrop" id="addLocModal">
+  <div class="proj-modal" style="width:580px">
+    <div class="proj-modal-head">
+      <span style="font-size:1rem;font-weight:700">Add Location</span>
+      <button onclick="closeModal('addLocModal')" style="background:none;border:none;cursor:pointer;font-size:1.2rem;color:var(--eo-text-muted)">&times;</button>
+    </div>
+    <div class="proj-modal-body">
+      <form method="post" action="{% url 'location_add' project.pk %}">
+        {% csrf_token %}
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Location Name *</label>
+          <input type="text" name="name" class="eo-form-control" required placeholder="e.g. Site A - Banjul"/>
+        </div>
+        <div class="row g-3 mb-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Category</label>
+            <input type="text" name="category" class="eo-form-control" placeholder="e.g. Installation, Office"/>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Status</label>
+            <select name="status" class="eo-form-select">
+              {% for val, label in status_choices %}
+              <option value="{{ val }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Address</label>
+          <input type="text" name="address" class="eo-form-control" placeholder="Street, city or area"/>
+        </div>
+        <div class="row g-3 mb-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Latitude * <span style="font-size:.68rem;font-weight:400;color:var(--eo-text-muted)">(or click map)</span></label>
+            <input type="number" name="latitude" id="addLat" class="eo-form-control" required step="0.000001" placeholder="13.4549"/>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Longitude *</label>
+            <input type="number" name="longitude" id="addLng" class="eo-form-control" required step="0.000001" placeholder="-16.5790"/>
+          </div>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Description</label>
+          <textarea name="description" class="eo-form-control" rows="2" placeholder="What happens at this location?"></textarea>
+        </div>
+        <div class="row g-3 mb-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Assigned To</label>
+            <select name="assigned_to" class="eo-form-select">
+              <option value="">— None —</option>
+              {% for s in staff_list %}
+              <option value="{{ s.id }}">{{ s.full_name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">Notes</label>
+            <input type="text" name="notes" class="eo-form-control" placeholder="Any extra notes..."/>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">
+          <button type="submit" class="eo-btn eo-btn-primary">Add Location</button>
+          <button type="button" onclick="closeModal('addLocModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{# ═══ Edit Location Modal ═══════════════════════════════════════════════════ #}
+<div class="proj-modal-backdrop" id="editLocModal">
+  <div class="proj-modal" style="width:580px">
+    <div class="proj-modal-head">
+      <span style="font-size:1rem;font-weight:700">Edit Location</span>
+      <button onclick="closeModal('editLocModal')" style="background:none;border:none;cursor:pointer;font-size:1.2rem;color:var(--eo-text-muted)">&times;</button>
+    </div>
+    <div class="proj-modal-body" id="editLocBody"></div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+function openModal(id)  { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.proj-modal-backdrop').forEach(function(el){
+  el.addEventListener('click', function(e){ if(e.target===el) el.classList.remove('open'); });
+});
+
+// ── Leaflet setup ──────────────────────────────────────────────────────────
+var mapEl = document.getElementById('leaflet-map');
+var leafMap, markers = {};
+
+var STATUS_COLORS = {
+  pending:     '#94a3b8',
+  in_progress: '#3b82f6',
+  completed:   '#10b981',
+  on_hold:     '#f59e0b',
+};
+
+function makeIcon(color) {
+  var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36">'
+    + '<path d="M14 0C6.3 0 0 6.3 0 14c0 9.3 14 22 14 22S28 23.3 28 14C28 6.3 21.7 0 14 0z" fill="'+color+'" stroke="#fff" stroke-width="1.5"/>'
+    + '<circle cx="14" cy="14" r="5.5" fill="white"/></svg>';
+  return L.divIcon({html:svg, className:'', iconSize:[28,36], iconAnchor:[14,36], popupAnchor:[0,-38]});
+}
+
+if (mapEl) {
+  var LOCATIONS = [
+    {% for loc in locations %}
+    {
+      id:     '{{ loc.pk }}',
+      name:   '{{ loc.name|escapejs }}',
+      lat:    {{ loc.latitude }},
+      lng:    {{ loc.longitude }},
+      status: '{{ loc.status }}',
+      statusLabel: '{{ loc.get_status_display }}',
+      category: '{{ loc.category|escapejs }}',
+      address: '{{ loc.address|escapejs }}',
+      description: '{{ loc.description|truncatechars:120|escapejs }}',
+      assignedTo: '{% if loc.assigned_to %}{{ loc.assigned_to.full_name|escapejs }}{% endif %}',
+    },
+    {% endfor %}
+  ];
+
+  var DEFAULT_CENTER = [13.4549, -16.5790];
+  leafMap = L.map('leaflet-map');
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org">OpenStreetMap</a>',
+    maxZoom: 19,
+  }).addTo(leafMap);
+
+  var bounds = [];
+  LOCATIONS.forEach(function(loc) {
+    var color = STATUS_COLORS[loc.status] || '#64748b';
+    var popup = '<div style="font-weight:700;font-size:.9rem;margin-bottom:5px">'+loc.name+'</div>'
+      + '<span style="font-size:.7rem;font-weight:700;padding:2px 7px;border-radius:4px;background:'+color+'20;color:'+color+'">'+loc.statusLabel+'</span>';
+    if (loc.category)    popup += '<div style="font-size:.78rem;color:#475569;margin-top:5px"><b>Category:</b> '+loc.category+'</div>';
+    if (loc.address)     popup += '<div style="font-size:.78rem;color:#475569"><b>Address:</b> '+loc.address+'</div>';
+    if (loc.assignedTo)  popup += '<div style="font-size:.78rem;color:#475569"><b>Assigned:</b> '+loc.assignedTo+'</div>';
+    if (loc.description) popup += '<div style="font-size:.78rem;color:#475569;margin-top:4px">'+loc.description+'</div>';
+    popup += '<div style="font-size:.7rem;color:#94a3b8;margin-top:6px;font-family:monospace">'+loc.lat.toFixed(5)+', '+loc.lng.toFixed(5)+'</div>';
+
+    var m = L.marker([loc.lat, loc.lng], {icon: makeIcon(color)}).addTo(leafMap);
+    m.bindPopup(popup, {maxWidth: 260});
+    markers[loc.id] = m;
+    bounds.push([loc.lat, loc.lng]);
+  });
+
+  if (bounds.length > 1)      leafMap.fitBounds(bounds, {padding: [40, 40]});
+  else if (bounds.length === 1) leafMap.setView(bounds[0], 15);
+  else                          leafMap.setView(DEFAULT_CENTER, 8);
+
+  // Legend
+  var legend = L.control({position:'bottomright'});
+  legend.onAdd = function() {
+    var d = L.DomUtil.create('div');
+    d.style.cssText = 'background:#fff;padding:10px 14px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.14);font-size:.75rem;line-height:1.9';
+    d.innerHTML = '<b style="display:block;margin-bottom:4px;font-size:.7rem;letter-spacing:.05em;color:#64748b">STATUS</b>';
+    [['#94a3b8','Pending'],['#3b82f6','In Progress'],['#10b981','Completed'],['#f59e0b','On Hold']].forEach(function(s){
+      d.innerHTML += '<div style="display:flex;align-items:center;gap:7px"><div style="width:10px;height:10px;border-radius:50%;background:'+s[0]+';flex-shrink:0"></div>'+s[1]+'</div>';
+    });
+    return d;
+  };
+  legend.addTo(leafMap);
+
+  // Click on map to pre-fill coordinates in add modal
+  leafMap.on('click', function(e) {
+    var latIn = document.getElementById('addLat');
+    var lngIn = document.getElementById('addLng');
+    if (latIn) latIn.value = e.latlng.lat.toFixed(6);
+    if (lngIn) lngIn.value = e.latlng.lng.toFixed(6);
+    openModal('addLocModal');
+  });
+}
+
+function flyTo(lat, lng, id) {
+  if (!leafMap) return;
+  leafMap.flyTo([lat, lng], 16, {duration: 0.8});
+  if (markers[id]) {
+    setTimeout(function(){ markers[id].openPopup(); }, 900);
+  }
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+// ── Edit modal ──────────────────────────────────────────────────────────────
+var STAFF = [
+  {% for s in staff_list %}
+  {id:'{{ s.id }}', name:'{{ s.full_name|escapejs }}'},
+  {% endfor %}
+];
+var STATUS_CHOICES = [{% for val,label in status_choices %}{val:'{{ val }}', label:'{{ label }}'},{% endfor %}];
+var CSRF = '{{ csrf_token }}';
+
+function openEdit(id, name, desc, addr, lat, lng, cat, status, assignedId, notes) {
+  var staffOpts = '<option value="">— None —</option>';
+  STAFF.forEach(function(s){
+    staffOpts += '<option value="'+s.id+'"'+(s.id===assignedId?' selected':'')+'>'+s.name+'</option>';
+  });
+  var statusOpts = '';
+  STATUS_CHOICES.forEach(function(s){
+    statusOpts += '<option value="'+s.val+'"'+(s.val===status?' selected':'')+'>'+s.label+'</option>';
+  });
+
+  var html = '<form method="post" action="/projects/{{ project.pk }}/locations/'+id+'/edit/">'
+    + '<input type="hidden" name="csrfmiddlewaretoken" value="'+CSRF+'">'
+    + _locFields(name, desc, addr, lat, lng, cat, statusOpts, staffOpts, notes)
+    + '<div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">'
+    + '<button type="submit" class="eo-btn eo-btn-primary">Save Changes</button>'
+    + '<button type="button" onclick="closeModal(\'editLocModal\')" class="eo-btn eo-btn-secondary">Cancel</button>'
+    + '</div></form>';
+  document.getElementById('editLocBody').innerHTML = html;
+  openModal('editLocModal');
+}
+
+function _locFields(name, desc, addr, lat, lng, cat, statusOpts, staffOpts, notes) {
+  return `
+    <div class="eo-form-group">
+      <label class="eo-form-label">Location Name *</label>
+      <input type="text" name="name" class="eo-form-control" required value="${name}" placeholder="e.g. Site A - Banjul"/>
+    </div>
+    <div class="row g-3 mb-3">
+      <div class="col-sm-6">
+        <label class="eo-form-label">Category</label>
+        <input type="text" name="category" class="eo-form-control" value="${cat}" placeholder="e.g. Installation, Office"/>
+      </div>
+      <div class="col-sm-6">
+        <label class="eo-form-label">Status</label>
+        <select name="status" class="eo-form-select">${statusOpts}</select>
+      </div>
+    </div>
+    <div class="eo-form-group">
+      <label class="eo-form-label">Address</label>
+      <input type="text" name="address" class="eo-form-control" value="${addr}" placeholder="Street, city or area"/>
+    </div>
+    <div class="row g-3 mb-3">
+      <div class="col-sm-6">
+        <label class="eo-form-label">Latitude *
+          <span style="font-size:.68rem;font-weight:400;color:var(--eo-text-muted)">(click map to auto-fill)</span>
+        </label>
+        <input type="number" name="latitude" class="eo-form-control" required step="0.000001" value="${lat}" placeholder="13.4549"/>
+      </div>
+      <div class="col-sm-6">
+        <label class="eo-form-label">Longitude *</label>
+        <input type="number" name="longitude" class="eo-form-control" required step="0.000001" value="${lng}" placeholder="-16.5790"/>
+      </div>
+    </div>
+    <div class="eo-form-group">
+      <label class="eo-form-label">Description</label>
+      <textarea name="description" class="eo-form-control" rows="2" placeholder="What happens at this location?">${desc}</textarea>
+    </div>
+    <div class="row g-3 mb-3">
+      <div class="col-sm-6">
+        <label class="eo-form-label">Assigned To</label>
+        <select name="assigned_to" class="eo-form-select">${staffOpts}</select>
+      </div>
+      <div class="col-sm-6">
+        <label class="eo-form-label">Notes</label>
+        <input type="text" name="notes" class="eo-form-control" value="${notes}" placeholder="Any extra notes..."/>
+      </div>
+    </div>`;
+}
+</script>
+
+{% endblock %}

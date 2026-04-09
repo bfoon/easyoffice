@@ -218,37 +218,55 @@
         </div>
       </div>
 
-      <form method="get" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
-        <div style="position:relative;flex:1;min-width:180px">
-          <i class="bi bi-search" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.78rem"></i>
-          <input type="text" name="tq" class="eo-form-control" style="padding-left:30px;font-size:.82rem"
-                 placeholder="Search tasks, assignee, project…" value="{{ search_q }}"/>
-        </div>
-        <select name="task_status" class="eo-form-select" style="min-width:130px;font-size:.82rem">
-          <option value="">All Status</option>
-          {% for val, label in status_choices %}
-          <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-        <select name="task_priority" class="eo-form-select" style="min-width:120px;font-size:.82rem">
-          <option value="">All Priority</option>
-          {% for val, label in priority_choices %}
-          <option value="{{ val }}" {% if priority_filter == val %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-        {% if filter_units %}
-        <select name="unit" class="eo-form-select" style="min-width:130px;font-size:.82rem">
-          <option value="">All Units</option>
-          {% for unit in filter_units %}
-          <option value="{{ unit.id }}" {% if unit_filter == unit.id|stringformat:"s" %}selected{% endif %}>{{ unit.name }}</option>
-          {% endfor %}
-        </select>
-        {% endif %}
-        <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm"><i class="bi bi-funnel"></i> Filter</button>
-        {% if search_q or status_filter or priority_filter or unit_filter %}
-        <a href="{% url 'admin_dashboard' %}" class="eo-btn eo-btn-secondary eo-btn-sm"><i class="bi bi-x-circle"></i> Clear</a>
-        {% endif %}
-      </form>
+      <form method="get" action="{{ dashboard_path }}" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+          <div style="position:relative;flex:1;min-width:180px">
+            <i class="bi bi-search" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.78rem"></i>
+            <input type="text" name="tq" class="eo-form-control" style="padding-left:30px;font-size:.82rem"
+                   placeholder="Search tasks, assignee, project…" value="{{ search_q }}"/>
+          </div>
+
+          <select name="task_status" class="eo-form-select" style="min-width:130px;font-size:.82rem">
+            <option value="">All Status</option>
+            {% for val, label in status_choices %}
+            <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+
+          <select name="task_priority" class="eo-form-select" style="min-width:120px;font-size:.82rem">
+            <option value="">All Priority</option>
+            {% for val, label in priority_choices %}
+            <option value="{{ val }}" {% if priority_filter == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+
+          {% if filter_units %}
+          <select name="unit" class="eo-form-select" style="min-width:130px;font-size:.82rem">
+            <option value="">All Units</option>
+            {% for unit in filter_units %}
+            <option value="{{ unit.id }}" {% if unit_filter == unit.id|stringformat:"s" %}selected{% endif %}>{{ unit.name }}</option>
+            {% endfor %}
+          </select>
+          {% endif %}
+
+          {% if filter_depts %}
+          <select name="dept" class="eo-form-select" style="min-width:140px;font-size:.82rem">
+            <option value="">All Departments</option>
+            {% for dept in filter_depts %}
+            <option value="{{ dept.id }}" {% if dept_filter == dept.id|stringformat:"s" %}selected{% endif %}>{{ dept.name }}</option>
+            {% endfor %}
+          </select>
+          {% endif %}
+
+          <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm">
+            <i class="bi bi-funnel"></i> Filter
+          </button>
+
+          {% if search_q or status_filter or priority_filter or unit_filter or dept_filter %}
+          <a href="{{ dashboard_path }}" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-x-circle"></i> Clear
+          </a>
+          {% endif %}
+        </form>
 
       {% if all_active_tasks %}
       <div style="overflow-x:auto;border:1px solid var(--eo-border);border-radius:var(--eo-radius)">
@@ -272,26 +290,45 @@
                    style="font-weight:600;font-size:.86rem;color:var(--eo-text);text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                   {{ task.title|truncatechars:45 }}
                 </a>
-                <span class="eo-status eo-status-{{ task.status }}" style="font-size:.66rem;margin-top:2px;display:inline-block">{{ task.get_status_display }}</span>
+                <span class="eo-status eo-status-{{ task.status }}" style="font-size:.66rem;margin-top:2px;display:inline-block">
+                  {{ task.get_status_display }}
+                </span>
               </td>
+
               <td>
-                <div style="font-size:.84rem;font-weight:600;color:var(--eo-text)">{{ task.assigned_to.full_name }}</div>
-                {% if task.assigned_to.staffprofile.supervisor %}
-                <div style="font-size:.71rem;color:var(--eo-text-muted)">Sup: {{ task.assigned_to.staffprofile.supervisor.full_name }}</div>
+                <div style="font-size:.84rem;font-weight:600;color:var(--eo-text)">
+                  {{ task.assigned_to.full_name|default:"Unassigned" }}
+                </div>
+                {% if task.assigned_to and task.assigned_to.staffprofile and task.assigned_to.staffprofile.supervisor %}
+                <div style="font-size:.71rem;color:var(--eo-text-muted)">
+                  Sup: {{ task.assigned_to.staffprofile.supervisor.full_name }}
+                </div>
                 {% endif %}
               </td>
-              <td style="font-size:.82rem;color:var(--eo-text-muted)">{{ task.assigned_to.staffprofile.unit.name|default:"—" }}</td>
+
+              <td style="font-size:.82rem;color:var(--eo-text-muted)">
+                {% if task.assigned_to and task.assigned_to.staffprofile and task.assigned_to.staffprofile.unit %}
+                  {{ task.assigned_to.staffprofile.unit.name }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+
               <td>
                 <span class="eo-priority eo-priority-{{ task.priority }}" style="font-size:.7rem">
                   <i class="bi bi-flag-fill"></i> {{ task.get_priority_display }}
                 </span>
               </td>
+
               <td style="font-size:.8rem;{% if task.is_overdue %}color:#ef4444;font-weight:700{% else %}color:var(--eo-text-muted){% endif %}">
                 {% if task.due_date %}
-                {% if task.is_overdue %}<i class="bi bi-exclamation-triangle-fill me-1"></i>{% endif %}
-                {{ task.due_date|date:"N j, Y" }}
-                {% else %}—{% endif %}
+                  {% if task.is_overdue %}<i class="bi bi-exclamation-triangle-fill me-1"></i>{% endif %}
+                  {{ task.due_date|date:"N j, Y" }}
+                {% else %}
+                  —
+                {% endif %}
               </td>
+
               <td style="min-width:100px">
                 {% if task.progress_pct > 0 %}
                 <div style="display:flex;align-items:center;gap:6px">
@@ -304,9 +341,16 @@
                 <span style="font-size:.78rem;color:var(--eo-text-muted)">Not started</span>
                 {% endif %}
               </td>
+
               <td>
                 <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Send follow-up"
-                        onclick="openFollowupModal('{{ task.title|escapejs }}','{{ task.pk }}','supervisor','{{ task.assigned_to.staffprofile.supervisor.full_name|default:task.assigned_to.full_name|escapejs }}','{{ task.due_date|date:"N j, Y"|default:"" }}')">
+                        onclick="openFollowupModal(
+                          '{{ task.title|escapejs }}',
+                          '{{ task.pk }}',
+                          '{% if task.assigned_to and task.assigned_to.staffprofile and task.assigned_to.staffprofile.supervisor %}supervisor{% else %}assigned_to{% endif %}',
+                          '{% if task.assigned_to and task.assigned_to.staffprofile and task.assigned_to.staffprofile.supervisor %}{{ task.assigned_to.staffprofile.supervisor.full_name|escapejs }}{% elif task.assigned_to %}{{ task.assigned_to.full_name|escapejs }}{% else %}Assignee{% endif %}',
+                          '{{ task.due_date|date:"N j, Y"|default:"" }}'
+                        )">
                   <i class="bi bi-envelope-arrow-up"></i>
                 </button>
               </td>
@@ -319,7 +363,7 @@
       <div style="text-align:center;padding:40px;color:var(--eo-text-muted)">
         <i class="bi bi-check2-all" style="font-size:2.5rem;display:block;margin-bottom:12px;opacity:.3"></i>
         <div style="font-weight:700">No tasks match your filters</div>
-        <a href="{% url 'admin_dashboard' %}" class="eo-btn eo-btn-secondary eo-btn-sm mt-3">Clear filters</a>
+        <a href="{{ dashboard_path }}" class="eo-btn eo-btn-secondary eo-btn-sm mt-3">Clear filters</a>
       </div>
       {% endif %}
     </div>

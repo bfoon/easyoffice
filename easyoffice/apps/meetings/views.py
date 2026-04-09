@@ -23,6 +23,9 @@ from apps.core.models import User
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _meeting_is_locked(meeting):
+    return meeting.status in ['completed', 'cancelled']
+
 def _can_edit_meeting(user, meeting):
     return user.is_superuser or meeting.organizer_id == user.id
 
@@ -38,29 +41,111 @@ def _can_view_meeting(user, meeting):
 
 
 def _notify_attendees(meeting, sender, title, message, exclude_ids=None):
-    """Push CoreNotification to all attendees except sender."""
+    """
+    Send in-app notifications + email invites/updates to internal attendees.
+    Includes agenda in the email body.
+    """
     try:
         from apps.core.models import CoreNotification
     except ImportError:
-        return
+        CoreNotification = None
+
     exclude = set(exclude_ids or [])
     exclude.add(sender.id)
+
+    start_text = timezone.localtime(meeting.start_datetime).strftime('%d %b %Y at %H:%M')
+    end_text = timezone.localtime(meeting.end_datetime).strftime('%H:%M')
+    location_text = meeting.location or 'Not specified'
+    virtual_text = meeting.virtual_link or 'Not provided'
+    agenda_text = (meeting.agenda or '').strip() or 'No agenda was provided.'
+    project_text = meeting.project.name if meeting.project else 'Not linked to a project'
+
+    email_body = (
+        f'Hello,\n\n'
+        f'You have been invited to the meeting "{meeting.title}".\n\n'
+        f'Details:\n'
+        f'- Organiser: {sender.full_name}\n'
+        f'- Type: {meeting.get_meeting_type_display()}\n'
+        f'- Date: {start_text}\n'
+        f'- End Time: {end_text}\n'
+        f'- Location: {location_text}\n'
+        f'- Virtual Link: {virtual_text}\n'
+        f'- Project: {project_text}\n\n'
+        f'Description:\n'
+        f'{meeting.description or "No description provided."}\n\n'
+        f'Agenda:\n'
+        f'{agenda_text}\n\n'
+        f'Please check EasyOffice for more details.\n\n'
+        f'— EasyOffice'
+    )
+
     for att in meeting.attendees.exclude(user_id__in=exclude).select_related('user'):
-        CoreNotification.objects.create(
-            recipient=att.user,
-            sender=sender,
-            notification_type='meeting',
-            title=title,
-            message=message,
-            link=f'/meetings/{meeting.id}/',
+        if CoreNotification:
+            CoreNotification.objects.create(
+                recipient=att.user,
+                sender=sender,
+                notification_type='meeting',
+                title=title,
+                message=message,
+                link=f'/meetings/{meeting.id}/',
+            )
+
+        if att.user.email:
+            try:
+                send_mail(
+                    subject=title,
+                    message=email_body,
+                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
+                    recipient_list=[att.user.email],
+                    fail_silently=True,
+                )
+            except Exception:
+                pass
+
+def _notify_external_attendees(meeting, sender, title):
+    """
+    Send email invites/updates to external attendees.
+    Includes agenda in the email body.
+    """
+    start_text = timezone.localtime(meeting.start_datetime).strftime('%d %b %Y at %H:%M')
+    end_text = timezone.localtime(meeting.end_datetime).strftime('%H:%M')
+    location_text = meeting.location or 'Not specified'
+    virtual_text = meeting.virtual_link or 'Not provided'
+    agenda_text = (meeting.agenda or '').strip() or 'No agenda was provided.'
+    project_text = meeting.project.name if meeting.project else 'Not linked to a project'
+
+    for att in meeting.external_attendees.all():
+        body = (
+            f'Hello {att.full_name},\n\n'
+            f'You have been invited to the meeting "{meeting.title}".\n\n'
+            f'Details:\n'
+            f'- Organiser: {sender.full_name}\n'
+            f'- Type: {meeting.get_meeting_type_display()}\n'
+            f'- Date: {start_text}\n'
+            f'- End Time: {end_text}\n'
+            f'- Location: {location_text}\n'
+            f'- Virtual Link: {virtual_text}\n'
+            f'- Project: {project_text}\n'
         )
 
-def _notify_external_attendees(meeting, sender, title, message):
-    for att in meeting.external_attendees.all():
+        if att.organisation:
+            body += f'- Organisation: {att.organisation}\n'
+        if att.role:
+            body += f'- Role: {att.role}\n'
+
+        body += (
+            f'\nDescription:\n'
+            f'{meeting.description or "No description provided."}\n\n'
+            f'Agenda:\n'
+            f'{agenda_text}\n\n'
+            f'Please keep this invitation for your reference.\n\n'
+            f'— EasyOffice'
+        )
+
         try:
             send_mail(
                 subject=title,
-                message=message,
+                message=body,
                 from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
                 recipient_list=[att.email],
                 fail_silently=True,
@@ -441,20 +526,21 @@ class MeetingCreateView(LoginRequiredMixin, View):
 
         meeting = Meeting.objects.create(
             title=title,
-            description=request.POST.get('description', ''),
+            description=request.POST.get('description', '').strip(),
             meeting_type=request.POST.get('meeting_type', 'team'),
             organizer=request.user,
             start_datetime=start_dt,
             end_datetime=end_dt,
-            location=request.POST.get('location', ''),
-            virtual_link=request.POST.get('virtual_link', ''),
-            agenda=request.POST.get('agenda', ''),
+            location=request.POST.get('location', '').strip(),
+            virtual_link=request.POST.get('virtual_link', '').strip(),
+            agenda=request.POST.get('agenda', '').strip(),
             is_private='is_private' in request.POST,
             project_id=request.POST.get('project') or None,
             unit_id=request.POST.get('unit') or None,
             department_id=request.POST.get('department') or None,
         )
 
+        # Internal attendees
         attendee_ids = request.POST.getlist('attendees')
         for uid in attendee_ids:
             try:
@@ -463,15 +549,24 @@ class MeetingCreateView(LoginRequiredMixin, View):
                     MeetingAttendee.objects.get_or_create(
                         meeting=meeting,
                         user=u,
-                        defaults={'is_required': True}
+                        defaults={
+                            'is_required': True,
+                            'rsvp': MeetingAttendee.RSVP.INVITED,
+                        }
                     )
             except User.DoesNotExist:
-                pass
+                continue
 
+        # Organiser is automatically included
         MeetingAttendee.objects.get_or_create(
             meeting=meeting,
             user=request.user,
-            defaults={'rsvp': 'accepted', 'is_required': True, 'role': 'Organiser'}
+            defaults={
+                'rsvp': MeetingAttendee.RSVP.ACCEPTED,
+                'is_required': True,
+                'role': 'Organiser',
+                'responded_at': timezone.now(),
+            }
         )
 
         # External attendees
@@ -480,33 +575,38 @@ class MeetingCreateView(LoginRequiredMixin, View):
         ext_orgs = request.POST.getlist('external_organisation')
         ext_roles = request.POST.getlist('external_role')
 
-        for i, email in enumerate(ext_emails):
-            email = (email or '').strip()
-            name = (ext_names[i] if i < len(ext_names) else '').strip()
+        for i, raw_email in enumerate(ext_emails):
+            email = (raw_email or '').strip()
+            full_name = (ext_names[i] if i < len(ext_names) else '').strip()
             organisation = (ext_orgs[i] if i < len(ext_orgs) else '').strip()
             role = (ext_roles[i] if i < len(ext_roles) else '').strip()
 
-            if not email or not name:
+            if not email or not full_name:
                 continue
 
             MeetingExternalAttendee.objects.get_or_create(
                 meeting=meeting,
                 email=email,
                 defaults={
-                    'full_name': name,
+                    'full_name': full_name,
                     'organisation': organisation,
                     'role': role,
                     'is_required': True,
+                    'rsvp': MeetingExternalAttendee.RSVP.INVITED,
                 }
             )
 
+        # Linked tasks
         task_ids = request.POST.getlist('linked_tasks')
         if task_ids:
             from apps.tasks.models import Task
             meeting.linked_tasks.set(Task.objects.filter(pk__in=task_ids))
+        else:
+            meeting.linked_tasks.clear()
 
         start_text = timezone.localtime(meeting.start_datetime).strftime("%d %b %Y at %H:%M")
 
+        # Internal invite notifications + email
         _notify_attendees(
             meeting,
             request.user,
@@ -514,12 +614,15 @@ class MeetingCreateView(LoginRequiredMixin, View):
             f'{request.user.full_name} invited you to "{meeting.title}" on {start_text}.',
         )
 
-        _notify_external_attendees(
-            meeting,
-            request.user,
-            f'Meeting invitation: {meeting.title}',
-            f'You have been invited to "{meeting.title}" on {start_text}.'
-        )
+        # External invite email
+        try:
+            _notify_external_attendees(
+                meeting,
+                request.user,
+                f'Meeting invitation: {meeting.title}',
+            )
+        except NameError:
+            pass
 
         messages.success(request, f'Meeting "{meeting.title}" created.')
         return redirect('meeting_detail', pk=meeting.pk)
@@ -532,12 +635,21 @@ class MeetingUpdateView(LoginRequiredMixin, View):
         meeting = get_object_or_404(Meeting, pk=pk)
         if not _can_edit_meeting(request.user, meeting):
             return HttpResponseForbidden('Only the organiser can edit this meeting.')
+
+        if _meeting_is_locked(meeting):
+            messages.error(request, 'This meeting is closed and can no longer be edited.')
+            return redirect('meeting_detail', pk=pk)
+
         return render(request, self.template_name, _meeting_form_context(request, meeting))
 
     def post(self, request, pk):
         meeting = get_object_or_404(Meeting, pk=pk)
         if not _can_edit_meeting(request.user, meeting):
             return HttpResponseForbidden('Only the organiser can edit this meeting.')
+
+        if _meeting_is_locked(meeting):
+            messages.error(request, 'This meeting is closed and can no longer be edited.')
+            return redirect('meeting_detail', pk=pk)
 
         start_raw = request.POST.get('start_datetime', '').strip()
         end_raw = request.POST.get('end_datetime', '').strip()
@@ -557,14 +669,19 @@ class MeetingUpdateView(LoginRequiredMixin, View):
             messages.error(request, 'End date/time must be after the start date/time.')
             return render(request, self.template_name, _meeting_form_context(request, meeting))
 
-        meeting.title = request.POST.get('title', meeting.title).strip() or meeting.title
-        meeting.description = request.POST.get('description', '')
+        title = request.POST.get('title', '').strip()
+        if not title:
+            messages.error(request, 'Meeting title is required.')
+            return render(request, self.template_name, _meeting_form_context(request, meeting))
+
+        meeting.title = title
+        meeting.description = request.POST.get('description', '').strip()
         meeting.meeting_type = request.POST.get('meeting_type', meeting.meeting_type)
         meeting.start_datetime = start_dt
         meeting.end_datetime = end_dt
-        meeting.location = request.POST.get('location', '')
-        meeting.virtual_link = request.POST.get('virtual_link', '')
-        meeting.agenda = request.POST.get('agenda', '')
+        meeting.location = request.POST.get('location', '').strip()
+        meeting.virtual_link = request.POST.get('virtual_link', '').strip()
+        meeting.agenda = request.POST.get('agenda', '').strip()
         meeting.is_private = 'is_private' in request.POST
         meeting.project_id = request.POST.get('project') or None
         meeting.unit_id = request.POST.get('unit') or None
@@ -573,12 +690,13 @@ class MeetingUpdateView(LoginRequiredMixin, View):
         meeting.save()
 
         attendee_ids = set(request.POST.getlist('attendees'))
-        existing_ids = set(str(i) for i in meeting.attendees.exclude(
-            user=request.user
-        ).values_list('user_id', flat=True))
+        existing_ids = set(
+            str(i) for i in meeting.attendees.exclude(user=request.user).values_list('user_id', flat=True)
+        )
 
-        removed = existing_ids - attendee_ids
-        meeting.attendees.filter(user_id__in=removed).delete()
+        removed_ids = existing_ids - attendee_ids
+        if removed_ids:
+            meeting.attendees.filter(user_id__in=removed_ids).delete()
 
         new_ids = attendee_ids - existing_ids
         for uid in new_ids:
@@ -588,12 +706,25 @@ class MeetingUpdateView(LoginRequiredMixin, View):
                     MeetingAttendee.objects.get_or_create(
                         meeting=meeting,
                         user=u,
-                        defaults={'is_required': True}
+                        defaults={
+                            'is_required': True,
+                            'rsvp': MeetingAttendee.RSVP.INVITED,
+                        }
                     )
             except User.DoesNotExist:
-                pass
+                continue
 
-        # Rebuild external attendees
+        MeetingAttendee.objects.get_or_create(
+            meeting=meeting,
+            user=request.user,
+            defaults={
+                'rsvp': MeetingAttendee.RSVP.ACCEPTED,
+                'is_required': True,
+                'role': 'Organiser',
+                'responded_at': timezone.now(),
+            }
+        )
+
         meeting.external_attendees.all().delete()
 
         ext_names = request.POST.getlist('external_name')
@@ -601,41 +732,49 @@ class MeetingUpdateView(LoginRequiredMixin, View):
         ext_orgs = request.POST.getlist('external_organisation')
         ext_roles = request.POST.getlist('external_role')
 
-        for i, email in enumerate(ext_emails):
-            email = (email or '').strip()
-            name = (ext_names[i] if i < len(ext_names) else '').strip()
+        for i, raw_email in enumerate(ext_emails):
+            email = (raw_email or '').strip()
+            full_name = (ext_names[i] if i < len(ext_names) else '').strip()
             organisation = (ext_orgs[i] if i < len(ext_orgs) else '').strip()
             role = (ext_roles[i] if i < len(ext_roles) else '').strip()
 
-            if not email or not name:
+            if not email or not full_name:
                 continue
 
             MeetingExternalAttendee.objects.create(
                 meeting=meeting,
-                full_name=name,
+                full_name=full_name,
                 email=email,
                 organisation=organisation,
                 role=role,
                 is_required=True,
+                rsvp=MeetingExternalAttendee.RSVP.INVITED,
             )
 
         task_ids = request.POST.getlist('linked_tasks')
         from apps.tasks.models import Task
-        meeting.linked_tasks.set(Task.objects.filter(pk__in=task_ids) if task_ids else [])
+        if task_ids:
+            meeting.linked_tasks.set(Task.objects.filter(pk__in=task_ids))
+        else:
+            meeting.linked_tasks.clear()
 
-        if new_ids or meeting.external_attendees.exists():
-            _notify_attendees(
-                meeting,
-                request.user,
-                f'Meeting updated: {meeting.title}',
-                f'The meeting "{meeting.title}" has been updated.',
-            )
+        start_text = timezone.localtime(meeting.start_datetime).strftime("%d %b %Y at %H:%M")
+
+        _notify_attendees(
+            meeting,
+            request.user,
+            f'Meeting updated: {meeting.title}',
+            f'The meeting "{meeting.title}" has been updated. It is scheduled for {start_text}.',
+        )
+
+        try:
             _notify_external_attendees(
                 meeting,
                 request.user,
                 f'Meeting updated: {meeting.title}',
-                f'The meeting "{meeting.title}" has been updated.'
             )
+        except NameError:
+            pass
 
         messages.success(request, 'Meeting updated.')
         return redirect('meeting_detail', pk=meeting.pk)
@@ -644,8 +783,13 @@ class MeetingUpdateView(LoginRequiredMixin, View):
 class MeetingAttendanceUpdateView(LoginRequiredMixin, View):
     def post(self, request, pk):
         meeting = get_object_or_404(Meeting, pk=pk)
+
         if not _can_edit_meeting(request.user, meeting):
             return HttpResponseForbidden('Only the organiser can manage attendance.')
+
+        if _meeting_is_locked(meeting):
+            messages.error(request, 'Attendance is closed because this meeting has ended or been cancelled.')
+            return redirect('meeting_detail', pk=pk)
 
         attendee_type = request.POST.get('attendee_type', 'internal')
         attendee_id = request.POST.get('attendee_id')
@@ -722,12 +866,16 @@ class MeetingDetailView(LoginRequiredMixin, View):
             'action_items': minutes.action_items.select_related(
                 'assigned_to', 'linked_task'
             ).all() if minutes else [],
-            'can_edit': _can_edit_meeting(request.user, meeting),
+            'can_edit': _can_edit_meeting(request.user, meeting) and not _meeting_is_locked(meeting),
             'can_take_minutes': (
-                    request.user.is_superuser or
-                    meeting.organizer_id == request.user.id or
-                    meeting.attendees.filter(user=request.user).exists()
+                (
+                        request.user.is_superuser or
+                        meeting.organizer_id == request.user.id or
+                        meeting.attendees.filter(user=request.user).exists()
+                )
             ),
+            'attendance_open': not _meeting_is_locked(meeting),
+            'meeting_locked': _meeting_is_locked(meeting),
             'linked_tasks': meeting.linked_tasks.select_related('assigned_to').all(),
             'rsvp_choices': MeetingAttendee.RSVP.choices,
         }
@@ -770,7 +918,7 @@ class MeetingRSVPView(LoginRequiredMixin, View):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cancel
+# Cancel And End
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MeetingCancelView(LoginRequiredMixin, View):
@@ -789,6 +937,44 @@ class MeetingCancelView(LoginRequiredMixin, View):
         )
         messages.warning(request, f'Meeting "{meeting.title}" cancelled.')
         return redirect('meeting_list')
+
+
+class MeetingEndView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        meeting = get_object_or_404(Meeting, pk=pk)
+
+        if not _can_edit_meeting(request.user, meeting):
+            return HttpResponseForbidden('Only the organiser can end this meeting.')
+
+        if meeting.status == 'cancelled':
+            messages.error(request, 'A cancelled meeting cannot be ended.')
+            return redirect('meeting_detail', pk=pk)
+
+        if meeting.status == 'completed':
+            messages.info(request, 'This meeting has already been ended.')
+            return redirect('meeting_detail', pk=pk)
+
+        meeting.status = 'completed'
+        meeting.save(update_fields=['status'])
+
+        _notify_attendees(
+            meeting,
+            request.user,
+            f'Meeting ended: {meeting.title}',
+            f'{request.user.full_name} has ended the meeting "{meeting.title}".',
+        )
+
+        try:
+            _notify_external_attendees(
+                meeting,
+                request.user,
+                f'Meeting ended: {meeting.title}',
+            )
+        except Exception:
+            pass
+
+        messages.success(request, f'Meeting "{meeting.title}" has been ended. Editing, cancelling, and attendance are now closed.')
+        return redirect('meeting_detail', pk=pk)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

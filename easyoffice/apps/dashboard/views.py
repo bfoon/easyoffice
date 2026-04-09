@@ -198,18 +198,18 @@ class AdminDashboardView(LoginRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        now  = timezone.now()
-        req  = self.request
+        now = timezone.now()
+        today = now.date()
+        req = self.request
 
-        # ── Filters from GET params ───────────────────────────────────────────
-        status_filter  = req.GET.get('task_status', '')
-        priority_filter= req.GET.get('task_priority', '')
-        unit_filter    = req.GET.get('unit', '')
-        dept_filter    = req.GET.get('dept', '')
-        search_q       = req.GET.get('tq', '').strip()
+        status_filter = (req.GET.get('task_status') or '').strip()
+        priority_filter = (req.GET.get('task_priority') or '').strip()
+        unit_filter = (req.GET.get('unit') or '').strip()
+        dept_filter = (req.GET.get('dept') or '').strip()
+        search_q = (req.GET.get('tq') or '').strip()
 
-        # ── Base task queryset ────────────────────────────────────────────────
-        all_tasks = Task.objects.select_related(
+        # One consistent "open task" queryset for counts + dashboard list
+        open_tasks = Task.objects.select_related(
             'assigned_to',
             'assigned_by',
             'assigned_to__staffprofile',
@@ -218,60 +218,68 @@ class AdminDashboardView(LoginRequiredMixin, TemplateView):
             'assigned_to__staffprofile__supervisor',
             'project',
             'category',
-        ).filter(
-            status__in=['todo', 'in_progress', 'review', 'on_hold']
+        ).exclude(
+            status__in=['done', 'cancelled']
         )
 
+        # Filtered queryset used only for the visible dashboard table
+        filtered_tasks = open_tasks
+
         if status_filter:
-            all_tasks = all_tasks.filter(status=status_filter)
+            filtered_tasks = filtered_tasks.filter(status=status_filter)
+
         if priority_filter:
-            all_tasks = all_tasks.filter(priority=priority_filter)
+            filtered_tasks = filtered_tasks.filter(priority=priority_filter)
+
         if unit_filter:
-            all_tasks = all_tasks.filter(
+            filtered_tasks = filtered_tasks.filter(
                 assigned_to__staffprofile__unit_id=unit_filter
             )
+
         if dept_filter:
-            all_tasks = all_tasks.filter(
+            filtered_tasks = filtered_tasks.filter(
                 assigned_to__staffprofile__department_id=dept_filter
             )
+
         if search_q:
-            all_tasks = all_tasks.filter(
+            filtered_tasks = filtered_tasks.filter(
                 Q(title__icontains=search_q) |
+                Q(description__icontains=search_q) |
                 Q(assigned_to__first_name__icontains=search_q) |
                 Q(assigned_to__last_name__icontains=search_q) |
                 Q(project__name__icontains=search_q)
             )
 
-        all_tasks = all_tasks.order_by('due_date', '-priority', '-created_at')
+        filtered_tasks = filtered_tasks.order_by('due_date', '-created_at').distinct()
 
-        # ── Summary stats ─────────────────────────────────────────────────────
-        total_staff_qs       = User.objects.filter(is_active=True, status='active')
-        total_projects_qs    = Project.objects.all()
-        total_open_tasks_qs  = Task.objects.filter(status__in=['todo','in_progress','review'])
+        task_list = list(filtered_tasks[:50])
+        for task in task_list:
+            task.progress_pct = task.progress_pct or 0
+            task.is_overdue = bool(task.due_date and task.due_date < now and task.status not in ['done', 'cancelled'])
 
-        ctx['now']                   = now
-        ctx['total_staff']           = total_staff_qs.count()
+        total_staff_qs = User.objects.filter(is_active=True, status='active')
+        total_projects_qs = Project.objects.all()
+
+        ctx['now'] = now
+        ctx['dashboard_path'] = req.path
+
+        ctx['total_staff'] = total_staff_qs.count()
         ctx['total_active_projects'] = total_projects_qs.filter(status='active').count()
-        ctx['total_tasks_open']      = total_open_tasks_qs.count()
-        ctx['total_tasks_overdue']   = total_open_tasks_qs.filter(due_date__lt=now).count()
-        ctx['total_tasks_due_today'] = total_open_tasks_qs.filter(
-            due_date__date=now.date()).count()
+        ctx['total_tasks_open'] = open_tasks.count()
+        ctx['total_tasks_overdue'] = open_tasks.filter(due_date__lt=now).count()
+        ctx['total_tasks_due_today'] = open_tasks.filter(due_date__date=today).count()
 
-        # ── Task list (paginated to 50 for performance) ───────────────────────
-        ctx['all_active_tasks']  = all_tasks[:50]
-        ctx['all_tasks_count']   = all_tasks.count()
+        ctx['all_active_tasks'] = task_list
+        ctx['all_tasks_count'] = filtered_tasks.count()
 
-        # ── Priority breakdown ────────────────────────────────────────────────
-        from apps.tasks.models import Task as _T
         ctx['priority_counts'] = {
-            'critical': total_open_tasks_qs.filter(priority='critical').count(),
-            'urgent':   total_open_tasks_qs.filter(priority='urgent').count(),
-            'high':     total_open_tasks_qs.filter(priority='high').count(),
-            'medium':   total_open_tasks_qs.filter(priority='medium').count(),
-            'low':      total_open_tasks_qs.filter(priority='low').count(),
+            'critical': open_tasks.filter(priority='critical').count(),
+            'urgent': open_tasks.filter(priority='urgent').count(),
+            'high': open_tasks.filter(priority='high').count(),
+            'medium': open_tasks.filter(priority='medium').count(),
+            'low': open_tasks.filter(priority='low').count(),
         }
 
-        # ── Tasks grouped by Unit ─────────────────────────────────────────────
         try:
             from apps.organization.models import Unit, Department
             units = Unit.objects.filter(is_active=True).order_by('name')
@@ -281,14 +289,13 @@ class AdminDashboardView(LoginRequiredMixin, TemplateView):
 
         unit_task_data = []
         for unit in units:
-            unit_tasks = total_open_tasks_qs.filter(
-                assigned_to__staffprofile__unit=unit
-            )
+            unit_tasks = open_tasks.filter(assigned_to__staffprofile__unit=unit)
             total = unit_tasks.count()
             if total == 0:
                 continue
+
             overdue = unit_tasks.filter(due_date__lt=now).count()
-            # Find unit head / supervisor
+
             unit_head = None
             try:
                 from apps.staff.models import StaffProfile
@@ -300,53 +307,53 @@ class AdminDashboardView(LoginRequiredMixin, TemplateView):
                 unit_head = head_profile.user if head_profile else None
             except Exception:
                 pass
+
             unit_task_data.append({
-                'unit':     unit,
-                'total':    total,
-                'overdue':  overdue,
-                'head':     unit_head,
-                'critical': unit_tasks.filter(priority__in=['critical','urgent']).count(),
+                'unit': unit,
+                'total': total,
+                'overdue': overdue,
+                'head': unit_head,
+                'critical': unit_tasks.filter(priority__in=['critical', 'urgent']).count(),
             })
 
-        ctx['unit_task_data']  = sorted(unit_task_data, key=lambda x: -x['overdue'])
+        ctx['unit_task_data'] = sorted(unit_task_data, key=lambda x: (-x['overdue'], -x['total']))
 
-        # ── Overdue tasks needing follow-up ───────────────────────────────────
-        ctx['overdue_tasks'] = Task.objects.filter(
-            status__in=['todo','in_progress','review'],
-            due_date__lt=now,
+        ctx['overdue_tasks'] = open_tasks.filter(
+            due_date__lt=now
         ).select_related(
-            'assigned_to','assigned_to__staffprofile',
+            'assigned_to',
+            'assigned_to__staffprofile',
             'assigned_to__staffprofile__supervisor',
             'assigned_to__staffprofile__unit',
-            'assigned_by','project',
+            'assigned_by',
+            'project',
         ).order_by('due_date')[:30]
 
-        # ── Projects ──────────────────────────────────────────────────────────
         ctx['projects_by_status'] = total_projects_qs.values('status').annotate(
             count=Count('id')
         ).order_by('status')
+
         ctx['latest_projects'] = total_projects_qs.select_related(
             'project_manager'
         ).order_by('-created_at')[:5]
 
-        # ── Leave ─────────────────────────────────────────────────────────────
         ctx['office_pending_leave_requests'] = LeaveRequest.objects.filter(
             status='pending'
         ).count()
+
         ctx['office_recent_leave_requests'] = LeaveRequest.objects.select_related(
-            'staff','leave_type','approved_by'
+            'staff', 'leave_type', 'approved_by'
         ).order_by('-created_at')[:8]
 
-        # ── Filter choices for template ───────────────────────────────────────
-        ctx['filter_units']    = units
-        ctx['filter_depts']    = depts
-        ctx['status_choices']  = Task.Status.choices
-        ctx['priority_choices']= Task.Priority.choices
-        ctx['status_filter']   = status_filter
+        ctx['filter_units'] = units
+        ctx['filter_depts'] = depts
+        ctx['status_choices'] = Task.Status.choices
+        ctx['priority_choices'] = Task.Priority.choices
+        ctx['status_filter'] = status_filter
         ctx['priority_filter'] = priority_filter
-        ctx['unit_filter']     = unit_filter
-        ctx['dept_filter']     = dept_filter
-        ctx['search_q']        = search_q
+        ctx['unit_filter'] = unit_filter
+        ctx['dept_filter'] = dept_filter
+        ctx['search_q'] = search_q
 
         return ctx
 

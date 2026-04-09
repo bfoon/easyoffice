@@ -14,13 +14,20 @@ def _get_staffprofile(user):
     return getattr(user, 'staffprofile', None)
 
 
+def _is_admin_user(user):
+    """CEO, Admin, Office Manager, and superusers can see all tasks."""
+    return user.is_superuser or user.groups.filter(
+        name__in=['CEO', 'Admin', 'Office Manager']
+    ).exists()
+
+
 def _is_supervisor_of(user, target_user):
     target_profile = getattr(target_user, 'staffprofile', None)
     return bool(target_profile and target_profile.supervisor_id == user.id)
 
 
 def _can_view_task(user, task):
-    if user.is_superuser:
+    if _is_admin_user(user):
         return True
     if task.assigned_by_id == user.id:
         return True
@@ -35,9 +42,9 @@ def _can_view_task(user, task):
 
 def _can_full_edit_task(user, task):
     """
-    Only creator/assigner and superuser can fully edit task fields.
+    Only creator/assigner, admins, and superuser can fully edit task fields.
     """
-    if user.is_superuser:
+    if _is_admin_user(user):
         return True
     if task.assigned_by_id == user.id:
         return True
@@ -47,12 +54,12 @@ def _can_full_edit_task(user, task):
 def _can_update_task_progress(user, task):
     """
     Quick update permission:
-    - superuser
+    - admins / CEO / Office Manager
     - creator/assigner
     - assignee
     - supervisor of assignee
     """
-    if user.is_superuser:
+    if _is_admin_user(user):
         return True
     if task.assigned_by_id == user.id:
         return True
@@ -66,11 +73,11 @@ def _can_update_task_progress(user, task):
 def _can_reassign_task(user, task):
     """
     Reassignment:
-    - superuser
+    - admins / CEO / Office Manager
     - creator/assigner
     - supervisor of assignee
     """
-    if user.is_superuser:
+    if _is_admin_user(user):
         return True
     if task.assigned_by_id == user.id:
         return True
@@ -80,7 +87,7 @@ def _can_reassign_task(user, task):
 
 
 def _can_log_time(user, task):
-    if user.is_superuser:
+    if _is_admin_user(user):
         return True
     if task.assigned_to_id == user.id:
         return True
@@ -130,13 +137,15 @@ class TaskListView(LoginRequiredMixin, TemplateView):
         view_mode = self.request.GET.get('view', 'mine')
 
         staff_profile = _get_staffprofile(user)
+        is_admin = _is_admin_user(user)
 
-        if view_mode == 'team' and staff_profile and staff_profile.is_supervisor_role:
+        if view_mode == 'all' and is_admin:
+            # CEO / Admin / Office Manager / superuser — see every task in org
+            tasks = Task.objects.all()
+        elif view_mode == 'team' and staff_profile and staff_profile.is_supervisor_role:
             tasks = Task.objects.filter(
                 assigned_to__staffprofile__supervisor=user
             )
-        elif view_mode == 'all' and user.is_superuser:
-            tasks = Task.objects.all()
         else:
             tasks = Task.objects.filter(
                 Q(assigned_to=user) |
@@ -167,6 +176,7 @@ class TaskListView(LoginRequiredMixin, TemplateView):
             'done': tasks.filter(status='done').count(),
         }
         ctx['can_view_team_tasks'] = bool(staff_profile and staff_profile.is_supervisor_role)
+        ctx['can_view_all_tasks']  = is_admin
         return ctx
 
 

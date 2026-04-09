@@ -1,0 +1,477 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ sheet.title }} — {{ project.name }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'project_list' %}">Projects</a> /
+  <a href="{% url 'project_detail' project.pk %}">{{ project.name }}</a> /
+  Tracking Sheet
+{% endblock %}
+
+{% block content %}
+<style>
+/* ── Shared modal system (matches project_detail.html) ── */
+.proj-modal-backdrop {
+  position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1050;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .18s;
+}
+.proj-modal-backdrop.open { opacity:1;pointer-events:all; }
+.proj-modal {
+  background:var(--eo-surface);border-radius:var(--eo-radius);
+  border:1px solid var(--eo-border);width:520px;max-width:96vw;
+  max-height:88vh;overflow-y:auto;
+  box-shadow:0 24px 64px rgba(0,0,0,.18);
+  transform:translateY(14px);transition:transform .18s;
+}
+.proj-modal-backdrop.open .proj-modal { transform:translateY(0); }
+.proj-modal-head {
+  padding:18px 22px 14px;
+  display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--eo-border);
+}
+.proj-modal-body { padding:20px 22px; }
+</style>
+
+
+<style>
+/* ── Table ── */
+.ts-wrap { border-radius:var(--eo-radius);overflow:hidden;border:1px solid var(--eo-border); }
+.ts-table { width:100%;border-collapse:collapse;font-size:.83rem; }
+.ts-table thead th {
+  background:var(--eo-bg);
+  color:var(--eo-text-muted);
+  font-size:.68rem;font-weight:700;
+  text-transform:uppercase;letter-spacing:.06em;
+  padding:10px 14px;
+  border-bottom:2px solid var(--eo-border);
+  white-space:nowrap;position:sticky;top:0;z-index:2;
+}
+.ts-table tbody td {
+  padding:10px 14px;border-bottom:1px solid var(--eo-border);
+  color:var(--eo-text);vertical-align:middle;
+}
+.ts-table tbody tr:last-child td { border-bottom:none; }
+.ts-table tbody tr:hover td { background:var(--eo-bg); }
+.ts-table tbody tr:hover .row-actions { opacity:1; }
+.row-actions { opacity:0;transition:opacity .12s;display:flex;gap:4px;justify-content:flex-end; }
+.ts-num { color:var(--eo-text-muted);font-size:.72rem;width:36px;text-align:center;font-variant-numeric:tabular-nums; }
+
+/* ── Type icons in header ── */
+.type-icon { font-size:.7rem;opacity:.6;margin-left:4px; }
+
+/* ── Status badges ── */
+.ts-status {
+  font-size:.72rem;font-weight:700;padding:2px 9px;border-radius:20px;white-space:nowrap;
+}
+.ts-status-done        { background:#d1fae5;color:#065f46; }
+.ts-status-in_progress { background:#dbeafe;color:#1e40af; }
+.ts-status-blocked     { background:#fee2e2;color:#991b1b; }
+.ts-status-pending     { background:#f1f5f9;color:#64748b; }
+
+/* ── Checkbox cell ── */
+.ts-check-on  { color:#10b981;font-size:1rem; }
+.ts-check-off { color:var(--eo-border);font-size:1rem; }
+
+/* ── Column config drag handle ── */
+.col-item { display:flex;gap:8px;align-items:center;padding:6px 4px;
+            border-radius:7px;transition:background .1s; }
+.col-item:hover { background:var(--eo-bg); }
+.drag-handle { color:var(--eo-text-muted);cursor:grab;font-size:.9rem;flex-shrink:0; }
+</style>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">{{ sheet.title }}</h1>
+    <p class="eo-page-subtitle">
+      {{ project.name }}
+      {% if columns %} · {{ columns|length }} column{{ columns|length|pluralize }}{% endif %}
+      {% if row_count %} · {{ row_count }} row{{ row_count|pluralize }}{% endif %}
+    </p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    {% if row_count %}
+    <a href="{% url 'tracking_export_csv' project.pk %}" class="eo-btn eo-btn-sm eo-btn-secondary">
+      <i class="bi bi-filetype-csv"></i> Export CSV
+    </a>
+    {% endif %}
+    {% if is_manager %}
+    <button onclick="openModal('configModal')" class="eo-btn eo-btn-sm eo-btn-secondary">
+      <i class="bi bi-sliders"></i> Columns
+    </button>
+    {% endif %}
+    {% if is_member and columns %}
+    <button onclick="openModal('addRowModal')" class="eo-btn eo-btn-sm eo-btn-primary">
+      <i class="bi bi-plus-lg"></i> Add Row
+    </button>
+    {% endif %}
+  </div>
+</div>
+
+{# ── No columns configured ─────────────────────────────────────────────────── #}
+{% if not columns %}
+<div class="eo-card" style="text-align:center;padding:80px 32px">
+  <div style="width:68px;height:68px;border-radius:18px;background:#e0f2fe;
+              display:flex;align-items:center;justify-content:center;margin:0 auto 18px;font-size:2rem">
+    <i class="bi bi-table" style="color:#0284c7"></i>
+  </div>
+  <h3 style="font-size:1.05rem;font-weight:700;margin-bottom:8px">Sheet not configured yet</h3>
+  <p style="font-size:.86rem;color:var(--eo-text-muted);max-width:380px;margin:0 auto 24px;line-height:1.6">
+    Define your columns first — choose types like Text, Number, Date, Status, or Checkbox — then start adding rows.
+  </p>
+  {% if is_manager %}
+  <button onclick="openModal('configModal')" class="eo-btn eo-btn-primary">
+    <i class="bi bi-sliders"></i> Configure Columns
+  </button>
+  {% endif %}
+</div>
+
+{# ── Table ────────────────────────────────────────────────────────────────── #}
+{% else %}
+<div class="ts-wrap" style="max-height:70vh;overflow:auto">
+  <table class="ts-table">
+    <thead>
+      <tr>
+        <th class="ts-num">#</th>
+        {% for col in columns %}
+        <th>
+          {{ col.label }}
+          {% if col.type == 'date'     %}<i class="bi bi-calendar3 type-icon"></i>
+          {% elif col.type == 'number' %}<i class="bi bi-hash type-icon"></i>
+          {% elif col.type == 'status' %}<i class="bi bi-circle-half type-icon"></i>
+          {% elif col.type == 'checkbox'%}<i class="bi bi-check-square type-icon"></i>
+          {% else %}<i class="bi bi-fonts type-icon"></i>{% endif %}
+        </th>
+        {% endfor %}
+        <th style="width:110px">Added By</th>
+        <th style="width:90px">Date</th>
+        {% if is_member %}<th style="width:76px"></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {# ── FIX: iterate over rows_processed (pre-processed by the view) ── #}
+      {% for item in rows_processed %}
+      <tr data-pk="{{ item.row.pk }}"
+          data-row="{{ item.data_json|escapejs }}">
+        <td class="ts-num">{{ forloop.counter }}</td>
+
+        {# Each cell has (label, type, key, value) from the view #}
+        {% for label, type, key, value in item.cells %}
+        <td>
+          {% if type == 'checkbox' %}
+            {% if value %}
+              <i class="bi bi-check-circle-fill ts-check-on"></i>
+            {% else %}
+              <i class="bi bi-circle ts-check-off"></i>
+            {% endif %}
+
+          {% elif type == 'status' %}
+            {% if value %}
+            <span class="ts-status
+              {% if value == 'Done' %}ts-status-done
+              {% elif value == 'In Progress' %}ts-status-in_progress
+              {% elif value == 'Blocked' %}ts-status-blocked
+              {% elif value == 'Pending' %}ts-status-pending
+              {% endif %}">{{ value }}</span>
+            {% else %}
+            <span style="color:var(--eo-text-muted)">—</span>
+            {% endif %}
+
+          {% elif type == 'date' and value %}
+            <span style="font-family:monospace;font-size:.8rem">{{ value }}</span>
+
+          {% elif type == 'number' and value %}
+            <span style="font-variant-numeric:tabular-nums;font-weight:600">{{ value }}</span>
+
+          {% else %}
+            {{ value|default:"—" }}
+          {% endif %}
+        </td>
+        {% endfor %}
+
+        <td style="font-size:.76rem;color:var(--eo-text-muted)">
+          {{ item.row.created_by.full_name|default:"—" }}
+        </td>
+        <td style="font-size:.76rem;color:var(--eo-text-muted)">
+          {{ item.row.created_at|date:"d M Y" }}
+        </td>
+
+        {% if is_member %}
+        <td>
+          <div class="row-actions">
+            <button onclick="openEditRow(this)" title="Edit row"
+                    class="eo-btn eo-btn-sm eo-btn-secondary"
+                    style="padding:4px 9px;font-size:.72rem">
+              <i class="bi bi-pencil"></i>
+            </button>
+            <form method="post" action="{% url 'tracking_row_delete' project.pk item.row.pk %}"
+                  style="display:inline" onsubmit="return confirm('Delete this row?')">
+              {% csrf_token %}
+              <button type="submit" class="eo-btn eo-btn-sm"
+                      style="padding:4px 9px;font-size:.72rem;color:var(--eo-danger)">
+                <i class="bi bi-trash3"></i>
+              </button>
+            </form>
+          </div>
+        </td>
+        {% endif %}
+      </tr>
+
+      {% empty %}
+      <tr>
+        <td colspan="{{ columns|length|add:4 }}"
+            style="text-align:center;padding:60px;color:var(--eo-text-muted)">
+          <i class="bi bi-inbox" style="font-size:2rem;opacity:.3;display:block;margin-bottom:10px"></i>
+          No rows yet.{% if is_member %} Click "+ Add Row" above to get started.{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{# Row count footer #}
+{% if row_count %}
+<div style="padding:10px 14px;font-size:.75rem;color:var(--eo-text-muted);
+            display:flex;align-items:center;justify-content:space-between">
+  <span>{{ row_count }} row{{ row_count|pluralize }}</span>
+  {% if is_member %}
+  <button onclick="openModal('addRowModal')"
+          style="background:none;border:none;cursor:pointer;color:var(--eo-accent);font-size:.78rem;font-weight:600;padding:0;display:flex;align-items:center;gap:4px">
+    <i class="bi bi-plus"></i> Add row
+  </button>
+  {% endif %}
+</div>
+{% endif %}
+{% endif %}
+
+<!-- {# ══════════════════════════════════════════════════════════════════════════
+   CONFIGURE COLUMNS MODAL
+══════════════════════════════════════════════════════════════════════════ #} -->
+{% if is_manager %}
+<div class="proj-modal-backdrop" id="configModal">
+  <div class="proj-modal" style="width:580px">
+    <div class="proj-modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:28px;height:28px;border-radius:7px;background:#e0f2fe;display:flex;align-items:center;justify-content:center">
+          <i class="bi bi-sliders" style="color:#0284c7;font-size:.85rem"></i>
+        </div>
+        <span style="font-size:1rem;font-weight:700">Configure Columns</span>
+      </div>
+      <button onclick="closeModal('configModal')"
+              style="background:none;border:none;cursor:pointer;font-size:1.3rem;color:var(--eo-text-muted);padding:0 4px">&times;</button>
+    </div>
+    <div class="proj-modal-body">
+      <form method="post" action="{% url 'tracking_columns' project.pk %}">
+        {% csrf_token %}
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Sheet Title</label>
+          <input type="text" name="sheet_title" class="eo-form-control" value="{{ sheet.title }}"/>
+        </div>
+
+        <div style="border-top:1px solid var(--eo-border);padding-top:16px;margin-bottom:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div>
+              <span style="font-size:.9rem;font-weight:700;color:var(--eo-text)">Columns</span>
+              <span style="font-size:.72rem;color:var(--eo-text-muted);margin-left:6px">Reorder by dragging ≡</span>
+            </div>
+            <button type="button" onclick="addColumn()"
+                    class="eo-btn eo-btn-sm" style="background:#e0f2fe;color:#0284c7;border:none">
+              <i class="bi bi-plus"></i> Add Column
+            </button>
+          </div>
+
+          <div id="colList" style="display:flex;flex-direction:column;gap:6px">
+            {% for col in columns %}
+            <div class="col-item">
+              <span class="drag-handle">≡</span>
+              <input type="text" name="col_label" value="{{ col.label }}"
+                     class="eo-form-control" style="flex:1" placeholder="Column name"/>
+              <select name="col_type" class="eo-form-select" style="width:120px;font-size:.82rem">
+                <option value="text"     {% if col.type == 'text'     %}selected{% endif %}>Text</option>
+                <option value="number"   {% if col.type == 'number'   %}selected{% endif %}>Number</option>
+                <option value="date"     {% if col.type == 'date'     %}selected{% endif %}>Date</option>
+                <option value="status"   {% if col.type == 'status'   %}selected{% endif %}>Status</option>
+                <option value="checkbox" {% if col.type == 'checkbox' %}selected{% endif %}>Checkbox</option>
+              </select>
+              <button type="button" onclick="this.closest('.col-item').remove()"
+                      style="background:none;border:none;cursor:pointer;color:var(--eo-text-muted);font-size:1rem;padding:2px 4px">×</button>
+            </div>
+            {% endfor %}
+          </div>
+
+          {% if not columns %}
+          <div id="noColHint" style="text-align:center;padding:20px;color:var(--eo-text-muted);
+               font-size:.82rem;border:2px dashed var(--eo-border);border-radius:8px">
+            No columns — click "+ Add Column" to start
+          </div>
+          {% endif %}
+        </div>
+
+        <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">
+          <button type="submit" class="eo-btn eo-btn-primary">Save Columns</button>
+          <button type="button" onclick="closeModal('configModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- {# ══════════════════════════════════════════════════════════════════════════
+   ADD ROW MODAL
+══════════════════════════════════════════════════════════════════════════ #} -->
+{% if is_member and columns %}
+<div class="proj-modal-backdrop" id="addRowModal">
+  <div class="proj-modal" style="width:520px">
+    <div class="proj-modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:28px;height:28px;border-radius:7px;background:#e0f2fe;display:flex;align-items:center;justify-content:center">
+          <i class="bi bi-plus-lg" style="color:#0284c7;font-size:.85rem"></i>
+        </div>
+        <span style="font-size:1rem;font-weight:700">Add Row</span>
+      </div>
+      <button onclick="closeModal('addRowModal')"
+              style="background:none;border:none;cursor:pointer;font-size:1.3rem;color:var(--eo-text-muted);padding:0 4px">&times;</button>
+    </div>
+    <div class="proj-modal-body">
+      <form method="post" action="{% url 'tracking_row_add' project.pk %}">
+        {% csrf_token %}
+        {% for col in columns %}
+        <div class="eo-form-group">
+          <label class="eo-form-label" style="display:flex;align-items:center;gap:6px">
+            {% if col.type == 'date'     %}<i class="bi bi-calendar3" style="color:var(--eo-text-muted);font-size:.75rem"></i>
+            {% elif col.type == 'number' %}<i class="bi bi-hash" style="color:var(--eo-text-muted);font-size:.75rem"></i>
+            {% elif col.type == 'status' %}<i class="bi bi-circle-half" style="color:var(--eo-text-muted);font-size:.75rem"></i>
+            {% elif col.type == 'checkbox'%}<i class="bi bi-check-square" style="color:var(--eo-text-muted);font-size:.75rem"></i>
+            {% else %}<i class="bi bi-fonts" style="color:var(--eo-text-muted);font-size:.75rem"></i>{% endif %}
+            {{ col.label }}
+          </label>
+          {% if col.type == 'date' %}
+            <input type="date" name="data_{{ col.key }}" class="eo-form-control"/>
+          {% elif col.type == 'number' %}
+            <input type="number" name="data_{{ col.key }}" class="eo-form-control" step="any" placeholder="0"/>
+          {% elif col.type == 'status' %}
+            <select name="data_{{ col.key }}" class="eo-form-select">
+              <option value="">— Select status —</option>
+              <option value="Pending">Pending</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Done">Done</option>
+              <option value="Blocked">Blocked</option>
+            </select>
+          {% elif col.type == 'checkbox' %}
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:.88rem;
+                          padding:10px 14px;border:1px solid var(--eo-border);border-radius:8px;
+                          transition:background .1s">
+              <input type="checkbox" name="data_{{ col.key }}" value="true"
+                     style="width:16px;height:16px;accent-color:#0284c7"
+                     onchange="this.closest('label').style.background=this.checked?'#e0f2fe':''"/>
+              Mark as checked
+            </label>
+          {% else %}
+            <input type="text" name="data_{{ col.key }}" class="eo-form-control"
+                   placeholder="{{ col.label }}..."/>
+          {% endif %}
+        </div>
+        {% endfor %}
+        <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">
+          <button type="submit" class="eo-btn eo-btn-primary">Add Row</button>
+          <button type="button" onclick="closeModal('addRowModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- {# ══════════════════════════════════════════════════════════════════════════
+   EDIT ROW MODAL (populated by JS using data-row attribute on <tr>)
+══════════════════════════════════════════════════════════════════════════ #} -->
+<div class="proj-modal-backdrop" id="editRowModal">
+  <div class="proj-modal" style="width:520px">
+    <div class="proj-modal-head">
+      <span style="font-size:1rem;font-weight:700">Edit Row</span>
+      <button onclick="closeModal('editRowModal')"
+              style="background:none;border:none;cursor:pointer;font-size:1.3rem;color:var(--eo-text-muted);padding:0 4px">&times;</button>
+    </div>
+    <div class="proj-modal-body" id="editRowBody"></div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function openModal(id)  { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.proj-modal-backdrop').forEach(function(el){
+  el.addEventListener('click', function(e){ if(e.target===el) el.classList.remove('open'); });
+});
+
+// ── Add blank column row ──────────────────────────────────────────────────────
+function addColumn() {
+  var hint = document.getElementById('noColHint');
+  if (hint) hint.style.display = 'none';
+  var div = document.createElement('div');
+  div.className = 'col-item';
+  div.innerHTML = '<span class="drag-handle">≡</span>'
+    + '<input type="text" name="col_label" class="eo-form-control" style="flex:1" placeholder="Column name"/>'
+    + '<select name="col_type" class="eo-form-select" style="width:120px;font-size:.82rem">'
+    + '<option value="text">Text</option><option value="number">Number</option>'
+    + '<option value="date">Date</option><option value="status">Status</option>'
+    + '<option value="checkbox">Checkbox</option></select>'
+    + '<button type="button" onclick="this.closest(\'.col-item\').remove()"'
+    + ' style="background:none;border:none;cursor:pointer;color:var(--eo-text-muted);font-size:1rem;padding:2px 4px">×</button>';
+  document.getElementById('colList').appendChild(div);
+}
+
+// ── Column definitions from context (for edit modal form builder) ─────────────
+var COLS = [{% for col in columns %}{"key":"{{ col.key }}","label":"{{ col.label|escapejs }}","type":"{{ col.type }}"},{% endfor %}];
+var CSRF = "{{ csrf_token }}";
+var BASE_URL = "/projects/{{ project.pk }}/tracking/row/";
+
+// ── Open edit modal — reads data from <tr data-row="..."> ─────────────────────
+function openEditRow(btn) {
+  var tr   = btn.closest('tr');
+  var pk   = tr.dataset.pk;
+  var data = {};
+  try { data = JSON.parse(tr.dataset.row); } catch(e) {}
+
+  var html = '<form method="post" action="' + BASE_URL + pk + '/edit/">';
+  html += '<input type="hidden" name="csrfmiddlewaretoken" value="' + CSRF + '">';
+
+  COLS.forEach(function(col) {
+    var val = data[col.key] || '';
+    html += '<div class="eo-form-group"><label class="eo-form-label">' + col.label + '</label>';
+
+    if (col.type === 'date') {
+      html += '<input type="date" name="data_' + col.key + '" class="eo-form-control" value="' + val + '"/>';
+    } else if (col.type === 'number') {
+      html += '<input type="number" name="data_' + col.key + '" class="eo-form-control" value="' + val + '" step="any"/>';
+    } else if (col.type === 'status') {
+      html += '<select name="data_' + col.key + '" class="eo-form-select">';
+      ['', 'Pending', 'In Progress', 'Done', 'Blocked'].forEach(function(s) {
+        html += '<option value="' + s + '"' + (val === s ? ' selected' : '') + '>' + (s || '— Select —') + '</option>';
+      });
+      html += '</select>';
+    } else if (col.type === 'checkbox') {
+      html += '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:.88rem;'
+            + 'padding:10px 14px;border:1px solid var(--eo-border);border-radius:8px">'
+            + '<input type="checkbox" name="data_' + col.key + '" value="true" style="width:16px;height:16px;accent-color:#0284c7"'
+            + (val ? ' checked' : '') + '/> Mark as checked</label>';
+    } else {
+      html += '<input type="text" name="data_' + col.key + '" class="eo-form-control" value="' + val + '" placeholder="' + col.label + '..."/>';
+    }
+    html += '</div>';
+  });
+
+  html += '<div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">';
+  html += '<button type="submit" class="eo-btn eo-btn-primary">Save Changes</button>';
+  html += '<button type="button" onclick="closeModal(\'editRowModal\')" class="eo-btn eo-btn-secondary">Cancel</button>';
+  html += '</div></form>';
+
+  document.getElementById('editRowBody').innerHTML = html;
+  openModal('editRowModal');
+}
+</script>
+{% endblock %}

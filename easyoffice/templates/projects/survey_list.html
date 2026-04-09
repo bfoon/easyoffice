@@ -1,0 +1,476 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Surveys — {{ project.name }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'project_list' %}">Projects</a> /
+  <a href="{% url 'project_detail' project.pk %}">{{ project.name }}</a> /
+  Surveys
+{% endblock %}
+
+{% block content %}
+<style>
+/* ── Shared modal system (matches project_detail.html) ── */
+.proj-modal-backdrop {
+  position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1050;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .18s;
+}
+.proj-modal-backdrop.open { opacity:1;pointer-events:all; }
+.proj-modal {
+  background:var(--eo-surface);border-radius:var(--eo-radius);
+  border:1px solid var(--eo-border);width:520px;max-width:96vw;
+  max-height:88vh;overflow-y:auto;
+  box-shadow:0 24px 64px rgba(0,0,0,.18);
+  transform:translateY(14px);transition:transform .18s;
+}
+.proj-modal-backdrop.open .proj-modal { transform:translateY(0); }
+.proj-modal-head {
+  padding:18px 22px 14px;
+  display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--eo-border);
+}
+.proj-modal-body { padding:20px 22px; }
+</style>
+
+
+<style>
+.survey-card {
+  border:1px solid var(--eo-border);
+  border-radius:var(--eo-radius);
+  background:var(--eo-surface);
+  padding:20px;
+  transition:box-shadow .15s, transform .15s;
+  position:relative;
+  overflow:hidden;
+}
+.survey-card:hover { box-shadow:0 4px 20px rgba(0,0,0,.08); transform:translateY(-1px); }
+.survey-card .accent-bar {
+  position:absolute;top:0;left:0;right:0;height:3px;
+}
+.survey-stat-pill {
+  display:inline-flex;align-items:center;gap:5px;
+  font-size:.72rem;font-weight:600;
+  padding:3px 9px;border-radius:20px;
+  background:var(--eo-bg);color:var(--eo-text-muted);
+  border:1px solid var(--eo-border);
+}
+.qtype-btn {
+  display:flex;flex-direction:column;align-items:center;gap:4px;
+  padding:10px 8px;border:2px solid var(--eo-border);border-radius:10px;
+  cursor:pointer;background:var(--eo-surface);
+  transition:border-color .12s,background .12s;font-size:.7rem;color:var(--eo-text-muted);
+  font-weight:600;text-align:center;min-width:68px;
+}
+.qtype-btn:hover { border-color:var(--eo-accent);background:var(--eo-bg);color:var(--eo-text); }
+.qtype-btn.selected { border-color:#8b5cf6;background:#ede9fe;color:#6d28d9; }
+.qtype-btn i { font-size:1.1rem;margin-bottom:1px; }
+.q-block {
+  background:var(--eo-bg);border:1px solid var(--eo-border);
+  border-radius:10px;padding:16px;position:relative;
+}
+.q-block-num {
+  width:22px;height:22px;border-radius:6px;background:var(--eo-accent);color:#fff;
+  font-size:.68rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+</style>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Surveys</h1>
+    <p class="eo-page-subtitle">{{ project.name }} · collect structured feedback from any audience</p>
+  </div>
+  {% if is_member %}
+  <button onclick="openModal('createSurveyModal')" class="eo-btn eo-btn-primary">
+    <i class="bi bi-plus-lg"></i> New Survey
+  </button>
+  {% endif %}
+</div>
+
+{# ── Stats strip ──────────────────────────────────────────────────────────── #}
+{% if surveys %}
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="eo-stat">
+      <div class="eo-stat-label">Total Surveys</div>
+      <div class="eo-stat-value">{{ surveys|length }}</div>
+      <i class="bi bi-clipboard2-check eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-success">
+      <div class="eo-stat-label">Active</div>
+      <div class="eo-stat-value">{% with act=surveys|length %}{{ act }}{% endwith %}</div>
+      <i class="bi bi-play-circle eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat eo-stat-info">
+      <div class="eo-stat-label">Total Responses</div>
+      <div class="eo-stat-value">
+        {% with total=0 %}
+        {% for s in surveys %}{{ s.resp_count|add:0 }}{% endfor %}
+        {% endwith %}
+      </div>
+      <i class="bi bi-people eo-stat-icon"></i>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="eo-stat">
+      <div class="eo-stat-label">Project</div>
+      <div class="eo-stat-value" style="font-size:.9rem;font-weight:700">{{ project.code }}</div>
+      <i class="bi bi-kanban eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
+{# ── Survey cards ─────────────────────────────────────────────────────────── #}
+<div class="row g-3">
+  {% for survey in surveys %}
+  <div class="col-sm-6 col-xl-4">
+    <div class="survey-card">
+      <div class="accent-bar" style="background:{% if survey.is_active %}#8b5cf6{% else %}var(--eo-border){% endif %}"></div>
+
+      {# Top row: title + status badge #}
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:12px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.98rem;font-weight:700;color:var(--eo-text);line-height:1.3">
+            {{ survey.title }}
+          </div>
+          {% if survey.description %}
+          <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:4px;line-height:1.5">
+            {{ survey.description|truncatechars:70 }}
+          </div>
+          {% endif %}
+        </div>
+        <span style="font-size:.68rem;font-weight:700;padding:3px 10px;border-radius:20px;flex-shrink:0;
+          {% if survey.is_active %}background:#ede9fe;color:#6d28d9{% else %}background:var(--eo-bg);color:var(--eo-text-muted);border:1px solid var(--eo-border){% endif %}">
+          {% if survey.is_active %}● Active{% else %}Closed{% endif %}
+        </span>
+      </div>
+
+      {# Metrics row #}
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">
+        <span class="survey-stat-pill">
+          <i class="bi bi-people" style="font-size:.75rem"></i>
+          {{ survey.resp_count }} response{{ survey.resp_count|pluralize }}
+        </span>
+        <span class="survey-stat-pill">
+          <i class="bi bi-patch-question" style="font-size:.75rem"></i>
+          {{ survey.questions.count }} Q
+        </span>
+        {% if survey.is_anonymous %}
+        <span class="survey-stat-pill" style="background:#fef3c7;color:#92400e;border-color:#fde68a">
+          <i class="bi bi-eye-slash" style="font-size:.75rem"></i> Anonymous
+        </span>
+        {% endif %}
+        {% if survey.closes_at %}
+        <span class="survey-stat-pill">
+          <i class="bi bi-calendar3" style="font-size:.75rem"></i>
+          Closes {{ survey.closes_at|date:"N j" }}
+        </span>
+        {% endif %}
+      </div>
+
+      {# Progress bar (responses visual) #}
+      {% if survey.resp_count > 0 %}
+      <div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+          <span style="font-size:.7rem;color:var(--eo-text-muted)">Response activity</span>
+          <span style="font-size:.7rem;font-weight:700;color:#7c3aed">{{ survey.resp_count }}</span>
+        </div>
+        <div style="height:4px;background:var(--eo-bg);border-radius:2px;overflow:hidden">
+          <div style="height:100%;background:linear-gradient(90deg,#8b5cf6,#a855f7);border-radius:2px;width:100%"></div>
+        </div>
+      </div>
+      {% endif %}
+
+      {# Created info #}
+      <div style="font-size:.72rem;color:var(--eo-text-muted);margin-bottom:14px">
+        <i class="bi bi-clock me-1"></i>Created {{ survey.created_at|naturaltime }}
+        {% if survey.created_by %} by {{ survey.created_by.full_name }}{% endif %}
+      </div>
+
+      {# Actions #}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--eo-border)">
+        <a href="{% url 'survey_detail' project.pk survey.pk %}" class="eo-btn eo-btn-sm eo-btn-secondary">
+          <i class="bi bi-bar-chart-line"></i> Results
+        </a>
+        {% if survey.is_active %}
+        <a href="{% url 'survey_submit' project.pk survey.pk %}" class="eo-btn eo-btn-sm eo-btn-primary">
+          <i class="bi bi-pencil-square"></i> Respond
+        </a>
+        {# Share link copy #}
+        <button type="button" onclick="copyLink('{{ request.scheme }}://{{ request.get_host }}{% url 'survey_submit' project.pk survey.pk %}')"
+                class="eo-btn eo-btn-sm eo-btn-secondary" title="Copy respondent link">
+          <i class="bi bi-link-45deg"></i>
+        </button>
+        {% endif %}
+        {% if is_manager %}
+        <form method="post" action="{% url 'survey_toggle' project.pk survey.pk %}" style="display:inline;margin-left:auto">
+          {% csrf_token %}
+          <button type="submit" class="eo-btn eo-btn-sm eo-btn-secondary"
+                  style="{% if survey.is_active %}color:var(--eo-danger){% endif %}">
+            <i class="bi bi-{% if survey.is_active %}stop-circle{% else %}play-circle{% endif %}"></i>
+            {% if survey.is_active %}Close{% else %}Reopen{% endif %}
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+{# ── Empty state ──────────────────────────────────────────────────────────── #}
+<div class="eo-card" style="text-align:center;padding:80px 32px">
+  <div style="width:72px;height:72px;border-radius:20px;background:#ede9fe;
+              display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:2rem">
+    <i class="bi bi-clipboard2" style="color:#7c3aed"></i>
+  </div>
+  <h3 style="font-size:1.1rem;font-weight:700;margin-bottom:8px">No surveys yet</h3>
+  <p style="font-size:.88rem;color:var(--eo-text-muted);max-width:380px;margin:0 auto 24px;line-height:1.6">
+    Surveys let you collect structured feedback from your team, customers, or any stakeholder — with instant results and charts.
+  </p>
+  {% if is_member %}
+  <button onclick="openModal('createSurveyModal')" class="eo-btn eo-btn-primary">
+    <i class="bi bi-plus"></i> Create Your First Survey
+  </button>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ── Toast notification ───────────────────────────────────────────────────── #}
+<div id="copyToast" style="position:fixed;bottom:24px;right:24px;background:#1e293b;color:#fff;
+  padding:10px 18px;border-radius:8px;font-size:.84rem;font-weight:600;
+  display:flex;align-items:center;gap:8px;z-index:9999;
+  opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s;pointer-events:none">
+  <i class="bi bi-check-circle-fill" style="color:#10b981"></i>
+  Link copied to clipboard!
+</div>
+
+{# ── Create Survey Modal ──────────────────────────────────────────────────── #}
+{% if is_member %}
+<div class="proj-modal-backdrop" id="createSurveyModal">
+  <div class="proj-modal" style="width:720px;max-width:96vw">
+    <div class="proj-modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:30px;height:30px;border-radius:8px;background:#ede9fe;
+                    display:flex;align-items:center;justify-content:center">
+          <i class="bi bi-clipboard2-check" style="color:#7c3aed;font-size:.9rem"></i>
+        </div>
+        <span style="font-size:1rem;font-weight:700;color:var(--eo-text)">New Survey</span>
+      </div>
+      <button onclick="closeModal('createSurveyModal')"
+              style="background:none;border:none;cursor:pointer;font-size:1.3rem;color:var(--eo-text-muted);
+                     line-height:1;padding:0 4px">&times;</button>
+    </div>
+    <div class="proj-modal-body">
+      <form method="post" id="surveyForm">
+        {% csrf_token %}
+
+        {# ── Basic info ── #}
+        <div class="eo-form-group">
+          <label class="eo-form-label">Survey Title *</label>
+          <input type="text" name="title" class="eo-form-control" required
+                 placeholder="e.g. Post-Training Feedback, Site Visit Report"/>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Description
+            <span style="font-weight:400;color:var(--eo-text-muted)">(shown to respondents)</span>
+          </label>
+          <textarea name="description" class="eo-form-control" rows="2"
+                    placeholder="Briefly explain the purpose of this survey..."></textarea>
+        </div>
+        <div class="row g-3 mb-4">
+          <div class="col-sm-5">
+            <label class="eo-form-label">Closing Date <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span></label>
+            <input type="date" name="closes_at" class="eo-form-control"/>
+          </div>
+          <div class="col-sm-7" style="display:flex;align-items:flex-end;padding-bottom:2px">
+            <label style="display:flex;align-items:center;gap:12px;cursor:pointer;
+                          padding:10px 14px;border:1px solid var(--eo-border);border-radius:8px;width:100%">
+              <input type="checkbox" name="is_anonymous" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0"/>
+              <div>
+                <div style="font-size:.85rem;font-weight:600;color:var(--eo-text)">Anonymous responses</div>
+                <div style="font-size:.71rem;color:var(--eo-text-muted)">Respondent identity is not recorded</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        {# ── Questions builder ── #}
+        <div style="border-top:1px solid var(--eo-border);padding-top:18px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+            <div>
+              <span style="font-size:.92rem;font-weight:700;color:var(--eo-text)">Questions</span>
+              <span id="qCountBadge" style="display:none;margin-left:8px;font-size:.7rem;font-weight:700;
+                background:var(--eo-accent);color:#fff;padding:2px 8px;border-radius:20px"></span>
+            </div>
+            <button type="button" onclick="showQTypePicker()"
+                    class="eo-btn eo-btn-sm" style="background:#ede9fe;color:#6d28d9;border:none">
+              <i class="bi bi-plus-lg"></i> Add Question
+            </button>
+          </div>
+
+          {# Question type picker (hidden by default) #}
+          <div id="qTypePicker" style="display:none;margin-bottom:16px;padding:16px;
+               background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px">
+            <div style="font-size:.75rem;font-weight:700;color:var(--eo-text-muted);
+                        text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px">
+              Choose question type
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              <div class="qtype-btn" onclick="addQuestion('text')">
+                <i class="bi bi-fonts"></i>Short Text
+              </div>
+              <div class="qtype-btn" onclick="addQuestion('paragraph')">
+                <i class="bi bi-text-left"></i>Paragraph
+              </div>
+              <div class="qtype-btn" onclick="addQuestion('single_choice')">
+                <i class="bi bi-ui-radios"></i>Single Choice
+              </div>
+              <div class="qtype-btn" onclick="addQuestion('multi_choice')">
+                <i class="bi bi-ui-checks"></i>Multi Choice
+              </div>
+              <div class="qtype-btn" onclick="addQuestion('rating')">
+                <i class="bi bi-star"></i>Rating
+              </div>
+              <div class="qtype-btn" onclick="addQuestion('yes_no')">
+                <i class="bi bi-toggle-on"></i>Yes / No
+              </div>
+              <div class="qtype-btn" onclick="addQuestion('number')">
+                <i class="bi bi-hash"></i>Number
+              </div>
+            </div>
+          </div>
+
+          <div id="questionsList" style="display:flex;flex-direction:column;gap:10px"></div>
+
+          <div id="noQuestionsHint" style="text-align:center;padding:28px;color:var(--eo-text-muted);
+               font-size:.84rem;border:2px dashed var(--eo-border);border-radius:10px">
+            <i class="bi bi-clipboard2" style="font-size:1.5rem;display:block;margin-bottom:8px;opacity:.4"></i>
+            Click "+ Add Question" to start building your survey
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;padding-top:16px;margin-top:16px;border-top:1px solid var(--eo-border)">
+          <button type="submit" class="eo-btn eo-btn-primary" style="min-width:140px">
+            <i class="bi bi-send"></i> Create Survey
+          </button>
+          <button type="button" onclick="closeModal('createSurveyModal')" class="eo-btn eo-btn-secondary">
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function openModal(id)  { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.proj-modal-backdrop').forEach(function(el){
+  el.addEventListener('click', function(e){ if(e.target===el) el.classList.remove('open'); });
+});
+
+// ── Copy survey link ──────────────────────────────────────────────────────────
+function copyLink(url) {
+  navigator.clipboard.writeText(url).then(function() {
+    var t = document.getElementById('copyToast');
+    t.style.opacity='1'; t.style.transform='translateY(0)';
+    setTimeout(function(){ t.style.opacity='0'; t.style.transform='translateY(8px)'; }, 2200);
+  });
+}
+
+// ── Question builder ──────────────────────────────────────────────────────────
+var qCount = 0;
+
+function showQTypePicker() {
+  var p = document.getElementById('qTypePicker');
+  p.style.display = p.style.display === 'none' ? '' : 'none';
+}
+
+var TYPE_LABELS = {
+  text:'Short Text', paragraph:'Paragraph', single_choice:'Single Choice',
+  multi_choice:'Multi Choice', rating:'Rating 1–5', yes_no:'Yes / No', number:'Number'
+};
+var TYPE_ICONS = {
+  text:'bi-fonts', paragraph:'bi-text-left', single_choice:'bi-ui-radios',
+  multi_choice:'bi-ui-checks', rating:'bi-star', yes_no:'bi-toggle-on', number:'bi-hash'
+};
+
+function addQuestion(qtype) {
+  document.getElementById('qTypePicker').style.display = 'none';
+  var hint = document.getElementById('noQuestionsHint');
+  if (hint) hint.style.display = 'none';
+
+  var idx  = qCount++;
+  var div  = document.createElement('div');
+  div.id   = 'q_' + idx;
+  div.className = 'q-block';
+
+  var needsOptions = (qtype === 'single_choice' || qtype === 'multi_choice');
+
+  div.innerHTML = `
+    <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px">
+      <div class="q-block-num">${idx+1}</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+          <span style="font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:5px;
+                       background:#ede9fe;color:#6d28d9;display:flex;align-items:center;gap:4px">
+            <i class="bi ${TYPE_ICONS[qtype]}"></i> ${TYPE_LABELS[qtype]}
+          </span>
+          <input type="hidden" name="q_type" value="${qtype}"/>
+        </div>
+        <input type="text" name="q_text" class="eo-form-control"
+               placeholder="Enter your question..." required
+               style="font-size:.88rem;font-weight:500"/>
+      </div>
+      <button type="button" onclick="removeQuestion(${idx})"
+              style="background:none;border:none;color:var(--eo-text-muted);cursor:pointer;
+                     font-size:1.1rem;padding:0;flex-shrink:0;margin-top:2px">&times;</button>
+    </div>
+
+    ${needsOptions ? `
+    <div style="margin-bottom:10px">
+      <label class="eo-form-label" style="font-size:.75rem">
+        Options <span style="font-weight:400;color:var(--eo-text-muted)">(one per line)</span>
+      </label>
+      <textarea name="q_options" class="eo-form-control" rows="3"
+                placeholder="Option A&#10;Option B&#10;Option C" style="font-size:.83rem"></textarea>
+    </div>` : '<textarea name="q_options" style="display:none"></textarea>'}
+
+    <div style="display:flex;align-items:center;gap:14px">
+      <label style="display:flex;align-items:center;gap:7px;font-size:.8rem;cursor:pointer;color:var(--eo-text-muted)">
+        <input type="checkbox" name="q_required" value="${idx}" checked
+               style="width:14px;height:14px;accent-color:#7c3aed"/>
+        Required
+      </label>
+    </div>`;
+
+  document.getElementById('questionsList').appendChild(div);
+  updateQCount();
+  div.querySelector('input[name="q_text"]').focus();
+}
+
+function removeQuestion(idx) {
+  var el = document.getElementById('q_' + idx);
+  if (el) { el.style.opacity='0'; el.style.transform='scale(.97)'; el.style.transition='.15s'; setTimeout(function(){el.remove();updateQCount();},150); }
+  if (!document.querySelector('#questionsList .q-block')) {
+    document.getElementById('noQuestionsHint').style.display='';
+  }
+}
+
+function updateQCount() {
+  var n = document.querySelectorAll('#questionsList .q-block').length;
+  var badge = document.getElementById('qCountBadge');
+  badge.style.display = n > 0 ? '' : 'none';
+  badge.textContent = n + ' question' + (n !== 1 ? 's' : '');
+}
+</script>
+{% endblock %}

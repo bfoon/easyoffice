@@ -21,6 +21,14 @@
         <p style="font-size:.87rem;color:rgba(255,255,255,.8);max-width:560px;margin:0;line-height:1.6">{{ meeting.description }}</p>
         {% endif %}
       </div>
+      {% if meeting_locked %}
+      <div style="margin-top:14px">
+        <span style="display:inline-flex;align-items:center;gap:8px;background:rgba(15,23,42,.18);color:#fff;border:1px solid rgba(255,255,255,.25);padding:7px 12px;border-radius:999px;font-size:.78rem;font-weight:700">
+          <i class="bi bi-lock"></i>
+          Meeting closed — editing, cancelling, and attendance are disabled
+        </span>
+      </div>
+      {% endif %}
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start">
         {% if can_take_minutes %}
         <a href="{% url 'meeting_minutes' meeting.pk %}" class="eo-btn eo-btn-sm"
@@ -28,12 +36,23 @@
           <i class="bi bi-journal-text"></i> {% if minutes %}View Minutes{% else %}Take Minutes{% endif %}
         </a>
         {% endif %}
+
         {% if can_edit %}
         <a href="{% url 'meeting_edit' meeting.pk %}" class="eo-btn eo-btn-sm"
            style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.35)">
           <i class="bi bi-pencil"></i> Edit
         </a>
-        {% if meeting.status != 'cancelled' %}
+
+        {% if meeting.status != 'cancelled' and meeting.status != 'completed' %}
+        <form method="post" action="{% url 'meeting_end' meeting.pk %}" style="display:inline"
+              onsubmit="return confirm('End this meeting? Attendance, editing, and cancelling will be closed.')">
+          {% csrf_token %}
+          <button type="submit" class="eo-btn eo-btn-sm"
+                  style="background:rgba(16,185,129,.22);color:#fff;border:1px solid rgba(16,185,129,.45)">
+            <i class="bi bi-stop-circle"></i> End Meeting
+          </button>
+        </form>
+
         <form method="post" action="{% url 'meeting_cancel' meeting.pk %}" style="display:inline"
               onsubmit="return confirm('Cancel this meeting? Attendees will be notified.')">
           {% csrf_token %}
@@ -44,6 +63,7 @@
         </form>
         {% endif %}
         {% endif %}
+
         {% if can_edit and minutes %}
         <form method="post" action="{% url 'meeting_minutes_share' meeting.pk %}" style="display:inline">
           {% csrf_token %}
@@ -248,11 +268,17 @@
       </div>
     </div>
 
-    {% if can_edit %}
+    {% if can_edit or meeting_locked %}
     <div class="eo-card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
         <h2 class="eo-card-title" style="margin:0">Attendance</h2>
-        <span style="font-size:.76rem;color:var(--eo-text-muted)">Take attendance during or after meeting</span>
+        <span style="font-size:.76rem;color:var(--eo-text-muted)">
+          {% if attendance_open %}
+            Take attendance during or after meeting
+          {% else %}
+            Attendance closed
+          {% endif %}
+        </span>
       </div>
 
       <div style="display:flex;flex-direction:column;gap:10px">
@@ -265,6 +291,7 @@
                 Internal attendee · Current: {{ att.get_rsvp_display }}
               </div>
             </div>
+            {% if attendance_open %}
             <form method="post" action="{% url 'meeting_attendance_update' meeting.pk %}" style="display:flex;gap:6px;flex-wrap:wrap">
               {% csrf_token %}
               <input type="hidden" name="attendee_type" value="internal">
@@ -276,6 +303,11 @@
                 <i class="bi bi-x-lg"></i> No Show
               </button>
             </form>
+            {% else %}
+            <span style="font-size:.72rem;font-weight:700;padding:4px 10px;border-radius:12px;background:#f1f5f9;color:#475569">
+              Closed
+            </span>
+            {% endif %}
           </div>
         </div>
         {% endfor %}

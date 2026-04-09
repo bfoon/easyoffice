@@ -1,4 +1,5 @@
 import uuid
+import json
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from apps.core.models import User
@@ -113,3 +114,174 @@ class Risk(models.Model):
 
     def __str__(self):
         return f'{self.project.code} — {self.title}'
+
+
+# =============================================================================
+# PROJECT TOOLS
+# =============================================================================
+
+# ─── Quick Survey ─────────────────────────────────────────────────────────────
+
+class Survey(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='surveys')
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    is_anonymous = models.BooleanField(
+        default=False,
+        help_text='When enabled, respondents are not recorded'
+    )
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_surveys')
+    created_at = models.DateTimeField(auto_now_add=True)
+    closes_at = models.DateField(null=True, blank=True, help_text='Leave blank to keep open indefinitely')
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.project.code} — {self.title}'
+
+    @property
+    def response_count(self):
+        return self.responses.count()
+
+
+class SurveyQuestion(models.Model):
+    class Type(models.TextChoices):
+        TEXT = 'text', _('Short Text')
+        PARAGRAPH = 'paragraph', _('Paragraph')
+        SINGLE_CHOICE = 'single_choice', _('Single Choice')
+        MULTI_CHOICE = 'multi_choice', _('Multiple Choice')
+        RATING = 'rating', _('Rating 1–5')
+        YES_NO = 'yes_no', _('Yes / No')
+        NUMBER = 'number', _('Number')
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    survey = models.ForeignKey(Survey, on_delete=models.CASCADE, related_name='questions')
+    text = models.CharField(max_length=400)
+    q_type = models.CharField(max_length=20, choices=Type.choices, default=Type.TEXT)
+    options = models.TextField(
+        blank=True,
+        help_text='For choice questions: enter one option per line'
+    )
+    is_required = models.BooleanField(default=True)
+    order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order']
+
+    def __str__(self):
+        return f'[{self.survey.title}] Q{self.order}: {self.text[:60]}'
+
+    def get_options_list(self):
+        return [o.strip() for o in self.options.splitlines() if o.strip()]
+
+
+class SurveyResponse(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    survey = models.ForeignKey(Survey, on_delete=models.CASCADE, related_name='responses')
+    respondent = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        help_text='Null when anonymous'
+    )
+    respondent_name = models.CharField(max_length=120, blank=True)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-submitted_at']
+
+    def __str__(self):
+        return f'Response #{self.pk} to "{self.survey.title}"'
+
+
+class SurveyAnswer(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    response = models.ForeignKey(SurveyResponse, on_delete=models.CASCADE, related_name='answers')
+    question = models.ForeignKey(SurveyQuestion, on_delete=models.CASCADE, related_name='answers')
+    value = models.TextField(blank=True)
+
+    def __str__(self):
+        return f'Answer to Q:{self.question_id}'
+
+
+# ─── Tracking Sheet ───────────────────────────────────────────────────────────
+
+class TrackingSheet(models.Model):
+    """One customisable spreadsheet per project."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.OneToOneField(Project, on_delete=models.CASCADE, related_name='tracking_sheet')
+    title = models.CharField(max_length=200, default='Tracking Sheet')
+    # JSON list of {key, label, type} dicts — type: text | number | date | status | checkbox
+    columns_json = models.TextField(default='[]')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_sheets')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'{self.project.code} — {self.title}'
+
+    def get_columns(self):
+        try:
+            return json.loads(self.columns_json)
+        except Exception:
+            return []
+
+    def set_columns(self, cols):
+        self.columns_json = json.dumps(cols)
+
+
+class TrackingRow(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sheet = models.ForeignKey(TrackingSheet, on_delete=models.CASCADE, related_name='rows')
+    data_json = models.TextField(default='{}')
+    order = models.PositiveSmallIntegerField(default=0)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='tracking_rows')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order', 'created_at']
+
+    def get_data(self):
+        try:
+            return json.loads(self.data_json)
+        except Exception:
+            return {}
+
+    def set_data(self, d):
+        self.data_json = json.dumps(d)
+
+
+# ─── Location Map ─────────────────────────────────────────────────────────────
+
+class ProjectLocation(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'pending', _('Pending')
+        IN_PROGRESS = 'in_progress', _('In Progress')
+        COMPLETED = 'completed', _('Completed')
+        ON_HOLD = 'on_hold', _('On Hold')
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='locations')
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    address = models.CharField(max_length=400, blank=True)
+    latitude = models.DecimalField(max_digits=10, decimal_places=6)
+    longitude = models.DecimalField(max_digits=10, decimal_places=6)
+    category = models.CharField(
+        max_length=100, blank=True,
+        help_text='e.g. Installation, Office, Field Site, Warehouse'
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    assigned_to = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='assigned_locations'
+    )
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return f'{self.project.code} — {self.name}'

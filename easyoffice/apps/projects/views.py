@@ -4,7 +4,13 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.db.models import Q, Count
 from django.utils import timezone
-from apps.projects.models import Project, Milestone, ProjectUpdate, Risk
+from apps.projects.models import (
+    Project, Milestone, ProjectUpdate, Risk,
+    Survey, SurveyQuestion, SurveyResponse, SurveyAnswer,
+    TrackingSheet, TrackingRow, ProjectLocation,
+)
+import json
+from collections import Counter
 from apps.core.models import User
 from django.db.models import Sum
 from apps.finance.models import PurchaseRequest, Payment, EmployeeFinanceRequest
@@ -809,3 +815,731 @@ def _build_gantt_pdf(project, milestones):
 
     c.save()
     return buf.getvalue()
+
+
+# =============================================================================
+# SURVEY VIEWS
+# =============================================================================
+
+class ProjectSurveyListView(LoginRequiredMixin, View):
+    """List all surveys for a project + create new surveys."""
+
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        surveys = project.surveys.select_related('created_by').annotate(
+            resp_count=Count('responses')
+        ).order_by('-created_at')
+        return render(request, 'projects/survey_list.html', {
+            'project': project,
+            'surveys': surveys,
+            'is_member': _is_project_member(request.user, project),
+            'is_manager': request.user.is_superuser or project.project_manager == request.user,
+            'question_types': SurveyQuestion.Type.choices,
+        })
+
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+
+        title = request.POST.get('title', '').strip()
+        if not title:
+            messages.error(request, 'Survey title is required.')
+            return redirect('project_surveys', pk=pk)
+
+        survey = Survey.objects.create(
+            project=project,
+            title=title,
+            description=request.POST.get('description', '').strip(),
+            is_anonymous=request.POST.get('is_anonymous') == 'on',
+            closes_at=request.POST.get('closes_at') or None,
+            created_by=request.user,
+        )
+
+        q_texts = request.POST.getlist('q_text')
+        q_types = request.POST.getlist('q_type')
+        q_options = request.POST.getlist('q_options')
+        q_req = set(request.POST.getlist('q_required'))  # set of "0","1",…
+
+        for i, (text, qtype, opts) in enumerate(zip(q_texts, q_types, q_options)):
+            if not text.strip():
+                continue
+            SurveyQuestion.objects.create(
+                survey=survey,
+                text=text.strip(),
+                q_type=qtype,
+                options=opts,
+                is_required=(str(i) in q_req),
+                order=i,
+            )
+
+        messages.success(request, f'Survey "{title}" created with {survey.questions.count()} question(s).')
+        return redirect('survey_detail', pk=pk, sid=survey.pk)
+
+
+class SurveyDetailView(LoginRequiredMixin, View):
+    """Results dashboard. Redirects non-members to submit page."""
+
+    def get(self, request, pk, sid):
+        project = get_object_or_404(Project, pk=pk)
+        survey = get_object_or_404(Survey, pk=sid, project=project)
+        is_member = _is_project_member(request.user, project)
+        is_manager = request.user.is_superuser or project.project_manager == request.user
+
+        if not is_member:
+            return redirect('survey_submit', pk=pk, sid=sid)
+
+        questions = survey.questions.order_by('order')
+        responses = (survey.responses
+                     .select_related('respondent')
+                     .prefetch_related('answers__question')
+                     .order_by('-submitted_at'))
+
+        already_responded = (
+                not survey.is_anonymous
+                and responses.filter(respondent=request.user).exists()
+        )
+
+        # ── Pre-process per-question results so templates need no custom filters ──
+        question_results = []
+        for q in questions:
+            raw_answers = list(
+                SurveyAnswer.objects.filter(question=q).values_list('value', flat=True)
+            )
+            result = {'question': q, 'raw': raw_answers, 'count': len(raw_answers)}
+
+            if q.q_type in ('single_choice', 'multi_choice'):
+                all_vals = []
+                for a in raw_answers:
+                    all_vals.extend([v.strip() for v in a.split(',') if v.strip()])
+                tally = dict(Counter(all_vals))
+                total = sum(tally.values()) or 1
+                options = q.get_options_list()
+                # Build ordered list safe for templates: [{label, count, pct}, ...]
+                tally_list = []
+                for opt in options:
+                    cnt = tally.get(opt, 0)
+                    tally_list.append({
+                        'label': opt, 'count': cnt,
+                        'pct': round(cnt / total * 100),
+                    })
+                # Any write-in answers not in the defined options
+                for k, v in tally.items():
+                    if k not in options:
+                        tally_list.append({
+                            'label': k, 'count': v,
+                            'pct': round(v / total * 100), 'extra': True,
+                        })
+                result.update({
+                    'tally_list': tally_list,
+                    'total': sum(tally.values()),
+                })
+
+            elif q.q_type == 'rating':
+                nums = [int(a) for a in raw_answers if a.strip().isdigit()]
+                total = len(nums) or 1
+                tally = dict(Counter(nums))
+                result.update({
+                    'avg': round(sum(nums) / len(nums), 1) if nums else None,
+                    'rating_list': [
+                        {'score': i, 'count': tally.get(i, 0),
+                         'pct': round(tally.get(i, 0) / total * 100)}
+                        for i in range(1, 6)
+                    ],
+                })
+
+            elif q.q_type == 'yes_no':
+                tally = dict(Counter(raw_answers))
+                total = sum(tally.values()) or 1
+                result.update({
+                    'yn_list': [
+                        {'label': 'Yes', 'count': tally.get('Yes', 0),
+                         'pct': round(tally.get('Yes', 0) / total * 100), 'color': '#10b981'},
+                        {'label': 'No', 'count': tally.get('No', 0),
+                         'pct': round(tally.get('No', 0) / total * 100), 'color': '#f87171'},
+                    ],
+                    'total': total,
+                })
+
+            question_results.append(result)
+
+        return render(request, 'projects/survey_detail.html', {
+            'project': project,
+            'survey': survey,
+            'questions': questions,
+            'responses': responses,
+            'question_results': question_results,
+            'is_manager': is_manager,
+            'is_member': is_member,
+            'already_responded': already_responded,
+        })
+
+
+class SurveySubmitView(LoginRequiredMixin, View):
+    """Survey fill-in page for any authenticated user."""
+
+    def _guard(self, request, survey, pk):
+        """Return a redirect if the survey cannot accept this response, else None."""
+        if not survey.is_active:
+            messages.warning(request, 'This survey is no longer accepting responses.')
+            return redirect('project_surveys', pk=pk)
+        if not survey.is_anonymous and survey.responses.filter(respondent=request.user).exists():
+            messages.info(request, 'You have already submitted a response to this survey.')
+            return redirect('survey_detail', pk=pk, sid=survey.pk)
+        return None
+
+    def get(self, request, pk, sid):
+        project = get_object_or_404(Project, pk=pk)
+        survey = get_object_or_404(Survey, pk=sid, project=project)
+        if (guard := self._guard(request, survey, pk)):
+            return guard
+        return render(request, 'projects/survey_submit.html', {
+            'project': project,
+            'survey': survey,
+            'questions': survey.questions.order_by('order'),
+        })
+
+    def post(self, request, pk, sid):
+        project = get_object_or_404(Project, pk=pk)
+        survey = get_object_or_404(Survey, pk=sid, project=project)
+        if (guard := self._guard(request, survey, pk)):
+            return guard
+
+        resp = SurveyResponse.objects.create(
+            survey=survey,
+            respondent=None if survey.is_anonymous else request.user,
+            respondent_name=(
+                request.POST.get('respondent_name', '').strip()
+                if survey.is_anonymous
+                else request.user.get_full_name()
+            ),
+        )
+
+        for q in survey.questions.order_by('order'):
+            if q.q_type == 'multi_choice':
+                val = ', '.join(request.POST.getlist(f'q_{q.pk}'))
+            else:
+                val = request.POST.get(f'q_{q.pk}', '').strip()
+            SurveyAnswer.objects.create(response=resp, question=q, value=val)
+
+        messages.success(request, 'Response submitted — thank you!')
+        return redirect('project_surveys', pk=pk)
+
+
+class SurveyToggleView(LoginRequiredMixin, View):
+    """Activate / close a survey (project manager only)."""
+
+    def post(self, request, pk, sid):
+        project = get_object_or_404(Project, pk=pk)
+        if not (request.user.is_superuser or project.project_manager == request.user):
+            return HttpResponseForbidden()
+        survey = get_object_or_404(Survey, pk=sid, project=project)
+        survey.is_active = not survey.is_active
+        survey.save(update_fields=['is_active'])
+        label = 'activated' if survey.is_active else 'closed'
+        messages.success(request, f'Survey "{survey.title}" {label}.')
+        return redirect('survey_detail', pk=pk, sid=sid)
+
+
+class SurveyDeleteView(LoginRequiredMixin, View):
+    def post(self, request, pk, sid):
+        project = get_object_or_404(Project, pk=pk)
+        if not (request.user.is_superuser or project.project_manager == request.user):
+            return HttpResponseForbidden()
+        survey = get_object_or_404(Survey, pk=sid, project=project)
+        survey.delete()
+        messages.success(request, 'Survey deleted.')
+        return redirect('project_surveys', pk=pk)
+
+
+# =============================================================================
+# TRACKING SHEET VIEWS
+# =============================================================================
+
+class TrackingSheetView(LoginRequiredMixin, View):
+    """Main tracking sheet (get-or-create per project)."""
+
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        sheet, _ = TrackingSheet.objects.get_or_create(
+            project=project,
+            defaults={'title': f'{project.name} Tracker', 'created_by': request.user}
+        )
+        columns = sheet.get_columns()
+        rows_qs = sheet.rows.select_related('created_by').order_by('order', 'created_at')
+
+        # Pre-process so templates can render cell values without custom filters.
+        # Each item: {'row': TrackingRow, 'cells': [(label, type, key, value), ...], 'data_json': str}
+        rows_processed = []
+        for row in rows_qs:
+            data = row.get_data()
+            cells = [
+                (col['label'], col['type'], col['key'], data.get(col['key'], ''))
+                for col in columns
+            ]
+            rows_processed.append({
+                'row': row,
+                'cells': cells,
+                'data_json': json.dumps(data),
+            })
+
+        return render(request, 'projects/tracking_sheet.html', {
+            'project': project,
+            'sheet': sheet,
+            'columns': columns,
+            'rows_processed': rows_processed,
+            'row_count': len(rows_processed),
+            'is_member': _is_project_member(request.user, project),
+            'is_manager': request.user.is_superuser or project.project_manager == request.user,
+        })
+
+class TrackingSheetUpdateColumnsView(LoginRequiredMixin, View):
+    """Save column definitions (manager only)."""
+
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not (request.user.is_superuser or project.project_manager == request.user):
+            return HttpResponseForbidden()
+
+        sheet, _ = TrackingSheet.objects.get_or_create(
+            project=project, defaults={'created_by': request.user}
+        )
+        sheet.title = request.POST.get('sheet_title', sheet.title).strip() or sheet.title
+
+        labels = request.POST.getlist('col_label')
+        types = request.POST.getlist('col_type')
+        cols = []
+        for i, (label, ctype) in enumerate(zip(labels, types)):
+            if label.strip():
+                safe = label.strip().lower().replace(' ', '_')
+                cols.append({'key': f'c{i}_{safe}', 'label': label.strip(), 'type': ctype})
+        sheet.set_columns(cols)
+        sheet.save()
+        messages.success(request, 'Columns updated.')
+        return redirect('project_tracking', pk=pk)
+
+
+class TrackingRowAddView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+        sheet, _ = TrackingSheet.objects.get_or_create(
+            project=project, defaults={'created_by': request.user}
+        )
+        data = {col['key']: request.POST.get(f'data_{col["key"]}', '') for col in sheet.get_columns()}
+        TrackingRow.objects.create(
+            sheet=sheet,
+            data_json=json.dumps(data),
+            order=sheet.rows.count(),
+            created_by=request.user,
+        )
+        messages.success(request, 'Row added.')
+        return redirect('project_tracking', pk=pk)
+
+
+class TrackingRowEditView(LoginRequiredMixin, View):
+    def post(self, request, pk, rid):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+        row = get_object_or_404(TrackingRow, pk=rid, sheet__project=project)
+        data = {col['key']: request.POST.get(f'data_{col["key"]}', '') for col in row.sheet.get_columns()}
+        row.data_json = json.dumps(data)
+        row.save(update_fields=['data_json'])
+        messages.success(request, 'Row updated.')
+        return redirect('project_tracking', pk=pk)
+
+
+class TrackingRowDeleteView(LoginRequiredMixin, View):
+    def post(self, request, pk, rid):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+        get_object_or_404(TrackingRow, pk=rid, sheet__project=project).delete()
+        messages.success(request, 'Row deleted.')
+        return redirect('project_tracking', pk=pk)
+
+
+class TrackingSheetExportCSVView(LoginRequiredMixin, View):
+    def get(self, request, pk):
+        import csv as _csv
+        project = get_object_or_404(Project, pk=pk)
+        sheet = get_object_or_404(TrackingSheet, project=project)
+        columns = sheet.get_columns()
+        rows = sheet.rows.select_related('created_by').order_by('order', 'created_at')
+
+        resp = HttpResponse(content_type='text/csv')
+        resp['Content-Disposition'] = f'attachment; filename="{project.code}_tracking.csv"'
+        writer = _csv.writer(resp)
+        writer.writerow(['#'] + [c['label'] for c in columns] + ['Added By', 'Date'])
+
+        for i, row in enumerate(rows, 1):
+            d = row.get_data()
+            writer.writerow(
+                [i]
+                + [d.get(c['key'], '') for c in columns]
+                + [
+                    row.created_by.get_full_name() if row.created_by else '',
+                    row.created_at.strftime('%Y-%m-%d'),
+                ]
+            )
+        return resp
+
+
+# =============================================================================
+# LOCATION MAP VIEWS
+# =============================================================================
+
+class ProjectLocationMapView(LoginRequiredMixin, View):
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        locations = project.locations.select_related('assigned_to').order_by('name')
+        return render(request, 'projects/location_map.html', {
+            'project': project,
+            'locations': locations,
+            'location_count': locations.count(),
+            'is_member': _is_project_member(request.user, project),
+            'is_manager': request.user.is_superuser or project.project_manager == request.user,
+            'status_choices': ProjectLocation.Status.choices,
+            'staff_list': User.objects.filter(is_active=True).order_by('first_name'),
+        })
+
+
+class ProjectLocationAddView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+        try:
+            lat = float(request.POST['latitude'])
+            lng = float(request.POST['longitude'])
+        except (KeyError, ValueError):
+            messages.error(request, 'Valid latitude and longitude are required.')
+            return redirect('project_locations', pk=pk)
+
+        assigned = User.objects.filter(pk=request.POST.get('assigned_to')).first()
+        ProjectLocation.objects.create(
+            project=project,
+            name=request.POST.get('name', '').strip(),
+            description=request.POST.get('description', '').strip(),
+            address=request.POST.get('address', '').strip(),
+            latitude=lat,
+            longitude=lng,
+            category=request.POST.get('category', '').strip(),
+            status=request.POST.get('status', 'pending'),
+            assigned_to=assigned,
+            notes=request.POST.get('notes', '').strip(),
+        )
+        messages.success(request, 'Location added.')
+        return redirect('project_locations', pk=pk)
+
+
+class ProjectLocationEditView(LoginRequiredMixin, View):
+    def post(self, request, pk, lid):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+        loc = get_object_or_404(ProjectLocation, pk=lid, project=project)
+        try:
+            lat = float(request.POST['latitude'])
+            lng = float(request.POST['longitude'])
+        except (KeyError, ValueError):
+            messages.error(request, 'Valid coordinates required.')
+            return redirect('project_locations', pk=pk)
+
+        loc.name = request.POST.get('name', '').strip()
+        loc.description = request.POST.get('description', '').strip()
+        loc.address = request.POST.get('address', '').strip()
+        loc.latitude = lat
+        loc.longitude = lng
+        loc.category = request.POST.get('category', '').strip()
+        loc.status = request.POST.get('status', 'pending')
+        loc.assigned_to = User.objects.filter(pk=request.POST.get('assigned_to')).first()
+        loc.notes = request.POST.get('notes', '').strip()
+        loc.save()
+        messages.success(request, 'Location updated.')
+        return redirect('project_locations', pk=pk)
+
+
+class ProjectLocationDeleteView(LoginRequiredMixin, View):
+    def post(self, request, pk, lid):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+        get_object_or_404(ProjectLocation, pk=lid, project=project).delete()
+        messages.success(request, 'Location removed.')
+        return redirect('project_locations', pk=pk)
+
+
+class LocationMapHTMLExportView(LoginRequiredMixin, View):
+    """Download a self-contained interactive Leaflet map as an HTML file."""
+
+    _STATUS_COLORS = {
+        'pending': '#94a3b8',
+        'in_progress': '#3b82f6',
+        'completed': '#10b981',
+        'on_hold': '#f59e0b',
+    }
+
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        locations = project.locations.select_related('assigned_to').order_by('name')
+        status_labels = dict(ProjectLocation.Status.choices)
+
+        loc_data = [
+            {
+                'name': loc.name,
+                'description': loc.description,
+                'address': loc.address,
+                'lat': float(loc.latitude),
+                'lng': float(loc.longitude),
+                'category': loc.category,
+                'status': loc.status,
+                'statusLabel': status_labels.get(loc.status, loc.status),
+                'color': self._STATUS_COLORS.get(loc.status, '#64748b'),
+                'assignedTo': loc.assigned_to.get_full_name() if loc.assigned_to else '',
+                'notes': loc.notes,
+            }
+            for loc in locations
+        ]
+
+        html = self._render_html(project, loc_data)
+        resp = HttpResponse(html, content_type='text/html; charset=utf-8')
+        resp['Content-Disposition'] = f'attachment; filename="{project.code}_location_map.html"'
+        return resp
+
+    def _render_html(self, project, loc_data):
+        import json as _json
+        count = len(loc_data)
+        from django.utils.timezone import now
+        exported = now().strftime('%d %b %Y')
+        colors = self._STATUS_COLORS
+
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>{project.name} — Location Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<style>
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  body{{font-family:system-ui,-apple-system,sans-serif;background:#f8fafc;display:flex;flex-direction:column;height:100vh}}
+  header{{background:{project.cover_color};color:#fff;padding:14px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}}
+  header h1{{font-size:1.1rem;font-weight:800;margin-bottom:2px}}
+  header p{{font-size:.75rem;opacity:.75}}
+  #map{{flex:1}}
+  .legend{{background:#fff;padding:12px 16px;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.15);font-size:.78rem;line-height:1.8}}
+  .legend b{{display:block;margin-bottom:6px;font-size:.75rem;letter-spacing:.05em;color:#64748b}}
+  .legend-item{{display:flex;align-items:center;gap:8px}}
+  .ldot{{width:11px;height:11px;border-radius:50%;flex-shrink:0}}
+  .popup-name{{font-weight:700;font-size:.92rem;margin-bottom:5px}}
+  .popup-badge{{display:inline-block;padding:2px 8px;border-radius:5px;font-size:.7rem;font-weight:600;margin-bottom:7px}}
+  .popup-row{{font-size:.8rem;color:#475569;margin-bottom:3px;display:flex;gap:5px}}
+  .popup-row b{{color:#1e293b;flex-shrink:0}}
+  .popup-coords{{font-size:.7rem;color:#94a3b8;margin-top:7px;font-family:monospace}}
+  .sidebar{{position:absolute;top:10px;left:10px;z-index:900;max-height:calc(100% - 20px);overflow-y:auto;background:#fff;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.15);width:240px}}
+  .sidebar-header{{padding:12px 14px 8px;border-bottom:1px solid #e2e8f0;font-size:.8rem;font-weight:700;color:#1e293b}}
+  .sidebar-item{{padding:9px 14px;border-bottom:1px solid #f1f5f9;cursor:pointer;transition:background .1s}}
+  .sidebar-item:hover{{background:#f8fafc}}
+  .sidebar-name{{font-size:.82rem;font-weight:600;color:#1e293b}}
+  .sidebar-sub{{font-size:.72rem;color:#94a3b8;margin-top:1px}}
+  .sidebar-dot{{width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:4px}}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>{project.name}</h1>
+    <p>{project.code} · {count} location(s) · Exported {exported}</p>
+  </div>
+  <div style="font-size:.75rem;opacity:.6">Interactive — click pins for details</div>
+</header>
+<div style="position:relative;flex:1;display:flex">
+  <div id="map"></div>
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">📍 Locations ({count})</div>
+    <div id="sidebar-list"></div>
+  </div>
+</div>
+<script>
+var LOCS = {_json.dumps(loc_data)};
+var DEFAULT_CENTER = [13.4549, -16.5790];
+var map = L.map('map');
+
+L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{
+  attribution:'© <a href="https://www.openstreetmap.org">OpenStreetMap</a> contributors',
+  maxZoom:19
+}}).addTo(map);
+
+function makeIcon(color){{
+  var svg='<svg xmlns="http://www.w3.org/2000/svg" width="30" height="38" viewBox="0 0 30 38">'
+    +'<path d="M15 0C7 0 0 7 0 15c0 10 15 23 15 23S30 25 30 15C30 7 23 0 15 0z" fill="'+color+'" stroke="#fff" stroke-width="1.5"/>'
+    +'<circle cx="15" cy="15" r="6" fill="white"/>'
+    +'</svg>';
+  return L.divIcon({{html:svg,className:'',iconSize:[30,38],iconAnchor:[15,38],popupAnchor:[0,-40]}});
+}}
+
+var markers = [];
+var bounds  = [];
+var sidebarList = document.getElementById('sidebar-list');
+
+LOCS.forEach(function(loc, i){{
+  var m = L.marker([loc.lat, loc.lng], {{icon:makeIcon(loc.color)}}).addTo(map);
+  var popup = '<div class="popup-name">'+loc.name+'</div>'
+    + '<span class="popup-badge" style="background:'+loc.color+'20;color:'+loc.color+'">'+loc.statusLabel+'</span>';
+  if(loc.category) popup+='<div class="popup-row"><b>Category:</b>'+loc.category+'</div>';
+  if(loc.address)  popup+='<div class="popup-row"><b>Address:</b>'+loc.address+'</div>';
+  if(loc.assignedTo) popup+='<div class="popup-row"><b>Assigned:</b>'+loc.assignedTo+'</div>';
+  if(loc.description) popup+='<div class="popup-row">'+loc.description+'</div>';
+  if(loc.notes) popup+='<div class="popup-row" style="font-style:italic;color:#64748b">'+loc.notes+'</div>';
+  popup+='<div class="popup-coords">'+loc.lat.toFixed(5)+', '+loc.lng.toFixed(5)+'</div>';
+  m.bindPopup(popup,{{maxWidth:270}});
+  markers.push(m);
+  bounds.push([loc.lat, loc.lng]);
+
+  // Sidebar item
+  var div = document.createElement('div');
+  div.className='sidebar-item';
+  div.innerHTML='<div style="display:flex;gap:8px"><div class="sidebar-dot" style="background:'+loc.color+'"></div>'
+    +'<div><div class="sidebar-name">'+loc.name+'</div>'
+    +'<div class="sidebar-sub">'+loc.statusLabel+(loc.category?' · '+loc.category:'')+'</div></div></div>';
+  div.onclick=function(){{map.setView([loc.lat,loc.lng],16);m.openPopup();}};
+  sidebarList.appendChild(div);
+}});
+
+if(bounds.length>1) map.fitBounds(bounds,{{padding:[40,40]}});
+else if(bounds.length===1) map.setView(bounds[0],15);
+else map.setView(DEFAULT_CENTER,8);
+
+// Legend
+var legend=L.control({{position:'bottomright'}});
+legend.onAdd=function(){{
+  var d=L.DomUtil.create('div','legend');
+  d.innerHTML='<b>STATUS</b>';
+  [{{'color':'{colors["pending"]}','label':'Pending'}},{{'color':'{colors["in_progress"]}','label':'In Progress'}},{{'color':'{colors["completed"]}','label':'Completed'}},{{'color':'{colors["on_hold"]}','label':'On Hold'}}]
+    .forEach(function(s){{
+      d.innerHTML+='<div class="legend-item"><div class="ldot" style="background:'+s.color+'"></div>'+s.label+'</div>';
+    }});
+  return d;
+}};
+legend.addTo(map);
+</script>
+</body>
+</html>"""
+
+
+class LocationMapPDFExportView(LoginRequiredMixin, View):
+    """Export a formatted PDF table of all project locations."""
+
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        locations = list(project.locations.select_related('assigned_to').order_by('name'))
+
+        try:
+            from reportlab.lib.pagesizes import A4, landscape
+            from reportlab.lib import colors as RC
+            from reportlab.platypus import (
+                SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            )
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.units import mm
+            import io as _io
+
+            buf = _io.BytesIO()
+            doc = SimpleDocTemplate(
+                buf, pagesize=landscape(A4),
+                topMargin=16 * mm, bottomMargin=16 * mm,
+                leftMargin=14 * mm, rightMargin=14 * mm,
+            )
+
+            hex_ = project.cover_color.lstrip('#')
+            C_COVER = RC.Color(*[int(hex_[i:i + 2], 16) / 255 for i in (0, 2, 4)])
+
+            S = getSampleStyleSheet()
+            title_style = ParagraphStyle('T', fontSize=16, fontName='Helvetica-Bold',
+                                         textColor=C_COVER, spaceAfter=3)
+            sub_style = ParagraphStyle('S', fontSize=9, fontName='Helvetica',
+                                       textColor=RC.HexColor('#64748b'), spaceAfter=14)
+            note_style = ParagraphStyle('N', fontSize=8, fontName='Helvetica',
+                                        textColor=RC.HexColor('#475569'), spaceAfter=5)
+
+            STATUS_C = {
+                'pending': RC.HexColor('#94a3b8'),
+                'in_progress': RC.HexColor('#3b82f6'),
+                'completed': RC.HexColor('#10b981'),
+                'on_hold': RC.HexColor('#f59e0b'),
+            }
+            STATUS_L = dict(ProjectLocation.Status.choices)
+
+            from django.utils.timezone import now
+            story = [
+                Paragraph(f'{project.name} — Location Map', title_style),
+                Paragraph(
+                    f'{project.code} · {len(locations)} location(s) · Exported {now().strftime("%d %b %Y")}',
+                    sub_style
+                ),
+            ]
+
+            # Table data
+            headers = ['#', 'Location Name', 'Category', 'Address', 'Lat', 'Long', 'Status', 'Assigned To']
+            rows = [headers]
+            for i, loc in enumerate(locations, 1):
+                rows.append([
+                    str(i),
+                    loc.name,
+                    loc.category or '—',
+                    loc.address or '—',
+                    f'{float(loc.latitude):.5f}',
+                    f'{float(loc.longitude):.5f}',
+                    STATUS_L.get(loc.status, loc.status),
+                    loc.assigned_to.get_full_name() if loc.assigned_to else '—',
+                ])
+
+            col_w = [8 * mm, 50 * mm, 32 * mm, 55 * mm, 22 * mm, 22 * mm, 24 * mm, 34 * mm]
+            tbl = Table(rows, colWidths=col_w, repeatRows=1)
+            style = TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), C_COVER),
+                ('TEXTCOLOR', (0, 0), (-1, 0), RC.white),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 8),
+                ('FONTSIZE', (0, 1), (-1, -1), 7.5),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [RC.white, RC.HexColor('#f8fafc')]),
+                ('GRID', (0, 0), (-1, -1), 0.3, RC.HexColor('#e2e8f0')),
+                ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+                ('ALIGN', (4, 1), (5, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ])
+            # Colour status column per row
+            for ri, loc in enumerate(locations, 1):
+                sc = STATUS_C.get(loc.status, RC.HexColor('#64748b'))
+                style.add('TEXTCOLOR', (6, ri), (6, ri), sc)
+                style.add('FONTNAME', (6, ri), (6, ri), 'Helvetica-Bold')
+            tbl.setStyle(style)
+            story.append(tbl)
+
+            # Notes
+            locs_with_notes = [(l, l.notes) for l in locations if l.notes.strip()]
+            if locs_with_notes:
+                story += [Spacer(1, 14),
+                          Paragraph('Notes', ParagraphStyle('H2', fontSize=10, fontName='Helvetica-Bold',
+                                                            textColor=C_COVER, spaceAfter=6))]
+                for loc, note in locs_with_notes:
+                    story.append(Paragraph(f'<b>{loc.name}:</b> {note}', note_style))
+
+            doc.build(story)
+            buf.seek(0)
+            return HttpResponse(
+                buf.getvalue(),
+                content_type='application/pdf',
+                headers={'Content-Disposition': f'attachment; filename="{project.code}_locations.pdf"'},
+            )
+
+        except ImportError:
+            return HttpResponse('ReportLab is required for PDF export.', status=500)

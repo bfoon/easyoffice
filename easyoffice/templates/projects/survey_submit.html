@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ survey.title }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'project_list' %}">Projects</a> /
+  <a href="{% url 'project_detail' project.pk %}">{{ project.name }}</a> /
+  <a href="{% url 'project_surveys' project.pk %}">Surveys</a> /
+  Respond
+{% endblock %}
+
+{% block content %}
+<style>
+/* ── Choice labels ── */
+.choice-label {
+  display:flex;align-items:center;gap:10px;cursor:pointer;
+  padding:10px 14px;border:1.5px solid var(--eo-border);border-radius:9px;
+  transition:border-color .12s,background .12s;user-select:none;
+}
+.choice-label:hover { border-color:#a78bfa;background:var(--eo-bg); }
+.choice-label.selected { border-color:#8b5cf6;background:#ede9fe; }
+/* ── Stars ── */
+.star-btn { font-size:2rem;color:var(--eo-border);cursor:pointer;transition:color .1s,transform .1s; }
+.star-btn:hover, .star-btn.lit { color:#f59e0b; }
+.star-btn:hover { transform:scale(1.15); }
+/* ── Progress ── */
+.progress-pip {
+  width:8px;height:8px;border-radius:50%;background:var(--eo-border);transition:background .2s;
+}
+.progress-pip.done { background:#8b5cf6; }
+.progress-pip.current { background:#7c3aed;width:20px;border-radius:4px; }
+</style>
+
+<div style="max-width:660px;margin:0 auto">
+
+  {# ── Survey header card ───────────────────────────────────────────────────── #}
+  <div style="background:linear-gradient(135deg,#6d28d9 0%,#7c3aed 50%,#a855f7 100%);
+              border-radius:var(--eo-radius);padding:26px 28px;margin-bottom:8px;color:#fff;
+              position:relative;overflow:hidden">
+    <div style="position:absolute;right:-30px;top:-30px;width:160px;height:160px;border-radius:50%;background:rgba(255,255,255,.06)"></div>
+    <div style="position:relative;z-index:1">
+      <div style="font-size:.68rem;font-weight:700;opacity:.7;letter-spacing:.08em;margin-bottom:8px">SURVEY · {{ project.code }}</div>
+      <h1 style="font-size:1.35rem;font-weight:800;margin:0 0 8px;line-height:1.2">{{ survey.title }}</h1>
+      {% if survey.description %}
+      <p style="font-size:.86rem;opacity:.85;line-height:1.6;margin:0 0 14px">{{ survey.description }}</p>
+      {% endif %}
+      <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:.76rem;opacity:.75">
+        <span><i class="bi bi-patch-question me-1"></i>{{ questions.count }} question{{ questions.count|pluralize }}</span>
+        {% if survey.is_anonymous %}<span><i class="bi bi-eye-slash me-1"></i>Anonymous</span>{% endif %}
+        {% if survey.closes_at %}<span><i class="bi bi-calendar3 me-1"></i>Closes {{ survey.closes_at|date:"N j" }}</span>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ── Progress pips ────────────────────────────────────────────────────────── #}
+  {% if questions.count > 1 %}
+  <div style="display:flex;align-items:center;gap:4px;padding:12px 4px;margin-bottom:4px" id="progressPips">
+    {% for q in questions %}
+    <div class="progress-pip{% if forloop.first %} current{% endif %}" id="pip_{{ forloop.counter }}"></div>
+    {% endfor %}
+    <span style="font-size:.72rem;color:var(--eo-text-muted);margin-left:8px" id="progressLabel">
+      1 / {{ questions.count }}
+    </span>
+  </div>
+  {% endif %}
+
+  {# ── Form ─────────────────────────────────────────────────────────────────── #}
+  <form method="post" id="surveyForm" novalidate>
+    {% csrf_token %}
+
+    {% if survey.is_anonymous %}
+    <div class="eo-card mb-3" style="padding:16px 20px">
+      <label class="eo-form-label" style="margin-bottom:8px">
+        Your Name <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span>
+      </label>
+      <input type="text" name="respondent_name" class="eo-form-control"
+             placeholder="Enter your name or leave blank to stay anonymous"/>
+    </div>
+    {% endif %}
+
+    {% for q in questions %}
+    <div class="eo-card mb-3 q-card" id="qcard_{{ forloop.counter }}"
+         style="transition:opacity .2s">
+      {# Question header #}
+      <div style="display:flex;gap:10px;margin-bottom:16px">
+        <div style="width:28px;height:28px;border-radius:8px;background:#ede9fe;color:#6d28d9;
+                    font-size:.78rem;font-weight:800;display:flex;align-items:center;justify-content:center;
+                    flex-shrink:0">{{ forloop.counter }}</div>
+        <div style="flex:1">
+          <div style="font-size:.95rem;font-weight:700;color:var(--eo-text);line-height:1.4">
+            {{ q.text }}
+            {% if q.is_required %}
+            <span style="color:#ef4444;font-size:.8rem;margin-left:2px">*</span>
+            {% endif %}
+          </div>
+          <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:3px">
+            {{ q.get_q_type_display }}
+          </div>
+        </div>
+      </div>
+
+      {# ── Short text ── #}
+      {% if q.q_type == 'text' %}
+        <input type="text" name="q_{{ q.pk }}" class="eo-form-control"
+               {% if q.is_required %}required{% endif %}
+               placeholder="Your answer..."
+               onchange="markProgress({{ forloop.counter }})"/>
+
+      {# ── Paragraph ── #}
+      {% elif q.q_type == 'paragraph' %}
+        <textarea name="q_{{ q.pk }}" class="eo-form-control" rows="4"
+                  {% if q.is_required %}required{% endif %}
+                  placeholder="Your answer..."
+                  onchange="markProgress({{ forloop.counter }})"></textarea>
+
+      {# ── Number ── #}
+      {% elif q.q_type == 'number' %}
+        <input type="number" name="q_{{ q.pk }}" class="eo-form-control"
+               {% if q.is_required %}required{% endif %}
+               placeholder="0"
+               onchange="markProgress({{ forloop.counter }})"/>
+
+      {# ── Yes / No ── #}
+      {% elif q.q_type == 'yes_no' %}
+        <div style="display:flex;gap:10px">
+          <label class="choice-label" style="flex:1" id="yn_yes_{{ q.pk }}"
+                 onclick="selectYN('{{ q.pk }}','Yes')">
+            <input type="radio" name="q_{{ q.pk }}" value="Yes"
+                   {% if q.is_required %}required{% endif %}
+                   style="accent-color:#7c3aed;flex-shrink:0"/>
+            <span style="font-size:.95rem;font-weight:700">
+              <i class="bi bi-hand-thumbs-up me-2" style="color:#10b981"></i>Yes
+            </span>
+          </label>
+          <label class="choice-label" style="flex:1" id="yn_no_{{ q.pk }}"
+                 onclick="selectYN('{{ q.pk }}','No')">
+            <input type="radio" name="q_{{ q.pk }}" value="No"
+                   style="accent-color:#7c3aed;flex-shrink:0"/>
+            <span style="font-size:.95rem;font-weight:700">
+              <i class="bi bi-hand-thumbs-down me-2" style="color:#f87171"></i>No
+            </span>
+          </label>
+        </div>
+
+      {# ── Single choice ── #}
+      {% elif q.q_type == 'single_choice' %}
+        <div style="display:flex;flex-direction:column;gap:7px">
+          {% for opt in q.get_options_list %}
+          <label class="choice-label" onclick="highlightChoice(this)">
+            <input type="radio" name="q_{{ q.pk }}" value="{{ opt }}"
+                   {% if q.is_required %}required{% endif %}
+                   style="accent-color:#7c3aed;flex-shrink:0;width:16px;height:16px"
+                   onchange="markProgress({{ forloop.parentloop.counter }})"/>
+            <span style="font-size:.9rem">{{ opt }}</span>
+          </label>
+          {% endfor %}
+        </div>
+
+      {# ── Multi choice ── #}
+      {% elif q.q_type == 'multi_choice' %}
+        <div style="display:flex;flex-direction:column;gap:7px">
+          {% for opt in q.get_options_list %}
+          <label class="choice-label">
+            <input type="checkbox" name="q_{{ q.pk }}" value="{{ opt }}"
+                   style="accent-color:#7c3aed;flex-shrink:0;width:16px;height:16px"
+                   onchange="highlightCheckbox(this);markProgress({{ forloop.parentloop.counter }})"/>
+            <span style="font-size:.9rem">{{ opt }}</span>
+          </label>
+          {% endfor %}
+        </div>
+
+      {# ── Rating ── #}
+      {% elif q.q_type == 'rating' %}
+        <div>
+          <div style="display:flex;gap:4px;margin-bottom:8px" id="stars_{{ q.pk }}">
+            {% for i in "12345" %}
+            <span class="star-btn" data-val="{{ i }}" data-name="q_{{ q.pk }}"
+                  onclick="setRating('{{ q.pk }}', {{ i }})"
+                  onmouseover="previewRating('{{ q.pk }}', {{ i }})"
+                  onmouseout="resetRatingPreview('{{ q.pk }}')">★</span>
+            {% endfor %}
+          </div>
+          <input type="hidden" name="q_{{ q.pk }}" id="rating_input_{{ q.pk }}"
+                 {% if q.is_required %}required{% endif %}/>
+          <div id="rating_label_{{ q.pk }}"
+               style="font-size:.76rem;color:var(--eo-text-muted);min-height:16px"></div>
+        </div>
+      {% endif %}
+    </div>
+    {% empty %}
+    <div class="eo-card" style="text-align:center;padding:40px;color:var(--eo-text-muted)">
+      <i class="bi bi-patch-question" style="font-size:2.5rem;opacity:.3;display:block;margin-bottom:12px"></i>
+      <p>This survey has no questions yet.</p>
+    </div>
+    {% endfor %}
+
+    {% if questions %}
+    <div style="display:flex;gap:10px;margin-top:6px;align-items:center">
+      <button type="submit" class="eo-btn eo-btn-primary" style="min-width:160px">
+        <i class="bi bi-send"></i> Submit Response
+      </button>
+      <a href="{% url 'project_surveys' project.pk %}" class="eo-btn eo-btn-secondary">Cancel</a>
+      <span style="margin-left:auto;font-size:.75rem;color:var(--eo-text-muted)">
+        <i class="bi bi-shield-check me-1"></i>
+        {% if survey.is_anonymous %}Anonymous — identity not recorded{% else %}Logged in as {{ request.user.full_name }}{% endif %}
+      </span>
+    </div>
+    {% endif %}
+  </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var RATING_LABELS = ['','Poor','Fair','Average','Good','Excellent'];
+var TOTAL_Q = {{ questions.count }};
+
+// ── Progress tracking ────────────────────────────────────────────────────────
+var answered = {};
+function markProgress(n) {
+  answered[n] = true;
+  var done = Object.keys(answered).length;
+  document.querySelectorAll('.progress-pip').forEach(function(pip, i) {
+    pip.classList.remove('done','current');
+    var q = i + 1;
+    if (answered[q]) pip.classList.add('done');
+  });
+  var label = document.getElementById('progressLabel');
+  if (label) label.textContent = done + ' / ' + TOTAL_Q + ' answered';
+}
+
+// ── Yes/No ───────────────────────────────────────────────────────────────────
+function selectYN(qpk, val) {
+  ['Yes','No'].forEach(function(v) {
+    var el = document.getElementById('yn_' + v.toLowerCase() + '_' + qpk);
+    if (el) el.classList.toggle('selected', v === val);
+  });
+}
+
+// ── Single choice highlight ──────────────────────────────────────────────────
+function highlightChoice(label) {
+  var group = label.closest('div').querySelectorAll('.choice-label');
+  group.forEach(function(l){ l.classList.remove('selected'); });
+  label.classList.add('selected');
+}
+
+// ── Checkbox highlight ───────────────────────────────────────────────────────
+function highlightCheckbox(cb) {
+  var label = cb.closest('.choice-label');
+  label.classList.toggle('selected', cb.checked);
+}
+
+// ── Star rating ──────────────────────────────────────────────────────────────
+function setRating(qpk, val) {
+  document.getElementById('rating_input_' + qpk).value = val;
+  document.getElementById('rating_label_' + qpk).textContent = RATING_LABELS[val];
+  paintStars(qpk, val, true);
+}
+function previewRating(qpk, val) { paintStars(qpk, val, false); }
+function resetRatingPreview(qpk) {
+  var cur = document.getElementById('rating_input_' + qpk).value;
+  paintStars(qpk, parseInt(cur) || 0, !!cur);
+}
+function paintStars(qpk, val, permanent) {
+  document.querySelectorAll('#stars_' + qpk + ' .star-btn').forEach(function(s) {
+    var lit = parseInt(s.dataset.val) <= val;
+    s.classList.toggle('lit', lit);
+    s.style.color = lit ? '#f59e0b' : 'var(--eo-border)';
+  });
+}
+</script>
+{% endblock %}

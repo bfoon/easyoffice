@@ -45,6 +45,7 @@ urlpatterns = [
     path('<uuid:pk>/locations/template/<str:fmt>/', views.LocationTemplateDownloadView.as_view(), name='location_template'),
     path('<uuid:pk>/locations/export/pdf/', views.LocationMapPDFExportView.as_view(), name='location_export_pdf'),
     path('<uuid:pk>/locations/export/html/', views.LocationMapHTMLExportView.as_view(), name='location_export_html'),
+    path('<uuid:pk>/locations/tools/plus-code-convert/', views.PlusCodeConvertView.as_view(), name='location_plus_code_convert'),
 
     # ── 📎  Documents ────────────────────────────────────────────────────────
     path('<uuid:pk>/documents/link/', views.ProjectDocumentLinkView.as_view(), name='project_document_link'),

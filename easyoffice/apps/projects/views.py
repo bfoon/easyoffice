@@ -2478,3 +2478,282 @@ class SurveyDashboardView(LoginRequiredMixin, View):
             'is_manager': request.user.is_superuser or project.project_manager == request.user,
             'public_url': request.build_absolute_uri(survey.get_public_url()) if survey.is_public else None,
         })
+
+
+def _olc_decode(code):
+    """
+    Pure-Python Open Location Code (Plus Code) decoder.
+    Returns (latitude_center, longitude_center).
+    Mirrors the OLC JS implementation embedded in location_map.html.
+    """
+    ALPHABET = '23456789CFGHJMPQRVWX'
+    BASE = 20
+    SEP = '+'
+    PAIR_LEN = 10
+    GRID_ROWS = 5
+    GRID_COLS = 4
+
+    char_idx = {c: i for i, c in enumerate(ALPHABET)}
+    code = code.strip().upper()
+
+    if SEP not in code:
+        raise ValueError('Missing "+" separator')
+
+    clean = code.replace(SEP, '')
+    while clean and clean[-1] == '0':
+        clean = clean[:-1]
+
+    lat, lng = -90.0, -180.0
+    lat_step = 180.0 / BASE
+    lng_step = 360.0 / BASE
+
+    for i in range(0, min(len(clean), PAIR_LEN), 2):
+        if clean[i] not in char_idx or clean[i + 1] not in char_idx:
+            raise ValueError(f'Invalid character in Plus Code: {code!r}')
+        lat += char_idx[clean[i]] * lat_step
+        lng += char_idx[clean[i + 1]] * lng_step
+        lat_step /= BASE
+        lng_step /= BASE
+
+    if len(clean) > PAIR_LEN:
+        lgs, lns = lat_step, lng_step
+        for j in range(PAIR_LEN, len(clean)):
+            lgs /= GRID_ROWS
+            lns /= GRID_COLS
+            v = char_idx[clean[j]]
+            lat += (v // GRID_COLS) * lgs
+            lng += (v % GRID_COLS) * lns
+        lat_step, lng_step = lgs, lns
+
+    return lat + lat_step / 2, lng + lng_step / 2
+
+
+def _olc_encode(lat, lng, length=8):
+    """Encode lat/lng to a full Plus Code (used when recovering short codes)."""
+    ALPHABET = '23456789CFGHJMPQRVWX'
+    BASE = 20
+    lat = min(90 - 1e-10, max(-90.0, lat)) + 90
+    lng = ((lng + 180) % 360 + 360) % 360
+    lat_step = 180.0 / BASE
+    lng_step = 360.0 / BASE
+    code = ''
+    for _ in range(0, length, 2):
+        code += ALPHABET[int(lat / lat_step)]
+        lat %= lat_step
+        code += ALPHABET[int(lng / lng_step)]
+        lng %= lng_step
+        lat_step /= BASE
+        lng_step /= BASE
+    return code[:8] + '+' + code[8:]
+
+
+def _olc_recover(short_code, ref_lat, ref_lng):
+    """
+    Recover a full Plus Code from a short code using a reference lat/lng,
+    then decode to (lat_center, lng_center).
+    """
+    SEP_POS = 8
+    sep_idx = short_code.index('+')
+    prefix_len = SEP_POS - sep_idx
+    prefix = _olc_encode(ref_lat, ref_lng).replace('+', '')[:prefix_len]
+    sn = short_code.upper().replace('+', '')
+    full_clean = prefix + sn
+    full_code = full_clean[:SEP_POS] + '+' + full_clean[SEP_POS:]
+    return _olc_decode(full_code)
+
+
+def _is_full_olc(code):
+    code = code.strip().upper()
+    return '+' in code and code.index('+') == 8
+
+
+class PlusCodeConvertView(LoginRequiredMixin, View):
+    """
+    POST: accept a CSV or Excel file whose rows contain a Plus Code column.
+    Decode every Plus Code to latitude / longitude, then stream the enriched
+    file back to the browser.  Nothing is saved to disk on the server — the
+    uploaded bytes are processed in memory and discarded immediately.
+
+    Short codes (e.g. "C7PM+F8G") are resolved against the project's first
+    saved location or a hard-coded Banjul fallback.
+    """
+
+    # Column aliases that are recognised as a Plus Code column (case-insensitive)
+    PC_ALIASES = {
+        'plus_code', 'plus code', 'pluscode', 'google plus code',
+        'open location code', 'olc', 'plus_codes', 'location code',
+    }
+
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+
+        upload = request.FILES.get('pc_file')
+        if not upload:
+            return JsonResponse({'error': 'No file uploaded.'}, status=400)
+
+        fname = upload.name.lower()
+
+        # ── reference point for short-code resolution ─────────────────────────
+        first_loc = project.locations.order_by('created_at').first()
+        ref_lat = float(first_loc.latitude) if first_loc else 13.4549
+        ref_lng = float(first_loc.longitude) if first_loc else -16.5790
+
+        # ── parse input ───────────────────────────────────────────────────────
+        try:
+            if fname.endswith('.csv'):
+                import csv as _csv, io as _io
+                text = upload.read().decode('utf-8-sig')
+                reader = _csv.DictReader(_io.StringIO(text))
+                headers = reader.fieldnames or []
+                rows = list(reader)
+                fmt = 'csv'
+
+            elif fname.endswith(('.xlsx', '.xls')):
+                import openpyxl
+                wb = openpyxl.load_workbook(upload, data_only=True)
+                ws = wb.active
+                headers = [str(c.value).strip() if c.value else '' for c in ws[1]]
+                rows = []
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if any(v is not None for v in row):
+                        rows.append(dict(zip(headers, [
+                            str(v).strip() if v is not None else '' for v in row
+                        ])))
+                fmt = 'xlsx'
+            else:
+                return JsonResponse(
+                    {'error': 'Only .csv and .xlsx files are supported.'},
+                    status=400
+                )
+        except Exception as exc:
+            return JsonResponse({'error': f'Could not read file: {exc}'}, status=400)
+
+        # ── find the Plus Code column ─────────────────────────────────────────
+        pc_col = None
+        for h in headers:
+            if h.strip().lower() in self.PC_ALIASES:
+                pc_col = h
+                break
+
+        if pc_col is None:
+            return JsonResponse(
+                {
+                    'error': (
+                        'No Plus Code column found. '
+                        'Name your column one of: plus_code, pluscode, '
+                        '"plus code", "google plus code", olc.'
+                    )
+                },
+                status=400,
+            )
+
+        # ── decode ────────────────────────────────────────────────────────────
+        out_headers = list(headers)
+        if 'latitude' not in [h.lower() for h in out_headers]:
+            out_headers.append('latitude')
+        if 'longitude' not in [h.lower() for h in out_headers]:
+            out_headers.append('longitude')
+        # keep a "decode_error" column only if there are errors (added lazily)
+        has_errors = False
+
+        processed = []
+        for row in rows:
+            code = str(row.get(pc_col, '') or '').strip().upper()
+            row_out = dict(row)  # copy
+            if not code:
+                row_out['latitude'] = ''
+                row_out['longitude'] = ''
+            else:
+                try:
+                    if _is_full_olc(code):
+                        lat, lng = _olc_decode(code)
+                    elif '+' in code:
+                        lat, lng = _olc_recover(code, ref_lat, ref_lng)
+                    else:
+                        raise ValueError('Not a recognisable Plus Code')
+                    row_out['latitude'] = round(lat, 6)
+                    row_out['longitude'] = round(lng, 6)
+                    row_out.pop('decode_error', None)
+                except Exception as exc:
+                    row_out['latitude'] = ''
+                    row_out['longitude'] = ''
+                    row_out['decode_error'] = str(exc)
+                    has_errors = True
+
+            processed.append(row_out)
+
+        if has_errors and 'decode_error' not in out_headers:
+            out_headers.append('decode_error')
+
+        # ── stream the result back ────────────────────────────────────────────
+        stem = upload.name.rsplit('.', 1)[0]
+
+        if fmt == 'csv':
+            import csv as _csv, io as _io
+            buf = _io.StringIO()
+            w = _csv.DictWriter(buf, fieldnames=out_headers, extrasaction='ignore')
+            w.writeheader()
+            w.writerows(processed)
+            response = HttpResponse(
+                buf.getvalue().encode('utf-8-sig'),
+                content_type='text/csv; charset=utf-8',
+            )
+            response['Content-Disposition'] = (
+                f'attachment; filename="{stem}_converted.csv"'
+            )
+            return response
+
+        else:  # xlsx
+            try:
+                import openpyxl
+                from openpyxl.styles import Font, PatternFill, Alignment
+                from openpyxl.utils import get_column_letter
+                import io as _io
+
+                wb2 = openpyxl.Workbook()
+                ws2 = wb2.active
+                ws2.title = 'Converted'
+
+                hdr_fill = PatternFill('solid', fgColor=project.cover_color.lstrip('#') or '1e3a5f')
+                for col_idx, h in enumerate(out_headers, 1):
+                    c = ws2.cell(row=1, column=col_idx, value=h)
+                    c.font = Font(bold=True, color='FFFFFF', size=11)
+                    c.fill = hdr_fill
+                    c.alignment = Alignment(horizontal='center', vertical='center')
+                ws2.row_dimensions[1].height = 20
+
+                for r_idx, row in enumerate(processed, 2):
+                    row_fill = PatternFill('solid', fgColor='F8FAFC' if r_idx % 2 == 0 else 'FFFFFF')
+                    for c_idx, h in enumerate(out_headers, 1):
+                        cell = ws2.cell(row=r_idx, column=c_idx, value=row.get(h, ''))
+                        cell.fill = row_fill
+                        cell.alignment = Alignment(vertical='center')
+
+                # Auto-size columns
+                for c_idx, h in enumerate(out_headers, 1):
+                    ws2.column_dimensions[get_column_letter(c_idx)].width = max(
+                        14, len(str(h)) + 4
+                    )
+                ws2.freeze_panes = 'A2'
+
+                buf2 = _io.BytesIO()
+                wb2.save(buf2)
+                buf2.seek(0)
+                response = HttpResponse(
+                    buf2.getvalue(),
+                    content_type=(
+                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    ),
+                )
+                response['Content-Disposition'] = (
+                    f'attachment; filename="{stem}_converted.xlsx"'
+                )
+                return response
+
+            except ImportError:
+                return JsonResponse(
+                    {'error': 'openpyxl is required for Excel output.'},
+                    status=500,
+                )

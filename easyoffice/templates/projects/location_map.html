@@ -71,27 +71,33 @@
       <button class="view-btn"        id="btn-list" onclick="setView('list')"><i class="bi bi-list-ul"></i> List</button>
     </div>
 
-    {# Export / template dropdown #}
-    {% if location_count %}
+    {# ── Tools dropdown (Export + Templates + Converter tools) ── #}
     <div style="position:relative">
-      <button class="eo-btn eo-btn-sm eo-btn-secondary" onclick="toggleDD('exportDD')">
-        <i class="bi bi-download"></i> Export <i class="bi bi-chevron-down" style="font-size:.65rem"></i>
+      <button class="eo-btn eo-btn-sm eo-btn-secondary" onclick="toggleDD('toolsDD')">
+        <i class="bi bi-tools"></i> Tools <i class="bi bi-chevron-down" style="font-size:.65rem"></i>
       </button>
-      <div id="exportDD" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:200;min-width:160px;overflow:hidden">
-        <a href="{% url 'location_export_html' project.pk %}" class="dd-item"><i class="bi bi-filetype-html me-2"></i>HTML Map</a>
-        <a href="{% url 'location_export_pdf' project.pk %}"  class="dd-item"><i class="bi bi-file-earmark-pdf me-2"></i>PDF Table</a>
-      </div>
-    </div>
-    {% endif %}
+      <div id="toolsDD" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:200;min-width:220px;overflow:hidden">
 
-    {# Template dropdown #}
-    <div style="position:relative">
-      <button class="eo-btn eo-btn-sm eo-btn-secondary" onclick="toggleDD('tmplDD')">
-        <i class="bi bi-file-earmark-arrow-down"></i> Template <i class="bi bi-chevron-down" style="font-size:.65rem"></i>
-      </button>
-      <div id="tmplDD" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:200;min-width:160px;overflow:hidden">
-        <a href="{% url 'location_template' project.pk 'csv' %}"  class="dd-item"><i class="bi bi-filetype-csv me-2"></i>CSV Template</a>
+        {# ── Converter tools ─────────────────────────────────── #}
+        <div style="padding:6px 14px 4px;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted)">Converters</div>
+        <button type="button" class="dd-item dd-item-btn" onclick="toggleDD('toolsDD');openModal('pcConvertModal')">
+          <i class="bi bi-pin-map me-2"></i>Plus Code → Lat / Lng
+        </button>
+
+        {# ── Export ──────────────────────────────────────────── #}
+        {% if location_count %}
+        <div style="height:1px;background:var(--eo-border);margin:4px 0"></div>
+        <div style="padding:6px 14px 4px;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted)">Export</div>
+        <a href="{% url 'location_export_html' project.pk %}" class="dd-item"><i class="bi bi-filetype-html me-2"></i>HTML Map</a>
+        <a href="{% url 'location_export_pdf'  project.pk %}" class="dd-item"><i class="bi bi-file-earmark-pdf me-2"></i>PDF Table</a>
+        {% endif %}
+
+        {# ── Templates ───────────────────────────────────────── #}
+        <div style="height:1px;background:var(--eo-border);margin:4px 0"></div>
+        <div style="padding:6px 14px 4px;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted)">Import Templates</div>
+        <a href="{% url 'location_template' project.pk 'csv'  %}" class="dd-item"><i class="bi bi-filetype-csv me-2"></i>CSV Template</a>
         <a href="{% url 'location_template' project.pk 'xlsx' %}" class="dd-item"><i class="bi bi-file-earmark-excel me-2"></i>Excel Template</a>
+
       </div>
     </div>
 
@@ -109,7 +115,160 @@
 <style>
 .dd-item{display:flex;align-items:center;padding:9px 16px;font-size:.84rem;color:var(--eo-text);text-decoration:none;transition:background .1s}
 .dd-item:hover{background:var(--eo-bg)}
+.dd-item-btn{width:100%;background:none;border:none;cursor:pointer;text-align:left}
 </style>
+
+<!-- {# ════════════════════════════════════════════════════════════════════════════
+   Plus Code → Lat/Lng Converter modal
+   ════════════════════════════════════════════════════════════════════════════ #} -->
+<div class="proj-modal-backdrop" id="pcConvertModal">
+  <div class="proj-modal" style="width:540px">
+    <div class="proj-modal-head">
+      <span style="font-weight:700;font-size:1rem"><i class="bi bi-pin-map me-2"></i>Plus Code → Lat / Lng Converter</span>
+      <button onclick="closeModal('pcConvertModal')" style="background:none;border:none;font-size:1.3rem;cursor:pointer;color:var(--eo-text-muted)">×</button>
+    </div>
+    <div class="proj-modal-body">
+
+      <p style="font-size:.84rem;color:var(--eo-text-muted);margin-bottom:16px">
+        Upload a <strong>CSV or Excel</strong> file that has a <code>plus_code</code> column (or
+        <code>pluscode</code> / <code>plus code</code> / <code>olc</code>).
+        The tool adds <strong>latitude</strong> and <strong>longitude</strong> columns and
+        returns the enriched file — nothing is stored on the server.
+      </p>
+
+      {# ── Drop zone ── #}
+      <div id="pc-drop-zone"
+           style="border:2px dashed var(--eo-border);border-radius:10px;padding:28px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;margin-bottom:16px"
+           onclick="document.getElementById('pcFileInput').click()"
+           ondragover="event.preventDefault();this.style.borderColor='var(--eo-primary)'"
+           ondragleave="this.style.borderColor='var(--eo-border)'"
+           ondrop="pcHandleDrop(event)">
+        <i class="bi bi-cloud-upload" style="font-size:2rem;color:var(--eo-text-muted)"></i>
+        <p style="margin-top:10px;font-size:.84rem;color:var(--eo-text-muted)">
+          Drop your CSV / Excel here, or <strong>click to browse</strong>
+        </p>
+        <p id="pc-file-name" style="margin-top:8px;font-size:.8rem;font-weight:600;color:var(--eo-primary);display:none"></p>
+        <input type="file" id="pcFileInput" accept=".csv,.xlsx,.xls" style="display:none" onchange="pcFileSelected(this)">
+      </div>
+
+      {# ── Error / status strip ── #}
+      <div id="pc-error" style="display:none;padding:10px 14px;border-radius:8px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:.82rem;margin-bottom:12px"></div>
+      <div id="pc-info"  style="display:none;padding:10px 14px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;font-size:.82rem;margin-bottom:12px"></div>
+
+      {# ── Column hint ── #}
+      <div style="font-size:.78rem;color:var(--eo-text-muted);margin-bottom:14px">
+        <strong>Accepted column names:</strong>
+        <code>plus_code</code>, <code>pluscode</code>, <code>plus code</code>,
+        <code>google plus code</code>, <code>olc</code>, <code>open location code</code>
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <button id="pcConvertBtn" class="eo-btn eo-btn-primary" onclick="pcSubmit()" disabled>
+          <i class="bi bi-arrow-repeat"></i> Convert &amp; Download
+        </button>
+        <button class="eo-btn eo-btn-secondary" onclick="pcReset();closeModal('pcConvertModal')">Cancel</button>
+      </div>
+
+    </div>{# /modal-body #}
+  </div>
+</div>
+
+<script>
+// ── Plus Code converter modal helpers ────────────────────────────────────────
+var _pcFile = null;
+
+function pcFileSelected(input) {
+  if (input.files && input.files[0]) {
+    _pcFile = input.files[0];
+    document.getElementById('pc-file-name').textContent = _pcFile.name;
+    document.getElementById('pc-file-name').style.display = 'block';
+    document.getElementById('pcConvertBtn').disabled = false;
+    document.getElementById('pc-error').style.display = 'none';
+    document.getElementById('pc-info').style.display  = 'none';
+  }
+}
+
+function pcHandleDrop(e) {
+  e.preventDefault();
+  document.getElementById('pc-drop-zone').style.borderColor = 'var(--eo-border)';
+  var f = e.dataTransfer.files[0];
+  if (!f) return;
+  var inp = document.getElementById('pcFileInput');
+  // Create a DataTransfer to set .files on the hidden input
+  try {
+    var dt = new DataTransfer();
+    dt.items.add(f);
+    inp.files = dt.files;
+  } catch(_) {}
+  _pcFile = f;
+  document.getElementById('pc-file-name').textContent = f.name;
+  document.getElementById('pc-file-name').style.display = 'block';
+  document.getElementById('pcConvertBtn').disabled = false;
+  document.getElementById('pc-error').style.display = 'none';
+  document.getElementById('pc-info').style.display  = 'none';
+}
+
+function pcReset() {
+  _pcFile = null;
+  document.getElementById('pcFileInput').value = '';
+  document.getElementById('pc-file-name').style.display = 'none';
+  document.getElementById('pcConvertBtn').disabled = true;
+  document.getElementById('pc-error').style.display = 'none';
+  document.getElementById('pc-info').style.display  = 'none';
+}
+
+function pcSubmit() {
+  if (!_pcFile) return;
+  var btn = document.getElementById('pcConvertBtn');
+  var errEl = document.getElementById('pc-error');
+  var infoEl = document.getElementById('pc-info');
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Converting…';
+  errEl.style.display = 'none';
+  infoEl.style.display = 'none';
+
+  var fd = new FormData();
+  fd.append('pc_file', _pcFile);
+  fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+
+  fetch('{% url "location_plus_code_convert" project.pk %}', {
+    method: 'POST',
+    body: fd,
+  })
+  .then(function(res) {
+    if (!res.ok) {
+      return res.json().then(function(d) { throw new Error(d.error || 'Server error'); });
+    }
+    // Trigger file download
+    var disp = res.headers.get('Content-Disposition') || '';
+    var match = disp.match(/filename="([^"]+)"/);
+    var filename = match ? match[1] : 'converted.csv';
+    return res.blob().then(function(blob) {
+      var url = URL.createObjectURL(blob);
+      var a   = document.createElement('a');
+      a.href  = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function() { URL.revokeObjectURL(url); document.body.removeChild(a); }, 200);
+    });
+  })
+  .then(function() {
+    infoEl.textContent = 'File converted and downloaded. You can close this panel.';
+    infoEl.style.display = 'block';
+    pcReset();
+  })
+  .catch(function(err) {
+    errEl.textContent = err.message || 'Conversion failed.';
+    errEl.style.display = 'block';
+  })
+  .finally(function() {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Convert &amp; Download';
+  });
+}
+</script>
 
 {# ── MAP VIEW ── always in DOM so Leaflet can init #}
 <div id="view-map">
@@ -248,7 +407,7 @@
   {% endif %}
 </div>
 
-{# ═══ Import Modal ══════════════════════════════════════════════════════════ #}
+<!-- {# ═══ Import Modal ══════════════════════════════════════════════════════════ #} -->
 {% if is_member %}
 <div class="proj-modal-backdrop" id="importModal">
   <div class="proj-modal" style="width:540px">
@@ -293,7 +452,7 @@
   </div>
 </div>
 
-{# ═══ Add Location Modal ════════════════════════════════════════════════════ #}
+<!-- {# ═══ Add Location Modal ════════════════════════════════════════════════════ #} -->
 <div class="proj-modal-backdrop" id="addLocModal">
   <div class="proj-modal" style="width:580px">
     <div class="proj-modal-head">

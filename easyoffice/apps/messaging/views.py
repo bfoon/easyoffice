@@ -3,8 +3,10 @@ from django.views.generic import TemplateView, View
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages as django_messages
 from django.db.models import Q
-from django.http import HttpResponseForbidden
+from django.http import HttpResponseForbidden, JsonResponse
 from django.utils import timezone
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 
 from apps.messaging.models import ChatRoom, ChatRoomMember, ChatMessage
 from apps.core.models import User
@@ -46,9 +48,6 @@ def _sidebar_rooms(user):
 
 
 def _can_manage_room(user, room):
-    """
-    Room creator and superuser can manage membership and delete the room.
-    """
     if user.is_superuser:
         return True
     return room.created_by_id == user.id
@@ -59,6 +58,143 @@ def _can_post_in_room(user, room):
         return False
     return room.members.filter(id=user.id).exists()
 
+
+def _safe_full_name(user):
+    try:
+        return user.full_name or user.get_full_name() or user.username
+    except Exception:
+        return str(user)
+
+
+def _safe_initials(user):
+    try:
+        if getattr(user, 'initials', None):
+            return user.initials
+    except Exception:
+        pass
+
+    name = _safe_full_name(user).strip()
+    if not name:
+        return "?"
+    parts = name.split()
+    return "".join(p[0].upper() for p in parts[:2]) or "?"
+
+
+def _room_group_name(room_id):
+    return f"chat_{room_id}"
+
+
+def _serialize_chat_message(msg):
+    return {
+        "type": "chat_message",
+        "message_id": str(msg.id),
+        "room_id": str(msg.room_id),
+        "sender_id": str(msg.sender_id),
+        "sender_name": _safe_full_name(msg.sender),
+        "sender_initials": _safe_initials(msg.sender),
+        "message": msg.content or "",
+        "content": msg.content or "",
+        "message_type": msg.message_type,
+        "timestamp": timezone.localtime(msg.created_at).strftime("%H:%M"),
+        "created_at": timezone.localtime(msg.created_at).isoformat(),
+        "reply_to_id": str(msg.reply_to_id) if msg.reply_to_id else None,
+        "reply_to_sender": _safe_full_name(msg.reply_to.sender) if msg.reply_to_id and msg.reply_to and msg.reply_to.sender else "",
+        "reply_to_content": (msg.reply_to.content[:60] if msg.reply_to_id and msg.reply_to and msg.reply_to.content else ""),
+        "file_url": msg.file.url if getattr(msg, "file", None) else "",
+        "file_name": msg.file_name or "",
+        "file_size": msg.file_size or 0,
+        "is_edited": getattr(msg, "is_edited", False),
+        "reactions": _reaction_summary(getattr(msg, "reactions", {})),
+    }
+
+
+def _broadcast_chat_message(msg):
+    """
+    Send a saved chat message to all WebSocket clients connected to the room.
+    """
+    try:
+        channel_layer = get_channel_layer()
+        if channel_layer is None:
+            return
+
+        payload = _serialize_chat_message(msg)
+
+        async_to_sync(channel_layer.group_send)(
+            _room_group_name(msg.room_id),
+            {
+                "type": "chat.message",
+                "payload": payload,
+            }
+        )
+    except Exception:
+        # Keep chat save working even if websocket broadcast fails
+        pass
+
+
+def _broadcast_typing(room_id, sender):
+    """
+    Broadcast typing indicator to other room members.
+    """
+    try:
+        channel_layer = get_channel_layer()
+        if channel_layer is None:
+            return
+
+        async_to_sync(channel_layer.group_send)(
+            _room_group_name(room_id),
+            {
+                "type": "chat.typing",
+                "payload": {
+                    "type": "typing",
+                    "room_id": str(room_id),
+                    "sender_id": str(sender.id),
+                    "sender_name": _safe_full_name(sender),
+                },
+            }
+        )
+    except Exception:
+        pass
+
+def _toggle_reaction_on_message(message, user, emoji):
+    """
+    Store reactions in JSON like:
+    {
+        "👍": ["user_id_1", "user_id_2"],
+        "😂": ["user_id_3"]
+    }
+    """
+    reactions = message.reactions or {}
+    user_id = str(user.id)
+
+    emoji_users = reactions.get(emoji, [])
+
+    if user_id in emoji_users:
+        emoji_users.remove(user_id)
+        if emoji_users:
+            reactions[emoji] = emoji_users
+        else:
+            reactions.pop(emoji, None)
+    else:
+        emoji_users.append(user_id)
+        reactions[emoji] = emoji_users
+
+    message.reactions = reactions
+    message.save(update_fields=['reactions'])
+    return reactions
+
+
+def _reaction_summary(reactions):
+    """
+    Convert stored JSON to frontend summary like:
+    {"👍": 2, "😂": 1}
+    """
+    out = {}
+    for emoji, users in (reactions or {}).items():
+        if isinstance(users, list):
+            out[emoji] = len(users)
+        elif isinstance(users, int):
+            out[emoji] = users
+    return out
 
 # ---------------------------------------------------------------------------
 # Chat List
@@ -136,14 +272,17 @@ class ChatRoomView(LoginRequiredMixin, View):
 
         if reply_to_id:
             try:
-                reply_to = ChatMessage.objects.get(id=reply_to_id, room=room)
+                reply_to = ChatMessage.objects.select_related('sender').get(id=reply_to_id, room=room)
             except ChatMessage.DoesNotExist:
-                pass
+                reply_to = None
+
+        new_message = None
 
         if 'file' in request.FILES:
             f = request.FILES['file']
-            msg_type = 'image' if f.content_type.startswith('image/') else 'file'
-            ChatMessage.objects.create(
+            msg_type = 'image' if (getattr(f, 'content_type', '') or '').startswith('image/') else 'file'
+
+            new_message = ChatMessage.objects.create(
                 room=room,
                 sender=request.user,
                 message_type=msg_type,
@@ -153,17 +292,27 @@ class ChatRoomView(LoginRequiredMixin, View):
                 content=content,
                 reply_to=reply_to,
             )
-            room.save()
 
         elif content:
-            ChatMessage.objects.create(
+            new_message = ChatMessage.objects.create(
                 room=room,
                 sender=request.user,
                 content=content,
                 message_type='text',
                 reply_to=reply_to,
             )
-            room.save()
+
+        if new_message:
+            room.updated_at = timezone.now()
+            room.save(update_fields=['updated_at'])
+
+            # mark sender as having read through now
+            ChatRoomMember.objects.filter(room=room, user=request.user).update(
+                last_read=timezone.now()
+            )
+
+            # IMPORTANT: real-time push to all websocket clients in the room
+            _broadcast_chat_message(new_message)
 
         return redirect('chat_room', room_id=room_id)
 
@@ -185,7 +334,7 @@ class DirectMessageView(LoginRequiredMixin, View):
             return redirect('chat_room', room_id=existing.id)
 
         room = ChatRoom.objects.create(
-            name=f'{request.user.full_name} & {target.full_name}',
+            name=f'{_safe_full_name(request.user)} & {_safe_full_name(target)}',
             room_type='direct',
             created_by=request.user,
         )
@@ -298,7 +447,7 @@ class RemoveRoomMemberView(LoginRequiredMixin, View):
         deleted, _ = ChatRoomMember.objects.filter(room=room, user=member).delete()
 
         if deleted:
-            django_messages.success(request, f'{member.full_name} removed from "{room.name}".')
+            django_messages.success(request, f'{_safe_full_name(member)} removed from "{room.name}".')
         else:
             django_messages.info(request, 'Member was not found in this room.')
 
@@ -321,3 +470,114 @@ class DeleteRoomView(LoginRequiredMixin, View):
 
         django_messages.success(request, f'"{room_name}" deleted successfully.')
         return redirect('chat_list')
+
+
+# ---------------------------------------------------------------------------
+# Optional typing HTTP endpoint fallback
+# ---------------------------------------------------------------------------
+
+class ChatTypingPingView(LoginRequiredMixin, View):
+    def post(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        if not _can_post_in_room(request.user, room):
+            return HttpResponseForbidden('Cannot type in this room.')
+
+        _broadcast_typing(room.id, request.user)
+        return JsonResponse({'status': 'ok'})
+
+class ChatMessagesPollView(LoginRequiredMixin, View):
+    """
+    Poll only new messages for the current room.
+    Used as a fallback when websocket is unreliable.
+    """
+
+    def get(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        after_id = request.GET.get('after_id', '').strip()
+
+        qs = (
+            room.messages.filter(is_deleted=False)
+            .select_related('sender', 'reply_to', 'reply_to__sender')
+            .order_by('created_at')
+        )
+
+        if after_id:
+            try:
+                anchor = room.messages.get(id=after_id)
+                qs = qs.filter(created_at__gt=anchor.created_at)
+            except ChatMessage.DoesNotExist:
+                pass
+
+        messages_data = []
+        for msg in qs:
+            messages_data.append({
+                'type': 'chat_message',
+                'message_id': str(msg.id),
+                'room_id': str(msg.room_id),
+                'sender_id': str(msg.sender_id),
+                'sender_name': _safe_full_name(msg.sender),
+                'sender_initials': _safe_initials(msg.sender),
+                'message': msg.content or '',
+                'content': msg.content or '',
+                'message_type': msg.message_type,
+                'timestamp': timezone.localtime(msg.created_at).strftime('%H:%M'),
+                'created_at': timezone.localtime(msg.created_at).isoformat(),
+                'reply_to_id': str(msg.reply_to_id) if msg.reply_to_id else None,
+                'reply_to_sender': _safe_full_name(msg.reply_to.sender) if msg.reply_to_id and msg.reply_to and msg.reply_to.sender else '',
+                'reply_to_content': (msg.reply_to.content[:60] if msg.reply_to_id and msg.reply_to and msg.reply_to.content else ''),
+                'file_url': msg.file.url if getattr(msg, 'file', None) else '',
+                'file_name': msg.file_name or '',
+                'file_size': msg.file_size or 0,
+                'is_edited': getattr(msg, 'is_edited', False),
+            })
+
+        ChatRoomMember.objects.filter(room=room, user=request.user).update(
+            last_read=timezone.now()
+        )
+
+        return JsonResponse({
+            'ok': True,
+            'messages': messages_data,
+        })
+
+class ToggleReactionView(LoginRequiredMixin, View):
+    """
+    Toggle reaction on a single message and broadcast the update live.
+    """
+
+    def post(self, request, room_id, message_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        message = get_object_or_404(ChatMessage, id=message_id, room=room, is_deleted=False)
+
+        emoji = (request.POST.get('emoji') or '').strip()
+        if not emoji:
+            return JsonResponse({'ok': False, 'error': 'Emoji is required.'}, status=400)
+
+        reactions = _toggle_reaction_on_message(message, request.user, emoji)
+        summary = _reaction_summary(reactions)
+
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer is not None:
+                async_to_sync(channel_layer.group_send)(
+                    _room_group_name(room.id),
+                    {
+                        "type": "chat.reaction",
+                        "payload": {
+                            "type": "chat_reaction",
+                            "room_id": str(room.id),
+                            "message_id": str(message.id),
+                            "reactions": summary,
+                        },
+                    }
+                )
+        except Exception:
+            pass
+
+        return JsonResponse({
+            'ok': True,
+            'message_id': str(message.id),
+            'reactions': summary,
+        })

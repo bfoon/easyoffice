@@ -7,6 +7,8 @@ urlpatterns = [
     path('dm/<uuid:user_id>/', views.DirectMessageView.as_view(), name='direct_message'),
 
     path('<uuid:room_id>/', views.ChatRoomView.as_view(), name='chat_room'),
+    path('<uuid:room_id>/messages/poll/', views.ChatMessagesPollView.as_view(), name='chat_messages_poll'),
+    path('<uuid:room_id>/message/<uuid:message_id>/react/', views.ToggleReactionView.as_view(), name='toggle_message_reaction'),
     path('<uuid:room_id>/add-members/', views.AddRoomMemberView.as_view(), name='add_room_members'),
     path('<uuid:room_id>/remove-member/<uuid:user_id>/', views.RemoveRoomMemberView.as_view(), name='remove_room_member'),
     path('<uuid:room_id>/delete/', views.DeleteRoomView.as_view(), name='delete_chat_room'),

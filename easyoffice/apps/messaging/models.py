@@ -6,29 +6,31 @@ from apps.core.models import User
 
 class ChatRoom(models.Model):
     class RoomType(models.TextChoices):
-        DIRECT = 'direct', _('Direct Message')
-        GROUP = 'group', _('Group Chat')
-        UNIT = 'unit', _('Unit Channel')
-        DEPARTMENT = 'department', _('Department Channel')
+        DIRECT       = 'direct',       _('Direct Message')
+        GROUP        = 'group',        _('Group Chat')
+        UNIT         = 'unit',         _('Unit Channel')
+        DEPARTMENT   = 'department',   _('Department Channel')
         ANNOUNCEMENT = 'announcement', _('Announcements')
-        PROJECT = 'project', _('Project Channel')
+        PROJECT      = 'project',      _('Project Channel')
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=200, blank=True)
-    room_type = models.CharField(max_length=20, choices=RoomType.choices, default=RoomType.GROUP)
-    members = models.ManyToManyField(User, related_name='chat_rooms', through='ChatRoomMember')
-    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_rooms')
-    description = models.TextField(blank=True)
-    avatar = models.ImageField(upload_to='chat_rooms/', null=True, blank=True)
-    is_archived = models.BooleanField(default=False)
-    is_readonly = models.BooleanField(default=False)
-    pinned_message = models.ForeignKey('ChatMessage', on_delete=models.SET_NULL,
-                                       null=True, blank=True, related_name='+')
-    unit = models.ForeignKey('organization.Unit', on_delete=models.SET_NULL, null=True, blank=True)
-    department = models.ForeignKey('organization.Department', on_delete=models.SET_NULL, null=True, blank=True)
-    project = models.ForeignKey('projects.Project', on_delete=models.SET_NULL, null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    id             = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name           = models.CharField(max_length=200, blank=True)
+    room_type      = models.CharField(max_length=20, choices=RoomType.choices, default=RoomType.GROUP)
+    members        = models.ManyToManyField(User, related_name='chat_rooms', through='ChatRoomMember')
+    created_by     = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_rooms')
+    description    = models.TextField(blank=True)
+    avatar         = models.ImageField(upload_to='chat_rooms/', null=True, blank=True)
+    is_archived    = models.BooleanField(default=False)
+    is_readonly    = models.BooleanField(default=False)
+    pinned_message = models.ForeignKey(
+        'ChatMessage', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+'
+    )
+    unit           = models.ForeignKey('organization.Unit',       on_delete=models.SET_NULL, null=True, blank=True)
+    department     = models.ForeignKey('organization.Department', on_delete=models.SET_NULL, null=True, blank=True)
+    project        = models.ForeignKey('projects.Project',        on_delete=models.SET_NULL, null=True, blank=True)
+    created_at     = models.DateTimeField(auto_now_add=True)
+    updated_at     = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['-updated_at']
@@ -43,16 +45,16 @@ class ChatRoom(models.Model):
 
 class ChatRoomMember(models.Model):
     class Role(models.TextChoices):
-        ADMIN = 'admin', _('Admin')
-        MEMBER = 'member', _('Member')
+        ADMIN    = 'admin',    _('Admin')
+        MEMBER   = 'member',   _('Member')
         READONLY = 'readonly', _('Read Only')
 
-    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE)
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    role = models.CharField(max_length=20, choices=Role.choices, default=Role.MEMBER)
+    room      = models.ForeignKey(ChatRoom, on_delete=models.CASCADE)
+    user      = models.ForeignKey(User,     on_delete=models.CASCADE)
+    role      = models.CharField(max_length=20, choices=Role.choices, default=Role.MEMBER)
     joined_at = models.DateTimeField(auto_now_add=True)
     last_read = models.DateTimeField(null=True, blank=True)
-    is_muted = models.BooleanField(default=False)
+    is_muted  = models.BooleanField(default=False)
     is_pinned = models.BooleanField(default=False)
 
     class Meta:
@@ -64,32 +66,89 @@ class ChatRoomMember(models.Model):
 
 class ChatMessage(models.Model):
     class MessageType(models.TextChoices):
-        TEXT = 'text', _('Text')
-        FILE = 'file', _('File')
-        IMAGE = 'image', _('Image')
+        TEXT   = 'text',   _('Text')
+        FILE   = 'file',   _('File')
+        IMAGE  = 'image',  _('Image')
         SYSTEM = 'system', _('System')
-        VOICE = 'voice', _('Voice Note')
+        VOICE  = 'voice',  _('Voice Note')
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages')
-    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='chat_messages')
+    id           = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    room         = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages')
+    sender       = models.ForeignKey(User,     on_delete=models.CASCADE, related_name='chat_messages')
     message_type = models.CharField(max_length=20, choices=MessageType.choices, default=MessageType.TEXT)
-    content = models.TextField(blank=True)
-    file = models.FileField(upload_to='chat_files/%Y/%m/', null=True, blank=True)
+    content      = models.TextField(blank=True)
+
+    # Direct device upload
+    file      = models.FileField(upload_to='chat_files/%Y/%m/', null=True, blank=True)
     file_name = models.CharField(max_length=255, blank=True)
     file_size = models.PositiveIntegerField(default=0)
-    reply_to = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='replies')
-    is_edited = models.BooleanField(default=False)
-    edited_at = models.DateTimeField(null=True, blank=True)
+
+    # ── Reference to a file from the Files app (no re-upload) ──────────────
+    linked_file = models.ForeignKey(
+        'files.SharedFile',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='chat_messages',
+        help_text='Attach an existing file from the Files app without re-uploading.',
+    )
+    # ───────────────────────────────────────────────────────────────────────
+
+    reply_to   = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='replies')
+    is_edited  = models.BooleanField(default=False)
+    edited_at  = models.DateTimeField(null=True, blank=True)
     is_deleted = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True)
-    reads = models.ManyToManyField(User, related_name='read_messages', blank=True)
-    reactions = models.JSONField(default=dict, blank=True)
+    reads      = models.ManyToManyField(User, related_name='read_messages', blank=True)
+    reactions  = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['created_at']
-        indexes = [models.Index(fields=['room', 'created_at'])]
+        indexes  = [models.Index(fields=['room', 'created_at'])]
 
     def __str__(self):
         return f'{self.sender}: {self.content[:50]}'
+
+    # ── Unified file accessors ──────────────────────────────────────────────
+    @property
+    def effective_file_url(self):
+        """File URL regardless of whether it's a direct upload or linked file."""
+        if self.file:
+            try:
+                return self.file.url
+            except Exception:
+                pass
+        if self.linked_file_id:
+            try:
+                lf = self.linked_file
+                if lf and lf.file:
+                    return lf.file.url
+            except Exception:
+                pass
+        return ''
+
+    @property
+    def effective_file_name(self):
+        if self.file_name:
+            return self.file_name
+        if self.linked_file_id:
+            try:
+                lf = self.linked_file
+                if lf:
+                    return lf.name
+            except Exception:
+                pass
+        return ''
+
+    @property
+    def effective_file_size(self):
+        if self.file_size:
+            return self.file_size
+        if self.linked_file_id:
+            try:
+                lf = self.linked_file
+                if lf:
+                    return lf.file_size
+            except Exception:
+                pass
+        return 0

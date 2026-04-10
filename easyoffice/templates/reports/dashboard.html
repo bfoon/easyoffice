@@ -1,14 +1,152 @@
 {% extends "base.html" %}
-{% block title %}Dashboard{% endblock %}
-{% block breadcrumb %}<span>Dashboard</span>{% endblock %}
+{% load humanize %}
+{% block title %}Reports & Analytics{% endblock %}
+{% block breadcrumb %}<span>Reports</span>{% endblock %}
+
 {% block content %}
+<style>
+  .rpt-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .rpt-kpi {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 20px 22px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .rpt-kpi-icon {
+    width: 46px; height: 46px;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.3rem; flex-shrink: 0;
+  }
+  .rpt-kpi-val {
+    font-size: 1.7rem; font-weight: 800; color: var(--eo-text); line-height: 1;
+  }
+  .rpt-kpi-label {
+    font-size: .76rem; color: var(--eo-text-muted); margin-top: 4px; font-weight: 500;
+  }
+  .rpt-nav-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+  }
+  .rpt-nav-card {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 24px;
+    text-decoration: none;
+    display: flex; flex-direction: column; gap: 10px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .rpt-nav-card:hover {
+    border-color: var(--eo-accent);
+    box-shadow: 0 4px 16px rgba(0,0,0,.08);
+  }
+  .rpt-nav-icon {
+    width: 44px; height: 44px;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.25rem; color: #fff;
+  }
+  .rpt-nav-title {
+    font-size: .95rem; font-weight: 700; color: var(--eo-text);
+  }
+  .rpt-nav-desc {
+    font-size: .8rem; color: var(--eo-text-muted); line-height: 1.5;
+  }
+  .rpt-nav-arrow {
+    margin-top: auto; font-size: .78rem; color: var(--eo-accent);
+    font-weight: 600; display: flex; align-items: center; gap: 4px;
+  }
+</style>
+
 <div class="eo-page-header">
-  <h1 class="eo-page-title">Dashboard</h1>
+  <div>
+    <h1 class="eo-page-title">Reports &amp; Analytics</h1>
+    <p style="color:var(--eo-text-muted);font-size:.85rem;margin:4px 0 0">Organisation-wide insights across tasks, projects, staff and finance.</p>
+  </div>
 </div>
-<div class="eo-card">
-  <p style="color:var(--eo-text-muted)">
-    <i class="bi bi-tools me-2"></i>
-    This module is scaffolded — models, views, and URL routes are all in place.
-  </p>
+
+<!-- KPI Summary -->
+<div class="rpt-kpi-grid">
+  <div class="rpt-kpi">
+    <div class="rpt-kpi-icon" style="background:#6366f115;color:#6366f1"><i class="bi bi-check2-square"></i></div>
+    <div>
+      <div class="rpt-kpi-val">{{ total_tasks|default:0|intcomma }}</div>
+      <div class="rpt-kpi-label">Total Tasks</div>
+    </div>
+  </div>
+  <div class="rpt-kpi">
+    <div class="rpt-kpi-icon" style="background:#ef444415;color:#ef4444"><i class="bi bi-exclamation-circle"></i></div>
+    <div>
+      <div class="rpt-kpi-val" style="color:#ef4444">{{ overdue_tasks|default:0 }}</div>
+      <div class="rpt-kpi-label">Overdue Tasks</div>
+    </div>
+  </div>
+  <div class="rpt-kpi">
+    <div class="rpt-kpi-icon" style="background:#8b5cf615;color:#8b5cf6"><i class="bi bi-kanban"></i></div>
+    <div>
+      <div class="rpt-kpi-val">{{ total_projects|default:0 }}</div>
+      <div class="rpt-kpi-label">Active Projects</div>
+    </div>
+  </div>
+  <div class="rpt-kpi">
+    <div class="rpt-kpi-icon" style="background:#10b98115;color:#10b981"><i class="bi bi-people"></i></div>
+    <div>
+      <div class="rpt-kpi-val">{{ total_staff|default:0 }}</div>
+      <div class="rpt-kpi-label">Active Staff</div>
+    </div>
+  </div>
+  <div class="rpt-kpi">
+    <div class="rpt-kpi-icon" style="background:#f59e0b15;color:#f59e0b"><i class="bi bi-currency-dollar"></i></div>
+    <div>
+      <div class="rpt-kpi-val">${{ budget_spent|default:0|intcomma }}</div>
+      <div class="rpt-kpi-label">Budget Spent ({{ budget_total|default:0|intcomma }} total)</div>
+    </div>
+  </div>
+  <div class="rpt-kpi">
+    <div class="rpt-kpi-icon" style="background:#0ea5e915;color:#0ea5e9"><i class="bi bi-graph-up-arrow"></i></div>
+    <div>
+      <div class="rpt-kpi-val">{{ avg_progress|default:0 }}%</div>
+      <div class="rpt-kpi-label">Avg. Project Progress</div>
+    </div>
+  </div>
+</div>
+
+<!-- Report Navigation Cards -->
+<div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted);margin-bottom:12px">Report Sections</div>
+<div class="rpt-nav-grid">
+  <a href="{% url 'task_report' %}" class="rpt-nav-card">
+    <div class="rpt-nav-icon" style="background:#6366f1"><i class="bi bi-check2-square"></i></div>
+    <div class="rpt-nav-title">Task Report</div>
+    <div class="rpt-nav-desc">Status breakdown, priority distribution, overdue tasks and monthly completion rates.</div>
+    <div class="rpt-nav-arrow">View report <i class="bi bi-arrow-right"></i></div>
+  </a>
+  <a href="{% url 'project_report' %}" class="rpt-nav-card">
+    <div class="rpt-nav-icon" style="background:#8b5cf6"><i class="bi bi-kanban-fill"></i></div>
+    <div class="rpt-nav-title">Project Report</div>
+    <div class="rpt-nav-desc">Active projects, progress tracking, budget allocation and status overview.</div>
+    <div class="rpt-nav-arrow">View report <i class="bi bi-arrow-right"></i></div>
+  </a>
+  <a href="{% url 'staff_report' %}" class="rpt-nav-card">
+    <div class="rpt-nav-icon" style="background:#10b981"><i class="bi bi-people-fill"></i></div>
+    <div class="rpt-nav-title">Staff Report</div>
+    <div class="rpt-nav-desc">Headcount by department, leave utilisation and workforce distribution.</div>
+    <div class="rpt-nav-arrow">View report <i class="bi bi-arrow-right"></i></div>
+  </a>
+  <a href="{% url 'finance_report' %}" class="rpt-nav-card">
+    <div class="rpt-nav-icon" style="background:#f59e0b"><i class="bi bi-bar-chart-fill"></i></div>
+    <div class="rpt-nav-title">Finance Report</div>
+    <div class="rpt-nav-desc">Budget vs. expenditure, department-level spending and monthly payment trends.</div>
+    <div class="rpt-nav-arrow">View report <i class="bi bi-arrow-right"></i></div>
+  </a>
 </div>
 {% endblock %}

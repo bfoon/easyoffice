@@ -1,14 +1,183 @@
 {% extends "base.html" %}
+{% load humanize %}
 {% block title %}Staff Report{% endblock %}
-{% block breadcrumb %}<span>Staff Report</span>{% endblock %}
+{% block breadcrumb %}<a href="{% url 'reports_dashboard' %}">Reports</a> / Staff Report{% endblock %}
+
 {% block content %}
-<div class="eo-page-header">
-  <h1 class="eo-page-title">Staff Report</h1>
+<style>
+  .rpt-stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .rpt-stat {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 18px 20px;
+    text-align: center;
+  }
+  .rpt-stat-num { font-size: 2rem; font-weight: 800; line-height: 1; color: var(--eo-text); }
+  .rpt-stat-lbl { font-size: .76rem; color: var(--eo-text-muted); margin-top: 6px; font-weight: 500; }
+  .rpt-card {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 20px 22px;
+    margin-bottom: 16px;
+  }
+  .rpt-card-title {
+    font-size: .82rem; font-weight: 700; color: var(--eo-text);
+    margin-bottom: 16px; text-transform: uppercase; letter-spacing: .04em;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .rpt-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .dept-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--eo-border);
+  }
+  .dept-row:last-child { border-bottom: none; }
+  .dept-name { flex: 1; font-size: .88rem; font-weight: 600; color: var(--eo-text); }
+  .dept-bar-wrap { flex: 2; background: var(--eo-border); border-radius: 99px; height: 8px; }
+  .dept-bar-fill { height: 100%; border-radius: 99px; background: var(--eo-accent); }
+  .dept-count { font-size: .82rem; font-weight: 700; color: var(--eo-text); min-width: 28px; text-align: right; }
+  @media (max-width: 768px) { .rpt-charts { grid-template-columns: 1fr; } }
+</style>
+
+<div class="eo-page-header" style="display:flex;align-items:center;justify-content:space-between">
+  <div>
+    <h1 class="eo-page-title">Staff Report</h1>
+    <p style="color:var(--eo-text-muted);font-size:.82rem;margin:4px 0 0">Headcount by department and leave utilisation.</p>
+  </div>
+  <a href="{% url 'reports_dashboard' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+    <i class="bi bi-arrow-left"></i> Back to Reports
+  </a>
 </div>
-<div class="eo-card">
-  <p style="color:var(--eo-text-muted)">
-    <i class="bi bi-tools me-2"></i>
-    This module is scaffolded — models, views, and URL routes are all in place.
-  </p>
+
+<!-- KPI Stats -->
+<div class="rpt-stat-row">
+  <div class="rpt-stat">
+    <div class="rpt-stat-num">{{ total_staff|default:0 }}</div>
+    <div class="rpt-stat-lbl">Active Staff</div>
+  </div>
+  <div class="rpt-stat">
+    <div class="rpt-stat-num" style="color:#f59e0b">{{ pending_leaves|default:0 }}</div>
+    <div class="rpt-stat-lbl">Leave Requests Pending</div>
+  </div>
+  <div class="rpt-stat">
+    <div class="rpt-stat-num" style="color:#10b981">{{ approved_leaves|default:0 }}</div>
+    <div class="rpt-stat-lbl">Approved Leaves</div>
+  </div>
+  <div class="rpt-stat">
+    <div class="rpt-stat-num" style="color:#6366f1">{{ staff_by_dept|length }}</div>
+    <div class="rpt-stat-lbl">Departments</div>
+  </div>
 </div>
+
+<!-- Charts -->
+<div class="rpt-charts">
+  <div class="rpt-card" style="margin-bottom:0">
+    <div class="rpt-card-title"><i class="bi bi-pie-chart-fill" style="color:#10b981"></i> Staff by Department</div>
+    <canvas id="deptChart" height="220"></canvas>
+  </div>
+  <div class="rpt-card" style="margin-bottom:0">
+    <div class="rpt-card-title"><i class="bi bi-bar-chart-fill" style="color:#6366f1"></i> Leave by Type</div>
+    <canvas id="leaveChart" height="220"></canvas>
+  </div>
+</div>
+<div style="margin-bottom:16px"></div>
+
+<!-- Department Breakdown -->
+<div class="rpt-card">
+  <div class="rpt-card-title"><i class="bi bi-building" style="color:#10b981"></i> Headcount by Department</div>
+  {% with max_count=staff_by_dept.0.count %}
+  {% for dept in staff_by_dept %}
+  <div class="dept-row">
+    <div class="dept-name">{{ dept.staffprofile__department__name|default:"Unassigned" }}</div>
+    <div class="dept-bar-wrap">
+      <div class="dept-bar-fill"
+        style="width:{% if max_count %}{% widthratio dept.count max_count 100 %}{% else %}0{% endif %}%;
+               background:{% cycle '#10b981' '#6366f1' '#0ea5e9' '#f59e0b' '#8b5cf6' '#ef4444' '#ec4899' %}">
+      </div>
+    </div>
+    <div class="dept-count">{{ dept.count }}</div>
+  </div>
+  {% empty %}
+  <div style="color:var(--eo-text-muted);font-size:.85rem;padding:16px 0">No department data available.</div>
+  {% endfor %}
+  {% endwith %}
+</div>
+
+<!-- Leave Breakdown -->
+{% if leave_by_type %}
+<div class="rpt-card">
+  <div class="rpt-card-title"><i class="bi bi-calendar-check" style="color:#6366f1"></i> Approved Leave by Type</div>
+  {% with max_count=leave_by_type.0.count %}
+  {% for leave in leave_by_type %}
+  <div class="dept-row">
+    <div class="dept-name">{{ leave.leave_type__name|default:"Unknown" }}</div>
+    <div class="dept-bar-wrap">
+      <div class="dept-bar-fill"
+        style="width:{% if max_count %}{% widthratio leave.count max_count 100 %}{% else %}0{% endif %}%;background:#6366f1">
+      </div>
+    </div>
+    <div class="dept-count">{{ leave.count }}</div>
+  </div>
+  {% endfor %}
+  {% endwith %}
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+var deptData   = {{ staff_by_dept|default:"[]" }};
+var deptLabels = deptData.map(function(d){ return d.staffprofile__department__name || 'Unassigned'; });
+var deptCounts = deptData.map(function(d){ return d.count; });
+
+var leaveData   = {{ leave_by_type|default:"[]" }};
+var leaveLabels = leaveData.map(function(d){ return d.leave_type__name || 'Unknown'; });
+var leaveCounts = leaveData.map(function(d){ return d.count; });
+
+var COLORS = ['#10b981','#6366f1','#0ea5e9','#f59e0b','#8b5cf6','#ef4444','#ec4899','#14b8a6'];
+var gridColor = 'rgba(128,128,128,.12)';
+Chart.defaults.font.family = 'inherit';
+
+new Chart(document.getElementById('deptChart'), {
+  type: 'doughnut',
+  data: {
+    labels: deptLabels,
+    datasets: [{ data: deptCounts, backgroundColor: COLORS, borderWidth: 2, borderColor: 'transparent', hoverOffset: 6 }]
+  },
+  options: {
+    plugins: { legend: { position: 'bottom', labels: { padding: 12, boxWidth: 12, font: { size: 11 } } } },
+    cutout: '58%'
+  }
+});
+
+new Chart(document.getElementById('leaveChart'), {
+  type: 'bar',
+  data: {
+    labels: leaveLabels,
+    datasets: [{
+      label: 'Days Taken',
+      data: leaveCounts,
+      backgroundColor: '#6366f1cc',
+      borderRadius: 6, borderSkipped: false
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { beginAtZero: true, grid: { color: gridColor }, ticks: { precision: 0 } },
+      y: { grid: { display: false } }
+    }
+  }
+});
+</script>
 {% endblock %}

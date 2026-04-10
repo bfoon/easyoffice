@@ -1,14 +1,200 @@
 {% extends "base.html" %}
+{% load humanize %}
 {% block title %}Task Report{% endblock %}
-{% block breadcrumb %}<span>Task Report</span>{% endblock %}
+{% block breadcrumb %}<a href="{% url 'reports_dashboard' %}">Reports</a> / Task Report{% endblock %}
+
 {% block content %}
-<div class="eo-page-header">
-  <h1 class="eo-page-title">Task Report</h1>
+<style>
+  .rpt-stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .rpt-stat {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 18px 20px;
+    text-align: center;
+  }
+  .rpt-stat-num { font-size: 2rem; font-weight: 800; line-height: 1; color: var(--eo-text); }
+  .rpt-stat-lbl { font-size: .76rem; color: var(--eo-text-muted); margin-top: 6px; font-weight: 500; }
+  .rpt-charts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .rpt-card {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 20px 22px;
+  }
+  .rpt-card-title {
+    font-size: .82rem; font-weight: 700; color: var(--eo-text);
+    margin-bottom: 16px; text-transform: uppercase; letter-spacing: .04em;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .rpt-table { width: 100%; border-collapse: collapse; }
+  .rpt-table th {
+    text-align: left; padding: 8px 12px;
+    font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--eo-text-muted); border-bottom: 1px solid var(--eo-border);
+  }
+  .rpt-table td {
+    padding: 10px 12px; font-size: .85rem; color: var(--eo-text);
+    border-bottom: 1px solid var(--eo-border);
+  }
+  .rpt-table tr:last-child td { border-bottom: none; }
+  .rpt-table tr:hover td { background: var(--eo-bg); }
+  .rpt-badge {
+    display: inline-flex; align-items: center;
+    padding: 2px 10px; border-radius: 20px;
+    font-size: .72rem; font-weight: 700;
+  }
+  @media (max-width: 768px) { .rpt-charts { grid-template-columns: 1fr; } }
+</style>
+
+<div class="eo-page-header" style="display:flex;align-items:center;justify-content:space-between">
+  <div>
+    <h1 class="eo-page-title">Task Report</h1>
+    <p style="color:var(--eo-text-muted);font-size:.82rem;margin:4px 0 0">Task status, priority distribution and overdue analysis.</p>
+  </div>
+  <a href="{% url 'reports_dashboard' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+    <i class="bi bi-arrow-left"></i> Back to Reports
+  </a>
 </div>
-<div class="eo-card">
-  <p style="color:var(--eo-text-muted)">
-    <i class="bi bi-tools me-2"></i>
-    This module is scaffolded — models, views, and URL routes are all in place.
-  </p>
+
+<!-- KPI Stats -->
+<div class="rpt-stat-row">
+  <div class="rpt-stat">
+    <div class="rpt-stat-num">{{ total_tasks|default:0|intcomma }}</div>
+    <div class="rpt-stat-lbl">Total Tasks</div>
+  </div>
+  <div class="rpt-stat">
+    <div class="rpt-stat-num" style="color:#0ea5e9">{{ in_progress_count|default:0 }}</div>
+    <div class="rpt-stat-lbl">In Progress</div>
+  </div>
+  <div class="rpt-stat">
+    <div class="rpt-stat-num" style="color:#10b981">{{ completed_this_month|default:0 }}</div>
+    <div class="rpt-stat-lbl">Completed This Month</div>
+  </div>
+  <div class="rpt-stat">
+    <div class="rpt-stat-num" style="color:#ef4444">{{ overdue_count|default:0 }}</div>
+    <div class="rpt-stat-lbl">Overdue</div>
+  </div>
 </div>
+
+<!-- Charts -->
+<div class="rpt-charts">
+  <div class="rpt-card">
+    <div class="rpt-card-title"><i class="bi bi-pie-chart-fill" style="color:#6366f1"></i> Status Breakdown</div>
+    <canvas id="statusChart" height="220"></canvas>
+  </div>
+  <div class="rpt-card">
+    <div class="rpt-card-title"><i class="bi bi-bar-chart-fill" style="color:#f59e0b"></i> Priority Distribution</div>
+    <canvas id="priorityChart" height="220"></canvas>
+  </div>
+</div>
+
+<!-- Overdue Tasks Table -->
+{% if overdue_tasks %}
+<div class="rpt-card">
+  <div class="rpt-card-title"><i class="bi bi-exclamation-triangle-fill" style="color:#ef4444"></i> Overdue Tasks (top 10)</div>
+  <table class="rpt-table">
+    <thead>
+      <tr>
+        <th>Task</th>
+        <th>Assigned To</th>
+        <th>Due Date</th>
+        <th>Status</th>
+        <th>Priority</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for task in overdue_tasks %}
+      <tr>
+        <td style="font-weight:600">{{ task.title|truncatechars:50 }}</td>
+        <td>{{ task.assigned_to.full_name|default:"—" }}</td>
+        <td style="color:#ef4444">{{ task.due_date|date:"d M Y" }}</td>
+        <td>
+          {% if task.status == 'todo' %}
+          <span class="rpt-badge" style="background:#6366f115;color:#6366f1">To Do</span>
+          {% elif task.status == 'in_progress' %}
+          <span class="rpt-badge" style="background:#0ea5e915;color:#0ea5e9">In Progress</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if task.priority == 'high' or task.priority == 'urgent' %}
+          <span class="rpt-badge" style="background:#ef444415;color:#ef4444">{{ task.get_priority_display }}</span>
+          {% elif task.priority == 'medium' %}
+          <span class="rpt-badge" style="background:#f59e0b15;color:#f59e0b">{{ task.get_priority_display }}</span>
+          {% else %}
+          <span class="rpt-badge" style="background:#10b98115;color:#10b981">{{ task.get_priority_display }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+var statusData = {{ tasks_by_status|default:"[]" }};
+var priorityData = {{ tasks_by_priority|default:"[]" }};
+
+var statusLabels  = statusData.map(function(d){ return d.status.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase()); });
+var statusCounts  = statusData.map(function(d){ return d.count; });
+var priorityLabels = priorityData.map(function(d){ return d.priority.replace(/\b\w/g,c=>c.toUpperCase()); });
+var priorityCounts = priorityData.map(function(d){ return d.count; });
+
+var COLORS = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899'];
+
+var isDark = document.documentElement.classList.contains('dark') ||
+             getComputedStyle(document.body).getPropertyValue('color-scheme').includes('dark');
+var gridColor = 'rgba(128,128,128,.12)';
+var textColor = getComputedStyle(document.documentElement).getPropertyValue('--eo-text-muted').trim() || '#888';
+
+Chart.defaults.font.family = 'inherit';
+Chart.defaults.color = textColor;
+
+new Chart(document.getElementById('statusChart'), {
+  type: 'doughnut',
+  data: {
+    labels: statusLabels,
+    datasets: [{ data: statusCounts, backgroundColor: COLORS, borderWidth: 2, borderColor: 'transparent', hoverOffset: 6 }]
+  },
+  options: {
+    plugins: { legend: { position: 'bottom', labels: { padding: 16, boxWidth: 12, font: { size: 12 } } } },
+    cutout: '62%'
+  }
+});
+
+new Chart(document.getElementById('priorityChart'), {
+  type: 'bar',
+  data: {
+    labels: priorityLabels,
+    datasets: [{
+      label: 'Tasks',
+      data: priorityCounts,
+      backgroundColor: ['#ef4444','#f59e0b','#0ea5e9','#10b981'].slice(0, priorityLabels.length),
+      borderRadius: 6, borderSkipped: false
+    }]
+  },
+  options: {
+    plugins: { legend: { display: false } },
+    scales: {
+      y: { beginAtZero: true, grid: { color: gridColor }, ticks: { precision: 0 } },
+      x: { grid: { display: false } }
+    }
+  }
+});
+</script>
 {% endblock %}

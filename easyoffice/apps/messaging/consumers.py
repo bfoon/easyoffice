@@ -21,7 +21,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         message = data.get('message', '').strip()
         if not message:
             return
-        saved = await self.save_message(user, message)
+        reply_to_id = data.get('reply_to') or None
+        saved, reply_sender_name, reply_content = await self.save_message(user, message, reply_to_id)
         await self.channel_layer.group_send(self.room_group, {
             'type': 'chat_message',
             'message': message,
@@ -30,15 +31,30 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'sender_initials': user.initials,
             'message_id': str(saved.id),
             'timestamp': saved.created_at.strftime('%H:%M'),
+            'reply_to_sender': reply_sender_name,
+            'reply_to_content': reply_content,
         })
 
     async def chat_message(self, event):
         await self.send(text_data=json.dumps(event))
 
     @database_sync_to_async
-    def save_message(self, user, content):
+    def save_message(self, user, content, reply_to_id=None):
         from apps.messaging.models import ChatRoom, ChatMessage
         room = ChatRoom.objects.get(id=self.room_id)
-        return ChatMessage.objects.create(
-            room=room, sender=user, content=content, message_type='text'
+        reply_obj = None
+        reply_sender_name = None
+        reply_content = None
+        if reply_to_id:
+            try:
+                reply_obj = ChatMessage.objects.select_related('sender').get(id=reply_to_id, room=room)
+                reply_sender_name = reply_obj.sender.full_name
+                reply_content = (reply_obj.content or '')[:80]
+            except ChatMessage.DoesNotExist:
+                pass
+        msg = ChatMessage.objects.create(
+            room=room, sender=user, content=content,
+            message_type='text', reply_to=reply_obj,
         )
+        room.save()
+        return msg, reply_sender_name, reply_content

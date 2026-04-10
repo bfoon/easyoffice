@@ -220,12 +220,19 @@
     border-radius: 0 6px 6px 0;
     background: var(--eo-border);
     font-size: .78rem;
-    color: var(--eo-text-muted);
+    color: var(--eo-text);
   }
-  .bubble-out + .bubble-reply, .bubble-reply.out {
-    border-left-color: rgba(255,255,255,.6);
-    background: rgba(255,255,255,.15);
-    color: rgba(255,255,255,.8);
+  .bubble-reply strong {
+    color: var(--eo-accent);
+    font-weight: 700;
+  }
+  .bubble-reply.out {
+    background: var(--eo-surface);
+    color: var(--eo-text);
+    border-left-color: var(--eo-accent);
+  }
+  .bubble-reply.out strong {
+    color: var(--eo-accent);
   }
 
   /* File / image bubbles */
@@ -692,6 +699,13 @@
           <i class="bi bi-paperclip"></i>
           <input type="file" id="fileInput" style="display:none" onchange="handleFileSelect(this)"/>
         </label>
+        <!-- Emoji picker trigger -->
+        <div style="position:relative">
+          <button type="button" class="chat-attach-btn" id="emojiBtn" title="Emoji" style="font-size:1.05rem">😊</button>
+          <div id="emojiPicker" style="display:none;position:absolute;bottom:42px;left:0;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:10px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);z-index:200;width:260px">
+            <div id="emojiGrid" style="display:flex;flex-wrap:wrap;gap:4px;max-height:180px;overflow-y:auto"></div>
+          </div>
+        </div>
         <textarea class="chat-textarea" id="chatInput"
                   placeholder="Message {{ room.name }}… (Enter to send, Shift+Enter for new line)"
                   rows="1"></textarea>
@@ -973,7 +987,45 @@ function handleFileSelect(input) {
   form.submit();
 }
 
-// ── Auto-resize textarea ──
+// ── Emoji picker ──
+var EMOJIS = ['😀','😂','😍','🥰','😎','😭','😅','🤣','😊','😇','🙃','😉','😋','😜','🤔','🤗','😤','😡','🥺','😱','🤩','😴','🤧','🥳','😷','🤓','👍','👎','👏','🙌','🤝','🙏','💪','👌','✌️','🤞','❤️','🧡','💛','💚','💙','💜','🖤','💔','💯','🔥','✨','🎉','🎊','🎈','🚀','💡','🌟','⭐','🌈','🌺','🌸','🍕','🍔','☕','🍰','😸','🐶','🦁','🐧','🌍','🏠','⚽','🎵','📚','💻','📱','🔑','💰'];
+var emojiGrid = document.getElementById('emojiGrid');
+if (emojiGrid) {
+  EMOJIS.forEach(function(em) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = em;
+    btn.style.cssText = 'background:none;border:none;font-size:1.3rem;cursor:pointer;padding:3px;border-radius:5px;line-height:1;transition:background .1s';
+    btn.addEventListener('mouseover', function() { this.style.background = 'var(--eo-bg)'; });
+    btn.addEventListener('mouseout',  function() { this.style.background = 'none'; });
+    btn.addEventListener('click', function() { insertEmoji(em); });
+    emojiGrid.appendChild(btn);
+  });
+}
+var emojiBtn = document.getElementById('emojiBtn');
+var emojiPicker = document.getElementById('emojiPicker');
+if (emojiBtn) {
+  emojiBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    emojiPicker.style.display = emojiPicker.style.display === 'none' ? 'block' : 'none';
+  });
+}
+document.addEventListener('click', function(e) {
+  if (emojiPicker && !emojiPicker.contains(e.target) && e.target !== emojiBtn) {
+    emojiPicker.style.display = 'none';
+  }
+});
+function insertEmoji(emoji) {
+  var input = document.getElementById('chatInput');
+  if (!input) return;
+  var start = input.selectionStart;
+  var end = input.selectionEnd;
+  input.value = input.value.slice(0, start) + emoji + input.value.slice(end);
+  input.selectionStart = input.selectionEnd = start + emoji.length;
+  input.focus();
+  input.dispatchEvent(new Event('input'));
+  emojiPicker.style.display = 'none';
+}
 var chatInput = document.getElementById('chatInput');
 var sendBtn = document.getElementById('sendBtn');
 
@@ -1091,10 +1143,6 @@ function appendMessage(data) {
   var avatarDiv = document.createElement('div');
   avatarDiv.className = 'chat-avatar';
 
-  var bubble = document.createElement('div');
-  bubble.className = 'bubble ' + (isOwn ? 'bubble-out' : 'bubble-in');
-  bubble.textContent = data.message;
-
   var bodyDiv = document.createElement('div');
   bodyDiv.className = 'chat-body';
 
@@ -1103,16 +1151,27 @@ function appendMessage(data) {
   senderDiv.innerHTML = (isOwn ? '<span style="color:var(--eo-accent)">You</span>' : escapeHtml(data.sender_name)) +
     '<span class="chat-time-inline">' + (data.timestamp || '') + '</span>';
 
+  // Reply quote block
+  if (data.reply_to_sender && data.reply_to_content) {
+    var replyBlock = document.createElement('div');
+    replyBlock.className = 'bubble-reply' + (isOwn ? ' out' : '');
+    replyBlock.style.marginBottom = '6px';
+    replyBlock.innerHTML = '<strong>' + escapeHtml(data.reply_to_sender) + '</strong>: ' + escapeHtml(data.reply_to_content);
+    bodyDiv.appendChild(replyBlock);
+  }
+
+  var bubble = document.createElement('div');
+  bubble.className = 'bubble ' + (isOwn ? 'bubble-out' : 'bubble-in');
+  bubble.textContent = data.message;
+
   if (!isOwn) {
     var initBubble = document.createElement('div');
     initBubble.className = 'initials-bubble';
     initBubble.textContent = data.sender_initials || '?';
     avatarDiv.appendChild(initBubble);
-    bodyDiv.appendChild(senderDiv);
-  } else {
-    bodyDiv.appendChild(senderDiv);
   }
 
+  bodyDiv.insertBefore(senderDiv, bodyDiv.firstChild);
   bodyDiv.appendChild(bubble);
   wrap.appendChild(avatarDiv);
   wrap.appendChild(bodyDiv);

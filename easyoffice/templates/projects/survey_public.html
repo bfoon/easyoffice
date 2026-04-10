@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>{{ survey.title }}</title>
+<style>
+  :root{--cover:{{ survey.project.cover_color|default:"#1e3a5f" }}}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,sans-serif;background:#f1f5f9;min-height:100vh;padding:0 0 60px}
+  .header{background:var(--cover);color:#fff;padding:20px 24px 40px;text-align:center}
+  .header h1{font-size:1.3rem;font-weight:700;margin-bottom:6px}
+  .header p{font-size:.88rem;opacity:.85;max-width:520px;margin:0 auto}
+  .card{background:#fff;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,.08);max-width:640px;margin:-28px auto 0;padding:32px 36px}
+  .badge-anon{display:inline-block;background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:999px;font-size:.72rem;font-weight:600;padding:3px 10px;margin-bottom:10px}
+  .q-block{margin-bottom:28px}
+  .q-label{font-size:.93rem;font-weight:600;color:#0f172a;margin-bottom:10px;line-height:1.4}
+  .q-label .req{color:#ef4444;margin-left:3px}
+  input[type=text],input[type=number],input[type=email],textarea,select{
+    width:100%;border:1.5px solid #e2e8f0;border-radius:10px;padding:10px 14px;
+    font-size:.9rem;color:#0f172a;outline:none;transition:.15s;background:#f8fafc
+  }
+  input:focus,textarea:focus{border-color:var(--cover);background:#fff;box-shadow:0 0 0 3px color-mix(in srgb,var(--cover) 12%,transparent)}
+  textarea{min-height:100px;resize:vertical}
+  .choice-grid{display:flex;flex-direction:column;gap:8px}
+  .choice-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1.5px solid #e2e8f0;border-radius:10px;cursor:pointer;transition:.15s}
+  .choice-item:hover{border-color:var(--cover);background:#f8fafc}
+  .choice-item input{width:auto;border:none;background:transparent;cursor:pointer;accent-color:var(--cover)}
+  .choice-item label{cursor:pointer;font-size:.9rem;color:#334155;flex:1}
+  .rating-row{display:flex;gap:10px;flex-wrap:wrap}
+  .rating-btn{width:46px;height:46px;border:1.5px solid #e2e8f0;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:.95rem;font-weight:600;cursor:pointer;transition:.15s;color:#475569}
+  .rating-btn:hover{border-color:var(--cover);color:var(--cover)}
+  .rating-btn input{display:none}
+  .rating-btn.selected{background:var(--cover);border-color:var(--cover);color:#fff}
+  .yn-row{display:flex;gap:12px}
+  .yn-btn{flex:1;padding:12px;border:1.5px solid #e2e8f0;border-radius:10px;text-align:center;cursor:pointer;font-weight:600;font-size:.9rem;transition:.15s}
+  .yn-btn:hover{border-color:var(--cover)}
+  .yn-btn.selected{background:var(--cover);border-color:var(--cover);color:#fff}
+  .yn-btn input{display:none}
+  .submit-btn{width:100%;padding:14px;background:var(--cover);color:#fff;border:none;border-radius:12px;font-size:1rem;font-weight:700;cursor:pointer;margin-top:8px;transition:.15s}
+  .submit-btn:hover{opacity:.9}
+  .name-block{margin-bottom:24px;padding-bottom:24px;border-bottom:1px solid #e2e8f0}
+  .already{text-align:center;padding:40px 20px;color:#64748b}
+  .already h2{font-size:1.1rem;font-weight:700;color:#0f172a;margin-bottom:8px}
+  .footer{text-align:center;font-size:.75rem;color:#94a3b8;margin-top:28px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  {% if survey.is_anonymous %}<span class="badge-anon">🔒 Anonymous Survey</span>{% endif %}
+  <h1>{{ survey.title }}</h1>
+  {% if survey.description %}<p>{{ survey.description }}</p>{% endif %}
+</div>
+
+<div class="card">
+
+{% if already_responded %}
+  <div class="already">
+    <div style="font-size:2.5rem;margin-bottom:12px">✅</div>
+    <h2>You've already responded</h2>
+    <p>Thank you — your response has been recorded.<br>Each device may only submit once.</p>
+  </div>
+
+{% else %}
+
+<form method="post" id="survey-form">
+  {% csrf_token %}
+  {# Hidden device fingerprint — filled by JS #}
+  <input type="hidden" name="_fp" id="fp-field" value="">
+
+  {% if survey.is_anonymous %}
+  <div class="name-block">
+    <div class="q-label">Your name <span style="color:#94a3b8;font-weight:400">(optional — survey is anonymous)</span></div>
+    <input type="text" name="respondent_name" placeholder="Enter your name or leave blank">
+  </div>
+  {% else %}
+  <div class="name-block">
+    <div class="q-label">Your name <span class="req">*</span></div>
+    <input type="text" name="respondent_name" placeholder="Full name" required>
+  </div>
+  {% endif %}
+
+  {% for q in questions %}
+  <div class="q-block">
+    <div class="q-label">
+      {{ forloop.counter }}. {{ q.text }}
+      {% if q.is_required %}<span class="req">*</span>{% endif %}
+    </div>
+
+    {% if q.q_type == 'text' %}
+      <input type="text" name="q_{{ q.pk }}" {% if q.is_required %}required{% endif %} placeholder="Your answer">
+
+    {% elif q.q_type == 'paragraph' %}
+      <textarea name="q_{{ q.pk }}" {% if q.is_required %}required{% endif %} placeholder="Your answer"></textarea>
+
+    {% elif q.q_type == 'number' %}
+      <input type="number" name="q_{{ q.pk }}" {% if q.is_required %}required{% endif %} placeholder="0">
+
+    {% elif q.q_type == 'single_choice' %}
+      <div class="choice-grid">
+        {% for opt in q.get_options_list %}
+        <label class="choice-item">
+          <input type="radio" name="q_{{ q.pk }}" value="{{ opt }}" {% if q.is_required %}required{% endif %} onchange="highlightChoice(this)">
+          <label>{{ opt }}</label>
+        </label>
+        {% endfor %}
+      </div>
+
+    {% elif q.q_type == 'multi_choice' %}
+      <div class="choice-grid">
+        {% for opt in q.get_options_list %}
+        <label class="choice-item">
+          <input type="checkbox" name="q_{{ q.pk }}" value="{{ opt }}" onchange="highlightChoice(this)">
+          <label>{{ opt }}</label>
+        </label>
+        {% endfor %}
+      </div>
+
+    {% elif q.q_type == 'rating' %}
+      <div class="rating-row" id="rating-{{ q.pk }}">
+        {% for i in "12345" %}
+        <label class="rating-btn" onclick="selectRating('{{ q.pk }}', {{ forloop.counter }}, this)">
+          <input type="radio" name="q_{{ q.pk }}" value="{{ forloop.counter }}" {% if q.is_required %}required{% endif %}>
+          {{ forloop.counter }}
+        </label>
+        {% endfor %}
+      </div>
+
+    {% elif q.q_type == 'yes_no' %}
+      <div class="yn-row">
+        <label class="yn-btn" onclick="selectYN('{{ q.pk }}', 'Yes', this)">
+          <input type="radio" name="q_{{ q.pk }}" value="Yes" {% if q.is_required %}required{% endif %}> 👍 Yes
+        </label>
+        <label class="yn-btn" onclick="selectYN('{{ q.pk }}', 'No', this)">
+          <input type="radio" name="q_{{ q.pk }}" value="No"> 👎 No
+        </label>
+      </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <button type="submit" class="submit-btn">Submit Response →</button>
+</form>
+
+{% endif %}
+
+<div class="footer">Powered by EasyOffice · {{ survey.project.name }}</div>
+</div>
+
+<script>
+// Highlight choice cards on selection
+function highlightChoice(input) {
+  var grid = input.closest('.choice-grid');
+  if (!grid) return;
+  if (input.type === 'radio') {
+    grid.querySelectorAll('.choice-item').forEach(function(el) { el.style.borderColor = ''; el.style.background = ''; });
+  }
+  var item = input.closest('.choice-item');
+  if (item) { item.style.borderColor = 'var(--cover)'; item.style.background = '#f8fafc'; }
+}
+
+function selectRating(qid, val, el) {
+  document.querySelectorAll('#rating-' + qid + ' .rating-btn').forEach(function(b) { b.classList.remove('selected'); });
+  el.classList.add('selected');
+  el.querySelector('input').checked = true;
+}
+
+function selectYN(qid, val, el) {
+  el.closest('.yn-row').querySelectorAll('.yn-btn').forEach(function(b) { b.classList.remove('selected'); });
+  el.classList.add('selected');
+  el.querySelector('input').checked = true;
+}
+
+// Simple browser fingerprint (no external lib needed)
+(function() {
+  var fp = [
+    navigator.language,
+    navigator.platform,
+    screen.width + 'x' + screen.height,
+    new Date().getTimezoneOffset(),
+    navigator.hardwareConcurrency || '',
+    navigator.deviceMemory || ''
+  ].join('|');
+  // Quick hash
+  var hash = 0;
+  for (var i = 0; i < fp.length; i++) {
+    hash = ((hash << 5) - hash) + fp.charCodeAt(i);
+    hash |= 0;
+  }
+  document.getElementById('fp-field').value = Math.abs(hash).toString(16);
+})();
+</script>
+</body>
+</html>

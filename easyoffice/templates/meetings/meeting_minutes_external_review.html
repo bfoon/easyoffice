@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Review Meeting Minutes{% if not submitted %} — {{ meeting.title }}{% endif %}</title>
+<link rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"/>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --c-bg:       #f1f5f9;
+    --c-surface:  #ffffff;
+    --c-border:   #e2e8f0;
+    --c-text:     #0f172a;
+    --c-muted:    #64748b;
+    --c-primary:  #3b82f6;
+    --c-success:  #10b981;
+    --c-danger:   #ef4444;
+    --c-warning:  #f59e0b;
+    --c-radius:   12px;
+    --accent: {{ meeting.type_color }};
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+    background: var(--c-bg);
+    color: var(--c-text);
+    min-height: 100vh;
+    padding: 32px 16px 64px;
+  }
+
+  .wrap { max-width: 680px; margin: 0 auto; }
+
+  /* Header strip */
+  .hdr {
+    background: var(--accent);
+    border-radius: var(--c-radius) var(--c-radius) 0 0;
+    padding: 28px 32px 24px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hdr::after {
+    content:'';position:absolute;right:-40px;top:-40px;
+    width:200px;height:200px;border-radius:50%;
+    background:rgba(255,255,255,.07);
+  }
+  .hdr-type { font-size:.75rem;font-weight:700;color:rgba(255,255,255,.75);margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em; }
+  .hdr h1   { font-size:1.4rem;font-weight:800;color:#fff;line-height:1.3;margin-bottom:6px; }
+  .hdr-meta { font-size:.82rem;color:rgba(255,255,255,.8);display:flex;flex-wrap:wrap;gap:14px; }
+
+  /* Card */
+  .card {
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: 0 0 var(--c-radius) var(--c-radius);
+    padding: 28px 32px;
+  }
+  .card + .card {
+    border-radius: var(--c-radius);
+    margin-top: 16px;
+  }
+
+  .section-title {
+    font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--c-muted);margin-bottom:12px;
+    display:flex;align-items:center;gap:6px;
+  }
+
+  .prose {
+    font-size:.9rem;line-height:1.75;color:var(--c-text);
+    white-space:pre-wrap;
+  }
+
+  /* Action items */
+  .ai-item {
+    display:flex;align-items:flex-start;gap:12px;
+    padding:10px 0;border-bottom:1px solid var(--c-border);
+  }
+  .ai-item:last-child { border-bottom:none; }
+  .ai-badge {
+    display:inline-flex;align-items:center;gap:4px;
+    font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:10px;white-space:nowrap;flex-shrink:0;
+  }
+  .ai-desc { font-size:.87rem;color:var(--c-text);flex:1; }
+  .ai-meta { font-size:.76rem;color:var(--c-muted);margin-top:2px; }
+
+  /* Decision buttons */
+  .decision-grid {
+    display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0;
+  }
+  .dec-btn {
+    display:flex;flex-direction:column;align-items:center;gap:8px;
+    padding:18px 12px;border-radius:12px;border:2px solid var(--c-border);
+    background:none;cursor:pointer;font-family:inherit;transition:all .15s;
+    text-align:center;
+  }
+  .dec-btn:hover { transform:translateY(-2px); }
+  .dec-btn.adopt:hover,
+  .dec-btn.adopt.selected {
+    border-color:var(--c-success);background:#d1fae5;
+  }
+  .dec-btn.decline:hover,
+  .dec-btn.decline.selected {
+    border-color:var(--c-danger);background:#fee2e2;
+  }
+  .dec-btn .icon {
+    width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:1.3rem;
+  }
+  .dec-btn.adopt  .icon { background:#d1fae5;color:var(--c-success); }
+  .dec-btn.decline .icon{ background:#fee2e2;color:var(--c-danger);  }
+  .dec-btn .label { font-size:.9rem;font-weight:700;color:var(--c-text); }
+  .dec-btn .sub   { font-size:.76rem;color:var(--c-muted);line-height:1.4; }
+
+  textarea {
+    width:100%;padding:12px 14px;border:1px solid var(--c-border);border-radius:10px;
+    font-size:.9rem;font-family:inherit;color:var(--c-text);background:var(--c-bg);
+    resize:vertical;min-height:90px;outline:none;transition:border-color .14s;
+  }
+  textarea:focus { border-color:var(--c-primary); }
+
+  .btn-submit {
+    width:100%;padding:14px;border-radius:10px;border:none;
+    font-size:1rem;font-weight:700;cursor:pointer;font-family:inherit;
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    transition:opacity .15s,transform .12s;
+  }
+  .btn-submit:hover { opacity:.92;transform:translateY(-1px); }
+  .btn-submit:disabled { opacity:.4;cursor:not-allowed;transform:none; }
+  .btn-submit.adopt-btn   { background:var(--c-success);color:#fff; }
+  .btn-submit.decline-btn { background:var(--c-danger);color:#fff;  }
+
+  /* Alert boxes */
+  .alert {
+    padding:14px 18px;border-radius:10px;font-size:.87rem;margin-bottom:18px;
+    display:flex;align-items:flex-start;gap:10px;
+  }
+  .alert-error   { background:#fee2e2;border:1px solid #fca5a5;color:#991b1b; }
+  .alert-success { background:#d1fae5;border:1px solid #6ee7b7;color:#065f46; }
+  .alert-info    { background:#dbeafe;border:1px solid #93c5fd;color:#1e40af; }
+
+  /* Success/done state */
+  .done-icon {
+    width:72px;height:72px;border-radius:50%;display:flex;align-items:center;
+    justify-content:center;font-size:2rem;margin:0 auto 20px;
+  }
+  .done-icon.adopted  { background:#d1fae5;color:var(--c-success); }
+  .done-icon.declined { background:#fee2e2;color:var(--c-danger);  }
+
+  .powered {
+    text-align:center;margin-top:24px;font-size:.76rem;color:var(--c-muted);
+  }
+
+  @media(max-width:480px){
+    .hdr,. card { padding:20px 18px; }
+    .decision-grid { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ── Header ── -->
+  <div class="hdr">
+    <div class="hdr-type"><i class="bi bi-journal-check me-1"></i>Meeting Minutes Review</div>
+    <h1>{{ meeting.title }}</h1>
+    <div class="hdr-meta">
+      <span><i class="bi bi-calendar-event me-1"></i>{{ meeting.start_datetime|date:"l, N j, Y · H:i" }}</span>
+      {% if meeting.location %}<span><i class="bi bi-geo-alt me-1"></i>{{ meeting.location }}</span>{% endif %}
+      <span><i class="bi bi-person me-1"></i>Organised by {{ meeting.organizer.full_name }}</span>
+    </div>
+  </div>
+
+  <!-- ── Main card ── -->
+  <div class="card">
+
+    {% if error %}
+    <!-- Error state -->
+    <div class="alert alert-error">
+      <i class="bi bi-exclamation-triangle-fill" style="flex-shrink:0;margin-top:1px"></i>
+      <span>{{ error }}</span>
+    </div>
+    <p style="font-size:.87rem;color:var(--c-muted);text-align:center">
+      Please contact <strong>{{ meeting.organizer.full_name }}</strong> for assistance.
+    </p>
+
+    {% elif submitted %}
+    <!-- Submitted state -->
+    <div style="text-align:center;padding:12px 0 24px">
+      <div class="done-icon {% if review.decision == 'adopted' %}adopted{% else %}declined{% endif %}">
+        <i class="bi bi-{% if review.decision == 'adopted' %}patch-check-fill{% else %}x-circle-fill{% endif %}"></i>
+      </div>
+      <h2 style="font-size:1.2rem;font-weight:800;color:var(--c-text);margin-bottom:8px">
+        Response recorded — thank you, {{ review.external_attendee.full_name }}
+      </h2>
+      <p style="font-size:.9rem;color:var(--c-muted);max-width:400px;margin:0 auto 20px;line-height:1.6">
+        You have <strong>{{ review.get_decision_display }}</strong> the minutes for
+        <strong>{{ meeting.title }}</strong>.
+        The meeting organiser has been notified.
+      </p>
+      {% if review.comment %}
+      <div style="background:var(--c-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px 18px;text-align:left;margin:0 auto;max-width:440px">
+        <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--c-muted);margin-bottom:6px">Your comment</div>
+        <p style="font-size:.88rem;color:var(--c-text);line-height:1.6;white-space:pre-wrap">{{ review.comment }}</p>
+      </div>
+      {% endif %}
+    </div>
+
+    {% elif review.is_expired and review.is_pending %}
+    <!-- Expired state -->
+    <div class="alert alert-error">
+      <i class="bi bi-clock-history" style="flex-shrink:0;margin-top:1px"></i>
+      <span>This review link has expired. Please contact <strong>{{ meeting.organizer.full_name }}</strong> to request a new one.</span>
+    </div>
+
+    {% elif not review.is_pending %}
+    <!-- Already responded -->
+    <div class="alert alert-info">
+      <i class="bi bi-info-circle-fill" style="flex-shrink:0;margin-top:1px"></i>
+      <div>
+        You have already submitted your response:
+        <strong>{{ review.get_decision_display }}</strong>{% if review.decided_at %} on {{ review.decided_at|date:"N j, Y" }}{% endif %}.
+      </div>
+    </div>
+
+    {% else %}
+    <!-- ── Active review form ── -->
+
+    <div class="alert alert-info" style="margin-bottom:22px">
+      <i class="bi bi-person-fill" style="flex-shrink:0;margin-top:1px"></i>
+      <span>Hello, <strong>{{ review.external_attendee.full_name }}</strong>. This link is personal to you and can only be used once.</span>
+    </div>
+
+    <!-- Minutes content -->
+    {% if minutes.content %}
+    <div style="margin-bottom:22px">
+      <div class="section-title"><i class="bi bi-journal-text"></i> Meeting Notes</div>
+      <div class="prose">{{ minutes.content }}</div>
+    </div>
+    {% endif %}
+
+    {% if minutes.decisions %}
+    <div style="margin-bottom:22px">
+      <div class="section-title"><i class="bi bi-check2-all"></i> Decisions Made</div>
+      <div class="prose">{{ minutes.decisions }}</div>
+    </div>
+    {% endif %}
+
+    {% if action_items %}
+    <div style="margin-bottom:24px">
+      <div class="section-title"><i class="bi bi-list-task"></i> Action Items</div>
+      {% for ai in action_items %}
+      <div class="ai-item">
+        <span class="ai-badge"
+              style="background:{{ ai.status_bg }};color:{{ ai.status_color }}">
+          <i class="bi {{ ai.status_icon }}"></i> {{ ai.get_status_display }}
+        </span>
+        <div>
+          <div class="ai-desc">{{ ai.description }}</div>
+          <div class="ai-meta">
+            {% if ai.assigned_to %}{{ ai.assigned_to.full_name }}{% endif %}
+            {% if ai.due_date %}&nbsp;· Due {{ ai.due_date|date:"N j, Y" }}{% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <hr style="border:none;border-top:1px solid var(--c-border);margin:20px 0"/>
+
+    <!-- Decision form -->
+    <form method="post" id="reviewForm">
+      {% csrf_token %}
+
+      <div style="margin-bottom:8px">
+        <div class="section-title" style="margin-bottom:14px">
+          <i class="bi bi-hand-thumbs-up"></i> Your Decision *
+        </div>
+        <div class="decision-grid">
+          <button type="button" class="dec-btn adopt" data-value="adopted" onclick="selectDecision(this)">
+            <div class="icon"><i class="bi bi-patch-check-fill"></i></div>
+            <div class="label">Adopt</div>
+            <div class="sub">I confirm the minutes accurately reflect the meeting</div>
+          </button>
+          <button type="button" class="dec-btn decline" data-value="declined" onclick="selectDecision(this)">
+            <div class="icon"><i class="bi bi-x-circle-fill"></i></div>
+            <div class="label">Decline</div>
+            <div class="sub">I have concerns or corrections to raise</div>
+          </button>
+        </div>
+        <input type="hidden" name="decision" id="decisionInput" value=""/>
+      </div>
+
+      <div style="margin-bottom:20px">
+        <label style="display:block;font-size:.84rem;font-weight:600;color:var(--c-text);margin-bottom:6px">
+          Comment / Amendments <span style="font-weight:400;color:var(--c-muted)">(optional)</span>
+        </label>
+        <textarea name="comment" id="commentArea"
+                  placeholder="Add any corrections, clarifications, or objections…"></textarea>
+      </div>
+
+      <div id="decisionError" style="display:none;margin-bottom:12px" class="alert alert-error">
+        <i class="bi bi-exclamation-triangle-fill"></i>
+        <span>Please select Adopt or Decline before submitting.</span>
+      </div>
+
+      <button type="submit" id="submitBtn" class="btn-submit" disabled onclick="return validateForm(event)">
+        <i class="bi bi-send-fill"></i> Submit Response
+      </button>
+    </form>
+
+    <p style="text-align:center;font-size:.76rem;color:var(--c-muted);margin-top:14px">
+      <i class="bi bi-clock me-1"></i>This link expires {{ review.expires_at|date:"N j, Y" }}.
+    </p>
+    {% endif %}
+
+  </div><!-- /card -->
+
+  <p class="powered">
+    Powered by <strong>EasyOffice</strong> &nbsp;·&nbsp; This is a secure one-time link generated for {{ review.external_attendee.email }}
+  </p>
+
+</div><!-- /wrap -->
+
+<script>
+var selectedDecision = '';
+
+function selectDecision(btn) {
+  selectedDecision = btn.dataset.value;
+  document.querySelectorAll('.dec-btn').forEach(function(b) { b.classList.remove('selected'); });
+  btn.classList.add('selected');
+  document.getElementById('decisionInput').value = selectedDecision;
+  document.getElementById('submitBtn').disabled = false;
+  document.getElementById('decisionError').style.display = 'none';
+
+  var sb = document.getElementById('submitBtn');
+  if (selectedDecision === 'adopted') {
+    sb.className = 'btn-submit adopt-btn';
+    sb.innerHTML = '<i class="bi bi-patch-check-fill"></i> Submit — Adopt Minutes';
+  } else {
+    sb.className = 'btn-submit decline-btn';
+    sb.innerHTML = '<i class="bi bi-x-circle-fill"></i> Submit — Decline / Object';
+  }
+}
+
+function validateForm(e) {
+  if (!selectedDecision) {
+    e.preventDefault();
+    document.getElementById('decisionError').style.display = 'flex';
+    window.scrollTo({ top: document.getElementById('decisionError').offsetTop - 20, behavior: 'smooth' });
+    return false;
+  }
+  return true;
+}
+</script>
+</body>
+</html>

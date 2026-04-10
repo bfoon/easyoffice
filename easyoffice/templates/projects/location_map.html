@@ -9,61 +9,96 @@
 
 {% block content %}
 <style>
-/* ── Shared modal system (matches project_detail.html) ── */
-.proj-modal-backdrop {
-  position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1050;
-  display:flex;align-items:center;justify-content:center;
-  opacity:0;pointer-events:none;transition:opacity .18s;
-}
-.proj-modal-backdrop.open { opacity:1;pointer-events:all; }
-.proj-modal {
-  background:var(--eo-surface);border-radius:var(--eo-radius);
-  border:1px solid var(--eo-border);width:520px;max-width:96vw;
-  max-height:88vh;overflow-y:auto;
-  box-shadow:0 24px 64px rgba(0,0,0,.18);
-  transform:translateY(14px);transition:transform .18s;
-}
-.proj-modal-backdrop.open .proj-modal { transform:translateY(0); }
-.proj-modal-head {
-  padding:18px 22px 14px;
-  display:flex;align-items:center;justify-content:space-between;
-  border-bottom:1px solid var(--eo-border);
-}
-.proj-modal-body { padding:20px 22px; }
+/* ── Modal ── */
+.proj-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1050;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .18s}
+.proj-modal-backdrop.open{opacity:1;pointer-events:all}
+.proj-modal{background:var(--eo-surface);border-radius:var(--eo-radius);border:1px solid var(--eo-border);width:520px;max-width:96vw;max-height:88vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.18);transform:translateY(14px);transition:transform .18s}
+.proj-modal-backdrop.open .proj-modal{transform:translateY(0)}
+.proj-modal-head{padding:18px 22px 14px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--eo-border)}
+.proj-modal-body{padding:20px 22px}
+
+/* ── Map wrap — no overflow:hidden (clips Leaflet tiles) ── */
+#map-wrap{position:relative;border:1px solid var(--eo-border);border-radius:var(--eo-radius);margin-bottom:1.5rem}
+#leaflet-map{height:520px;border-radius:var(--eo-radius);z-index:1}
+#map-empty-overlay{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--eo-surface);border-radius:var(--eo-radius);color:var(--eo-text-muted)}
+
+/* ── View toggle ── */
+.view-btn{padding:6px 14px;border:1px solid var(--eo-border);background:var(--eo-surface);color:var(--eo-text-muted);font-size:.82rem;font-weight:600;cursor:pointer;transition:.12s}
+.view-btn:first-child{border-radius:8px 0 0 8px}
+.view-btn:last-child{border-radius:0 8px 8px 0}
+.view-btn.active{background:var(--eo-primary);color:#fff;border-color:var(--eo-primary)}
+
+/* ── Status badges ── */
+.loc-status{font-size:.72rem;font-weight:700;padding:3px 9px;border-radius:20px}
+.loc-status-pending{background:#f1f5f9;color:#64748b}
+.loc-status-in_progress{background:#dbeafe;color:#1e40af}
+.loc-status-completed{background:#d1fae5;color:#065f46}
+.loc-status-on_hold{background:#fef3c7;color:#92400e}
+
+/* ── Tile cards ── */
+.loc-card{padding:14px;border:1px solid var(--eo-border);border-radius:10px;cursor:pointer;transition:box-shadow .12s,border-color .12s}
+.loc-card:hover{box-shadow:0 2px 12px rgba(0,0,0,.08);border-color:var(--eo-accent)}
+
+/* ── List table ── */
+.loc-table{width:100%;border-collapse:collapse;font-size:.84rem}
+.loc-table th{padding:10px 12px;text-align:left;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);background:var(--eo-bg);border-bottom:2px solid var(--eo-border);white-space:nowrap}
+.loc-table td{padding:10px 12px;border-bottom:1px solid var(--eo-border);vertical-align:middle;color:var(--eo-text)}
+.loc-table tbody tr:hover{background:var(--eo-bg)}
+.loc-table td.coord{font-family:monospace;font-size:.76rem;color:var(--eo-text-muted)}
+
+/* ── Pagination ── */
+.pg-btn{padding:5px 11px;border:1px solid var(--eo-border);border-radius:6px;background:var(--eo-surface);color:var(--eo-text);font-size:.82rem;cursor:pointer}
+.pg-btn:disabled{opacity:.4;cursor:default}
+.pg-btn.active{background:var(--eo-primary);color:#fff;border-color:var(--eo-primary)}
+
+/* ── Drop zone ── */
+#drop-zone{border:2px dashed var(--eo-border);border-radius:10px;padding:28px;text-align:center;transition:border-color .15s,background .15s;cursor:pointer}
+#drop-zone.dragover{border-color:var(--eo-primary);background:var(--eo-primary)08}
 </style>
 
-
-<style>
-/* Leaflet needs height on its container */
-#leaflet-map { height:480px; border-radius:var(--eo-radius); z-index:1; }
-.loc-status { font-size:.72rem; font-weight:700; padding:3px 9px; border-radius:20px; }
-.loc-status-pending      { background:#f1f5f9; color:#64748b; }
-.loc-status-in_progress  { background:#dbeafe; color:#1e40af; }
-.loc-status-completed    { background:#d1fae5; color:#065f46; }
-.loc-status-on_hold      { background:#fef3c7; color:#92400e; }
-.loc-card {
-  padding:14px;border:1px solid var(--eo-border);border-radius:10px;
-  cursor:pointer;transition:box-shadow .12s,border-color .12s;
-}
-.loc-card:hover { box-shadow:0 2px 12px rgba(0,0,0,.08); border-color:var(--eo-accent); }
-</style>
-{# Leaflet CSS loaded in extra_css block below #}
-
-<div class="eo-page-header">
+{# ── Page header ── #}
+<div class="eo-page-header" style="flex-wrap:wrap;gap:10px">
   <div>
     <h1 class="eo-page-title">Location Map</h1>
-    <p class="eo-page-subtitle">{{ project.name }} · {{ location_count }} location{{ location_count|pluralize }}</p>
+    <p class="eo-page-subtitle">{{ project.name }} · <span id="loc-count-label">{{ location_count }} location{{ location_count|pluralize }}</span></p>
   </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+
+    {# View toggle #}
+    <div style="display:flex">
+      <button class="view-btn active" id="btn-map"  onclick="setView('map')"><i class="bi bi-map"></i> Map</button>
+      <button class="view-btn"        id="btn-tile" onclick="setView('tile')"><i class="bi bi-grid-3x3-gap"></i> Tiles</button>
+      <button class="view-btn"        id="btn-list" onclick="setView('list')"><i class="bi bi-list-ul"></i> List</button>
+    </div>
+
+    {# Export / template dropdown #}
     {% if location_count %}
-    <a href="{% url 'location_export_html' project.pk %}" class="eo-btn eo-btn-sm eo-btn-secondary">
-      <i class="bi bi-filetype-html"></i> Export HTML
-    </a>
-    <a href="{% url 'location_export_pdf' project.pk %}" class="eo-btn eo-btn-sm eo-btn-secondary">
-      <i class="bi bi-file-earmark-pdf"></i> Export PDF
-    </a>
+    <div style="position:relative">
+      <button class="eo-btn eo-btn-sm eo-btn-secondary" onclick="toggleDD('exportDD')">
+        <i class="bi bi-download"></i> Export <i class="bi bi-chevron-down" style="font-size:.65rem"></i>
+      </button>
+      <div id="exportDD" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:200;min-width:160px;overflow:hidden">
+        <a href="{% url 'location_export_html' project.pk %}" class="dd-item"><i class="bi bi-filetype-html me-2"></i>HTML Map</a>
+        <a href="{% url 'location_export_pdf' project.pk %}"  class="dd-item"><i class="bi bi-file-earmark-pdf me-2"></i>PDF Table</a>
+      </div>
+    </div>
     {% endif %}
+
+    {# Template dropdown #}
+    <div style="position:relative">
+      <button class="eo-btn eo-btn-sm eo-btn-secondary" onclick="toggleDD('tmplDD')">
+        <i class="bi bi-file-earmark-arrow-down"></i> Template <i class="bi bi-chevron-down" style="font-size:.65rem"></i>
+      </button>
+      <div id="tmplDD" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:200;min-width:160px;overflow:hidden">
+        <a href="{% url 'location_template' project.pk 'csv' %}"  class="dd-item"><i class="bi bi-filetype-csv me-2"></i>CSV Template</a>
+        <a href="{% url 'location_template' project.pk 'xlsx' %}" class="dd-item"><i class="bi bi-file-earmark-excel me-2"></i>Excel Template</a>
+      </div>
+    </div>
+
     {% if is_member %}
+    <button onclick="openModal('importModal')" class="eo-btn eo-btn-sm eo-btn-secondary">
+      <i class="bi bi-upload"></i> Import
+    </button>
     <button onclick="openModal('addLocModal')" class="eo-btn eo-btn-sm eo-btn-primary">
       <i class="bi bi-plus-lg"></i> Add Location
     </button>
@@ -71,95 +106,203 @@
   </div>
 </div>
 
-{# ── Map ──────────────────────────────────────────────────────────────────── #}
-<div class="eo-card mb-4" style="padding:0;overflow:hidden">
-  {% if location_count == 0 %}
-  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:300px;color:var(--eo-text-muted)">
-    <i class="bi bi-geo-alt" style="font-size:3rem;opacity:.3;margin-bottom:14px"></i>
-    <p style="font-size:.9rem;margin-bottom:16px">No locations pinned yet.</p>
-    {% if is_member %}
-    <button onclick="openModal('addLocModal')" class="eo-btn eo-btn-primary">
-      <i class="bi bi-plus"></i> Add First Location
-    </button>
-    {% endif %}
-  </div>
-  {% else %}
-  <div id="leaflet-map"></div>
-  {% endif %}
-</div>
+<style>
+.dd-item{display:flex;align-items:center;padding:9px 16px;font-size:.84rem;color:var(--eo-text);text-decoration:none;transition:background .1s}
+.dd-item:hover{background:var(--eo-bg)}
+</style>
 
-{# ── Location List ─────────────────────────────────────────────────────────── #}
-{% if locations %}
-<div class="row g-3">
-  {% for loc in locations %}
-  <div class="col-sm-6 col-xl-4">
-    <div class="loc-card" onclick="flyTo({{ loc.latitude }}, {{ loc.longitude }}, '{{ loc.pk }}')">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">{{ loc.name }}</div>
-          {% if loc.category %}
-          <div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:2px">{{ loc.category }}</div>
-          {% endif %}
-        </div>
-        <span class="loc-status loc-status-{{ loc.status }}">{{ loc.get_status_display }}</span>
-      </div>
-
-      {% if loc.address %}
-      <div style="font-size:.78rem;color:var(--eo-text-muted);margin-bottom:6px;display:flex;gap:5px;align-items:flex-start">
-        <i class="bi bi-geo-alt" style="flex-shrink:0;margin-top:1px"></i>
-        <span>{{ loc.address }}</span>
-      </div>
-      {% endif %}
-
-      {% if loc.description %}
-      <div style="font-size:.78rem;color:var(--eo-text-muted);margin-bottom:6px;line-height:1.5">
-        {{ loc.description|truncatechars:80 }}
-      </div>
-      {% endif %}
-
-      {% if loc.assigned_to %}
-      <div style="font-size:.76rem;color:var(--eo-text-muted);margin-bottom:8px">
-        <i class="bi bi-person me-1"></i>{{ loc.assigned_to.full_name }}
-      </div>
-      {% endif %}
-
-      <div style="font-size:.72rem;color:var(--eo-text-muted);font-family:monospace;margin-bottom:10px">
-        {{ loc.latitude }}, {{ loc.longitude }}
-      </div>
-
+{# ── MAP VIEW ── always in DOM so Leaflet can init #}
+<div id="view-map">
+  <div id="map-wrap">
+    <div id="leaflet-map"></div>
+    {% if location_count == 0 %}
+    <div id="map-empty-overlay">
+      <i class="bi bi-geo-alt" style="font-size:3rem;opacity:.3;margin-bottom:14px"></i>
+      <p style="font-size:.9rem;margin-bottom:16px">No locations yet. Click the map or import a file.</p>
       {% if is_member %}
-      <div style="display:flex;gap:6px;border-top:1px solid var(--eo-border);padding-top:10px" onclick="event.stopPropagation()">
-        <button onclick="openEdit('{{ loc.pk }}','{{ loc.name|escapejs }}','{{ loc.description|escapejs }}','{{ loc.address|escapejs }}',{{ loc.latitude }},{{ loc.longitude }},'{{ loc.category|escapejs }}','{{ loc.status }}','{% if loc.assigned_to %}{{ loc.assigned_to.pk }}{% endif %}','{{ loc.notes|escapejs }}')"
-                class="eo-btn eo-btn-sm eo-btn-secondary">
-          <i class="bi bi-pencil"></i> Edit
-        </button>
-        <form method="post" action="{% url 'location_delete' project.pk loc.pk %}" style="display:inline"
-              onsubmit="return confirm('Remove {{ loc.name|escapejs }}?')">
-          {% csrf_token %}
-          <button type="submit" class="eo-btn eo-btn-sm" style="color:var(--eo-danger)">
-            <i class="bi bi-trash3"></i>
-          </button>
-        </form>
+      <div style="display:flex;gap:8px">
+        <button onclick="hideOverlay();openModal('addLocModal')" class="eo-btn eo-btn-primary"><i class="bi bi-plus"></i> Add</button>
+        <button onclick="openModal('importModal')" class="eo-btn eo-btn-secondary"><i class="bi bi-upload"></i> Import</button>
       </div>
       {% endif %}
     </div>
+    {% endif %}
   </div>
-  {% endfor %}
 </div>
-{% endif %}
+
+{# ── TILE VIEW ── #}
+<div id="view-tile" style="display:none">
+  {% if locations %}
+  <div class="row g-3" id="tile-grid">
+    {% for loc in locations %}
+    <div class="col-sm-6 col-xl-4 tile-item">
+      <div class="loc-card" onclick="switchToMapPin({{ loc.latitude }}, {{ loc.longitude }}, '{{ loc.pk }}')">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">{{ loc.name }}</div>
+            {% if loc.category %}<div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:2px">{{ loc.category }}</div>{% endif %}
+          </div>
+          <span class="loc-status loc-status-{{ loc.status }}">{{ loc.get_status_display }}</span>
+        </div>
+        {% if loc.address %}<div style="font-size:.78rem;color:var(--eo-text-muted);margin-bottom:6px;display:flex;gap:5px"><i class="bi bi-geo-alt" style="flex-shrink:0;margin-top:1px"></i><span>{{ loc.address }}</span></div>{% endif %}
+        {% if loc.description %}<div style="font-size:.78rem;color:var(--eo-text-muted);margin-bottom:6px;line-height:1.5">{{ loc.description|truncatechars:80 }}</div>{% endif %}
+        {% if loc.assigned_to %}<div style="font-size:.76rem;color:var(--eo-text-muted);margin-bottom:8px"><i class="bi bi-person me-1"></i>{{ loc.assigned_to.full_name }}</div>{% endif %}
+        <div style="font-size:.72rem;color:var(--eo-text-muted);font-family:monospace;margin-bottom:10px">{{ loc.latitude }}, {{ loc.longitude }}</div>
+        {% if is_member %}
+        <div style="display:flex;gap:6px;border-top:1px solid var(--eo-border);padding-top:10px" onclick="event.stopPropagation()">
+          <button onclick="openEdit('{{ loc.pk }}','{{ loc.name|escapejs }}','{{ loc.description|escapejs }}','{{ loc.address|escapejs }}',{{ loc.latitude }},{{ loc.longitude }},'{{ loc.category|escapejs }}','{{ loc.status }}','{% if loc.assigned_to %}{{ loc.assigned_to.pk }}{% endif %}','{{ loc.notes|escapejs }}')" class="eo-btn eo-btn-sm eo-btn-secondary"><i class="bi bi-pencil"></i> Edit</button>
+          <form method="post" action="{% url 'location_delete' project.pk loc.pk %}" style="display:inline" onsubmit="return confirm('Remove {{ loc.name|escapejs }}?')">
+            {% csrf_token %}<button type="submit" class="eo-btn eo-btn-sm" style="color:var(--eo-danger)"><i class="bi bi-trash3"></i></button>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {# Tile pagination #}
+  <div id="tile-pagination" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;flex-wrap:wrap;gap:8px"></div>
+  {% else %}
+  <div style="text-align:center;padding:60px;color:var(--eo-text-muted)">
+    <i class="bi bi-geo-alt" style="font-size:3rem;opacity:.3;display:block;margin-bottom:14px"></i>
+    <p style="font-size:.9rem">No locations yet.</p>
+  </div>
+  {% endif %}
+</div>
+
+{# ── LIST VIEW ── #}
+<div id="view-list" style="display:none">
+  {# List search + filter bar #}
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+    <input type="text" id="list-search" class="eo-form-control" style="max-width:260px" placeholder="Search name, address…" oninput="filterList()"/>
+    <select id="list-filter-status" class="eo-form-select" style="max-width:160px" onchange="filterList()">
+      <option value="">All statuses</option>
+      {% for val, label in status_choices %}
+      <option value="{{ val }}">{{ label }}</option>
+      {% endfor %}
+    </select>
+    <select id="list-filter-cat" class="eo-form-select" style="max-width:160px" onchange="filterList()">
+      <option value="">All categories</option>
+      {% for loc in locations %}{% if loc.category %}
+      <option value="{{ loc.category|escapejs }}">{{ loc.category }}</option>
+      {% endif %}{% endfor %}
+    </select>
+    <span id="list-count-badge" style="align-self:center;font-size:.8rem;color:var(--eo-text-muted)"></span>
+  </div>
+
+  {% if locations %}
+  <div class="eo-card" style="padding:0;overflow:hidden">
+    <div style="overflow-x:auto">
+      <table class="loc-table" id="loc-list-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Name</th>
+            <th>Category</th>
+            <th>Status</th>
+            <th>Address</th>
+            <th>Coordinates</th>
+            <th>Assigned To</th>
+            {% if is_member %}<th style="text-align:right">Actions</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody id="list-tbody">
+          {% for loc in locations %}
+          <tr class="list-row"
+              data-name="{{ loc.name|lower|escapejs }}"
+              data-address="{{ loc.address|lower|escapejs }}"
+              data-status="{{ loc.status }}"
+              data-cat="{{ loc.category|lower|escapejs }}">
+            <td style="color:var(--eo-text-muted);font-size:.75rem">{{ forloop.counter }}</td>
+            <td>
+              <div style="font-weight:600">{{ loc.name }}</div>
+              {% if loc.description %}<div style="font-size:.73rem;color:var(--eo-text-muted)">{{ loc.description|truncatechars:50 }}</div>{% endif %}
+            </td>
+            <td style="color:var(--eo-text-muted)">{{ loc.category|default:"—" }}</td>
+            <td><span class="loc-status loc-status-{{ loc.status }}">{{ loc.get_status_display }}</span></td>
+            <td style="color:var(--eo-text-muted);max-width:200px">{{ loc.address|default:"—" }}</td>
+            <td class="coord">{{ loc.latitude }},<br>{{ loc.longitude }}</td>
+            <td style="color:var(--eo-text-muted)">{{ loc.assigned_to.full_name|default:"—" }}</td>
+            {% if is_member %}
+            <td style="text-align:right;white-space:nowrap">
+              <button onclick="switchToMapPin({{ loc.latitude }},{{ loc.longitude }},'{{ loc.pk }}')" class="eo-btn eo-btn-sm eo-btn-secondary" title="Show on map"><i class="bi bi-map"></i></button>
+              <button onclick="openEdit('{{ loc.pk }}','{{ loc.name|escapejs }}','{{ loc.description|escapejs }}','{{ loc.address|escapejs }}',{{ loc.latitude }},{{ loc.longitude }},'{{ loc.category|escapejs }}','{{ loc.status }}','{% if loc.assigned_to %}{{ loc.assigned_to.pk }}{% endif %}','{{ loc.notes|escapejs }}')" class="eo-btn eo-btn-sm eo-btn-secondary"><i class="bi bi-pencil"></i></button>
+              <form method="post" action="{% url 'location_delete' project.pk loc.pk %}" style="display:inline" onsubmit="return confirm('Remove {{ loc.name|escapejs }}?')">
+                {% csrf_token %}<button type="submit" class="eo-btn eo-btn-sm" style="color:var(--eo-danger)"><i class="bi bi-trash3"></i></button>
+              </form>
+            </td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {# List pagination #}
+  <div id="list-pagination" style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;flex-wrap:wrap;gap:8px"></div>
+  {% else %}
+  <div style="text-align:center;padding:60px;color:var(--eo-text-muted)">
+    <i class="bi bi-geo-alt" style="font-size:3rem;opacity:.3;display:block;margin-bottom:14px"></i>
+    <p style="font-size:.9rem">No locations yet.</p>
+  </div>
+  {% endif %}
+</div>
+
+{# ═══ Import Modal ══════════════════════════════════════════════════════════ #}
+{% if is_member %}
+<div class="proj-modal-backdrop" id="importModal">
+  <div class="proj-modal" style="width:540px">
+    <div class="proj-modal-head">
+      <span style="font-size:1rem;font-weight:700"><i class="bi bi-upload me-2"></i>Import Locations</span>
+      <button onclick="closeModal('importModal')" style="background:none;border:none;cursor:pointer;font-size:1.2rem;color:var(--eo-text-muted)">&times;</button>
+    </div>
+    <div class="proj-modal-body">
+
+      {# Format reminder #}
+      <div style="background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:.8rem;color:var(--eo-text-muted)">
+        <div style="font-weight:700;color:var(--eo-text);margin-bottom:6px"><i class="bi bi-info-circle me-1"></i>Required columns</div>
+        <div style="font-family:monospace;font-size:.76rem;background:var(--eo-surface);padding:6px 10px;border-radius:6px;border:1px solid var(--eo-border)">
+          name &nbsp;·&nbsp; latitude &nbsp;·&nbsp; longitude
+        </div>
+        <div style="margin-top:6px">Optional: description, address, category, status, notes</div>
+        <div style="margin-top:4px">Status values: <code>pending</code> · <code>in_progress</code> · <code>completed</code> · <code>on_hold</code></div>
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <a href="{% url 'location_template' project.pk 'csv' %}" class="eo-btn eo-btn-sm eo-btn-secondary"><i class="bi bi-filetype-csv me-1"></i>CSV Template</a>
+          <a href="{% url 'location_template' project.pk 'xlsx' %}" class="eo-btn eo-btn-sm eo-btn-secondary"><i class="bi bi-file-earmark-excel me-1"></i>Excel Template</a>
+        </div>
+      </div>
+
+      <form method="post" action="{% url 'location_import' project.pk %}" enctype="multipart/form-data" id="import-form">
+        {% csrf_token %}
+        <div id="drop-zone" onclick="document.getElementById('import-file-input').click()">
+          <i class="bi bi-cloud-upload" style="font-size:2rem;color:var(--eo-primary);display:block;margin-bottom:8px"></i>
+          <div style="font-size:.88rem;font-weight:600;color:var(--eo-text);margin-bottom:4px">Drop CSV or Excel file here</div>
+          <div style="font-size:.78rem;color:var(--eo-text-muted)">or click to browse</div>
+          <div id="drop-file-name" style="margin-top:10px;font-size:.8rem;font-weight:600;color:var(--eo-primary);display:none"></div>
+        </div>
+        <input type="file" id="import-file-input" name="import_file" accept=".csv,.xlsx,.xls" style="display:none" onchange="onFileChosen(this)"/>
+
+        <div style="display:flex;gap:8px;padding-top:16px;border-top:1px solid var(--eo-border);margin-top:16px">
+          <button type="submit" class="eo-btn eo-btn-primary" id="import-submit-btn" disabled>
+            <i class="bi bi-upload"></i> Import
+          </button>
+          <button type="button" onclick="closeModal('importModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
 
 {# ═══ Add Location Modal ════════════════════════════════════════════════════ #}
-{% if is_member %}
 <div class="proj-modal-backdrop" id="addLocModal">
   <div class="proj-modal" style="width:580px">
     <div class="proj-modal-head">
       <span style="font-size:1rem;font-weight:700">Add Location</span>
-      <button onclick="closeModal('addLocModal')" style="background:none;border:none;cursor:pointer;font-size:1.2rem;color:var(--eo-text-muted)">&times;</button>
+      <button onclick="closeModal('addLocModal');clearPreviewPin()" style="background:none;border:none;cursor:pointer;font-size:1.2rem;color:var(--eo-text-muted)">&times;</button>
     </div>
     <div class="proj-modal-body">
       <form method="post" action="{% url 'location_add' project.pk %}">
         {% csrf_token %}
-
         <div class="eo-form-group">
           <label class="eo-form-label">Location Name *</label>
           <input type="text" name="name" class="eo-form-control" required placeholder="e.g. Site A - Banjul"/>
@@ -172,9 +315,7 @@
           <div class="col-sm-6">
             <label class="eo-form-label">Status</label>
             <select name="status" class="eo-form-select">
-              {% for val, label in status_choices %}
-              <option value="{{ val }}">{{ label }}</option>
-              {% endfor %}
+              {% for val, label in status_choices %}<option value="{{ val }}">{{ label }}</option>{% endfor %}
             </select>
           </div>
         </div>
@@ -182,14 +323,22 @@
           <label class="eo-form-label">Address</label>
           <input type="text" name="address" class="eo-form-control" placeholder="Street, city or area"/>
         </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Plus Code <span style="font-size:.68rem;font-weight:400;color:var(--eo-text-muted)">optional — auto-fills lat/lng</span></label>
+          <div style="display:flex;gap:8px">
+            <input type="text" id="addPlusCode" class="eo-form-control" placeholder="e.g. C7PM+F8G" style="font-family:monospace;text-transform:uppercase" oninput="decodePlusCode(this.value,'addLat','addLng','addPlusErr')"/>
+            <button type="button" class="eo-btn eo-btn-secondary" style="white-space:nowrap;flex-shrink:0" onclick="decodePlusCode(document.getElementById('addPlusCode').value,'addLat','addLng','addPlusErr')"><i class="bi bi-pin-map-fill"></i> Decode</button>
+          </div>
+          <div id="addPlusErr" style="font-size:.72rem;color:var(--eo-danger);margin-top:4px;display:none"></div>
+        </div>
         <div class="row g-3 mb-3">
           <div class="col-sm-6">
-            <label class="eo-form-label">Latitude * <span style="font-size:.68rem;font-weight:400;color:var(--eo-text-muted)">(or click map)</span></label>
-            <input type="number" name="latitude" id="addLat" class="eo-form-control" required step="0.000001" placeholder="13.4549"/>
+            <label class="eo-form-label">Latitude * <span style="font-size:.68rem;font-weight:400;color:var(--eo-text-muted)">or click map</span></label>
+            <input type="number" name="latitude" id="addLat" class="eo-form-control" required step="0.000001" placeholder="13.4549" oninput="previewPin('addLat','addLng')"/>
           </div>
           <div class="col-sm-6">
             <label class="eo-form-label">Longitude *</label>
-            <input type="number" name="longitude" id="addLng" class="eo-form-control" required step="0.000001" placeholder="-16.5790"/>
+            <input type="number" name="longitude" id="addLng" class="eo-form-control" required step="0.000001" placeholder="-16.5790" oninput="previewPin('addLat','addLng')"/>
           </div>
         </div>
         <div class="eo-form-group">
@@ -201,9 +350,7 @@
             <label class="eo-form-label">Assigned To</label>
             <select name="assigned_to" class="eo-form-select">
               <option value="">— None —</option>
-              {% for s in staff_list %}
-              <option value="{{ s.id }}">{{ s.full_name }}</option>
-              {% endfor %}
+              {% for s in staff_list %}<option value="{{ s.id }}">{{ s.full_name }}</option>{% endfor %}
             </select>
           </div>
           <div class="col-sm-6">
@@ -211,10 +358,9 @@
             <input type="text" name="notes" class="eo-form-control" placeholder="Any extra notes..."/>
           </div>
         </div>
-
         <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">
           <button type="submit" class="eo-btn eo-btn-primary">Add Location</button>
-          <button type="button" onclick="closeModal('addLocModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+          <button type="button" onclick="closeModal('addLocModal');clearPreviewPin()" class="eo-btn eo-btn-secondary">Cancel</button>
         </div>
       </form>
     </div>
@@ -226,7 +372,7 @@
   <div class="proj-modal" style="width:580px">
     <div class="proj-modal-head">
       <span style="font-size:1rem;font-weight:700">Edit Location</span>
-      <button onclick="closeModal('editLocModal')" style="background:none;border:none;cursor:pointer;font-size:1.2rem;color:var(--eo-text-muted)">&times;</button>
+      <button onclick="closeModal('editLocModal');clearPreviewPin()" style="background:none;border:none;cursor:pointer;font-size:1.2rem;color:var(--eo-text-muted)">&times;</button>
     </div>
     <div class="proj-modal-body" id="editLocBody"></div>
   </div>
@@ -237,27 +383,73 @@
 
 {% block extra_css %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" crossorigin=""/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" crossorigin=""/>
 {% endblock %}
 
 {% block extra_js %}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js" crossorigin=""></script>
 <script>
+// ── Modal ────────────────────────────────────────────────────────────────────
 function openModal(id)  { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-document.querySelectorAll('.proj-modal-backdrop').forEach(function(el){
-  el.addEventListener('click', function(e){ if(e.target===el) el.classList.remove('open'); });
+document.querySelectorAll('.proj-modal-backdrop').forEach(function(el) {
+  el.addEventListener('click', function(e) { if (e.target === el) el.classList.remove('open'); });
 });
 
-// ── Leaflet setup ──────────────────────────────────────────────────────────
-var mapEl = document.getElementById('leaflet-map');
-var leafMap, markers = {};
+// ── Dropdown toggle ──────────────────────────────────────────────────────────
+function toggleDD(id) {
+  var el = document.getElementById(id);
+  var open = el.style.display !== 'none';
+  document.querySelectorAll('[id$="DD"]').forEach(function(d){ d.style.display='none'; });
+  el.style.display = open ? 'none' : 'block';
+}
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('[onclick^="toggleDD"]') && !e.target.closest('[id$="DD"]'))
+    document.querySelectorAll('[id$="DD"]').forEach(function(d){ d.style.display='none'; });
+});
 
-var STATUS_COLORS = {
-  pending:     '#94a3b8',
-  in_progress: '#3b82f6',
-  completed:   '#10b981',
-  on_hold:     '#f59e0b',
-};
+// ── View toggle ──────────────────────────────────────────────────────────────
+var currentView = 'map';
+function setView(v) {
+  currentView = v;
+  ['map','tile','list'].forEach(function(n) {
+    document.getElementById('view-'+n).style.display = (n===v) ? 'block' : 'none';
+    document.getElementById('btn-'+n).classList.toggle('active', n===v);
+  });
+  if (v === 'map') setTimeout(function(){ leafMap.invalidateSize(); }, 50);
+  if (v === 'tile') renderTilePage(tilePage);
+  if (v === 'list') filterList();
+}
+
+// ── Import: drop zone & file pick ────────────────────────────────────────────
+function onFileChosen(inp) {
+  var name = inp.files[0] ? inp.files[0].name : '';
+  var nm = document.getElementById('drop-file-name');
+  nm.textContent = name ? '✓ ' + name : '';
+  nm.style.display = name ? 'block' : 'none';
+  document.getElementById('import-submit-btn').disabled = !name;
+}
+var dz = document.getElementById('drop-zone');
+if (dz) {
+  dz.addEventListener('dragover', function(e){ e.preventDefault(); dz.classList.add('dragover'); });
+  dz.addEventListener('dragleave', function(){ dz.classList.remove('dragover'); });
+  dz.addEventListener('drop', function(e){
+    e.preventDefault(); dz.classList.remove('dragover');
+    var f = e.dataTransfer.files[0];
+    if (f) {
+      var inp = document.getElementById('import-file-input');
+      // Create a DataTransfer to assign dropped file to input
+      var dt = new DataTransfer(); dt.items.add(f); inp.files = dt.files;
+      onFileChosen(inp);
+    }
+  });
+}
+
+// ── Leaflet setup ────────────────────────────────────────────────────────────
+var STATUS_COLORS = {pending:'#94a3b8', in_progress:'#3b82f6', completed:'#10b981', on_hold:'#f59e0b'};
+var DEFAULT_CENTER = [13.4549, -16.5790];
 
 function makeIcon(color) {
   var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36">'
@@ -266,163 +458,316 @@ function makeIcon(color) {
   return L.divIcon({html:svg, className:'', iconSize:[28,36], iconAnchor:[14,36], popupAnchor:[0,-38]});
 }
 
-if (mapEl) {
-  var LOCATIONS = [
-    {% for loc in locations %}
-    {
-      id:     '{{ loc.pk }}',
-      name:   '{{ loc.name|escapejs }}',
-      lat:    {{ loc.latitude }},
-      lng:    {{ loc.longitude }},
-      status: '{{ loc.status }}',
-      statusLabel: '{{ loc.get_status_display }}',
-      category: '{{ loc.category|escapejs }}',
-      address: '{{ loc.address|escapejs }}',
-      description: '{{ loc.description|truncatechars:120|escapejs }}',
-      assignedTo: '{% if loc.assigned_to %}{{ loc.assigned_to.full_name|escapejs }}{% endif %}',
-    },
-    {% endfor %}
-  ];
-
-  var DEFAULT_CENTER = [13.4549, -16.5790];
-  leafMap = L.map('leaflet-map');
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxZoom: 19,
-    crossOrigin: true,
-    referrerPolicy: 'strict-origin-when-cross-origin'
-  }).addTo(leafMap);
-
-  var bounds = [];
-  LOCATIONS.forEach(function(loc) {
-    var color = STATUS_COLORS[loc.status] || '#64748b';
-    var popup = '<div style="font-weight:700;font-size:.9rem;margin-bottom:5px">'+loc.name+'</div>'
-      + '<span style="font-size:.7rem;font-weight:700;padding:2px 7px;border-radius:4px;background:'+color+'20;color:'+color+'">'+loc.statusLabel+'</span>';
-    if (loc.category)    popup += '<div style="font-size:.78rem;color:#475569;margin-top:5px"><b>Category:</b> '+loc.category+'</div>';
-    if (loc.address)     popup += '<div style="font-size:.78rem;color:#475569"><b>Address:</b> '+loc.address+'</div>';
-    if (loc.assignedTo)  popup += '<div style="font-size:.78rem;color:#475569"><b>Assigned:</b> '+loc.assignedTo+'</div>';
-    if (loc.description) popup += '<div style="font-size:.78rem;color:#475569;margin-top:4px">'+loc.description+'</div>';
-    popup += '<div style="font-size:.7rem;color:#94a3b8;margin-top:6px;font-family:monospace">'+loc.lat.toFixed(5)+', '+loc.lng.toFixed(5)+'</div>';
-
-    var m = L.marker([loc.lat, loc.lng], {icon: makeIcon(color)}).addTo(leafMap);
-    m.bindPopup(popup, {maxWidth: 260});
-    markers[loc.id] = m;
-    bounds.push([loc.lat, loc.lng]);
-  });
-
-  if (bounds.length > 1)      leafMap.fitBounds(bounds, {padding: [40, 40]});
-  else if (bounds.length === 1) leafMap.setView(bounds[0], 15);
-  else                          leafMap.setView(DEFAULT_CENTER, 8);
-
-  // Legend
-  var legend = L.control({position:'bottomright'});
-  legend.onAdd = function() {
-    var d = L.DomUtil.create('div');
-    d.style.cssText = 'background:#fff;padding:10px 14px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.14);font-size:.75rem;line-height:1.9';
-    d.innerHTML = '<b style="display:block;margin-bottom:4px;font-size:.7rem;letter-spacing:.05em;color:#64748b">STATUS</b>';
-    [['#94a3b8','Pending'],['#3b82f6','In Progress'],['#10b981','Completed'],['#f59e0b','On Hold']].forEach(function(s){
-      d.innerHTML += '<div style="display:flex;align-items:center;gap:7px"><div style="width:10px;height:10px;border-radius:50%;background:'+s[0]+';flex-shrink:0"></div>'+s[1]+'</div>';
+var leafMap  = L.map('leaflet-map');
+var mcGroup  = L.markerClusterGroup({
+  maxClusterRadius: 60,
+  showCoverageOnHover: false,
+  iconCreateFunction: function(cluster) {
+    var count = cluster.getChildCount();
+    var size = count < 10 ? 36 : count < 100 ? 42 : 50;
+    return L.divIcon({
+      html: '<div style="width:'+size+'px;height:'+size+'px;border-radius:50%;background:var(--eo-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:'+(size<42?'.78rem':'.88rem')+';font-weight:700;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.2)">'+count+'</div>',
+      className:'', iconSize:[size,size], iconAnchor:[size/2,size/2],
     });
-    return d;
-  };
-  legend.addTo(leafMap);
-
-  // Click on map to pre-fill coordinates in add modal
-  leafMap.on('click', function(e) {
-    var latIn = document.getElementById('addLat');
-    var lngIn = document.getElementById('addLng');
-    if (latIn) latIn.value = e.latlng.lat.toFixed(6);
-    if (lngIn) lngIn.value = e.latlng.lng.toFixed(6);
-    openModal('addLocModal');
-  });
-}
-
-function flyTo(lat, lng, id) {
-  if (!leafMap) return;
-  leafMap.flyTo([lat, lng], 16, {duration: 0.8});
-  if (markers[id]) {
-    setTimeout(function(){ markers[id].openPopup(); }, 900);
   }
+});
+
+var markers   = {};
+var previewMk = null;
+
+var tileLayers = {
+  'Voyager': L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',  {attribution:'&copy; OSM &copy; CARTO', subdomains:'abcd', maxZoom:20}),
+  'Light':   L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',            {attribution:'&copy; OSM &copy; CARTO', subdomains:'abcd', maxZoom:20}),
+  'Dark':    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',             {attribution:'&copy; OSM &copy; CARTO', subdomains:'abcd', maxZoom:20}),
+  'Satellite':L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',  {attribution:'&copy; Esri', maxZoom:19}),
+  'Terrain': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', {attribution:'&copy; Esri', maxZoom:19}),
+  'Street':  L.tileLayer('https://tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',                       {attribution:'&copy; OSM contributors', maxZoom:20}),
+};
+tileLayers['Voyager'].addTo(leafMap);
+L.control.layers(tileLayers, {}, {position:'topleft', collapsed:true}).addTo(leafMap);
+
+// Load all location markers
+var LOCATIONS = [
+  {% for loc in locations %}{
+    id:'{{ loc.pk }}', name:'{{ loc.name|escapejs }}',
+    lat:{{ loc.latitude }}, lng:{{ loc.longitude }},
+    status:'{{ loc.status }}', statusLabel:'{{ loc.get_status_display }}',
+    category:'{{ loc.category|escapejs }}', address:'{{ loc.address|escapejs }}',
+    description:'{{ loc.description|truncatechars:100|escapejs }}',
+    assignedTo:'{% if loc.assigned_to %}{{ loc.assigned_to.full_name|escapejs }}{% endif %}',
+  },{% endfor %}
+];
+
+var bounds = [];
+LOCATIONS.forEach(function(loc) {
+  var color = STATUS_COLORS[loc.status] || '#64748b';
+  var popup = '<div style="font-weight:700;font-size:.9rem;margin-bottom:5px">'+loc.name+'</div>'
+    + '<span style="font-size:.7rem;font-weight:700;padding:2px 7px;border-radius:4px;background:'+color+'20;color:'+color+'">'+loc.statusLabel+'</span>';
+  if (loc.category)    popup += '<div style="font-size:.78rem;color:#475569;margin-top:5px"><b>Category:</b> '+loc.category+'</div>';
+  if (loc.address)     popup += '<div style="font-size:.78rem;color:#475569"><b>Address:</b> '+loc.address+'</div>';
+  if (loc.assignedTo)  popup += '<div style="font-size:.78rem;color:#475569"><b>Assigned:</b> '+loc.assignedTo+'</div>';
+  if (loc.description) popup += '<div style="font-size:.78rem;color:#475569;margin-top:4px">'+loc.description+'</div>';
+  popup += '<div style="font-size:.7rem;color:#94a3b8;margin-top:6px;font-family:monospace">'+loc.lat.toFixed(5)+', '+loc.lng.toFixed(5)+'</div>';
+
+  var m = L.marker([loc.lat, loc.lng], {icon: makeIcon(color)});
+  m.bindPopup(popup, {maxWidth:260});
+  markers[loc.id] = m;
+  mcGroup.addLayer(m);
+  bounds.push([loc.lat, loc.lng]);
+});
+leafMap.addLayer(mcGroup);
+
+if (bounds.length > 1)        leafMap.fitBounds(bounds, {padding:[40,40]});
+else if (bounds.length === 1) leafMap.setView(bounds[0], 15);
+else                          leafMap.setView(DEFAULT_CENTER, 8);
+
+setTimeout(function(){ leafMap.invalidateSize(); }, 250);
+
+// Legend
+var legend = L.control({position:'bottomright'});
+legend.onAdd = function() {
+  var d = L.DomUtil.create('div');
+  d.style.cssText = 'background:#fff;padding:10px 14px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.14);font-size:.75rem;line-height:1.9';
+  d.innerHTML = '<b style="display:block;margin-bottom:4px;font-size:.7rem;letter-spacing:.05em;color:#64748b">STATUS</b>';
+  [['#94a3b8','Pending'],['#3b82f6','In Progress'],['#10b981','Completed'],['#f59e0b','On Hold']].forEach(function(s){
+    d.innerHTML += '<div style="display:flex;align-items:center;gap:7px"><div style="width:10px;height:10px;border-radius:50%;background:'+s[0]+';flex-shrink:0"></div>'+s[1]+'</div>';
+  });
+  return d;
+};
+legend.addTo(leafMap);
+
+// Click map → fill add form and open modal
+leafMap.on('click', function(e) {
+  var lat = e.latlng.lat, lng = e.latlng.lng;
+  var li = document.getElementById('addLat'), ni = document.getElementById('addLng');
+  if (li) li.value = lat.toFixed(6);
+  if (ni) ni.value = lng.toFixed(6);
+  showPreviewPin(lat, lng);
+  hideOverlay();
+  openModal('addLocModal');
+});
+
+// ── Preview pin ───────────────────────────────────────────────────────────────
+function showPreviewPin(lat, lng) {
+  if (previewMk) { previewMk.setLatLng([lat, lng]); }
+  else {
+    previewMk = L.marker([lat, lng], {icon: makeIcon('#6366f1'), zIndexOffset:500}).addTo(leafMap);
+    previewMk.bindPopup('<span style="font-size:.82rem;color:#6366f1;font-weight:600">Preview pin<br><span style="font-family:monospace;font-size:.7rem">'+lat.toFixed(5)+', '+lng.toFixed(5)+'</span></span>');
+  }
+  leafMap.panTo([lat, lng], {animate:true, duration:0.4});
+  hideOverlay();
+}
+function clearPreviewPin() { if (previewMk){ leafMap.removeLayer(previewMk); previewMk=null; } }
+function previewPin(latId, lngId) {
+  var lat=parseFloat(document.getElementById(latId).value), lng=parseFloat(document.getElementById(lngId).value);
+  if (!isNaN(lat)&&!isNaN(lng)&&lat>=-90&&lat<=90&&lng>=-180&&lng<=180) showPreviewPin(lat,lng);
+}
+function hideOverlay() { var o=document.getElementById('map-empty-overlay'); if(o) o.style.display='none'; }
+
+// Fly to a saved marker and switch to map view
+function flyTo(lat, lng, id) {
+  if (currentView !== 'map') setView('map');
+  leafMap.flyTo([lat, lng], 16, {duration:0.8});
+  if (markers[id]) setTimeout(function(){ markers[id].openPopup(); }, 900);
   window.scrollTo({top:0, behavior:'smooth'});
 }
+// Same but called from list/tile view
+function switchToMapPin(lat, lng, id) { flyTo(lat, lng, id); }
 
-// ── Edit modal ──────────────────────────────────────────────────────────────
-var STAFF = [
-  {% for s in staff_list %}
-  {id:'{{ s.id }}', name:'{{ s.full_name|escapejs }}'},
-  {% endfor %}
-];
+// ── Tile view pagination ─────────────────────────────────────────────────────
+var PAGE_SIZE_TILE = 24;
+var tilePage = 1;
+var tileItems = document.querySelectorAll('.tile-item');
+
+function renderTilePage(page) {
+  tilePage = page;
+  var total = tileItems.length;
+  var start = (page - 1) * PAGE_SIZE_TILE;
+  tileItems.forEach(function(el, i){ el.style.display = (i>=start && i<start+PAGE_SIZE_TILE) ? '' : 'none'; });
+  renderPagination('tile-pagination', page, Math.ceil(total/PAGE_SIZE_TILE), renderTilePage);
+}
+if (tileItems.length > 0) renderTilePage(1);
+
+// ── List view: filter + pagination ───────────────────────────────────────────
+var PAGE_SIZE_LIST = 50;
+var listPage  = 1;
+var listRows  = document.querySelectorAll('.list-row');
+var filteredRows = Array.from(listRows);
+
+function filterList() {
+  var q   = (document.getElementById('list-search')        ? document.getElementById('list-search').value.toLowerCase()        : '');
+  var st  = (document.getElementById('list-filter-status') ? document.getElementById('list-filter-status').value               : '');
+  var cat = (document.getElementById('list-filter-cat')    ? document.getElementById('list-filter-cat').value.toLowerCase()    : '');
+
+  filteredRows = Array.from(listRows).filter(function(r) {
+    var matchQ   = !q   || r.dataset.name.includes(q)  || r.dataset.address.includes(q);
+    var matchSt  = !st  || r.dataset.status === st;
+    var matchCat = !cat || r.dataset.cat   === cat;
+    return matchQ && matchSt && matchCat;
+  });
+
+  var badge = document.getElementById('list-count-badge');
+  if (badge) badge.textContent = filteredRows.length + ' result' + (filteredRows.length!==1?'s':'');
+
+  listPage = 1;
+  renderListPage(1);
+}
+
+function renderListPage(page) {
+  listPage = page;
+  var start = (page - 1) * PAGE_SIZE_LIST;
+  listRows.forEach(function(r){ r.style.display = 'none'; });
+  filteredRows.slice(start, start + PAGE_SIZE_LIST).forEach(function(r){ r.style.display = ''; });
+  renderPagination('list-pagination', page, Math.ceil(filteredRows.length/PAGE_SIZE_LIST), renderListPage);
+}
+if (listRows.length > 0) filterList();
+
+// ── Generic pagination renderer ───────────────────────────────────────────────
+function renderPagination(containerId, current, total, onPage) {
+  var el = document.getElementById(containerId);
+  if (!el) return;
+  if (total <= 1) { el.innerHTML = ''; return; }
+
+  var info = document.createElement('span');
+  info.style.cssText = 'font-size:.8rem;color:var(--eo-text-muted)';
+  var pageSize = containerId.startsWith('tile') ? PAGE_SIZE_TILE : PAGE_SIZE_LIST;
+  var dataLen  = containerId.startsWith('tile') ? tileItems.length : filteredRows.length;
+  var from = (current-1)*pageSize+1, to = Math.min(current*pageSize, dataLen);
+  info.textContent = from+'–'+to+' of '+dataLen;
+
+  var btns = document.createElement('div');
+  btns.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap';
+
+  function mkBtn(label, pg, disabled, active) {
+    var b = document.createElement('button');
+    b.className = 'pg-btn' + (active?' active':'');
+    b.textContent = label; b.disabled = disabled;
+    if (!disabled) b.onclick = function(){ onPage(pg); };
+    return b;
+  }
+  btns.appendChild(mkBtn('‹', current-1, current<=1, false));
+  var start = Math.max(1, current-2), end = Math.min(total, current+2);
+  if (start > 1) { btns.appendChild(mkBtn('1', 1, false, false)); if (start>2) { var sp=document.createElement('span'); sp.textContent='…'; sp.style='padding:0 4px;color:var(--eo-text-muted)'; btns.appendChild(sp); } }
+  for (var p=start; p<=end; p++) btns.appendChild(mkBtn(p, p, false, p===current));
+  if (end < total) { if (end<total-1) { var sp2=document.createElement('span'); sp2.textContent='…'; sp2.style='padding:0 4px;color:var(--eo-text-muted)'; btns.appendChild(sp2); } btns.appendChild(mkBtn(total, total, false, false)); }
+  btns.appendChild(mkBtn('›', current+1, current>=total, false));
+
+  el.innerHTML = '';
+  el.appendChild(info);
+  el.appendChild(btns);
+}
+
+// ── Edit modal (build HTML via JS) ───────────────────────────────────────────
+var STAFF = [{% for s in staff_list %}{id:'{{ s.id }}', name:'{{ s.full_name|escapejs }}'},{% endfor %}];
 var STATUS_CHOICES = [{% for val,label in status_choices %}{val:'{{ val }}', label:'{{ label }}'},{% endfor %}];
 var CSRF = '{{ csrf_token }}';
 
-function openEdit(id, name, desc, addr, lat, lng, cat, status, assignedId, notes) {
-  var staffOpts = '<option value="">— None —</option>';
-  STAFF.forEach(function(s){
-    staffOpts += '<option value="'+s.id+'"'+(s.id===assignedId?' selected':'')+'>'+s.name+'</option>';
-  });
-  var statusOpts = '';
-  STATUS_CHOICES.forEach(function(s){
-    statusOpts += '<option value="'+s.val+'"'+(s.val===status?' selected':'')+'>'+s.label+'</option>';
-  });
+function _esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;'); }
 
-  var html = '<form method="post" action="/projects/{{ project.pk }}/locations/'+id+'/edit/">'
-    + '<input type="hidden" name="csrfmiddlewaretoken" value="'+CSRF+'">'
-    + _locFields(name, desc, addr, lat, lng, cat, statusOpts, staffOpts, notes)
-    + '<div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">'
-    + '<button type="submit" class="eo-btn eo-btn-primary">Save Changes</button>'
-    + '<button type="button" onclick="closeModal(\'editLocModal\')" class="eo-btn eo-btn-secondary">Cancel</button>'
-    + '</div></form>';
-  document.getElementById('editLocBody').innerHTML = html;
+function openEdit(id, name, desc, addr, lat, lng, cat, status, assignedId, notes) {
+  var staffOpts='<option value="">— None —</option>';
+  STAFF.forEach(function(s){ staffOpts+='<option value="'+s.id+'"'+(s.id===assignedId?' selected':'')+'>'+s.name+'</option>'; });
+  var statusOpts='';
+  STATUS_CHOICES.forEach(function(s){ statusOpts+='<option value="'+s.val+'"'+(s.val===status?' selected':'')+'>'+s.label+'</option>'; });
+  var lId='eLat_'+id, nId='eLng_'+id, pcId='ePC_'+id, errId='ePCerr_'+id;
+
+  document.getElementById('editLocBody').innerHTML =
+    '<form method="post" action="/projects/{{ project.pk }}/locations/'+id+'/edit/">'
+    +'<input type="hidden" name="csrfmiddlewaretoken" value="'+CSRF+'">'
+    +'<div class="eo-form-group"><label class="eo-form-label">Location Name *</label>'
+    +'<input type="text" name="name" class="eo-form-control" required value="'+_esc(name)+'"/></div>'
+    +'<div class="row g-3 mb-3"><div class="col-sm-6"><label class="eo-form-label">Category</label>'
+    +'<input type="text" name="category" class="eo-form-control" value="'+_esc(cat)+'"/></div>'
+    +'<div class="col-sm-6"><label class="eo-form-label">Status</label>'
+    +'<select name="status" class="eo-form-select">'+statusOpts+'</select></div></div>'
+    +'<div class="eo-form-group"><label class="eo-form-label">Address</label>'
+    +'<input type="text" name="address" class="eo-form-control" value="'+_esc(addr)+'"/></div>'
+    +'<div class="eo-form-group"><label class="eo-form-label">Plus Code <span style="font-size:.68rem;font-weight:400;color:var(--eo-text-muted)">optional</span></label>'
+    +'<div style="display:flex;gap:8px"><input type="text" id="'+pcId+'" class="eo-form-control" placeholder="C7PM+F8G" style="font-family:monospace;text-transform:uppercase"'
+    +' oninput="decodePlusCode(this.value,\''+lId+'\',\''+nId+'\',\''+errId+'\')">'
+    +'<button type="button" class="eo-btn eo-btn-secondary" style="white-space:nowrap;flex-shrink:0"'
+    +' onclick="decodePlusCode(document.getElementById(\''+pcId+'\').value,\''+lId+'\',\''+nId+'\',\''+errId+'\')">'
+    +'<i class="bi bi-pin-map-fill"></i> Decode</button></div>'
+    +'<div id="'+errId+'" style="font-size:.72rem;color:var(--eo-danger);margin-top:4px;display:none"></div></div>'
+    +'<div class="row g-3 mb-3"><div class="col-sm-6"><label class="eo-form-label">Latitude *</label>'
+    +'<input type="number" name="latitude" id="'+lId+'" class="eo-form-control" required step="0.000001" value="'+lat+'"'
+    +' oninput="previewPin(\''+lId+'\',\''+nId+'\')"/></div>'
+    +'<div class="col-sm-6"><label class="eo-form-label">Longitude *</label>'
+    +'<input type="number" name="longitude" id="'+nId+'" class="eo-form-control" required step="0.000001" value="'+lng+'"'
+    +' oninput="previewPin(\''+lId+'\',\''+nId+'\')"/></div></div>'
+    +'<div class="eo-form-group"><label class="eo-form-label">Description</label>'
+    +'<textarea name="description" class="eo-form-control" rows="2">'+_esc(desc)+'</textarea></div>'
+    +'<div class="row g-3 mb-3"><div class="col-sm-6"><label class="eo-form-label">Assigned To</label>'
+    +'<select name="assigned_to" class="eo-form-select">'+staffOpts+'</select></div>'
+    +'<div class="col-sm-6"><label class="eo-form-label">Notes</label>'
+    +'<input type="text" name="notes" class="eo-form-control" value="'+_esc(notes)+'"/></div></div>'
+    +'<div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">'
+    +'<button type="submit" class="eo-btn eo-btn-primary">Save Changes</button>'
+    +'<button type="button" onclick="clearPreviewPin();closeModal(\'editLocModal\')" class="eo-btn eo-btn-secondary">Cancel</button>'
+    +'</div></form>';
+
   openModal('editLocModal');
+  showPreviewPin(parseFloat(lat), parseFloat(lng));
 }
 
-function _locFields(name, desc, addr, lat, lng, cat, statusOpts, staffOpts, notes) {
-  return `
-    <div class="eo-form-group">
-      <label class="eo-form-label">Location Name *</label>
-      <input type="text" name="name" class="eo-form-control" required value="${name}" placeholder="e.g. Site A - Banjul"/>
-    </div>
-    <div class="row g-3 mb-3">
-      <div class="col-sm-6">
-        <label class="eo-form-label">Category</label>
-        <input type="text" name="category" class="eo-form-control" value="${cat}" placeholder="e.g. Installation, Office"/>
-      </div>
-      <div class="col-sm-6">
-        <label class="eo-form-label">Status</label>
-        <select name="status" class="eo-form-select">${statusOpts}</select>
-      </div>
-    </div>
-    <div class="eo-form-group">
-      <label class="eo-form-label">Address</label>
-      <input type="text" name="address" class="eo-form-control" value="${addr}" placeholder="Street, city or area"/>
-    </div>
-    <div class="row g-3 mb-3">
-      <div class="col-sm-6">
-        <label class="eo-form-label">Latitude *
-          <span style="font-size:.68rem;font-weight:400;color:var(--eo-text-muted)">(click map to auto-fill)</span>
-        </label>
-        <input type="number" name="latitude" class="eo-form-control" required step="0.000001" value="${lat}" placeholder="13.4549"/>
-      </div>
-      <div class="col-sm-6">
-        <label class="eo-form-label">Longitude *</label>
-        <input type="number" name="longitude" class="eo-form-control" required step="0.000001" value="${lng}" placeholder="-16.5790"/>
-      </div>
-    </div>
-    <div class="eo-form-group">
-      <label class="eo-form-label">Description</label>
-      <textarea name="description" class="eo-form-control" rows="2" placeholder="What happens at this location?">${desc}</textarea>
-    </div>
-    <div class="row g-3 mb-3">
-      <div class="col-sm-6">
-        <label class="eo-form-label">Assigned To</label>
-        <select name="assigned_to" class="eo-form-select">${staffOpts}</select>
-      </div>
-      <div class="col-sm-6">
-        <label class="eo-form-label">Notes</label>
-        <input type="text" name="notes" class="eo-form-control" value="${notes}" placeholder="Any extra notes..."/>
-      </div>
-    </div>`;
+// ── Inline OLC (Plus Code) decoder ────────────────────────────────────────────
+var OLC = (function(){
+  var A='23456789CFGHJMPQRVWX', SEP='+', SP=8, BASE=20, PLEN=10, GR=5, GC=4;
+  var CI={}; for(var _i=0;_i<A.length;_i++) CI[A[_i]]=_i;
+  function isValid(c){
+    if(!c||typeof c!=='string') return false;
+    var u=c.toUpperCase(), si=u.indexOf(SEP);
+    if(si<0||si!==u.lastIndexOf(SEP)||si>SP||si%2!==0||u.length<=si+1) return false;
+    for(var i=0;i<u.length;i++){var ch=u[i];if(ch!==SEP&&ch!=='0'&&!(ch in CI))return false;}
+    return true;
+  }
+  function isShort(c){return isValid(c)&&c.indexOf(SEP)<SP;}
+  function isFull(c) {return isValid(c)&&c.indexOf(SEP)===SP;}
+  function encode(lat,lng,len){
+    len=len||SP;
+    lat=Math.min(90-1e-10,Math.max(-90,lat))+90; lng=((lng+180)%360+360)%360;
+    var ls=180/BASE,ns=360/BASE,code='';
+    for(var i=0;i<len;i+=2){code+=A[Math.floor(lat/ls)];lat%=ls;code+=A[Math.floor(lng/ns)];lng%=ns;ls/=BASE;ns/=BASE;}
+    return code.substring(0,SP)+SEP+code.substring(SP);
+  }
+  function decode(code){
+    var u=code.toUpperCase().replace(SEP,'');
+    while(u.length>0&&u[u.length-1]==='0') u=u.slice(0,-1);
+    var lat=-90,lng=-180,ls=180/BASE,ns=360/BASE;
+    for(var i=0;i<Math.min(u.length,PLEN);i+=2){lat+=CI[u[i]]*ls;lng+=CI[u[i+1]]*ns;ls/=BASE;ns/=BASE;}
+    if(u.length>PLEN){var lgs=ls,lns=ns;for(var j=PLEN;j<u.length;j++){lgs/=GR;lns/=GC;var v=CI[u[j]];lat+=Math.floor(v/GC)*lgs;lng+=(v%GC)*lns;}ls=lgs;ns=lns;}
+    return{latitudeCenter:lat+ls/2,longitudeCenter:lng+ns/2};
+  }
+  function recoverNearest(sc,rlat,rlng){
+    var si=sc.indexOf(SEP),plen=SP-si;
+    var prefix=encode(rlat,rlng,SP).replace(SEP,'').substring(0,plen);
+    var sn=sc.toUpperCase().replace(SEP,''),fn=prefix+sn;
+    var full=fn.substring(0,SP)+SEP+fn.substring(SP);
+    var d=decode(full);
+    var res=Math.pow(BASE,2-plen/2);
+    if(Math.abs(rlat-d.latitudeCenter)>res/2){
+      var delta=(rlat>d.latitudeCenter)?res:-res;
+      var ap=encode(rlat+delta,rlng,SP).replace(SEP,'').substring(0,plen);
+      if(ap!==prefix){var an=ap+sn;d=decode(an.substring(0,SP)+SEP+an.substring(SP));}
+    }
+    return d;
+  }
+  return{isValid:isValid,isShort:isShort,isFull:isFull,decode:decode,encode:encode,recoverNearest:recoverNearest};
+})();
+
+var OLC_REF_LAT=13.4549, OLC_REF_LNG=-16.5790;
+function decodePlusCode(code,latId,lngId,errId){
+  var errEl=document.getElementById(errId);
+  code=(code||'').trim().toUpperCase();
+  if(!code) return;
+  try{
+    var d=OLC.isShort(code)?OLC.recoverNearest(code,OLC_REF_LAT,OLC_REF_LNG):OLC.isFull(code)?OLC.decode(code):null;
+    if(!d){if(errEl){errEl.textContent='Not a valid Plus Code.';errEl.style.display='block';}return;}
+    document.getElementById(latId).value=d.latitudeCenter.toFixed(6);
+    document.getElementById(lngId).value=d.longitudeCenter.toFixed(6);
+    if(errEl) errEl.style.display='none';
+    showPreviewPin(d.latitudeCenter,d.longitudeCenter);
+  }catch(e){if(errEl){errEl.textContent='Error: '+e.message;errEl.style.display='block';}}
 }
 </script>
-
 {% endblock %}

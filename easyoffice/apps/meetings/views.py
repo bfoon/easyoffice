@@ -1,5 +1,5 @@
 import io, re, json, tempfile, os
-from datetime import date as _date
+from datetime import date as _date, timedelta
 from datetime import datetime
 
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -14,7 +14,8 @@ from django.db.models import Q
 from django.core.files.base import ContentFile
 
 from apps.meetings.models import (
-    Meeting, MeetingAttendee, MeetingExternalAttendee, MeetingMinutes, MeetingActionItem
+    Meeting, MeetingAttendee, MeetingExternalAttendee,
+    MeetingMinutes, MeetingActionItem, MeetingMinutesExternalReview
 )
 from apps.core.models import User
 
@@ -41,10 +42,6 @@ def _can_view_meeting(user, meeting):
 
 
 def _notify_attendees(meeting, sender, title, message, exclude_ids=None):
-    """
-    Send in-app notifications + email invites/updates to internal attendees.
-    Includes agenda in the email body.
-    """
     try:
         from apps.core.models import CoreNotification
     except ImportError:
@@ -102,11 +99,8 @@ def _notify_attendees(meeting, sender, title, message, exclude_ids=None):
             except Exception:
                 pass
 
+
 def _notify_external_attendees(meeting, sender, title):
-    """
-    Send email invites/updates to external attendees.
-    Includes agenda in the email body.
-    """
     start_text = timezone.localtime(meeting.start_datetime).strftime('%d %b %Y at %H:%M')
     end_text = timezone.localtime(meeting.end_datetime).strftime('%H:%M')
     location_text = meeting.location or 'Not specified'
@@ -127,12 +121,10 @@ def _notify_external_attendees(meeting, sender, title):
             f'- Virtual Link: {virtual_text}\n'
             f'- Project: {project_text}\n'
         )
-
         if att.organisation:
             body += f'- Organisation: {att.organisation}\n'
         if att.role:
             body += f'- Role: {att.role}\n'
-
         body += (
             f'\nDescription:\n'
             f'{meeting.description or "No description provided."}\n\n'
@@ -141,7 +133,6 @@ def _notify_external_attendees(meeting, sender, title):
             f'Please keep this invitation for your reference.\n\n'
             f'— EasyOffice'
         )
-
         try:
             send_mail(
                 subject=title,
@@ -153,22 +144,73 @@ def _notify_external_attendees(meeting, sender, title):
         except Exception:
             pass
 
+
+def _notify_external_for_adoption(meeting, minutes, request):
+    """
+    Issue one-time review tokens to each external attendee and email them
+    a personalised adopt/decline link.  Expires after 14 days.
+    """
+    from datetime import timedelta
+
+    base_url = getattr(settings, 'SITE_URL', f'{request.scheme}://{request.get_host()}')
+    expires  = timezone.now() + timedelta(days=14)
+
+    start_text = timezone.localtime(meeting.start_datetime).strftime('%d %b %Y at %H:%M')
+
+    for ext in meeting.external_attendees.all():
+        # Create or refresh token
+        review, created = MeetingMinutesExternalReview.objects.get_or_create(
+            minutes=minutes,
+            external_attendee=ext,
+            defaults={'expires_at': expires},
+        )
+        if not created:
+            # Refresh token and expiry if re-submitted
+            from apps.meetings.models import _generate_review_token
+            review.token      = _generate_review_token()
+            review.decision   = MeetingMinutesExternalReview.Decision.PENDING
+            review.decided_at = None
+            review.expires_at = expires
+            review.save()
+
+        review_url = f'{base_url}/meetings/minutes/review/{review.token}/'
+
+        body = (
+            f'Dear {ext.full_name},\n\n'
+            f'The minutes for the meeting "{meeting.title}" (held on {start_text}) '
+            f'have been submitted for adoption.\n\n'
+            f'As an external participant, you are invited to review and record your '
+            f'position on these minutes.\n\n'
+            f'Please use the link below — it is unique to you and valid for 14 days:\n\n'
+            f'  {review_url}\n\n'
+            f'You will be able to:\n'
+            f'  • Adopt / Agree — confirm the minutes are accurate\n'
+            f'  • Decline / Object — flag concerns or corrections\n'
+            f'  • Add a comment with any notes or amendments\n\n'
+            f'This link can only be used once.\n\n'
+            f'— EasyOffice / {meeting.organizer.full_name}'
+        )
+
+        try:
+            send_mail(
+                subject=f'Action required: Review minutes for "{meeting.title}"',
+                message=body,
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
+                recipient_list=[ext.email],
+                fail_silently=True,
+            )
+        except Exception:
+            pass
+
+
 def _parse_meeting_datetime(value):
-    """
-    Parse HTML datetime-local input (YYYY-MM-DDTHH:MM) or common datetime strings
-    into a timezone-aware datetime.
-    """
     if not value:
         raise ValueError('Date and time value is required.')
-
     value = str(value).strip()
     formats = [
-        '%Y-%m-%dT%H:%M',
-        '%Y-%m-%d %H:%M',
-        '%Y-%m-%dT%H:%M:%S',
-        '%Y-%m-%d %H:%M:%S',
+        '%Y-%m-%dT%H:%M', '%Y-%m-%d %H:%M',
+        '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S',
     ]
-
     parsed = None
     for fmt in formats:
         try:
@@ -176,14 +218,104 @@ def _parse_meeting_datetime(value):
             break
         except ValueError:
             continue
-
     if parsed is None:
         raise ValueError('Invalid date/time format. Please use a valid date and time.')
-
     if timezone.is_naive(parsed):
         parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
-
     return parsed
+
+
+def _next_occurrence(dt, recurrence):
+    """Return the next datetime given a recurrence rule."""
+    if recurrence == 'daily':
+        return dt + timedelta(days=1)
+    elif recurrence == 'weekly':
+        return dt + timedelta(weeks=1)
+    elif recurrence == 'biweekly':
+        return dt + timedelta(weeks=2)
+    elif recurrence == 'monthly':
+        # Add ~30 days; same time of day
+        from dateutil.relativedelta import relativedelta
+        try:
+            return dt + relativedelta(months=1)
+        except Exception:
+            return dt + timedelta(days=30)
+    return None
+
+
+def _generate_recurrence_instances(parent, attendee_ids, external_data):
+    """Create child meeting instances for a recurring parent meeting."""
+    recurrence = parent.recurrence
+    if not recurrence or recurrence == 'none':
+        return
+
+    count = min(int(parent.recurrence_count or 4), 52)
+    end_date = parent.recurrence_end  # may be None
+
+    duration = parent.end_datetime - parent.start_datetime
+    current_start = parent.start_datetime
+
+    for _ in range(count):
+        current_start = _next_occurrence(current_start, recurrence)
+        if not current_start:
+            break
+        if end_date and current_start.date() > end_date:
+            break
+
+        instance = Meeting.objects.create(
+            title=parent.title,
+            description=parent.description,
+            meeting_type=parent.meeting_type,
+            organizer=parent.organizer,
+            start_datetime=current_start,
+            end_datetime=current_start + duration,
+            location=parent.location,
+            virtual_link=parent.virtual_link,
+            agenda=parent.agenda,
+            is_private=parent.is_private,
+            project=parent.project,
+            unit=parent.unit,
+            department=parent.department,
+            recurrence_parent=parent,
+            recurrence='none',
+        )
+
+        # Copy attendees
+        for uid in attendee_ids:
+            try:
+                u = User.objects.get(pk=uid)
+                if u != parent.organizer:
+                    MeetingAttendee.objects.get_or_create(
+                        meeting=instance, user=u,
+                        defaults={'is_required': True, 'rsvp': MeetingAttendee.RSVP.INVITED}
+                    )
+            except User.DoesNotExist:
+                continue
+
+        MeetingAttendee.objects.get_or_create(
+            meeting=instance,
+            user=parent.organizer,
+            defaults={
+                'rsvp': MeetingAttendee.RSVP.ACCEPTED,
+                'is_required': True,
+                'role': 'Organiser',
+                'responded_at': timezone.now(),
+            }
+        )
+
+        # Copy external attendees
+        for ext in external_data:
+            MeetingExternalAttendee.objects.get_or_create(
+                meeting=instance,
+                email=ext['email'],
+                defaults={
+                    'full_name': ext['full_name'],
+                    'organisation': ext.get('organisation', ''),
+                    'role': ext.get('role', ''),
+                    'is_required': True,
+                    'rsvp': MeetingExternalAttendee.RSVP.INVITED,
+                }
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -206,53 +338,29 @@ def _build_minutes_pdf(meeting, minutes):
     M = 20 * mm
 
     doc = SimpleDocTemplate(
-        buf,
-        pagesize=A4,
-        rightMargin=M,
-        leftMargin=M,
-        topMargin=28 * mm,
-        bottomMargin=18 * mm,
+        buf, pagesize=A4, rightMargin=M, leftMargin=M,
+        topMargin=28 * mm, bottomMargin=18 * mm,
         title=f'Minutes — {meeting.title}'
     )
 
-    C_HEAD = colors.HexColor('#1e3a5f')
-    C_ACC = colors.HexColor(meeting.type_color)
+    C_HEAD  = colors.HexColor('#1e3a5f')
+    C_ACC   = colors.HexColor(meeting.type_color)
     C_MUTED = colors.HexColor('#64748b')
-    C_BG = colors.HexColor('#f8fafc')
+    C_BG    = colors.HexColor('#f8fafc')
 
     ss = getSampleStyleSheet()
 
-    sTitle = ParagraphStyle(
-        'MTitle', parent=ss['Title'],
-        fontSize=20, textColor=C_HEAD, spaceAfter=3 * mm, leading=26
-    )
-    sMeta = ParagraphStyle(
-        'MMeta', parent=ss['Normal'],
-        fontSize=9, textColor=C_MUTED, spaceAfter=4 * mm
-    )
-    sSection = ParagraphStyle(
-        'MSection', parent=ss['Heading2'],
-        fontSize=13, textColor=C_HEAD, spaceBefore=6 * mm, spaceAfter=3 * mm
-    )
-    sBody = ParagraphStyle(
-        'MBody', parent=ss['Normal'],
-        fontSize=10.5, leading=16, spaceAfter=3 * mm,
-        alignment=TA_JUSTIFY
-    )
-    sBullet = ParagraphStyle(
-        'MBullet', parent=ss['Normal'],
-        fontSize=10.5, leading=15, spaceAfter=2 * mm,
-        leftIndent=10 * mm, firstLineIndent=-5 * mm
-    )
-    sAction = ParagraphStyle(
-        'MAction', parent=ss['Normal'],
-        fontSize=10, leading=14, spaceAfter=1 * mm
-    )
+    sTitle   = ParagraphStyle('MTitle',   parent=ss['Title'],   fontSize=20, textColor=C_HEAD, spaceAfter=3*mm, leading=26)
+    sMeta    = ParagraphStyle('MMeta',    parent=ss['Normal'],  fontSize=9,  textColor=C_MUTED, spaceAfter=4*mm)
+    sSection = ParagraphStyle('MSection', parent=ss['Heading2'],fontSize=13, textColor=C_HEAD, spaceBefore=6*mm, spaceAfter=3*mm)
+    sBody    = ParagraphStyle('MBody',    parent=ss['Normal'],  fontSize=10.5, leading=16, spaceAfter=3*mm, alignment=TA_JUSTIFY)
+    sBullet  = ParagraphStyle('MBullet',  parent=ss['Normal'],  fontSize=10.5, leading=15, spaceAfter=2*mm, leftIndent=10*mm, firstLineIndent=-5*mm)
+    sAction  = ParagraphStyle('MAction',  parent=ss['Normal'],  fontSize=10, leading=14, spaceAfter=1*mm)
 
     def inline(text):
         text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-        text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)
+        text = re.sub(r'\*(.+?)\*',     r'<i>\1</i>', text)
         return text
 
     def parse_body(text):
@@ -269,17 +377,13 @@ def _build_minutes_pdf(meeting, minutes):
         for line in text.splitlines():
             s = line.strip()
             if s.startswith('# '):
-                flush()
-                flowables.append(Paragraph(inline(s[2:]), sSection))
+                flush(); flowables.append(Paragraph(inline(s[2:]), sSection))
             elif s.startswith('## '):
-                flush()
-                flowables.append(Paragraph(inline(s[3:]), sSection))
+                flush(); flowables.append(Paragraph(inline(s[3:]), sSection))
             elif s.startswith(('- ', '• ', '* ')):
-                flush()
-                flowables.append(Paragraph(f'•  {inline(s[2:])}', sBullet))
+                flush(); flowables.append(Paragraph(f'•  {inline(s[2:])}', sBullet))
             elif s == '':
-                flush()
-                flowables.append(Spacer(1, 2 * mm))
+                flush(); flowables.append(Spacer(1, 2*mm))
             else:
                 buf_lines.append(s)
         flush()
@@ -289,43 +393,42 @@ def _build_minutes_pdf(meeting, minutes):
 
     story.append(Paragraph(meeting.title, sTitle))
     start = timezone.localtime(meeting.start_datetime).strftime('%A, %d %B %Y  %H:%M')
-    end = timezone.localtime(meeting.end_datetime).strftime('%H:%M')
-    meta = (
-        f'{start} – {end}  ·  '
-        f'{meeting.get_meeting_type_display()}  ·  '
-        f'Organised by {meeting.organizer.full_name}'
-    )
+    end   = timezone.localtime(meeting.end_datetime).strftime('%H:%M')
+    meta  = f'{start} – {end}  ·  {meeting.get_meeting_type_display()}  ·  Organised by {meeting.organizer.full_name}'
     if meeting.location:
         meta += f'  ·  {meeting.location}'
+
+    # Adoption status in PDF
+    if minutes.adoption_status == 'adopted':
+        adopted_by = minutes.adopted_by.full_name if minutes.adopted_by else 'Unknown'
+        adopted_at = timezone.localtime(minutes.adopted_at).strftime('%d %b %Y %H:%M') if minutes.adopted_at else '—'
+        meta += f'\n\nAdopted by {adopted_by} on {adopted_at}'
+
     story.append(Paragraph(meta, sMeta))
-    story.append(HRFlowable(width='100%', color=C_ACC, thickness=2, spaceAfter=5 * mm))
+    story.append(HRFlowable(width='100%', color=C_ACC, thickness=2, spaceAfter=5*mm))
 
     attendees = list(meeting.attendees.select_related('user').order_by('user__first_name'))
     if attendees:
         story.append(Paragraph('Attendees', sSection))
-        rows = [[
-            Paragraph('<b>Name</b>', sAction),
-            Paragraph('<b>Role</b>', sAction),
-            Paragraph('<b>Status</b>', sAction),
-        ]]
+        rows = [[Paragraph('<b>Name</b>', sAction), Paragraph('<b>Role</b>', sAction), Paragraph('<b>Status</b>', sAction)]]
         for att in attendees:
             rows.append([
                 Paragraph(att.user.full_name, sAction),
                 Paragraph(att.role or '—', sAction),
                 Paragraph(att.get_rsvp_display(), sAction),
             ])
-        tbl = Table(rows, colWidths=[90 * mm, 60 * mm, 40 * mm])
+        tbl = Table(rows, colWidths=[90*mm, 60*mm, 40*mm])
         tbl.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), C_BG),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 9.5),
-            ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#e2e8f0')),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, C_BG]),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('BACKGROUND', (0,0), (-1,0), C_BG),
+            ('FONTNAME',   (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE',   (0,0), (-1,-1), 9.5),
+            ('GRID',       (0,0), (-1,-1), 0.4, colors.HexColor('#e2e8f0')),
+            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, C_BG]),
+            ('TOPPADDING', (0,0), (-1,-1), 4),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
         ]))
         story.append(tbl)
-        story.append(Spacer(1, 4 * mm))
+        story.append(Spacer(1, 4*mm))
 
     if meeting.agenda:
         story.append(Paragraph('Agenda', sSection))
@@ -339,6 +442,10 @@ def _build_minutes_pdf(meeting, minutes):
         story.append(Paragraph('Decisions Made', sSection))
         story.extend(parse_body(minutes.decisions))
 
+    if minutes.adoption_notes:
+        story.append(Paragraph('Adoption Notes / Amendments', sSection))
+        story.extend(parse_body(minutes.adoption_notes))
+
     action_items = list(minutes.action_items.select_related('assigned_to').all())
     if action_items:
         story.append(Paragraph('Action Items', sSection))
@@ -347,7 +454,7 @@ def _build_minutes_pdf(meeting, minutes):
             Paragraph('<b>Action</b>', sAction),
             Paragraph('<b>Owner</b>', sAction),
             Paragraph('<b>Due</b>', sAction),
-            Paragraph('<b>Done</b>', sAction),
+            Paragraph('<b>Status</b>', sAction),
         ]]
         for i, ai in enumerate(action_items, 1):
             rows.append([
@@ -355,17 +462,17 @@ def _build_minutes_pdf(meeting, minutes):
                 Paragraph(inline(ai.description), sAction),
                 Paragraph(ai.assigned_to.full_name if ai.assigned_to else '—', sAction),
                 Paragraph(ai.due_date.strftime('%d %b %Y') if ai.due_date else '—', sAction),
-                Paragraph('✓' if ai.is_done else '○', sAction),
+                Paragraph(ai.get_status_display(), sAction),
             ])
-        tbl = Table(rows, colWidths=[10 * mm, 85 * mm, 45 * mm, 25 * mm, 15 * mm])
+        tbl = Table(rows, colWidths=[10*mm, 82*mm, 45*mm, 25*mm, 28*mm])
         tbl.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), C_BG),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 9.5),
-            ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#e2e8f0')),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, C_BG]),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('BACKGROUND',    (0,0), (-1,0), C_BG),
+            ('FONTNAME',      (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE',      (0,0), (-1,-1), 9.5),
+            ('GRID',          (0,0), (-1,-1), 0.4, colors.HexColor('#e2e8f0')),
+            ('ROWBACKGROUNDS',(0,1), (-1,-1), [colors.white, C_BG]),
+            ('TOPPADDING',    (0,0), (-1,-1), 4),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
         ]))
         story.append(tbl)
 
@@ -373,10 +480,9 @@ def _build_minutes_pdf(meeting, minutes):
         canvas.saveState()
         canvas.setFont('Helvetica', 8)
         canvas.setFillColor(C_MUTED)
-        canvas.drawString(M, 12 * mm, f'EasyOffice Meeting Minutes  ·  {meeting.title}')
+        canvas.drawString(M, 12*mm, f'EasyOffice Meeting Minutes  ·  {meeting.title}')
         canvas.drawRightString(
-            PAGE_W - M,
-            12 * mm,
+            PAGE_W - M, 12*mm,
             f'Generated {timezone.now().strftime("%d %b %Y, %H:%M")}  ·  Page {doc.page}'
         )
         canvas.restoreState()
@@ -401,21 +507,16 @@ class MeetingListView(LoginRequiredMixin, TemplateView):
         mtype = self.request.GET.get('type', '')
 
         base_qs = Meeting.objects.filter(
-            Q(organizer=user) |
-            Q(attendees__user=user) |
-            Q(is_private=False)
+            Q(organizer=user) | Q(attendees__user=user) | Q(is_private=False)
         ).distinct().select_related('organizer', 'project')
 
         if q:
-            base_qs = base_qs.filter(
-                Q(title__icontains=q) | Q(description__icontains=q)
-            )
+            base_qs = base_qs.filter(Q(title__icontains=q) | Q(description__icontains=q))
         if mtype:
             base_qs = base_qs.filter(meeting_type=mtype)
 
         upcoming = base_qs.filter(
-            start_datetime__gte=now,
-            status__in=['scheduled', 'in_progress']
+            start_datetime__gte=now, status__in=['scheduled', 'in_progress']
         ).order_by('start_datetime')
 
         past = base_qs.filter(
@@ -429,26 +530,21 @@ class MeetingListView(LoginRequiredMixin, TemplateView):
         ctx.update({
             'upcoming': upcoming[:20],
             'past': past[:20],
-            'my_meetings': my_meetings.filter(start_datetime__gte=now)[:10],
             'view': view,
             'q': q,
             'type_filter': mtype,
             'meeting_types': Meeting.MeetingType.choices,
-            'my_upcoming_count': my_meetings.filter(
-                start_datetime__gte=now, status='scheduled'
-            ).count(),
-            'pending_rsvp': MeetingAttendee.objects.filter(
-                user=user, rsvp='invited'
-            ).count(),
+            'my_upcoming_count': my_meetings.filter(start_datetime__gte=now, status='scheduled').count(),
+            'pending_rsvp': MeetingAttendee.objects.filter(user=user, rsvp='invited').count(),
         })
         return ctx
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Create / Edit
+# Create / Edit helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _meeting_form_context(request, meeting=None):
+def _meeting_form_context(request, meeting=None, prefill=None):
     from apps.projects.models import Project
     from apps.tasks.models import Task
     try:
@@ -470,39 +566,120 @@ def _meeting_form_context(request, meeting=None):
         'units': units,
         'departments': depts,
         'meeting_types': Meeting.MeetingType.choices,
-        'meeting': meeting,
+        'recurrence_types': Meeting.Recurrence.choices,
+        'meeting': meeting or prefill,
         'mode': 'edit' if meeting else 'create',
         'selected_project_id': selected_project_id,
         'external_attendees': meeting.external_attendees.all() if meeting else [],
+        'prefill': prefill,
     }
 
     if meeting:
-        ctx['current_attendee_ids'] = list(
-            meeting.attendees.values_list('user_id', flat=True)
-        )
+        ctx['current_attendee_ids'] = list(meeting.attendees.values_list('user_id', flat=True))
         ctx['available_tasks'] = Task.objects.filter(
             Q(assigned_by=request.user) | Q(assigned_to=request.user)
         ).filter(status__in=['todo', 'in_progress', 'review']).order_by('-created_at')[:50]
         ctx['linked_task_ids'] = list(meeting.linked_tasks.values_list('id', flat=True))
+    elif prefill:
+        # Follow-up: pre-select same attendees
+        ctx['current_attendee_ids'] = list(prefill.attendees.values_list('user_id', flat=True))
+        ctx['available_tasks'] = Task.objects.filter(
+            Q(assigned_by=request.user) | Q(assigned_to=request.user)
+        ).filter(status__in=['todo', 'in_progress', 'review']).order_by('-created_at')[:50]
+        ctx['linked_task_ids'] = []
     else:
         from apps.tasks.models import Task as T
         ctx['available_tasks'] = T.objects.filter(
             Q(assigned_by=request.user) | Q(assigned_to=request.user)
         ).filter(status__in=['todo', 'in_progress', 'review']).order_by('-created_at')[:50]
         ctx['linked_task_ids'] = []
+        ctx['current_attendee_ids'] = []
 
     return ctx
 
+
+def _save_attendees_and_external(meeting, request, is_update=False):
+    """Shared logic to persist internal + external attendees from POST."""
+    attendee_ids = set(request.POST.getlist('attendees'))
+
+    if is_update:
+        existing_ids = set(
+            str(i) for i in meeting.attendees.exclude(user=request.user).values_list('user_id', flat=True)
+        )
+        removed_ids = existing_ids - attendee_ids
+        if removed_ids:
+            meeting.attendees.filter(user_id__in=removed_ids).delete()
+        new_ids = attendee_ids - existing_ids
+    else:
+        new_ids = attendee_ids
+
+    for uid in new_ids:
+        try:
+            u = User.objects.get(pk=uid)
+            if u != request.user:
+                MeetingAttendee.objects.get_or_create(
+                    meeting=meeting, user=u,
+                    defaults={'is_required': True, 'rsvp': MeetingAttendee.RSVP.INVITED}
+                )
+        except User.DoesNotExist:
+            continue
+
+    MeetingAttendee.objects.get_or_create(
+        meeting=meeting, user=request.user,
+        defaults={
+            'rsvp': MeetingAttendee.RSVP.ACCEPTED,
+            'is_required': True,
+            'role': 'Organiser',
+            'responded_at': timezone.now(),
+        }
+    )
+
+    if is_update:
+        meeting.external_attendees.all().delete()
+
+    ext_names  = request.POST.getlist('external_name')
+    ext_emails = request.POST.getlist('external_email')
+    ext_orgs   = request.POST.getlist('external_organisation')
+    ext_roles  = request.POST.getlist('external_role')
+
+    external_data = []
+    for i, raw_email in enumerate(ext_emails):
+        email     = (raw_email or '').strip()
+        full_name = (ext_names[i] if i < len(ext_names) else '').strip()
+        org       = (ext_orgs[i]  if i < len(ext_orgs)  else '').strip()
+        role      = (ext_roles[i] if i < len(ext_roles) else '').strip()
+        if not email or not full_name:
+            continue
+        MeetingExternalAttendee.objects.get_or_create(
+            meeting=meeting, email=email,
+            defaults={'full_name': full_name, 'organisation': org, 'role': role,
+                      'is_required': True, 'rsvp': MeetingExternalAttendee.RSVP.INVITED}
+        )
+        external_data.append({'email': email, 'full_name': full_name, 'organisation': org, 'role': role})
+
+    return list(attendee_ids), external_data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Create
+# ─────────────────────────────────────────────────────────────────────────────
 
 class MeetingCreateView(LoginRequiredMixin, View):
     template_name = 'meetings/meeting_form.html'
 
     def get(self, request):
-        return render(request, self.template_name, _meeting_form_context(request))
+        prefill = None
+        follow_up_from = request.GET.get('follow_up_from')
+        if follow_up_from:
+            try:
+                prefill = Meeting.objects.get(pk=follow_up_from)
+            except (Meeting.DoesNotExist, Exception):
+                pass
+        return render(request, self.template_name, _meeting_form_context(request, prefill=prefill))
 
     def post(self, request):
         start_raw = request.POST.get('start_datetime', '').strip()
-        end_raw = request.POST.get('end_datetime', '').strip()
+        end_raw   = request.POST.get('end_datetime', '').strip()
 
         if not start_raw or not end_raw:
             messages.error(request, 'Start and end date/time are required.')
@@ -510,7 +687,7 @@ class MeetingCreateView(LoginRequiredMixin, View):
 
         try:
             start_dt = _parse_meeting_datetime(start_raw)
-            end_dt = _parse_meeting_datetime(end_raw)
+            end_dt   = _parse_meeting_datetime(end_raw)
         except ValueError as e:
             messages.error(request, str(e))
             return render(request, self.template_name, _meeting_form_context(request))
@@ -523,6 +700,25 @@ class MeetingCreateView(LoginRequiredMixin, View):
         if not title:
             messages.error(request, 'Meeting title is required.')
             return render(request, self.template_name, _meeting_form_context(request))
+
+        recurrence       = request.POST.get('recurrence', 'none')
+        recurrence_count_raw = request.POST.get('recurrence_count', '').strip()
+        recurrence_end_raw   = request.POST.get('recurrence_end', '').strip()
+
+        recurrence_count = None
+        recurrence_end   = None
+        if recurrence != 'none':
+            try:
+                recurrence_count = max(1, min(52, int(recurrence_count_raw or 4)))
+            except ValueError:
+                recurrence_count = 4
+            if recurrence_end_raw:
+                try:
+                    recurrence_end = datetime.strptime(recurrence_end_raw, '%Y-%m-%d').date()
+                except ValueError:
+                    recurrence_end = None
+
+        parent_meeting_id = request.POST.get('parent_meeting') or None
 
         meeting = Meeting.objects.create(
             title=title,
@@ -538,95 +734,48 @@ class MeetingCreateView(LoginRequiredMixin, View):
             project_id=request.POST.get('project') or None,
             unit_id=request.POST.get('unit') or None,
             department_id=request.POST.get('department') or None,
+            recurrence=recurrence,
+            recurrence_count=recurrence_count,
+            recurrence_end=recurrence_end,
+            parent_meeting_id=parent_meeting_id,
         )
 
-        # Internal attendees
-        attendee_ids = request.POST.getlist('attendees')
-        for uid in attendee_ids:
-            try:
-                u = User.objects.get(pk=uid)
-                if u != request.user:
-                    MeetingAttendee.objects.get_or_create(
-                        meeting=meeting,
-                        user=u,
-                        defaults={
-                            'is_required': True,
-                            'rsvp': MeetingAttendee.RSVP.INVITED,
-                        }
-                    )
-            except User.DoesNotExist:
-                continue
+        attendee_ids, external_data = _save_attendees_and_external(meeting, request)
 
-        # Organiser is automatically included
-        MeetingAttendee.objects.get_or_create(
-            meeting=meeting,
-            user=request.user,
-            defaults={
-                'rsvp': MeetingAttendee.RSVP.ACCEPTED,
-                'is_required': True,
-                'role': 'Organiser',
-                'responded_at': timezone.now(),
-            }
-        )
-
-        # External attendees
-        ext_names = request.POST.getlist('external_name')
-        ext_emails = request.POST.getlist('external_email')
-        ext_orgs = request.POST.getlist('external_organisation')
-        ext_roles = request.POST.getlist('external_role')
-
-        for i, raw_email in enumerate(ext_emails):
-            email = (raw_email or '').strip()
-            full_name = (ext_names[i] if i < len(ext_names) else '').strip()
-            organisation = (ext_orgs[i] if i < len(ext_orgs) else '').strip()
-            role = (ext_roles[i] if i < len(ext_roles) else '').strip()
-
-            if not email or not full_name:
-                continue
-
-            MeetingExternalAttendee.objects.get_or_create(
-                meeting=meeting,
-                email=email,
-                defaults={
-                    'full_name': full_name,
-                    'organisation': organisation,
-                    'role': role,
-                    'is_required': True,
-                    'rsvp': MeetingExternalAttendee.RSVP.INVITED,
-                }
-            )
-
-        # Linked tasks
         task_ids = request.POST.getlist('linked_tasks')
         if task_ids:
             from apps.tasks.models import Task
             meeting.linked_tasks.set(Task.objects.filter(pk__in=task_ids))
-        else:
-            meeting.linked_tasks.clear()
 
-        start_text = timezone.localtime(meeting.start_datetime).strftime("%d %b %Y at %H:%M")
+        start_text = timezone.localtime(meeting.start_datetime).strftime('%d %b %Y at %H:%M')
 
-        # Internal invite notifications + email
         _notify_attendees(
-            meeting,
-            request.user,
+            meeting, request.user,
             f'Meeting invitation: {meeting.title}',
             f'{request.user.full_name} invited you to "{meeting.title}" on {start_text}.',
         )
-
-        # External invite email
         try:
-            _notify_external_attendees(
-                meeting,
-                request.user,
-                f'Meeting invitation: {meeting.title}',
-            )
-        except NameError:
+            _notify_external_attendees(meeting, request.user, f'Meeting invitation: {meeting.title}')
+        except Exception:
             pass
 
-        messages.success(request, f'Meeting "{meeting.title}" created.')
+        # Generate recurring instances
+        if recurrence != 'none':
+            try:
+                _generate_recurrence_instances(meeting, attendee_ids, external_data)
+                instance_count = min(recurrence_count or 4, 52)
+                messages.success(request, f'Meeting "{meeting.title}" created with {instance_count} recurring instance(s).')
+            except Exception as e:
+                messages.warning(request, f'Meeting created, but recurrence generation failed: {e}')
+        else:
+            messages.success(request, f'Meeting "{meeting.title}" created.')
+
         return redirect('meeting_detail', pk=meeting.pk)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Update
+# ─────────────────────────────────────────────────────────────────────────────
 
 class MeetingUpdateView(LoginRequiredMixin, View):
     template_name = 'meetings/meeting_form.html'
@@ -635,24 +784,21 @@ class MeetingUpdateView(LoginRequiredMixin, View):
         meeting = get_object_or_404(Meeting, pk=pk)
         if not _can_edit_meeting(request.user, meeting):
             return HttpResponseForbidden('Only the organiser can edit this meeting.')
-
         if _meeting_is_locked(meeting):
             messages.error(request, 'This meeting is closed and can no longer be edited.')
             return redirect('meeting_detail', pk=pk)
-
         return render(request, self.template_name, _meeting_form_context(request, meeting))
 
     def post(self, request, pk):
         meeting = get_object_or_404(Meeting, pk=pk)
         if not _can_edit_meeting(request.user, meeting):
             return HttpResponseForbidden('Only the organiser can edit this meeting.')
-
         if _meeting_is_locked(meeting):
             messages.error(request, 'This meeting is closed and can no longer be edited.')
             return redirect('meeting_detail', pk=pk)
 
         start_raw = request.POST.get('start_datetime', '').strip()
-        end_raw = request.POST.get('end_datetime', '').strip()
+        end_raw   = request.POST.get('end_datetime', '').strip()
 
         if not start_raw or not end_raw:
             messages.error(request, 'Start and end date/time are required.')
@@ -660,7 +806,7 @@ class MeetingUpdateView(LoginRequiredMixin, View):
 
         try:
             start_dt = _parse_meeting_datetime(start_raw)
-            end_dt = _parse_meeting_datetime(end_raw)
+            end_dt   = _parse_meeting_datetime(end_raw)
         except ValueError as e:
             messages.error(request, str(e))
             return render(request, self.template_name, _meeting_form_context(request, meeting))
@@ -674,82 +820,22 @@ class MeetingUpdateView(LoginRequiredMixin, View):
             messages.error(request, 'Meeting title is required.')
             return render(request, self.template_name, _meeting_form_context(request, meeting))
 
-        meeting.title = title
+        meeting.title       = title
         meeting.description = request.POST.get('description', '').strip()
         meeting.meeting_type = request.POST.get('meeting_type', meeting.meeting_type)
         meeting.start_datetime = start_dt
-        meeting.end_datetime = end_dt
-        meeting.location = request.POST.get('location', '').strip()
+        meeting.end_datetime   = end_dt
+        meeting.location    = request.POST.get('location', '').strip()
         meeting.virtual_link = request.POST.get('virtual_link', '').strip()
-        meeting.agenda = request.POST.get('agenda', '').strip()
-        meeting.is_private = 'is_private' in request.POST
-        meeting.project_id = request.POST.get('project') or None
-        meeting.unit_id = request.POST.get('unit') or None
+        meeting.agenda      = request.POST.get('agenda', '').strip()
+        meeting.is_private  = 'is_private' in request.POST
+        meeting.project_id  = request.POST.get('project') or None
+        meeting.unit_id     = request.POST.get('unit') or None
         meeting.department_id = request.POST.get('department') or None
-        meeting.status = request.POST.get('status', meeting.status)
+        meeting.status      = request.POST.get('status', meeting.status)
         meeting.save()
 
-        attendee_ids = set(request.POST.getlist('attendees'))
-        existing_ids = set(
-            str(i) for i in meeting.attendees.exclude(user=request.user).values_list('user_id', flat=True)
-        )
-
-        removed_ids = existing_ids - attendee_ids
-        if removed_ids:
-            meeting.attendees.filter(user_id__in=removed_ids).delete()
-
-        new_ids = attendee_ids - existing_ids
-        for uid in new_ids:
-            try:
-                u = User.objects.get(pk=uid)
-                if u != request.user:
-                    MeetingAttendee.objects.get_or_create(
-                        meeting=meeting,
-                        user=u,
-                        defaults={
-                            'is_required': True,
-                            'rsvp': MeetingAttendee.RSVP.INVITED,
-                        }
-                    )
-            except User.DoesNotExist:
-                continue
-
-        MeetingAttendee.objects.get_or_create(
-            meeting=meeting,
-            user=request.user,
-            defaults={
-                'rsvp': MeetingAttendee.RSVP.ACCEPTED,
-                'is_required': True,
-                'role': 'Organiser',
-                'responded_at': timezone.now(),
-            }
-        )
-
-        meeting.external_attendees.all().delete()
-
-        ext_names = request.POST.getlist('external_name')
-        ext_emails = request.POST.getlist('external_email')
-        ext_orgs = request.POST.getlist('external_organisation')
-        ext_roles = request.POST.getlist('external_role')
-
-        for i, raw_email in enumerate(ext_emails):
-            email = (raw_email or '').strip()
-            full_name = (ext_names[i] if i < len(ext_names) else '').strip()
-            organisation = (ext_orgs[i] if i < len(ext_orgs) else '').strip()
-            role = (ext_roles[i] if i < len(ext_roles) else '').strip()
-
-            if not email or not full_name:
-                continue
-
-            MeetingExternalAttendee.objects.create(
-                meeting=meeting,
-                full_name=full_name,
-                email=email,
-                organisation=organisation,
-                role=role,
-                is_required=True,
-                rsvp=MeetingExternalAttendee.RSVP.INVITED,
-            )
+        _save_attendees_and_external(meeting, request, is_update=True)
 
         task_ids = request.POST.getlist('linked_tasks')
         from apps.tasks.models import Task
@@ -758,89 +844,31 @@ class MeetingUpdateView(LoginRequiredMixin, View):
         else:
             meeting.linked_tasks.clear()
 
-        start_text = timezone.localtime(meeting.start_datetime).strftime("%d %b %Y at %H:%M")
-
+        start_text = timezone.localtime(meeting.start_datetime).strftime('%d %b %Y at %H:%M')
         _notify_attendees(
-            meeting,
-            request.user,
+            meeting, request.user,
             f'Meeting updated: {meeting.title}',
             f'The meeting "{meeting.title}" has been updated. It is scheduled for {start_text}.',
         )
-
         try:
-            _notify_external_attendees(
-                meeting,
-                request.user,
-                f'Meeting updated: {meeting.title}',
-            )
-        except NameError:
+            _notify_external_attendees(meeting, request.user, f'Meeting updated: {meeting.title}')
+        except Exception:
             pass
 
         messages.success(request, 'Meeting updated.')
         return redirect('meeting_detail', pk=meeting.pk)
 
 
-class MeetingAttendanceUpdateView(LoginRequiredMixin, View):
-    def post(self, request, pk):
-        meeting = get_object_or_404(Meeting, pk=pk)
+# ─────────────────────────────────────────────────────────────────────────────
+# Follow-up
+# ─────────────────────────────────────────────────────────────────────────────
 
-        if not _can_edit_meeting(request.user, meeting):
-            return HttpResponseForbidden('Only the organiser can manage attendance.')
+class MeetingFollowUpView(LoginRequiredMixin, View):
+    """Redirect to the create form pre-populated from a source meeting."""
+    def get(self, request, pk):
+        get_object_or_404(Meeting, pk=pk)  # 404 guard
+        return redirect(f'/meetings/create/?follow_up_from={pk}')
 
-        if _meeting_is_locked(meeting):
-            messages.error(request, 'Attendance is closed because this meeting has ended or been cancelled.')
-            return redirect('meeting_detail', pk=pk)
-
-        attendee_type = request.POST.get('attendee_type', 'internal')
-        attendee_id = request.POST.get('attendee_id')
-        status = request.POST.get('status')
-
-        allowed = {'attended', 'no_show', 'accepted', 'declined', 'tentative'}
-        if status not in allowed:
-            messages.error(request, 'Invalid attendance status.')
-            return redirect('meeting_detail', pk=pk)
-
-        if attendee_type == 'external':
-            attendee = get_object_or_404(MeetingExternalAttendee, pk=attendee_id, meeting=meeting)
-        else:
-            attendee = get_object_or_404(MeetingAttendee, pk=attendee_id, meeting=meeting)
-
-        attendee.rsvp = status
-        if status == 'attended':
-            attendee.checked_in_at = timezone.now()
-        attendee.responded_at = timezone.now()
-        attendee.save(update_fields=['rsvp', 'checked_in_at', 'responded_at'])
-
-        messages.success(request, 'Attendance updated.')
-        return redirect('meeting_detail', pk=pk)
-
-class ShareMeetingMinutesView(LoginRequiredMixin, View):
-    def post(self, request, pk):
-        meeting = get_object_or_404(Meeting, pk=pk)
-        if not _can_edit_meeting(request.user, meeting):
-            return HttpResponseForbidden('Only the organiser can share minutes.')
-
-        minutes = getattr(meeting, 'minutes', None)
-        if not minutes:
-            messages.error(request, 'No meeting minutes available yet.')
-            return redirect('meeting_detail', pk=pk)
-
-        _notify_attendees(
-            meeting,
-            request.user,
-            f'Meeting minutes shared: {meeting.title}',
-            f'The minutes for "{meeting.title}" are now available.',
-        )
-
-        _notify_external_attendees(
-            meeting,
-            request.user,
-            f'Meeting minutes shared: {meeting.title}',
-            f'The minutes for "{meeting.title}" are now available.'
-        )
-
-        messages.success(request, 'Meeting minutes shared with all attendees.')
-        return redirect('meeting_detail', pk=pk)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Detail
@@ -855,7 +883,7 @@ class MeetingDetailView(LoginRequiredMixin, View):
             return HttpResponseForbidden('You do not have access to this meeting.')
 
         my_invite = meeting.attendees.filter(user=request.user).first()
-        minutes = getattr(meeting, 'minutes', None)
+        minutes   = getattr(meeting, 'minutes', None)
 
         ctx = {
             'meeting': meeting,
@@ -863,21 +891,23 @@ class MeetingDetailView(LoginRequiredMixin, View):
             'external_attendees': meeting.external_attendees.all(),
             'my_invite': my_invite,
             'minutes': minutes,
-            'action_items': minutes.action_items.select_related(
-                'assigned_to', 'linked_task'
-            ).all() if minutes else [],
+            'action_items': minutes.action_items.select_related('assigned_to').all() if minutes else [],
             'can_edit': _can_edit_meeting(request.user, meeting) and not _meeting_is_locked(meeting),
             'can_take_minutes': (
-                (
-                        request.user.is_superuser or
-                        meeting.organizer_id == request.user.id or
-                        meeting.attendees.filter(user=request.user).exists()
-                )
+                request.user.is_superuser or
+                meeting.organizer_id == request.user.id or
+                meeting.attendees.filter(user=request.user).exists()
             ),
             'attendance_open': not _meeting_is_locked(meeting),
             'meeting_locked': _meeting_is_locked(meeting),
             'linked_tasks': meeting.linked_tasks.select_related('assigned_to').all(),
             'rsvp_choices': MeetingAttendee.RSVP.choices,
+            # Recurrence context
+            'recurrence_instances': meeting.recurrence_instances.order_by('start_datetime')[:12]
+                                    if meeting.is_recurring_parent else [],
+            'recurrence_parent': meeting.recurrence_parent,
+            # Follow-up context
+            'follow_up_meetings': meeting.follow_up_meetings.order_by('start_datetime')[:5],
         }
         return render(request, self.template_name, ctx)
 
@@ -893,9 +923,7 @@ class MeetingRSVPView(LoginRequiredMixin, View):
         if rsvp not in dict(MeetingAttendee.RSVP.choices):
             rsvp = 'accepted'
 
-        attendee, _ = MeetingAttendee.objects.get_or_create(
-            meeting=meeting, user=request.user
-        )
+        attendee, _ = MeetingAttendee.objects.get_or_create(meeting=meeting, user=request.user)
         attendee.rsvp = rsvp
         attendee.responded_at = timezone.now()
         attendee.save(update_fields=['rsvp', 'responded_at'])
@@ -918,7 +946,7 @@ class MeetingRSVPView(LoginRequiredMixin, View):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cancel And End
+# Cancel / End
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MeetingCancelView(LoginRequiredMixin, View):
@@ -926,15 +954,11 @@ class MeetingCancelView(LoginRequiredMixin, View):
         meeting = get_object_or_404(Meeting, pk=pk)
         if not _can_edit_meeting(request.user, meeting):
             return HttpResponseForbidden('Only the organiser can cancel this meeting.')
-
         meeting.status = 'cancelled'
         meeting.save(update_fields=['status'])
-
-        _notify_attendees(
-            meeting, request.user,
-            f'Meeting cancelled: {meeting.title}',
-            f'{request.user.full_name} has cancelled "{meeting.title}".',
-        )
+        _notify_attendees(meeting, request.user,
+                          f'Meeting cancelled: {meeting.title}',
+                          f'{request.user.full_name} has cancelled "{meeting.title}".')
         messages.warning(request, f'Meeting "{meeting.title}" cancelled.')
         return redirect('meeting_list')
 
@@ -942,14 +966,11 @@ class MeetingCancelView(LoginRequiredMixin, View):
 class MeetingEndView(LoginRequiredMixin, View):
     def post(self, request, pk):
         meeting = get_object_or_404(Meeting, pk=pk)
-
         if not _can_edit_meeting(request.user, meeting):
             return HttpResponseForbidden('Only the organiser can end this meeting.')
-
         if meeting.status == 'cancelled':
             messages.error(request, 'A cancelled meeting cannot be ended.')
             return redirect('meeting_detail', pk=pk)
-
         if meeting.status == 'completed':
             messages.info(request, 'This meeting has already been ended.')
             return redirect('meeting_detail', pk=pk)
@@ -957,23 +978,52 @@ class MeetingEndView(LoginRequiredMixin, View):
         meeting.status = 'completed'
         meeting.save(update_fields=['status'])
 
-        _notify_attendees(
-            meeting,
-            request.user,
-            f'Meeting ended: {meeting.title}',
-            f'{request.user.full_name} has ended the meeting "{meeting.title}".',
-        )
-
+        _notify_attendees(meeting, request.user,
+                          f'Meeting ended: {meeting.title}',
+                          f'{request.user.full_name} has ended the meeting "{meeting.title}".')
         try:
-            _notify_external_attendees(
-                meeting,
-                request.user,
-                f'Meeting ended: {meeting.title}',
-            )
+            _notify_external_attendees(meeting, request.user, f'Meeting ended: {meeting.title}')
         except Exception:
             pass
 
-        messages.success(request, f'Meeting "{meeting.title}" has been ended. Editing, cancelling, and attendance are now closed.')
+        messages.success(request, f'Meeting "{meeting.title}" has been ended.')
+        return redirect('meeting_detail', pk=pk)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Attendance
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MeetingAttendanceUpdateView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        meeting = get_object_or_404(Meeting, pk=pk)
+        if not _can_edit_meeting(request.user, meeting):
+            return HttpResponseForbidden('Only the organiser can manage attendance.')
+        if _meeting_is_locked(meeting):
+            messages.error(request, 'Attendance is closed.')
+            return redirect('meeting_detail', pk=pk)
+
+        attendee_type = request.POST.get('attendee_type', 'internal')
+        attendee_id   = request.POST.get('attendee_id')
+        status        = request.POST.get('status')
+
+        allowed = {'attended', 'no_show', 'accepted', 'declined', 'tentative'}
+        if status not in allowed:
+            messages.error(request, 'Invalid attendance status.')
+            return redirect('meeting_detail', pk=pk)
+
+        if attendee_type == 'external':
+            attendee = get_object_or_404(MeetingExternalAttendee, pk=attendee_id, meeting=meeting)
+        else:
+            attendee = get_object_or_404(MeetingAttendee, pk=attendee_id, meeting=meeting)
+
+        attendee.rsvp = status
+        if status == 'attended':
+            attendee.checked_in_at = timezone.now()
+        attendee.responded_at = timezone.now()
+        attendee.save(update_fields=['rsvp', 'checked_in_at', 'responded_at'])
+
+        messages.success(request, 'Attendance updated.')
         return redirect('meeting_detail', pk=pk)
 
 
@@ -990,16 +1040,19 @@ class MeetingMinutesView(LoginRequiredMixin, View):
             return HttpResponseForbidden()
 
         minutes, _ = MeetingMinutes.objects.get_or_create(
-            meeting=meeting,
-            defaults={'author': request.user}
+            meeting=meeting, defaults={'author': request.user}
         )
         staff = User.objects.filter(is_active=True).order_by('first_name')
+        external_reviews = minutes.external_reviews.select_related('external_attendee').all() \
+                           if minutes.adoption_status != 'draft' else []
         return render(request, self.template_name, {
             'meeting': meeting,
             'minutes': minutes,
             'action_items': minutes.action_items.select_related('assigned_to').all(),
             'staff_list': staff,
-            'can_edit': not minutes.is_final or request.user.is_superuser,
+            'can_edit': minutes.is_editable or request.user.is_superuser,
+            'action_statuses': MeetingActionItem.ActionStatus.choices,
+            'external_reviews': external_reviews,
         })
 
     def post(self, request, pk):
@@ -1008,65 +1061,99 @@ class MeetingMinutesView(LoginRequiredMixin, View):
             return HttpResponseForbidden()
 
         minutes, _ = MeetingMinutes.objects.get_or_create(
-            meeting=meeting,
-            defaults={'author': request.user}
+            meeting=meeting, defaults={'author': request.user}
         )
 
         action = request.POST.get('action', 'save')
 
-        if not minutes.is_final or request.user.is_superuser:
-            minutes.content = request.POST.get('content', '')
+        # ── SAVE / SUBMIT / ADOPT ──────────────────────────────────────────
+        if action in ('save', 'submit_for_adoption') and (minutes.is_editable or request.user.is_superuser):
+            minutes.content   = request.POST.get('content', '')
             minutes.decisions = request.POST.get('decisions', '')
-            minutes.author = request.user
+            minutes.author    = request.user
 
-            if action == 'finalise':
+            # Rebuild action items
+            minutes.action_items.all().delete()
+            descs    = request.POST.getlist('ai_description')
+            owners   = request.POST.getlist('ai_owner')
+            dues     = request.POST.getlist('ai_due')
+            statuses = request.POST.getlist('ai_status')
+
+            for i, desc in enumerate(descs):
+                desc = desc.strip()
+                if not desc:
+                    continue
+                ai_status = statuses[i] if i < len(statuses) and statuses[i] else 'not_started'
+                if ai_status not in dict(MeetingActionItem.ActionStatus.choices):
+                    ai_status = 'not_started'
+                MeetingActionItem.objects.create(
+                    minutes=minutes,
+                    description=desc,
+                    assigned_to_id=owners[i] if i < len(owners) and owners[i] else None,
+                    due_date=dues[i] if i < len(dues) and dues[i] else None,
+                    status=ai_status,
+                )
+
+            if action == 'submit_for_adoption':
+                minutes.adoption_status = MeetingMinutes.AdoptionStatus.SUBMITTED
                 minutes.is_final = True
                 minutes.finalised_at = timezone.now()
-
-            minutes.save()
-
-            if not minutes.is_final or request.user.is_superuser:
-                minutes.action_items.all().delete()
-                descs = request.POST.getlist('ai_description')
-                owners = request.POST.getlist('ai_owner')
-                dues = request.POST.getlist('ai_due')
-                dones = request.POST.getlist('ai_done')
-                for i, desc in enumerate(descs):
-                    desc = desc.strip()
-                    if not desc:
-                        continue
-                    MeetingActionItem.objects.create(
-                        minutes=minutes,
-                        description=desc,
-                        assigned_to_id=owners[i] if i < len(owners) and owners[i] else None,
-                        due_date=dues[i] if i < len(dues) and dues[i] else None,
-                        is_done=str(i) in dones,
-                    )
-
-            if action == 'finalise':
-                try:
-                    pdf_bytes = _build_minutes_pdf(meeting, minutes)
-                    safe = re.sub(r'[^\w\s-]', '', meeting.title)[:50].replace(' ', '-')
-                    fname = f'Minutes-{safe}-{timezone.localtime(meeting.start_datetime).strftime("%Y%m%d")}.pdf'
-                    _save_minutes_as_file(minutes, pdf_bytes, fname, request.user)
-                    messages.success(request, f'Minutes finalised and saved as "{fname}".')
-                except Exception as e:
-                    messages.warning(request, f'Minutes saved but PDF failed: {e}')
-            else:
-                messages.success(request, 'Draft minutes saved.')
-
-            if action == 'finalise':
+                minutes.save()
+                # Notify internal attendees
                 _notify_attendees(
                     meeting, request.user,
-                    f'Meeting minutes available: {meeting.title}',
-                    f'The minutes for "{meeting.title}" have been finalised.',
+                    f'Minutes submitted for adoption: {meeting.title}',
+                    f'The minutes for "{meeting.title}" have been submitted for adoption. Please review.',
                 )
+                # Issue one-time review tokens to external attendees
+                try:
+                    _notify_external_for_adoption(meeting, minutes, request)
+                except Exception as e:
+                    messages.warning(request, f'External review emails failed: {e}')
+                messages.success(request, 'Minutes submitted for adoption. Attendees have been notified to review.')
+            else:
+                minutes.save()
+                messages.success(request, 'Draft minutes saved.')
+
+        elif action == 'adopt' and not minutes.is_editable:
+            # Organiser or superuser adopts the minutes
+            if not (request.user.is_superuser or meeting.organizer_id == request.user.id):
+                messages.error(request, 'Only the meeting organiser can adopt the minutes.')
+                return redirect('meeting_minutes', pk=pk)
+
+            minutes.adoption_status = MeetingMinutes.AdoptionStatus.ADOPTED
+            minutes.adopted_at = timezone.now()
+            minutes.adopted_by = request.user
+            minutes.adoption_notes = request.POST.get('adoption_notes', '').strip()
+            minutes.save()
+
+            # Generate PDF
+            try:
+                pdf_bytes = _build_minutes_pdf(meeting, minutes)
+                safe  = re.sub(r'[^\w\s-]', '', meeting.title)[:50].replace(' ', '-')
+                fname = f'Minutes-{safe}-{timezone.localtime(meeting.start_datetime).strftime("%Y%m%d")}.pdf'
+                _save_minutes_as_file(minutes, pdf_bytes, fname, request.user)
+                messages.success(request, f'Minutes adopted and saved as "{fname}".')
+            except Exception as e:
+                messages.warning(request, f'Minutes adopted but PDF generation failed: {e}')
+
+            _notify_attendees(
+                meeting, request.user,
+                f'Minutes adopted: {meeting.title}',
+                f'The minutes for "{meeting.title}" have been officially adopted.',
+            )
+
+        elif action == 'reopen' and request.user.is_superuser:
+            minutes.adoption_status = MeetingMinutes.AdoptionStatus.DRAFT
+            minutes.is_final = False
+            minutes.finalised_at = None
+            minutes.save()
+            messages.info(request, 'Minutes reopened for editing (superuser override).')
 
         return redirect('meeting_minutes', pk=pk)
 
 
 def _save_minutes_as_file(minutes, pdf_bytes, filename, user):
-    """Save the minutes PDF into the SharedFile system."""
     from apps.files.models import SharedFile
     sf = SharedFile.objects.create(
         name=filename,
@@ -1088,15 +1175,141 @@ def _save_minutes_as_file(minutes, pdf_bytes, filename, user):
 
 
 class MeetingMinutesPDFView(LoginRequiredMixin, View):
-    """Download the minutes PDF directly."""
     def get(self, request, pk):
         meeting = get_object_or_404(Meeting, pk=pk)
         if not _can_view_meeting(request.user, meeting):
             return HttpResponseForbidden()
         minutes = get_object_or_404(MeetingMinutes, meeting=meeting)
         pdf_bytes = _build_minutes_pdf(meeting, minutes)
-        safe = re.sub(r'[^\w\s-]', '', meeting.title)[:40].replace(' ', '-')
+        safe  = re.sub(r'[^\w\s-]', '', meeting.title)[:40].replace(' ', '-')
         fname = f'Minutes-{safe}.pdf'
-        resp = HttpResponse(pdf_bytes, content_type='application/pdf')
+        resp  = HttpResponse(pdf_bytes, content_type='application/pdf')
         resp['Content-Disposition'] = f'attachment; filename="{fname}"'
         return resp
+
+
+class ShareMeetingMinutesView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        meeting = get_object_or_404(Meeting, pk=pk)
+        if not _can_edit_meeting(request.user, meeting):
+            return HttpResponseForbidden('Only the organiser can share minutes.')
+
+        minutes = getattr(meeting, 'minutes', None)
+        if not minutes:
+            messages.error(request, 'No meeting minutes available yet.')
+            return redirect('meeting_detail', pk=pk)
+
+        _notify_attendees(meeting, request.user,
+                          f'Meeting minutes shared: {meeting.title}',
+                          f'The minutes for "{meeting.title}" are now available.')
+        try:
+            _notify_external_attendees(meeting, request.user, f'Meeting minutes shared: {meeting.title}')
+        except Exception:
+            pass
+
+        messages.success(request, 'Meeting minutes shared with all attendees.')
+        return redirect('meeting_detail', pk=pk)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public: External attendee one-time review link
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MeetingMinutesExternalReviewView(View):
+    """
+    Public (no login required) view served via a one-time token link
+    sent to external attendees when minutes are submitted for adoption.
+    GET  — show the minutes summary + adopt/decline form
+    POST — record the decision and close the token
+    """
+    template_name = 'meetings/meeting_minutes_external_review.html'
+
+    def _get_review(self, token):
+        return get_object_or_404(MeetingMinutesExternalReview, token=token)
+
+    def get(self, request, token):
+        review  = self._get_review(token)
+        meeting = review.minutes.meeting
+        minutes = review.minutes
+        return render(request, self.template_name, {
+            'review':  review,
+            'meeting': meeting,
+            'minutes': minutes,
+            'action_items': minutes.action_items.select_related('assigned_to').all(),
+        })
+
+    def post(self, request, token):
+        review  = self._get_review(token)
+        minutes = review.minutes
+        meeting = minutes.meeting
+
+        if review.is_expired:
+            return render(request, self.template_name, {
+                'review': review, 'meeting': meeting, 'minutes': minutes,
+                'error': 'This review link has expired. Please contact the meeting organiser.',
+            })
+
+        if not review.is_pending:
+            return render(request, self.template_name, {
+                'review': review, 'meeting': meeting, 'minutes': minutes,
+                'error': 'You have already submitted your response for these minutes.',
+            })
+
+        decision = request.POST.get('decision', '')
+        if decision not in ('adopted', 'declined'):
+            return render(request, self.template_name, {
+                'review': review, 'meeting': meeting, 'minutes': minutes,
+                'error': 'Please select either Adopt or Decline.',
+            })
+
+        review.decision   = decision
+        review.comment    = request.POST.get('comment', '').strip()
+        review.decided_at = timezone.now()
+        review.save()
+
+        # Notify the organiser in-app + email
+        ext = review.external_attendee
+        decision_label = review.get_decision_display()
+        comment_text   = f'\n\nComment: {review.comment}' if review.comment else ''
+
+        try:
+            from apps.core.models import CoreNotification
+            CoreNotification.objects.create(
+                recipient=meeting.organizer,
+                sender=None,
+                notification_type='meeting',
+                title=f'External review: {ext.full_name} {decision_label} the minutes',
+                message=(
+                    f'{ext.full_name} ({ext.email}) has {decision_label.lower()} '
+                    f'the minutes for "{meeting.title}".{comment_text}'
+                ),
+                link=f'/meetings/{meeting.id}/minutes/',
+            )
+        except Exception:
+            pass
+
+        try:
+            send_mail(
+                subject=f'External review response: {meeting.title}',
+                message=(
+                    f'Hello {meeting.organizer.full_name},\n\n'
+                    f'{ext.full_name} ({ext.email}) has submitted their review:\n\n'
+                    f'Decision: {decision_label}\n'
+                    f'Meeting: {meeting.title}\n'
+                    f'Date: {timezone.localtime(meeting.start_datetime).strftime("%d %b %Y at %H:%M")}'
+                    f'{comment_text}\n\n'
+                    f'— EasyOffice'
+                ),
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
+                recipient_list=[meeting.organizer.email],
+                fail_silently=True,
+            )
+        except Exception:
+            pass
+
+        return render(request, self.template_name, {
+            'review':    review,
+            'meeting':   meeting,
+            'minutes':   minutes,
+            'submitted': True,
+        })

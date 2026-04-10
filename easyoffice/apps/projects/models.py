@@ -132,6 +132,23 @@ class Survey(models.Model):
         default=False,
         help_text='When enabled, respondents are not recorded'
     )
+
+    # ── Public access (no login required) ────────────────────────────────────
+    is_public = models.BooleanField(
+        default=False,
+        help_text='Allow anyone with the link to respond without logging in'
+    )
+    public_token = models.UUIDField(
+        null=True,
+        blank=True,
+        editable=False,
+        help_text='Unique token used in the public share link'
+    )
+    allow_multiple_responses = models.BooleanField(
+        default=False,
+        help_text='Allow the same device/IP to submit more than once (public surveys only)'
+    )
+
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_surveys')
     created_at = models.DateTimeField(auto_now_add=True)
     closes_at = models.DateField(null=True, blank=True, help_text='Leave blank to keep open indefinitely')
@@ -145,6 +162,10 @@ class Survey(models.Model):
     @property
     def response_count(self):
         return self.responses.count()
+
+    def get_public_url(self):
+        from django.urls import reverse
+        return reverse('survey_public', kwargs={'token': self.public_token})
 
 
 class SurveyQuestion(models.Model):
@@ -183,9 +204,22 @@ class SurveyResponse(models.Model):
     survey = models.ForeignKey(Survey, on_delete=models.CASCADE, related_name='responses')
     respondent = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True,
-        help_text='Null when anonymous'
+        help_text='Null when anonymous or public'
     )
     respondent_name = models.CharField(max_length=120, blank=True)
+
+    # ── Capture fields for public responses ──────────────────────────────────
+    ip_address = models.GenericIPAddressField(
+        null=True, blank=True,
+        help_text='Captured from the request for public submissions'
+    )
+    device_id = models.CharField(
+        max_length=128, blank=True,
+        help_text='Browser fingerprint sent by the client (FingerprintJS)'
+    )
+    user_agent = models.TextField(blank=True)
+    is_public_response = models.BooleanField(default=False)
+
     submitted_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

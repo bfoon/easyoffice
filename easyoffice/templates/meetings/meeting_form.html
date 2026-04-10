@@ -2,19 +2,34 @@
 {% block title %}{% if mode == 'create' %}New Meeting{% else %}Edit Meeting{% endif %}{% endblock %}
 {% block breadcrumb %}
   <a href="{% url 'meeting_list' %}">Meetings</a> /
-  {% if mode == 'create' %}New Meeting{% else %}Edit{{ meeting.title|truncatechars:30 }}{% endif %}
+  {% if mode == 'create' %}New Meeting{% else %}Edit {{ meeting.title|truncatechars:30 }}{% endif %}
 {% endblock %}
 
 {% block content %}
 <div class="eo-page-header">
   <h1 class="eo-page-title">
     <i class="bi bi-calendar-plus" style="color:var(--eo-primary)"></i>
-    {% if mode == 'create' %}Schedule New Meeting{% else %}Edit Meeting{% endif %}
+    {% if mode == 'create' %}
+      {% if prefill %}Schedule Follow-up Meeting{% else %}Schedule New Meeting{% endif %}
+    {% else %}
+      Edit Meeting
+    {% endif %}
   </h1>
 </div>
 
+{% if prefill and mode == 'create' %}
+<div style="padding:12px 16px;border-radius:10px;margin-bottom:20px;background:#dbeafe;border:1px solid #93c5fd;color:#1e40af;font-size:.87rem;display:flex;align-items:center;gap:10px">
+  <i class="bi bi-arrow-right-circle-fill"></i>
+  <span>This is a <strong>follow-up</strong> to <strong>{{ prefill.title }}</strong>. Attendees and settings have been pre-filled.</span>
+  <input type="hidden" name="parent_meeting" value="{{ prefill.pk }}"/>
+</div>
+{% endif %}
+
 <form method="post">
   {% csrf_token %}
+  {% if prefill and mode == 'create' %}
+  <input type="hidden" name="parent_meeting" value="{{ prefill.pk }}"/>
+  {% endif %}
   <div class="row g-4">
 
     <!-- ── LEFT ── -->
@@ -27,7 +42,8 @@
         <div class="eo-form-group">
           <label class="eo-form-label">Meeting Title *</label>
           <input type="text" name="title" class="eo-form-control" required
-                 placeholder="e.g. Weekly Team Sync" value="{{ meeting.title|default:'' }}"/>
+                 placeholder="e.g. Weekly Team Sync"
+                 value="{% if prefill and mode == 'create' %}Follow-up: {{ prefill.title|truncatechars:60 }}{% else %}{{ meeting.title|default:'' }}{% endif %}"/>
         </div>
 
         <div class="eo-form-group">
@@ -38,7 +54,9 @@
                           border-radius:10px;cursor:pointer;transition:border-color .14s,background .14s"
                    class="meeting-type-opt">
               <input type="radio" name="meeting_type" value="{{ val }}"
-                     {% if meeting.meeting_type == val or not meeting and val == 'team' %}checked{% endif %}
+                     {% if meeting.meeting_type == val %}checked
+                     {% elif prefill and prefill.meeting_type == val %}checked
+                     {% elif not meeting and not prefill and val == 'team' %}checked{% endif %}
                      style="display:none" onchange="onTypeChange(this)"/>
               <div>
                 <div style="font-size:.85rem;font-weight:600;color:var(--eo-text)">{{ label }}</div>
@@ -51,13 +69,13 @@
         <div class="eo-form-group">
           <label class="eo-form-label">Description / Purpose</label>
           <textarea name="description" class="eo-form-control" rows="3"
-                    placeholder="What is this meeting about?">{{ meeting.description|default:'' }}</textarea>
+                    placeholder="What is this meeting about?">{% if prefill and mode == 'create' %}{{ prefill.description }}{% else %}{{ meeting.description|default:'' }}{% endif %}</textarea>
         </div>
 
         <div class="eo-form-group">
           <label class="eo-form-label">Agenda</label>
           <textarea name="agenda" class="eo-form-control" rows="4"
-                    placeholder="List agenda items, e.g.:&#10;1. Review last week's actions&#10;2. Project status updates&#10;3. AOB">{{ meeting.agenda|default:'' }}</textarea>
+                    placeholder="List agenda items…">{% if prefill and mode == 'create' %}{% else %}{{ meeting.agenda|default:'' }}{% endif %}</textarea>
         </div>
 
         <div class="row g-3">
@@ -78,31 +96,78 @@
             <label class="eo-form-label">Location <span style="font-weight:400;color:var(--eo-text-muted)">(room or address)</span></label>
             <input type="text" name="location" class="eo-form-control"
                    placeholder="e.g. Conference Room A, or Virtual"
-                   value="{{ meeting.location|default:'' }}"/>
+                   value="{% if prefill and mode == 'create' %}{{ prefill.location }}{% else %}{{ meeting.location|default:'' }}{% endif %}"/>
           </div>
           <div class="col-sm-6">
             <label class="eo-form-label">Virtual Link <span style="font-weight:400;color:var(--eo-text-muted)">(Zoom/Meet/Teams)</span></label>
             <input type="url" name="virtual_link" class="eo-form-control"
                    placeholder="https://zoom.us/j/…"
-                   value="{{ meeting.virtual_link|default:'' }}"/>
+                   value="{% if prefill and mode == 'create' %}{{ prefill.virtual_link }}{% else %}{{ meeting.virtual_link|default:'' }}{% endif %}"/>
           </div>
         </div>
       </div>
+
+      <!-- Recurrence (create only, not for follow-ups) -->
+      {% if mode == 'create' and not prefill %}
+      <div class="eo-card mb-4">
+        <h2 class="eo-card-title mb-1">Recurrence</h2>
+        <p style="font-size:.82rem;color:var(--eo-text-muted);margin-bottom:16px">
+          Automatically create multiple instances of this meeting on a schedule.
+        </p>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Repeat</label>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">
+            {% for val, label in recurrence_types %}
+            <label style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 8px;
+                          border:1.5px solid var(--eo-border);border-radius:10px;cursor:pointer;
+                          transition:border-color .14s,background .14s;text-align:center"
+                   class="recurrence-opt">
+              <input type="radio" name="recurrence" value="{{ val }}"
+                     {% if val == 'none' %}checked{% endif %}
+                     style="display:none" onchange="onRecurrenceChange(this)"/>
+              <div style="font-size:.82rem;font-weight:600;color:var(--eo-text)">{{ label }}</div>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div id="recurrenceOptions" style="display:none">
+          <div class="row g-3 mt-1">
+            <div class="col-sm-6">
+              <label class="eo-form-label">Number of Occurrences</label>
+              <input type="number" name="recurrence_count" class="eo-form-control"
+                     min="1" max="52" value="4" placeholder="e.g. 8"/>
+              <div style="font-size:.73rem;color:var(--eo-text-muted);margin-top:4px">Max 52. Leave blank for default (4).</div>
+            </div>
+            <div class="col-sm-6">
+              <label class="eo-form-label">End Date <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span></label>
+              <input type="date" name="recurrence_end" class="eo-form-control"
+                     placeholder="Stop after this date"/>
+              <div style="font-size:.73rem;color:var(--eo-text-muted);margin-top:4px">If both are set, the earlier limit applies.</div>
+            </div>
+          </div>
+          <div style="margin-top:12px;padding:10px 14px;background:var(--eo-bg);border-radius:10px;
+                      border:1px solid var(--eo-border);font-size:.82rem;color:var(--eo-text-muted)">
+            <i class="bi bi-info-circle me-1"></i>
+            Instances will share the same attendees, location, and type. Each can be individually edited after creation.
+          </div>
+        </div>
+      </div>
+      {% endif %}
 
       <!-- Attendees -->
       <div class="eo-card mb-4">
         <h2 class="eo-card-title mb-1">Invite Attendees</h2>
         <p style="font-size:.82rem;color:var(--eo-text-muted);margin-bottom:14px">
-          You (as organiser) are automatically included. Select additional participants.
+          You (as organiser) are automatically included.{% if prefill and mode == 'create' %} Attendees from the original meeting are pre-selected.{% endif %}
         </p>
-
         <div style="position:relative;margin-bottom:10px">
           <i class="bi bi-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.8rem"></i>
           <input type="text" id="attendeeSearch" placeholder="Search staff…"
                  style="width:100%;padding:8px 12px 8px 32px;border:1px solid var(--eo-border);border-radius:8px;
                         background:var(--eo-bg);color:var(--eo-text);font-size:.84rem;outline:none"/>
         </div>
-
         <div style="max-height:260px;overflow-y:auto;border:1px solid var(--eo-border);border-radius:10px" id="attendeeList">
           {% for user in staff_list %}
           <label style="display:flex;align-items:center;gap:12px;padding:9px 14px;cursor:pointer;
@@ -131,6 +196,7 @@
         </div>
       </div>
 
+      <!-- External Attendees -->
       <div class="eo-card mb-4">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
           <div>
@@ -143,29 +209,19 @@
             <i class="bi bi-plus-lg"></i> Add External
           </button>
         </div>
-
         <div id="externalAttendeeWrap" style="display:flex;flex-direction:column;gap:10px">
           {% for ext in external_attendees %}
           <div class="external-attendee-row row g-2">
-            <div class="col-md-3">
-              <input type="text" name="external_name" class="eo-form-control" placeholder="Full name" value="{{ ext.full_name }}">
-            </div>
-            <div class="col-md-3">
-              <input type="email" name="external_email" class="eo-form-control" placeholder="Email" value="{{ ext.email }}">
-            </div>
-            <div class="col-md-3">
-              <input type="text" name="external_organisation" class="eo-form-control" placeholder="Organisation" value="{{ ext.organisation }}">
-            </div>
-            <div class="col-md-2">
-              <input type="text" name="external_role" class="eo-form-control" placeholder="Role" value="{{ ext.role }}">
-            </div>
+            <div class="col-md-3"><input type="text" name="external_name" class="eo-form-control" placeholder="Full name" value="{{ ext.full_name }}"></div>
+            <div class="col-md-3"><input type="email" name="external_email" class="eo-form-control" placeholder="Email" value="{{ ext.email }}"></div>
+            <div class="col-md-3"><input type="text" name="external_organisation" class="eo-form-control" placeholder="Organisation" value="{{ ext.organisation }}"></div>
+            <div class="col-md-2"><input type="text" name="external_role" class="eo-form-control" placeholder="Role" value="{{ ext.role }}"></div>
             <div class="col-md-1">
               <button type="button" class="eo-btn eo-btn-danger eo-btn-sm w-100" onclick="this.closest('.external-attendee-row').remove()">
                 <i class="bi bi-trash"></i>
               </button>
             </div>
           </div>
-          {% empty %}
           {% endfor %}
         </div>
       </div>
@@ -190,7 +246,6 @@
     <!-- ── RIGHT ── -->
     <div class="col-lg-4">
 
-      <!-- Options -->
       <div class="eo-card mb-4">
         <h2 class="eo-card-title mb-4">Options</h2>
 
@@ -211,7 +266,9 @@
           <select name="project" class="eo-form-select">
             <option value="">— No project —</option>
             {% for proj in projects %}
-            <option value="{{ proj.id }}" {% if meeting.project_id == proj.id %}selected{% endif %}>
+            <option value="{{ proj.id }}"
+                    {% if meeting.project_id == proj.id %}selected
+                    {% elif prefill and prefill.project_id == proj.id %}selected{% endif %}>
               [{{ proj.code }}] {{ proj.name }}
             </option>
             {% endfor %}
@@ -220,11 +277,13 @@
 
         {% if units %}
         <div class="eo-form-group">
-          <label class="eo-form-label">Unit <span style="font-weight:400;color:var(--eo-text-muted)">(for unit meetings)</span></label>
+          <label class="eo-form-label">Unit</label>
           <select name="unit" class="eo-form-select">
             <option value="">— None —</option>
             {% for unit in units %}
-            <option value="{{ unit.id }}" {% if meeting.unit_id == unit.id %}selected{% endif %}>{{ unit.name }}</option>
+            <option value="{{ unit.id }}"
+                    {% if meeting.unit_id == unit.id %}selected
+                    {% elif prefill and prefill.unit_id == unit.id %}selected{% endif %}>{{ unit.name }}</option>
             {% endfor %}
           </select>
         </div>
@@ -236,14 +295,17 @@
           <select name="department" class="eo-form-select">
             <option value="">— None —</option>
             {% for dept in departments %}
-            <option value="{{ dept.id }}" {% if meeting.department_id == dept.id %}selected{% endif %}>{{ dept.name }}</option>
+            <option value="{{ dept.id }}"
+                    {% if meeting.department_id == dept.id %}selected
+                    {% elif prefill and prefill.department_id == dept.id %}selected{% endif %}>{{ dept.name }}</option>
             {% endfor %}
           </select>
         </div>
         {% endif %}
 
         <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px 0">
-          <input type="checkbox" name="is_private" {% if meeting.is_private %}checked{% endif %}
+          <input type="checkbox" name="is_private"
+                 {% if meeting.is_private %}checked{% elif prefill and prefill.is_private %}checked{% endif %}
                  style="width:18px;height:18px;cursor:pointer"/>
           <div>
             <div style="font-size:.86rem;font-weight:600;color:var(--eo-text)">Private meeting</div>
@@ -252,11 +314,14 @@
         </label>
       </div>
 
-      <!-- Actions -->
       <div class="eo-card">
         <button type="submit" class="eo-btn eo-btn-primary w-100 mb-2" style="padding:11px">
           <i class="bi bi-{% if mode == 'create' %}calendar-plus{% else %}floppy{% endif %}"></i>
-          {% if mode == 'create' %}Schedule Meeting{% else %}Save Changes{% endif %}
+          {% if mode == 'create' %}
+            {% if prefill %}Schedule Follow-up{% else %}Schedule Meeting{% endif %}
+          {% else %}
+            Save Changes
+          {% endif %}
         </button>
         <a href="{% if mode == 'edit' %}{% url 'meeting_detail' meeting.pk %}{% else %}{% url 'meeting_list' %}{% endif %}"
            class="eo-btn eo-btn-secondary w-100">Cancel</a>
@@ -270,15 +335,28 @@
 // Highlight selected meeting type radio
 document.querySelectorAll('.meeting-type-opt').forEach(function(label) {
   var radio = label.querySelector('input[type=radio]');
-  if (radio.checked) label.style.borderColor = 'var(--eo-primary)';
+  if (radio.checked) { label.style.borderColor = 'var(--eo-primary)'; label.style.background = 'var(--eo-primary)08'; }
   radio.addEventListener('change', function() {
     document.querySelectorAll('.meeting-type-opt').forEach(function(l) {
-      l.style.borderColor = 'var(--eo-border)';
-      l.style.background  = '';
+      l.style.borderColor = 'var(--eo-border)'; l.style.background = '';
     });
     label.style.borderColor = 'var(--eo-primary)';
     label.style.background  = 'var(--eo-primary)08';
   });
+});
+
+// Recurrence radio styling
+function onRecurrenceChange(radio) {
+  document.querySelectorAll('.recurrence-opt').forEach(function(l) {
+    l.style.borderColor = 'var(--eo-border)'; l.style.background = '';
+  });
+  var label = radio.closest('.recurrence-opt');
+  if (label) { label.style.borderColor = 'var(--eo-primary)'; label.style.background = 'var(--eo-primary)08'; }
+  document.getElementById('recurrenceOptions').style.display = radio.value !== 'none' ? 'block' : 'none';
+}
+document.querySelectorAll('.recurrence-opt').forEach(function(label) {
+  var radio = label.querySelector('input[type=radio]');
+  if (radio && radio.checked) onRecurrenceChange(radio);
 });
 
 // Attendee search
@@ -294,33 +372,21 @@ function updateCount() {
   document.getElementById('attendeeCount').textContent = n;
 }
 updateCount();
-</script>
 
-
-<script>
 function addExternalRow() {
   const wrap = document.getElementById('externalAttendeeWrap');
   const row = document.createElement('div');
   row.className = 'external-attendee-row row g-2';
   row.innerHTML = `
-    <div class="col-md-3">
-      <input type="text" name="external_name" class="eo-form-control" placeholder="Full name">
-    </div>
-    <div class="col-md-3">
-      <input type="email" name="external_email" class="eo-form-control" placeholder="Email">
-    </div>
-    <div class="col-md-3">
-      <input type="text" name="external_organisation" class="eo-form-control" placeholder="Organisation">
-    </div>
-    <div class="col-md-2">
-      <input type="text" name="external_role" class="eo-form-control" placeholder="Role">
-    </div>
+    <div class="col-md-3"><input type="text" name="external_name" class="eo-form-control" placeholder="Full name"></div>
+    <div class="col-md-3"><input type="email" name="external_email" class="eo-form-control" placeholder="Email"></div>
+    <div class="col-md-3"><input type="text" name="external_organisation" class="eo-form-control" placeholder="Organisation"></div>
+    <div class="col-md-2"><input type="text" name="external_role" class="eo-form-control" placeholder="Role"></div>
     <div class="col-md-1">
       <button type="button" class="eo-btn eo-btn-danger eo-btn-sm w-100" onclick="this.closest('.external-attendee-row').remove()">
         <i class="bi bi-trash"></i>
       </button>
-    </div>
-  `;
+    </div>`;
   wrap.appendChild(row);
 }
 </script>

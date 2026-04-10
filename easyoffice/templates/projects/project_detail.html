@@ -636,15 +636,23 @@
           <h2 class="eo-card-title">Risks</h2>
           <p class="eo-card-subtitle">{{ active_risks.count }} open · {{ resolved_risks.count }} resolved</p>
         </div>
-        {% if is_member %}
-        <button onclick="openModal('riskModal')" class="eo-btn eo-btn-secondary eo-btn-sm">
-          <i class="bi bi-plus"></i> Log
-        </button>
-        {% endif %}
+        <div style="display:flex;gap:6px;align-items:center">
+          {% if resolved_risks.count %}
+          <button onclick="toggleResolvedRisks()" id="resolvedRisksToggle"
+                  class="eo-btn eo-btn-secondary eo-btn-sm" style="font-size:.72rem">
+            <i class="bi bi-eye" id="resolvedRisksIcon"></i> Resolved
+          </button>
+          {% endif %}
+          {% if is_member %}
+          <button onclick="openModal('riskModal')" class="eo-btn eo-btn-secondary eo-btn-sm">
+            <i class="bi bi-plus"></i> Log
+          </button>
+          {% endif %}
+        </div>
       </div>
 
       {% if active_risks %}
-      <div style="display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;flex-direction:column;gap:8px" id="activeRisksContainer">
         {% for risk in active_risks %}
         <div style="padding:12px;background:var(--eo-bg);border-radius:8px;border-left:3px solid
           {% if risk.level == 'critical' %}#db2777
@@ -678,9 +686,42 @@
         {% endfor %}
       </div>
       {% else %}
-      <div style="text-align:center;padding:24px;color:var(--eo-text-muted)">
+      <div style="text-align:center;padding:24px;color:var(--eo-text-muted)" id="activeRisksContainer">
         <i class="bi bi-shield-check" style="font-size:1.6rem;display:block;margin-bottom:6px;color:var(--eo-success)"></i>
         <p style="font-size:.82rem">No open risks. Great work!</p>
+      </div>
+      {% endif %}
+
+      {# ── Resolved Risks (hidden by default) ─────────────────────────────── #}
+      {% if resolved_risks %}
+      <div id="resolvedRisksContainer" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--eo-border)">
+        <div style="font-size:.72rem;font-weight:700;color:var(--eo-text-muted);letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px">
+          <i class="bi bi-check-circle me-1" style="color:var(--eo-success)"></i>Resolved ({{ resolved_risks.count }})
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          {% for risk in resolved_risks %}
+          <div style="padding:12px;background:var(--eo-bg);border-radius:8px;border-left:3px solid #10b981;opacity:.75">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:5px">
+              <span style="font-size:.85rem;font-weight:600;color:var(--eo-text-muted);text-decoration:line-through">{{ risk.title }}</span>
+              <span style="font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:4px;flex-shrink:0;background:#d1fae5;color:#065f46">
+                Resolved
+              </span>
+            </div>
+            <p style="font-size:.77rem;color:var(--eo-text-muted);margin:0 0 6px;line-height:1.5">{{ risk.description|truncatechars:80 }}</p>
+            {% if is_member %}
+            <form method="post" action="{% url 'project_risk' project.pk %}" style="margin-top:8px">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="unresolve"/>
+              <input type="hidden" name="risk_id" value="{{ risk.id }}"/>
+              <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm"
+                      style="font-size:.72rem;padding:3px 10px">
+                <i class="bi bi-arrow-counterclockwise"></i> Re-open
+              </button>
+            </form>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
       </div>
       {% endif %}
     </div>
@@ -937,7 +978,7 @@
           {% if surveys %}
           <div style="display:flex;flex-direction:column;gap:6px">
             {% for survey in surveys %}
-            <a href="{% url 'survey_detail' project.pk survey.pk %}" style="text-decoration:none;display:block">
+            <a href="{% url 'survey_dashboard' project.pk survey.pk %}" style="text-decoration:none;display:block">
               <div style="padding:9px 12px;border:1px solid var(--eo-border);border-radius:8px;
                           transition:border-color .12s,background .12s"
                    onmouseover="this.style.borderColor='#8b5cf6';this.style.background='var(--eo-bg)'"
@@ -1899,6 +1940,15 @@ function renderGanttSVG() {
   parts.push('</svg>');
 
   container.innerHTML = parts.join('');
+}
+
+function toggleResolvedRisks() {
+  var container = document.getElementById('resolvedRisksContainer');
+  var icon = document.getElementById('resolvedRisksIcon');
+  if (!container) return;
+  var isHidden = container.style.display === 'none';
+  container.style.display = isHidden ? 'block' : 'none';
+  icon.className = isHidden ? 'bi bi-eye-slash' : 'bi bi-eye';
 }
 </script>
 {% endblock %}

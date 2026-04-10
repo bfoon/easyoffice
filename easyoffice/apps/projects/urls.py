@@ -13,12 +13,20 @@ urlpatterns = [
     path('<uuid:pk>/risk/', views.ProjectRiskView.as_view(), name='project_risk'),
     path('<uuid:pk>/gantt-pdf/', views.ProjectGanttPDFView.as_view(), name='project_gantt_pdf'),
 
-    # ── 🗳  Quick Survey ─────────────────────────────────────────────────────
+    # ── 🗳  Surveys ──────────────────────────────────────────────────────────
     path('<uuid:pk>/surveys/', views.ProjectSurveyListView.as_view(), name='project_surveys'),
     path('<uuid:pk>/surveys/<uuid:sid>/', views.SurveyDetailView.as_view(), name='survey_detail'),
+    path('<uuid:pk>/surveys/<uuid:sid>/edit/', views.SurveyEditView.as_view(), name='survey_edit'),
     path('<uuid:pk>/surveys/<uuid:sid>/submit/', views.SurveySubmitView.as_view(), name='survey_submit'),
     path('<uuid:pk>/surveys/<uuid:sid>/toggle/', views.SurveyToggleView.as_view(), name='survey_toggle'),
     path('<uuid:pk>/surveys/<uuid:sid>/delete/', views.SurveyDeleteView.as_view(), name='survey_delete'),
+
+    # Public survey — no login required (token-based)
+    path('surveys/public/<uuid:token>/', views.PublicSurveyView.as_view(), name='survey_public'),
+
+    # Live dashboard API (JSON) + full dashboard page
+    path('<uuid:pk>/surveys/<uuid:sid>/dashboard/', views.SurveyDashboardView.as_view(), name='survey_dashboard'),
+    path('<uuid:pk>/surveys/<uuid:sid>/dashboard/data/', views.SurveyDashboardDataView.as_view(), name='survey_dashboard_data'),
 
     # ── 📊  Tracking Sheet ───────────────────────────────────────────────────
     path('<uuid:pk>/tracking/', views.TrackingSheetView.as_view(), name='project_tracking'),
@@ -33,9 +41,12 @@ urlpatterns = [
     path('<uuid:pk>/locations/add/', views.ProjectLocationAddView.as_view(), name='location_add'),
     path('<uuid:pk>/locations/<uuid:lid>/edit/', views.ProjectLocationEditView.as_view(), name='location_edit'),
     path('<uuid:pk>/locations/<uuid:lid>/delete/', views.ProjectLocationDeleteView.as_view(), name='location_delete'),
-    path('<uuid:pk>/locations/export/html/', views.LocationMapHTMLExportView.as_view(), name='location_export_html'),
+    path('<uuid:pk>/locations/import/', views.ProjectLocationImportView.as_view(), name='location_import'),
+    path('<uuid:pk>/locations/template/<str:fmt>/', views.LocationTemplateDownloadView.as_view(), name='location_template'),
     path('<uuid:pk>/locations/export/pdf/', views.LocationMapPDFExportView.as_view(), name='location_export_pdf'),
+    path('<uuid:pk>/locations/export/html/', views.LocationMapHTMLExportView.as_view(), name='location_export_html'),
 
+    # ── 📎  Documents ────────────────────────────────────────────────────────
     path('<uuid:pk>/documents/link/', views.ProjectDocumentLinkView.as_view(), name='project_document_link'),
     path('<uuid:pk>/documents/unlink/<uuid:file_id>/', views.ProjectDocumentUnlinkView.as_view(), name='project_document_unlink'),
 ]

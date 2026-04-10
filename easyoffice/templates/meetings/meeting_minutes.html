@@ -30,13 +30,11 @@
 .mn-btn:hover{ background:var(--eo-bg);border-color:var(--eo-border);color:var(--eo-text); }
 .mn-btn.wide{ width:auto;padding:0 10px;font-size:.75rem;font-weight:700; }
 .mn-sep{ width:1px;height:18px;background:var(--eo-border);margin:0 4px; }
-
 .mn-section-label {
   font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
   color:var(--eo-text-muted);padding:14px 18px 4px;background:var(--eo-bg);
   border-top:1px solid var(--eo-border);
 }
-
 textarea.mn-area {
   width:100%;border:none;outline:none;
   padding:14px 18px;font-size:.95rem;line-height:1.75;
@@ -45,8 +43,8 @@ textarea.mn-area {
 }
 textarea.mn-area::placeholder{ color:var(--eo-text-muted); }
 
-/* Action items table */
-.ai-row { display:grid; grid-template-columns:1fr 160px 130px 36px; gap:8px; align-items:center; margin-bottom:8px; }
+/* Action items */
+.ai-row { display:grid; grid-template-columns:1fr 150px 120px 130px 36px; gap:8px; align-items:center; margin-bottom:8px; }
 @media(max-width:640px){ .ai-row{ grid-template-columns:1fr; } }
 </style>
 
@@ -58,7 +56,14 @@ textarea.mn-area::placeholder{ color:var(--eo-text-muted); }
         <i class="bi {{ meeting.type_icon }} me-1"></i>{{ meeting.get_meeting_type_display }}
         &nbsp;·&nbsp;{{ meeting.start_datetime|date:"N j, Y · H:i" }}
       </div>
-      <h1 style="font-size:1.3rem;font-weight:800;color:#fff;margin:0">{{ meeting.title }}</h1>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <h1 style="font-size:1.3rem;font-weight:800;color:#fff;margin:0">{{ meeting.title }}</h1>
+        <span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:999px;font-size:.74rem;font-weight:700;
+                     background:rgba(0,0,0,.18);color:#fff">
+          <i class="bi {% if minutes.adoption_status == 'adopted' %}bi-patch-check-fill{% elif minutes.adoption_status == 'submitted' %}bi-send-fill{% else %}bi-pencil{% endif %}"></i>
+          {{ minutes.get_adoption_status_display }}
+        </span>
+      </div>
     </div>
     <a href="{% url 'meeting_detail' meeting.pk %}" class="eo-btn eo-btn-sm"
        style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.35)">
@@ -67,15 +72,58 @@ textarea.mn-area::placeholder{ color:var(--eo-text-muted); }
   </div>
 </div>
 
-{% if minutes.is_final and not request.user.is_superuser %}
-<!-- Read-only view -->
-<div style="padding:12px 16px;border-radius:10px;margin-bottom:16px;background:#d1fae5;border:1px solid #6ee7b7;color:#065f46;font-size:.87rem">
-  <i class="bi bi-lock-fill me-2"></i>These minutes have been <strong>finalised</strong> and are read-only.
-  <a href="{% url 'meeting_minutes_pdf' meeting.pk %}" class="ms-3" style="color:#065f46;font-weight:700">
-    <i class="bi bi-download me-1"></i>Download PDF
-  </a>
+{# ────────── ADOPTED — fully read-only ────────── #}
+{% if minutes.adoption_status == 'adopted' %}
+<div style="padding:14px 18px;border-radius:12px;margin-bottom:18px;
+            background:#d1fae5;border:1px solid #6ee7b7;color:#065f46;font-size:.87rem;
+            display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+  <div style="display:flex;align-items:center;gap:10px">
+    <i class="bi bi-patch-check-fill" style="font-size:1.1rem"></i>
+    <div>
+      <strong>These minutes have been officially adopted</strong> and are locked.
+      {% if minutes.adopted_by %}Adopted by <strong>{{ minutes.adopted_by.full_name }}</strong>{% if minutes.adopted_at %} on {{ minutes.adopted_at|date:"N j, Y" }}{% endif %}.{% endif %}
+    </div>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a href="{% url 'meeting_minutes_pdf' meeting.pk %}" class="eo-btn eo-btn-sm"
+       style="background:#065f46;color:#fff;border-color:#065f46">
+      <i class="bi bi-download me-1"></i>Download PDF
+    </a>
+    {% if request.user.is_superuser %}
+    <form method="post" style="display:inline" onsubmit="return confirm('Reopen for editing? (Superuser override)')">
+      {% csrf_token %}
+      <button name="action" value="reopen" class="eo-btn eo-btn-sm eo-btn-warning">
+        <i class="bi bi-unlock"></i> Reopen
+      </button>
+    </form>
+    {% endif %}
+  </div>
 </div>
-<!-- Show read-only content -->
+
+{# ────────── SUBMITTED — awaiting adoption ────────── #}
+{% elif minutes.adoption_status == 'submitted' %}
+<div style="padding:14px 18px;border-radius:12px;margin-bottom:18px;
+            background:#dbeafe;border:1px solid #93c5fd;color:#1e40af;font-size:.87rem">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:10px">
+      <i class="bi bi-send-fill" style="font-size:1.1rem"></i>
+      <div>
+        <strong>Submitted for adoption.</strong> The minutes are locked and shared with attendees for review.
+        Attendees can discuss; the <strong>organiser</strong> adopts them once consensus is reached.
+      </div>
+    </div>
+    {% if can_edit or request.user == meeting.organizer or request.user.is_superuser %}
+    <button type="button" onclick="document.getElementById('adoptModal').style.display='flex'"
+            class="eo-btn eo-btn-primary eo-btn-sm" style="flex-shrink:0">
+      <i class="bi bi-patch-check-fill me-1"></i> Adopt Minutes
+    </button>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{# ────────── READ-ONLY body (submitted or adopted) ────────── #}
+{% if not can_edit and not request.user.is_superuser %}
 <div class="mn-layout">
   <div>
     {% if minutes.content %}
@@ -90,14 +138,26 @@ textarea.mn-area::placeholder{ color:var(--eo-text-muted); }
       <div style="white-space:pre-wrap;font-size:.9rem;line-height:1.75;color:var(--eo-text)">{{ minutes.decisions }}</div>
     </div>
     {% endif %}
+    {% if minutes.adoption_notes %}
+    <div class="eo-card mb-4">
+      <h3 class="eo-card-title mb-3">
+        <i class="bi bi-patch-check me-2" style="color:#10b981"></i>Adoption Notes / Amendments
+      </h3>
+      <div style="white-space:pre-wrap;font-size:.9rem;line-height:1.75;color:var(--eo-text)">{{ minutes.adoption_notes }}</div>
+    </div>
+    {% endif %}
     {% if action_items %}
     <div class="eo-card">
       <h3 class="eo-card-title mb-3">Action Items</h3>
       {% for ai in action_items %}
-      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border);{% endif %}">
-        <i class="bi bi-{% if ai.is_done %}check-circle-fill{% else %}circle{% endif %}"
-           style="color:{% if ai.is_done %}#10b981{% else %}var(--eo-text-muted){% endif %};flex-shrink:0"></i>
-        <span style="flex:1;font-size:.87rem;{% if ai.is_done %}text-decoration:line-through;color:var(--eo-text-muted){% else %}color:var(--eo-text){% endif %}">{{ ai.description }}</span>
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border);{% endif %}">
+        <span style="display:inline-flex;align-items:center;gap:5px;font-size:.71rem;font-weight:700;padding:3px 9px;border-radius:10px;flex-shrink:0;
+                     background:{{ ai.status_bg }};color:{{ ai.status_color }}">
+          <i class="bi {{ ai.status_icon }}" style="font-size:.65rem"></i>
+          {{ ai.get_status_display }}
+        </span>
+        <span style="flex:1;font-size:.87rem;color:{% if ai.status == 'completed' %}var(--eo-text-muted){% else %}var(--eo-text){% endif %};
+                     {% if ai.status == 'completed' %}text-decoration:line-through;{% endif %}">{{ ai.description }}</span>
         {% if ai.assigned_to %}<span style="font-size:.78rem;color:var(--eo-text-muted)">{{ ai.assigned_to.full_name }}</span>{% endif %}
         {% if ai.due_date %}<span style="font-size:.76rem;color:var(--eo-text-muted)">{{ ai.due_date|date:"N j" }}</span>{% endif %}
       </div>
@@ -107,25 +167,62 @@ textarea.mn-area::placeholder{ color:var(--eo-text-muted); }
   </div>
   <div>
     <div class="eo-card">
-      <h3 class="eo-card-title mb-2">PDF Available</h3>
-      <p style="font-size:.82rem;color:var(--eo-text-muted);margin-bottom:12px">These minutes are finalised and have been saved as a PDF.</p>
+      <h3 class="eo-card-title mb-2">PDF Minutes</h3>
+      <p style="font-size:.82rem;color:var(--eo-text-muted);margin-bottom:12px">
+        {% if minutes.adoption_status == 'adopted' %}
+          These minutes are adopted and locked.
+        {% else %}
+          These minutes have been submitted for adoption.
+        {% endif %}
+      </p>
       <a href="{% url 'meeting_minutes_pdf' meeting.pk %}" class="eo-btn eo-btn-primary w-100">
         <i class="bi bi-file-earmark-pdf-fill"></i> Download PDF
       </a>
     </div>
+    <div class="eo-card mt-3">
+      <h3 class="eo-card-title mb-3">Attendees</h3>
+      {% for att in meeting.attendees.all %}
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border);{% endif %}">
+        <div style="width:24px;height:24px;border-radius:50%;background:{{ meeting.type_color }};color:#fff;font-size:.6rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ att.user.initials }}</div>
+        <span style="font-size:.82rem;color:var(--eo-text);flex:1">{{ att.user.full_name }}</span>
+        <span style="font-size:.68rem;color:{{ att.rsvp_color }}">{{ att.get_rsvp_display }}</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if external_reviews %}
+    <div class="eo-card mt-3">
+      <h3 class="eo-card-title mb-3">
+        <i class="bi bi-globe2 me-2" style="color:{{ meeting.type_color }}"></i>External Reviews
+      </h3>
+      {% for rev in external_reviews %}
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border);{% endif %}">
+        <div style="width:30px;height:30px;border-radius:50%;background:var(--eo-border);color:var(--eo-text-muted);font-size:.62rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          {{ rev.external_attendee.full_name|slice:":2"|upper }}
+        </div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.83rem;font-weight:600;color:var(--eo-text)">{{ rev.external_attendee.full_name }}</div>
+          {% if rev.comment %}<div style="font-size:.72rem;color:var(--eo-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ rev.comment|truncatechars:50 }}</div>{% endif %}
+        </div>
+        <span style="font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:12px;flex-shrink:0;
+                     background:{{ rev.decision_color }}18;color:{{ rev.decision_color }}">
+          {% if rev.decision == 'pending' %}<i class="bi bi-hourglass-split me-1"></i>{% elif rev.decision == 'adopted' %}<i class="bi bi-check-lg me-1"></i>{% else %}<i class="bi bi-x-lg me-1"></i>{% endif %}
+          {{ rev.get_decision_display }}
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
 </div>
 
 {% else %}
-<!-- ── EDITABLE FORM ── -->
+{# ────────── EDITABLE FORM ────────── #}
 <form method="post" id="minutesForm">
   {% csrf_token %}
   <div class="mn-layout">
-
-    <!-- Editor -->
     <div>
       <div class="mn-editor mb-4">
-        <!-- Toolbar -->
         <div class="mn-toolbar">
           <button type="button" class="mn-btn wide" onclick="ins(notesArea,'# ','')">H1</button>
           <button type="button" class="mn-btn wide" onclick="ins(notesArea,'## ','')">H2</button>
@@ -136,15 +233,13 @@ textarea.mn-area::placeholder{ color:var(--eo-text-muted); }
           <button type="button" class="mn-btn" onclick="ins(notesArea,'- ','')" title="Bullet"><i class="bi bi-list-ul"></i></button>
           <button type="button" class="mn-btn" onclick="ins(notesArea,'1. ','')" title="Numbered"><i class="bi bi-list-ol"></i></button>
         </div>
-
         <div class="mn-section-label">Meeting Notes</div>
         <textarea class="mn-area" name="content" id="notesArea"
                   placeholder="Record what was discussed…&#10;&#10;Use markdown:&#10;# Heading   **bold**   *italic*   - bullet">{{ minutes.content }}</textarea>
-
         <div class="mn-section-label">Decisions Made</div>
         <textarea class="mn-area" name="decisions" id="decisionsArea"
                   style="min-height:120px"
-                  placeholder="List the key decisions agreed upon in this meeting…">{{ minutes.decisions }}</textarea>
+                  placeholder="List the key decisions agreed upon…">{{ minutes.decisions }}</textarea>
       </div>
 
       <!-- Action Items -->
@@ -161,6 +256,7 @@ textarea.mn-area::placeholder{ color:var(--eo-text-muted); }
           <span>Action / Task</span>
           <span>Assigned To</span>
           <span>Due Date</span>
+          <span>Status</span>
           <span></span>
         </div>
 
@@ -177,6 +273,11 @@ textarea.mn-area::placeholder{ color:var(--eo-text-muted); }
             </select>
             <input type="date" name="ai_due" class="eo-form-control"
                    value="{{ ai.due_date|date:'Y-m-d'|default:'' }}"/>
+            <select name="ai_status" class="eo-form-select" style="font-size:.82rem">
+              {% for val, label in action_statuses %}
+              <option value="{{ val }}" {% if ai.status == val %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
             <button type="button" onclick="this.closest('.ai-item').remove()"
                     class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" style="color:var(--eo-danger)">
               <i class="bi bi-trash"></i>
@@ -195,31 +296,38 @@ textarea.mn-area::placeholder{ color:var(--eo-text-muted); }
     <!-- Side panel -->
     <div style="display:flex;flex-direction:column;gap:16px">
 
+      <!-- Save / Submit / Adopt -->
       <div class="eo-card">
-        <h3 class="eo-card-title mb-3">Save Minutes</h3>
+        <h3 class="eo-card-title mb-3">Minutes Actions</h3>
 
-        <button type="submit" name="action" value="save"
-                class="eo-btn eo-btn-secondary w-100 mb-2">
+        <button type="submit" name="action" value="save" class="eo-btn eo-btn-secondary w-100 mb-2">
           <i class="bi bi-floppy"></i> Save Draft
         </button>
 
-        <button type="button" onclick="confirmFinalise()"
-                class="eo-btn eo-btn-primary w-100">
-          <i class="bi bi-file-earmark-pdf-fill"></i> Finalise &amp; Save PDF
+        <button type="button" onclick="confirmSubmit()" class="eo-btn eo-btn-primary w-100 mb-2">
+          <i class="bi bi-send-fill"></i> Submit for Adoption
         </button>
-        <div style="margin-top:8px;font-size:.74rem;color:var(--eo-text-muted);line-height:1.5">
-          Finalising locks the minutes and saves a PDF to the File Manager. Attendees will be notified.
+        <div style="font-size:.74rem;color:var(--eo-text-muted);line-height:1.5;margin-bottom:12px">
+          Submitting locks the minutes for editing and notifies attendees to review. The organiser then formally adopts them.
         </div>
 
         {% if minutes.updated_at %}
-        <div style="margin-top:12px;font-size:.74rem;color:var(--eo-text-muted)">
-          Last saved {{ minutes.updated_at|naturaltime }}
-          {% if minutes.author %}by {{ minutes.author.full_name }}{% endif %}
+        <div style="font-size:.74rem;color:var(--eo-text-muted);padding-top:10px;border-top:1px solid var(--eo-border)">
+          Last saved {{ minutes.updated_at|naturaltime }}{% if minutes.author %} by {{ minutes.author.full_name }}{% endif %}
         </div>
         {% endif %}
       </div>
 
-      <!-- Meeting quick info -->
+      <!-- PDF download -->
+      <div class="eo-card">
+        <h3 class="eo-card-title mb-2">PDF Export</h3>
+        <a href="{% url 'meeting_minutes_pdf' meeting.pk %}" class="eo-btn eo-btn-secondary w-100"
+           style="font-size:.84rem">
+          <i class="bi bi-file-earmark-pdf-fill" style="color:#ef4444"></i> Download Draft PDF
+        </a>
+      </div>
+
+      <!-- Attendees -->
       <div class="eo-card">
         <h3 class="eo-card-title mb-3">Attendees</h3>
         {% for att in meeting.attendees.all %}
@@ -231,36 +339,101 @@ textarea.mn-area::placeholder{ color:var(--eo-text-muted); }
         {% endfor %}
       </div>
 
+      {% if external_reviews %}
+      <div class="eo-card">
+        <h3 class="eo-card-title mb-3">
+          <i class="bi bi-globe2 me-2" style="color:{{ meeting.type_color }}"></i>External Reviews
+        </h3>
+        {% for rev in external_reviews %}
+        <div style="display:flex;align-items:center;gap:10px;padding:7px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border);{% endif %}">
+          <div style="width:28px;height:28px;border-radius:50%;background:var(--eo-border);color:var(--eo-text-muted);font-size:.6rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            {{ rev.external_attendee.full_name|slice:":2"|upper }}
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.82rem;font-weight:600;color:var(--eo-text)">{{ rev.external_attendee.full_name }}</div>
+            {% if rev.is_expired and rev.is_pending %}<div style="font-size:.71rem;color:#ef4444">Link expired</div>{% endif %}
+          </div>
+          <span style="font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:12px;flex-shrink:0;
+                       background:{{ rev.decision_color }}18;color:{{ rev.decision_color }}">
+            {{ rev.get_decision_display }}
+          </span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
     </div>
   </div>
 
   <input type="hidden" name="action" id="formAction" value="save"/>
 </form>
+{% endif %}
 
-<!-- Finalise confirmation modal -->
-<div id="finaliseModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1060;align-items:center;justify-content:center">
+
+<!-- ── ADOPT MODAL ── -->
+<div id="adoptModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.48);z-index:1060;align-items:center;justify-content:center">
+  <div style="background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:16px;width:480px;max-width:95vw;padding:30px;box-shadow:0 24px 64px rgba(0,0,0,.22)">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+      <div style="width:44px;height:44px;border-radius:50%;background:#d1fae5;color:#065f46;display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0">
+        <i class="bi bi-patch-check-fill"></i>
+      </div>
+      <div>
+        <h3 style="font-size:1.05rem;font-weight:700;color:var(--eo-text);margin:0">Adopt These Minutes?</h3>
+        <p style="font-size:.82rem;color:var(--eo-text-muted);margin:2px 0 0">This action cannot be undone without superuser access.</p>
+      </div>
+    </div>
+
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="adopt"/>
+
+      <div class="eo-form-group" style="margin-bottom:16px">
+        <label class="eo-form-label">Adoption Notes / Amendments <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span></label>
+        <textarea name="adoption_notes" class="eo-form-control" rows="4"
+                  placeholder="Record any amendments, corrections, or notes agreed upon at adoption…"></textarea>
+        <div style="font-size:.73rem;color:var(--eo-text-muted);margin-top:4px">These notes will be appended to the final PDF.</div>
+      </div>
+
+      <p style="font-size:.86rem;color:var(--eo-text-muted);margin-bottom:20px;line-height:1.6">
+        Adopting will officially close the minutes, generate a PDF, and save it to the File Manager. All attendees will be notified.
+      </p>
+      <div style="display:flex;gap:10px">
+        <button type="submit" class="eo-btn eo-btn-primary flex-grow-1">
+          <i class="bi bi-patch-check-fill"></i> Yes, Adopt Minutes
+        </button>
+        <button type="button" onclick="document.getElementById('adoptModal').style.display='none'"
+                class="eo-btn eo-btn-secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ── SUBMIT CONFIRMATION MODAL ── -->
+<div id="submitModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1060;align-items:center;justify-content:center">
   <div style="background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:14px;width:440px;max-width:95vw;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.2)">
-    <h3 style="font-size:1.05rem;font-weight:700;color:var(--eo-text);margin:0 0 10px">Finalise Minutes?</h3>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+      <div style="width:40px;height:40px;border-radius:50%;background:#dbeafe;color:#1e40af;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">
+        <i class="bi bi-send-fill"></i>
+      </div>
+      <h3 style="font-size:1.05rem;font-weight:700;color:var(--eo-text);margin:0">Submit for Adoption?</h3>
+    </div>
     <p style="font-size:.86rem;color:var(--eo-text-muted);margin-bottom:20px;line-height:1.6">
-      This will lock the minutes, generate a PDF, and save it to the File Manager. All attendees will be notified. This action cannot be undone without superuser access.
+      The minutes will be locked for editing and all attendees will be notified to review them. The organiser will then formally adopt the minutes once consensus is reached.
     </p>
     <div style="display:flex;gap:10px">
-      <button type="button" onclick="doFinalise()" class="eo-btn eo-btn-primary flex-grow-1">
-        <i class="bi bi-file-earmark-check-fill"></i> Yes, Finalise
+      <button type="button" onclick="doSubmit()" class="eo-btn eo-btn-primary flex-grow-1">
+        <i class="bi bi-send-fill"></i> Yes, Submit
       </button>
-      <button type="button" onclick="document.getElementById('finaliseModal').style.display='none'"
+      <button type="button" onclick="document.getElementById('submitModal').style.display='none'"
               class="eo-btn eo-btn-secondary">Cancel</button>
     </div>
   </div>
 </div>
 
-{% endif %}
-
 <script>
 var notesArea     = document.getElementById('notesArea');
 var decisionsArea = document.getElementById('decisionsArea');
 
-// ── Formatting helpers ────────────────────────────────────────────────────────
 function ins(ta, prefix, suffix) {
   if (!ta) return;
   var s = ta.selectionStart, e = ta.selectionEnd;
@@ -281,10 +454,13 @@ function wrap(ta, open, close) {
   ta.focus();
 }
 
-// ── Action items ──────────────────────────────────────────────────────────────
 var staffOptions = `
   <option value="">— Anyone —</option>
   {% for s in staff_list %}<option value="{{ s.id }}">{{ s.full_name }}</option>{% endfor %}
+`;
+
+var statusOptions = `
+  {% for val, label in action_statuses %}<option value="{{ val }}">{{ label }}</option>{% endfor %}
 `;
 
 function addActionRow() {
@@ -295,6 +471,7 @@ function addActionRow() {
     '<input type="text" name="ai_description" class="eo-form-control" placeholder="What needs to be done?"/>' +
     '<select name="ai_owner" class="eo-form-select">' + staffOptions + '</select>' +
     '<input type="date" name="ai_due" class="eo-form-control"/>' +
+    '<select name="ai_status" class="eo-form-select" style="font-size:.82rem">' + statusOptions + '</select>' +
     '<button type="button" onclick="removeRow(this)" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" style="color:var(--eo-danger)"><i class="bi bi-trash"></i></button>';
   document.getElementById('aiContainer').appendChild(div);
   div.querySelector('input').focus();
@@ -307,19 +484,23 @@ function removeRow(btn) {
   }
 }
 
-// ── Finalise flow ─────────────────────────────────────────────────────────────
-function confirmFinalise() {
-  document.getElementById('finaliseModal').style.display = 'flex';
+function confirmSubmit() {
+  document.getElementById('submitModal').style.display = 'flex';
 }
-function doFinalise() {
-  document.getElementById('formAction').value = 'finalise';
-  document.getElementById('finaliseModal').style.display = 'none';
-  document.getElementById('minutesForm').submit();
+function doSubmit() {
+  var f = document.getElementById('minutesForm');
+  if (!f) return;
+  document.getElementById('formAction').value = 'submit_for_adoption';
+  document.getElementById('submitModal').style.display = 'none';
+  f.submit();
 }
 
-// Close modal on backdrop click
-document.getElementById('finaliseModal') && document.getElementById('finaliseModal').addEventListener('click', function(e) {
-  if (e.target === this) this.style.display = 'none';
+// Close modals on backdrop click
+['adoptModal','submitModal'].forEach(function(id) {
+  var el = document.getElementById(id);
+  if (el) el.addEventListener('click', function(e) {
+    if (e.target === this) this.style.display = 'none';
+  });
 });
 </script>
 {% endblock %}

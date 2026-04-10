@@ -9,6 +9,7 @@ from apps.projects.models import (
     Survey, SurveyQuestion, SurveyResponse, SurveyAnswer,
     TrackingSheet, TrackingRow, ProjectLocation,
 )
+import csv
 import json
 from collections import Counter
 from apps.core.models import User
@@ -464,6 +465,12 @@ class ProjectRiskView(LoginRequiredMixin, View):
             risk.save(update_fields=['is_resolved'])
             messages.success(request, f'Risk "{risk.title}" marked as resolved.')
 
+        elif action == 'unresolve':
+            risk = get_object_or_404(Risk, pk=request.POST.get('risk_id'), project=project)
+            risk.is_resolved = False
+            risk.save(update_fields=['is_resolved'])
+            messages.success(request, f'Risk "{risk.title}" re-opened.')
+
         elif action == 'add':
             owner_id = request.POST.get('owner_id')
             Risk.objects.create(
@@ -511,7 +518,7 @@ class ProjectGanttPDFView(LoginRequiredMixin, View):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# _build_gantt_pdf helper  (place near the other helpers at the top of views.py)
+# _build_gantt_pdf helper
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_gantt_pdf(project, milestones):
@@ -853,9 +860,11 @@ def _build_gantt_pdf(project, milestones):
     c.save()
     return buf.getvalue()
 
+
 # =============================================================================
 # Document Upload VIEWS
 # =============================================================================
+
 class ProjectDocumentLinkView(LoginRequiredMixin, View):
     def get(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
@@ -947,24 +956,69 @@ class ProjectDocumentUnlinkView(LoginRequiredMixin, View):
         messages.success(request, f'"{file_obj.name}" removed from this project.')
         return redirect('project_detail', pk=pk)
 
+
 # =============================================================================
 # SURVEY VIEWS
 # =============================================================================
 
+def _save_survey_questions(survey, request):
+    """
+    Rebuild survey questions from posted form fields.
+    """
+    survey.questions.all().delete()
+
+    q_texts = request.POST.getlist('q_text')
+    q_types = request.POST.getlist('q_type')
+    q_options = request.POST.getlist('q_options')
+    q_required = set(request.POST.getlist('q_required'))
+
+    order = 0
+    for i, text in enumerate(q_texts):
+        text = (text or '').strip()
+        if not text:
+            continue
+
+        SurveyQuestion.objects.create(
+            survey=survey,
+            text=text,
+            q_type=q_types[i] if i < len(q_types) else 'text',
+            options=(q_options[i] if i < len(q_options) else '').strip(),
+            is_required=str(i) in q_required,
+            order=order,
+        )
+        order += 1
+
+
 class ProjectSurveyListView(LoginRequiredMixin, View):
-    """List all surveys for a project + create new surveys."""
+    """List all surveys for a project + create new surveys + export responses."""
 
     def get(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
-        surveys = project.surveys.select_related('created_by').annotate(
-            resp_count=Count('responses')
-        ).order_by('-created_at')
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+
+        export_sid = request.GET.get('export', '').strip()
+        if export_sid:
+            return self._export_csv(request, project, export_sid)
+
+        surveys = (
+            project.surveys
+            .select_related('created_by')
+            .prefetch_related('questions')
+            .annotate(resp_count=Count('responses'))
+            .order_by('-created_at')
+        )
+
+        active_count = sum(1 for s in surveys if s.is_active)
+        total_responses = sum(getattr(s, 'resp_count', 0) for s in surveys)
+
         return render(request, 'projects/survey_list.html', {
             'project': project,
             'surveys': surveys,
             'is_member': _is_project_member(request.user, project),
             'is_manager': request.user.is_superuser or project.project_manager == request.user,
-            'question_types': SurveyQuestion.Type.choices,
+            'active_count': active_count,
+            'total_responses': total_responses,
         })
 
     def post(self, request, pk):
@@ -982,30 +1036,80 @@ class ProjectSurveyListView(LoginRequiredMixin, View):
             title=title,
             description=request.POST.get('description', '').strip(),
             is_anonymous=request.POST.get('is_anonymous') == 'on',
+            is_public=request.POST.get('is_public') == 'on',
+            allow_multiple_responses=request.POST.get('allow_multiple_responses') == 'on',
             closes_at=request.POST.get('closes_at') or None,
             created_by=request.user,
         )
 
-        q_texts = request.POST.getlist('q_text')
-        q_types = request.POST.getlist('q_type')
-        q_options = request.POST.getlist('q_options')
-        q_req = set(request.POST.getlist('q_required'))  # set of "0","1",…
+        if survey.is_public and not survey.public_token:
+            import uuid
+            survey.public_token = uuid.uuid4()
+            survey.save(update_fields=['public_token'])
 
-        for i, (text, qtype, opts) in enumerate(zip(q_texts, q_types, q_options)):
-            if not text.strip():
-                continue
-            SurveyQuestion.objects.create(
-                survey=survey,
-                text=text.strip(),
-                q_type=qtype,
-                options=opts,
-                is_required=(str(i) in q_req),
-                order=i,
-            )
+        _save_survey_questions(survey, request)
 
-        messages.success(request, f'Survey "{title}" created with {survey.questions.count()} question(s).')
-        return redirect('survey_detail', pk=pk, sid=survey.pk)
+        messages.success(request, f'Survey "{survey.title}" created.')
+        return redirect('survey_dashboard', pk=pk, sid=survey.pk)
 
+    def _export_csv(self, request, project, sid):
+        survey = get_object_or_404(
+            Survey.objects.prefetch_related('questions', 'responses__answers__question'),
+            pk=sid,
+            project=project
+        )
+
+        questions = list(survey.questions.order_by('order'))
+        responses = (
+            survey.responses
+            .select_related('respondent')
+            .prefetch_related('answers__question')
+            .order_by('submitted_at')
+        )
+
+        response = HttpResponse(content_type='text/csv; charset=utf-8')
+        response['Content-Disposition'] = (
+            f'attachment; filename="{project.code}_{survey.title.replace(" ", "_")}_responses.csv"'
+        )
+
+        writer = csv.writer(response)
+
+        # Header row
+        header = [
+            'Response ID',
+            'Submitted At',
+            'Respondent',
+            'Respondent Name',
+            'Is Public Response',
+            'IP Address',
+            'Device ID',
+        ] + [q.text for q in questions]
+        writer.writerow(header)
+
+        # Data rows
+        for resp in responses:
+            answer_map = {str(a.question_id): a.value for a in resp.answers.all()}
+
+            respondent_display = ''
+            if resp.respondent:
+                respondent_display = getattr(resp.respondent, 'full_name', '') or str(resp.respondent)
+
+            row = [
+                str(resp.pk),
+                resp.submitted_at.strftime('%Y-%m-%d %H:%M:%S') if resp.submitted_at else '',
+                respondent_display,
+                resp.respondent_name or '',
+                'Yes' if getattr(resp, 'is_public_response', False) else 'No',
+                resp.ip_address or '',
+                resp.device_id or '',
+            ]
+
+            for q in questions:
+                row.append(answer_map.get(str(q.pk), ''))
+
+            writer.writerow(row)
+
+        return response
 
 class SurveyDetailView(LoginRequiredMixin, View):
     """Results dashboard. Redirects non-members to submit page."""
@@ -1109,13 +1213,14 @@ class SurveySubmitView(LoginRequiredMixin, View):
     """Survey fill-in page for any authenticated user."""
 
     def _guard(self, request, survey, pk):
-        """Return a redirect if the survey cannot accept this response, else None."""
         if not survey.is_active:
             messages.warning(request, 'This survey is no longer accepting responses.')
             return redirect('project_surveys', pk=pk)
+
         if not survey.is_anonymous and survey.responses.filter(respondent=request.user).exists():
             messages.info(request, 'You have already submitted a response to this survey.')
-            return redirect('survey_detail', pk=pk, sid=survey.pk)
+            return redirect('survey_dashboard', pk=pk, sid=survey.pk)
+
         return None
 
     def get(self, request, pk, sid):
@@ -1123,6 +1228,7 @@ class SurveySubmitView(LoginRequiredMixin, View):
         survey = get_object_or_404(Survey, pk=sid, project=project)
         if (guard := self._guard(request, survey, pk)):
             return guard
+
         return render(request, 'projects/survey_submit.html', {
             'project': project,
             'survey': survey,
@@ -1135,6 +1241,34 @@ class SurveySubmitView(LoginRequiredMixin, View):
         if (guard := self._guard(request, survey, pk)):
             return guard
 
+        questions = list(survey.questions.order_by('order'))
+
+        errors = []
+        cleaned_answers = []
+
+        for q in questions:
+            field_name = f'q_{q.pk}'
+
+            if q.q_type == 'multi_choice':
+                vals = [v.strip() for v in request.POST.getlist(field_name) if v.strip()]
+                val = ', '.join(vals)
+            else:
+                val = request.POST.get(field_name, '').strip()
+
+            if q.is_required and not val:
+                errors.append(f'Please answer: {q.text}')
+
+            cleaned_answers.append((q, val))
+
+        if errors:
+            for err in errors:
+                messages.error(request, err)
+            return render(request, 'projects/survey_submit.html', {
+                'project': project,
+                'survey': survey,
+                'questions': questions,
+            })
+
         resp = SurveyResponse.objects.create(
             survey=survey,
             respondent=None if survey.is_anonymous else request.user,
@@ -1145,29 +1279,40 @@ class SurveySubmitView(LoginRequiredMixin, View):
             ),
         )
 
-        for q in survey.questions.order_by('order'):
-            if q.q_type == 'multi_choice':
-                val = ', '.join(request.POST.getlist(f'q_{q.pk}'))
-            else:
-                val = request.POST.get(f'q_{q.pk}', '').strip()
-            SurveyAnswer.objects.create(response=resp, question=q, value=val)
+        for q, val in cleaned_answers:
+            SurveyAnswer.objects.create(
+                response=resp,
+                question=q,
+                value=val
+            )
 
         messages.success(request, 'Response submitted — thank you!')
-        return redirect('project_surveys', pk=pk)
+        return redirect('survey_dashboard', pk=pk, sid=survey.pk)
 
 
 class SurveyToggleView(LoginRequiredMixin, View):
-    """Activate / close a survey (project manager only)."""
+    """Activate / close a survey, or toggle public access (project manager only)."""
 
     def post(self, request, pk, sid):
         project = get_object_or_404(Project, pk=pk)
         if not (request.user.is_superuser or project.project_manager == request.user):
             return HttpResponseForbidden()
         survey = get_object_or_404(Survey, pk=sid, project=project)
-        survey.is_active = not survey.is_active
-        survey.save(update_fields=['is_active'])
-        label = 'activated' if survey.is_active else 'closed'
-        messages.success(request, f'Survey "{survey.title}" {label}.')
+
+        action = request.POST.get('action', 'toggle_active')
+
+        if action == 'toggle_public':
+            survey.is_public = not survey.is_public
+            survey.allow_multiple_responses = request.POST.get('allow_multiple') == 'on'
+            survey.save(update_fields=['is_public', 'allow_multiple_responses'])
+            label = 'open to the public' if survey.is_public else 'restricted to internal users'
+            messages.success(request, f'Survey "{survey.title}" is now {label}.')
+        else:
+            survey.is_active = not survey.is_active
+            survey.save(update_fields=['is_active'])
+            label = 'activated' if survey.is_active else 'closed'
+            messages.success(request, f'Survey "{survey.title}" {label}.')
+
         return redirect('survey_detail', pk=pk, sid=sid)
 
 
@@ -1181,6 +1326,118 @@ class SurveyDeleteView(LoginRequiredMixin, View):
         messages.success(request, 'Survey deleted.')
         return redirect('project_surveys', pk=pk)
 
+class SurveyEditView(LoginRequiredMixin, View):
+    """Edit survey settings and rebuild its questions."""
+
+    def post(self, request, pk, sid):
+        project = get_object_or_404(Project, pk=pk)
+        if not (request.user.is_superuser or project.project_manager == request.user):
+            return HttpResponseForbidden()
+
+        survey = get_object_or_404(Survey, pk=sid, project=project)
+
+        title = request.POST.get('title', '').strip()
+        if not title:
+            messages.error(request, 'Survey title is required.')
+            return redirect('survey_detail', pk=pk, sid=sid)
+
+        survey.title = title
+        survey.description = request.POST.get('description', '').strip()
+        survey.is_anonymous = request.POST.get('is_anonymous') == 'on'
+        survey.is_public = request.POST.get('is_public') == 'on'
+        survey.allow_multiple_responses = request.POST.get('allow_multiple_responses') == 'on'
+        survey.closes_at = request.POST.get('closes_at') or None
+
+        if survey.is_public and not survey.public_token:
+            import uuid
+            survey.public_token = uuid.uuid4()
+
+        survey.save()
+
+        _save_survey_questions(survey, request)
+
+        messages.success(request, f'Survey "{survey.title}" updated.')
+        return redirect('survey_dashboard', pk=pk, sid=sid)
+
+class PublicSurveyView(View):
+    """
+    Public survey access (no login required)
+    """
+
+    def get(self, request, token):
+        survey = get_object_or_404(Survey, public_token=token, is_public=True)
+
+        if not survey.is_active:
+            return render(request, 'projects/survey_public_closed.html', {
+                'survey': survey
+            })
+
+        questions = survey.questions.order_by('order')
+
+        return render(request, 'projects/survey_submit.html', {
+            'survey': survey,
+            'project': survey.project,
+            'questions': questions,
+            'is_public_view': True
+        })
+
+    def post(self, request, token):
+        survey = get_object_or_404(Survey, public_token=token, is_public=True)
+
+        if not survey.is_active:
+            return redirect('survey_public', token=token)
+
+        # ── Prevent multiple submissions ──
+        if not survey.allow_multiple_responses:
+            if request.session.get(f'survey_done_{survey.id}'):
+                messages.warning(request, 'You already submitted this survey.')
+                return redirect('survey_public', token=token)
+
+        questions = survey.questions.order_by('order')
+
+        errors = []
+        answers = []
+
+        for q in questions:
+            field = f'q_{q.pk}'
+
+            if q.q_type == 'multi_choice':
+                val = ', '.join(request.POST.getlist(field))
+            else:
+                val = request.POST.get(field, '').strip()
+
+            if q.is_required and not val:
+                errors.append(q.text)
+
+            answers.append((q, val))
+
+        if errors:
+            messages.error(request, 'Please answer all required questions.')
+            return render(request, 'projects/survey_submit.html', {
+                'survey': survey,
+                'project': survey.project,
+                'questions': questions,
+                'is_public_view': True
+            })
+
+        resp = SurveyResponse.objects.create(
+            survey=survey,
+            respondent=None,
+            respondent_name=request.POST.get('respondent_name', '').strip(),
+        )
+
+        for q, val in answers:
+            SurveyAnswer.objects.create(
+                response=resp,
+                question=q,
+                value=val
+            )
+
+        # mark session
+        request.session[f'survey_done_{survey.id}'] = True
+
+        messages.success(request, 'Thank you for your response!')
+        return redirect('survey_public', token=token)
 
 # =============================================================================
 # TRACKING SHEET VIEWS
@@ -1198,8 +1455,6 @@ class TrackingSheetView(LoginRequiredMixin, View):
         columns = sheet.get_columns()
         rows_qs = sheet.rows.select_related('created_by').order_by('order', 'created_at')
 
-        # Pre-process so templates can render cell values without custom filters.
-        # Each item: {'row': TrackingRow, 'cells': [(label, type, key, value), ...], 'data_json': str}
         rows_processed = []
         for row in rows_qs:
             data = row.get_data()
@@ -1222,6 +1477,7 @@ class TrackingSheetView(LoginRequiredMixin, View):
             'is_member': _is_project_member(request.user, project),
             'is_manager': request.user.is_superuser or project.project_manager == request.user,
         })
+
 
 class TrackingSheetUpdateColumnsView(LoginRequiredMixin, View):
     """Save column definitions (manager only)."""
@@ -1439,6 +1695,213 @@ class ProjectLocationDeleteView(LoginRequiredMixin, View):
         return redirect('project_locations', pk=pk)
 
 
+class ProjectLocationImportView(LoginRequiredMixin, View):
+    """Bulk-import locations from a CSV or Excel file."""
+
+    FIELD_MAP = {
+        'name':        ['name', 'location name', 'location'],
+        'latitude':    ['latitude', 'lat'],
+        'longitude':   ['longitude', 'lon', 'lng', 'long'],
+        'description': ['description', 'desc'],
+        'address':     ['address'],
+        'category':    ['category', 'type'],
+        'status':      ['status'],
+        'notes':       ['notes', 'note'],
+    }
+    VALID_STATUSES = {'pending', 'in_progress', 'completed', 'on_hold'}
+
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+
+        upload = request.FILES.get('import_file')
+        if not upload:
+            messages.error(request, 'No file selected.')
+            return redirect('project_locations', pk=pk)
+
+        fname = upload.name.lower()
+        rows, parse_error = [], None
+
+        try:
+            if fname.endswith('.csv'):
+                import csv, io as _io
+                text = upload.read().decode('utf-8-sig')
+                rows = list(csv.DictReader(_io.StringIO(text)))
+
+            elif fname.endswith(('.xlsx', '.xls')):
+                import openpyxl
+                wb = openpyxl.load_workbook(upload, data_only=True)
+                ws = wb.active
+                headers = [str(c.value).strip() if c.value else '' for c in ws[1]]
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if any(v is not None for v in row):
+                        rows.append(dict(zip(headers, row)))
+            else:
+                messages.error(request, 'Only .csv and .xlsx files are supported.')
+                return redirect('project_locations', pk=pk)
+        except Exception as e:
+            messages.error(request, f'Could not read file: {e}')
+            return redirect('project_locations', pk=pk)
+
+        def _get(row, field):
+            """Pull a value from a row regardless of column alias used."""
+            for alias in self.FIELD_MAP.get(field, [field]):
+                for key, val in row.items():
+                    if str(key).strip().lower() == alias:
+                        return str(val).strip() if val is not None else ''
+            return ''
+
+        created, skipped, errors = 0, 0, []
+
+        for i, row in enumerate(rows, 2):
+            name = _get(row, 'name')
+            if not name or name.startswith('#'):
+                skipped += 1
+                continue
+
+            try:
+                lat = float(_get(row, 'latitude'))
+                lng = float(_get(row, 'longitude'))
+            except ValueError:
+                skipped += 1
+                errors.append(f'Row {i} ("{name}"): invalid coordinates.')
+                continue
+
+            if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+                skipped += 1
+                errors.append(f'Row {i} ("{name}"): coordinates out of range.')
+                continue
+
+            status = _get(row, 'status').lower().replace(' ', '_')
+            if status not in self.VALID_STATUSES:
+                status = 'pending'
+
+            ProjectLocation.objects.create(
+                project=project,
+                name=name,
+                description=_get(row, 'description'),
+                address=_get(row, 'address'),
+                latitude=lat,
+                longitude=lng,
+                category=_get(row, 'category'),
+                status=status,
+                notes=_get(row, 'notes'),
+            )
+            created += 1
+
+        if errors:
+            messages.warning(
+                request,
+                f'Imported {created} location(s); {skipped} row(s) skipped. '
+                + ' | '.join(errors[:5])
+                + (' …' if len(errors) > 5 else '')
+            )
+        else:
+            messages.success(request, f'Successfully imported {created} location(s).')
+
+        return redirect('project_locations', pk=pk)
+
+
+class LocationTemplateDownloadView(LoginRequiredMixin, View):
+    """Download a blank CSV or Excel template for bulk location import."""
+
+    HEADERS  = ['name', 'description', 'address', 'latitude', 'longitude',
+                 'category', 'status', 'notes']
+    SAMPLE   = ['Site A – Banjul Office', 'Main coordination hub',
+                 '12 Marina Parade, Banjul', '13.4549', '-16.5790',
+                 'Office', 'active', 'Near the waterfront']
+    SAMPLE2  = ['Field Site B', 'Installation point',
+                 'Kanifing Industrial Zone', '13.3950', '-16.6100',
+                 'Installation', 'pending', '']
+    STATUS_NOTE = ('# status values: pending | in_progress | completed | on_hold  '
+                   '— delete this row before importing')
+
+    def get(self, request, pk, fmt='xlsx'):
+        project = get_object_or_404(Project, pk=pk)
+
+        if fmt == 'csv':
+            import csv, io as _io
+            buf = _io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(self.HEADERS)
+            w.writerow(self.SAMPLE)
+            w.writerow(self.SAMPLE2)
+            w.writerow([self.STATUS_NOTE] + [''] * (len(self.HEADERS) - 1))
+            resp = HttpResponse(buf.getvalue(), content_type='text/csv; charset=utf-8')
+            resp['Content-Disposition'] = (
+                f'attachment; filename="{project.code}_locations_template.csv"'
+            )
+            return resp
+
+        elif fmt == 'xlsx':
+            try:
+                import openpyxl
+                from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+                from openpyxl.utils import get_column_letter
+                import io as _io
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = 'Locations'
+
+                # ── Header row ──
+                hdr_fill = PatternFill('solid', fgColor=project.cover_color.lstrip('#') or '1e3a5f')
+                thin = Side(style='thin', color='D0D7E0')
+                border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+                for col, h in enumerate(self.HEADERS, 1):
+                    c = ws.cell(row=1, column=col, value=h)
+                    c.font      = Font(bold=True, color='FFFFFF', size=11)
+                    c.fill      = hdr_fill
+                    c.alignment = Alignment(horizontal='center', vertical='center')
+                    c.border    = border
+                ws.row_dimensions[1].height = 20
+
+                # ── Sample rows ──
+                for r_idx, sample in enumerate([self.SAMPLE, self.SAMPLE2], 2):
+                    row_fill = PatternFill('solid', fgColor='F8FAFC' if r_idx % 2 == 0 else 'FFFFFF')
+                    for col, val in enumerate(sample, 1):
+                        c = ws.cell(row=r_idx, column=col, value=val)
+                        c.alignment = Alignment(vertical='center')
+                        c.fill   = row_fill
+                        c.border = border
+
+                # ── Notes row ──
+                nc = ws.cell(row=4, column=1, value=self.STATUS_NOTE)
+                nc.font = Font(italic=True, color='94A3B8', size=9)
+
+                # ── Column widths ──
+                widths = [28, 35, 35, 12, 12, 18, 14, 28]
+                for col, w in enumerate(widths, 1):
+                    ws.column_dimensions[get_column_letter(col)].width = w
+
+                # ── Freeze header ──
+                ws.freeze_panes = 'A2'
+
+                buf = _io.BytesIO()
+                wb.save(buf)
+                buf.seek(0)
+                resp = HttpResponse(
+                    buf.getvalue(),
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+                resp['Content-Disposition'] = (
+                    f'attachment; filename="{project.code}_locations_template.xlsx"'
+                )
+                return resp
+
+            except ImportError:
+                messages.error(request, 'openpyxl is required for Excel export. Run: pip install openpyxl')
+                return redirect('project_locations', pk=pk)
+
+        return HttpResponse('Invalid format.', status=400)
+
+
+# =============================================================================
+# LOCATION MAP HTML EXPORT
+# =============================================================================
+
 class LocationMapHTMLExportView(LoginRequiredMixin, View):
     """Download a self-contained interactive Leaflet map as an HTML file."""
 
@@ -1494,130 +1957,134 @@ class LocationMapHTMLExportView(LoginRequiredMixin, View):
         cover_color = escape(str(project.cover_color or '#1e3a5f'))
 
         return f"""<!DOCTYPE html>
-    <html lang="en">
-    <head>
-    <meta charset="UTF-8"/>
-    <meta name="viewport" content="width=device-width,initial-scale=1"/>
-    <title>{project_name} — Location Map</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-    <style>
-      *{{box-sizing:border-box;margin:0;padding:0}}
-      body{{font-family:system-ui,-apple-system,sans-serif;background:#f8fafc;display:flex;flex-direction:column;height:100vh}}
-      header{{background:{cover_color};color:#fff;padding:14px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}}
-      header h1{{font-size:1.1rem;font-weight:700}}
-      header p{{font-size:.82rem;opacity:.92;margin-top:2px}}
-      .wrap{{display:grid;grid-template-columns:340px 1fr;min-height:0;flex:1}}
-      .sidebar{{background:#fff;border-right:1px solid #e2e8f0;overflow:auto}}
-      .sidebar-head{{padding:14px 16px;border-bottom:1px solid #e2e8f0}}
-      .sidebar-head h2{{font-size:.92rem;font-weight:700;color:#0f172a}}
-      .sidebar-head p{{font-size:.76rem;color:#64748b;margin-top:4px}}
-      .list{{padding:12px;display:flex;flex-direction:column;gap:10px}}
-      .card{{border:1px solid #e2e8f0;border-radius:12px;padding:12px;cursor:pointer;transition:.15s}}
-      .card:hover{{border-color:#3b82f6;box-shadow:0 3px 14px rgba(0,0,0,.06)}}
-      .card-title{{font-size:.88rem;font-weight:700;color:#0f172a}}
-      .card-meta{{font-size:.75rem;color:#64748b;margin-top:4px}}
-      .badge{{display:inline-block;padding:3px 8px;border-radius:999px;font-size:.68rem;font-weight:700;margin-top:8px}}
-      #map{{height:100%;width:100%}}
-      @media (max-width: 900px) {{
-        .wrap{{grid-template-columns:1fr}}
-        .sidebar{{max-height:40vh}}
-      }}
-    </style>
-    </head>
-    <body>
-    <header>
-      <div>
-        <h1>{project_name} — Location Map</h1>
-        <p>{count} location{"s" if count != 1 else ""} • Exported {exported}</p>
-      </div>
-      <div style="font-size:.8rem;opacity:.9">{project_code}</div>
-    </header>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>{project_name} — Location Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<style>
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  body{{font-family:system-ui,-apple-system,sans-serif;background:#f8fafc;display:flex;flex-direction:column;height:100vh}}
+  header{{background:{cover_color};color:#fff;padding:14px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}}
+  header h1{{font-size:1.1rem;font-weight:700}}
+  header p{{font-size:.82rem;opacity:.92;margin-top:2px}}
+  .wrap{{display:grid;grid-template-columns:340px 1fr;min-height:0;flex:1}}
+  .sidebar{{background:#fff;border-right:1px solid #e2e8f0;overflow:auto}}
+  .sidebar-head{{padding:14px 16px;border-bottom:1px solid #e2e8f0}}
+  .sidebar-head h2{{font-size:.92rem;font-weight:700;color:#0f172a}}
+  .sidebar-head p{{font-size:.76rem;color:#64748b;margin-top:4px}}
+  .list{{padding:12px;display:flex;flex-direction:column;gap:10px}}
+  .card{{border:1px solid #e2e8f0;border-radius:12px;padding:12px;cursor:pointer;transition:.15s}}
+  .card:hover{{border-color:#3b82f6;box-shadow:0 3px 14px rgba(0,0,0,.06)}}
+  .card-title{{font-size:.88rem;font-weight:700;color:#0f172a}}
+  .card-meta{{font-size:.75rem;color:#64748b;margin-top:4px}}
+  .badge{{display:inline-block;padding:3px 8px;border-radius:999px;font-size:.68rem;font-weight:700;margin-top:8px}}
+  #map{{height:100%;width:100%}}
+  @media (max-width: 900px) {{
+    .wrap{{grid-template-columns:1fr}}
+    .sidebar{{max-height:40vh}}
+  }}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>{project_name} — Location Map</h1>
+    <p>{count} location{"s" if count != 1 else ""} • Exported {exported}</p>
+  </div>
+  <div style="font-size:.8rem;opacity:.9">{project_code}</div>
+</header>
 
-    <div class="wrap">
-      <aside class="sidebar">
-        <div class="sidebar-head">
-          <h2>Locations</h2>
-          <p>Click a location to focus it on the map.</p>
-        </div>
-        <div class="list" id="loc-list"></div>
-      </aside>
-      <main id="map"></main>
+<div class="wrap">
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <h2>Locations</h2>
+      <p>Click a location to focus it on the map.</p>
     </div>
+    <div class="list" id="loc-list"></div>
+  </aside>
+  <main id="map"></main>
+</div>
 
-    <script>
-    var LOCS = {_json.dumps(loc_data, ensure_ascii=False)};
-    var STATUS_COLORS = {{
-      pending: '#94a3b8',
-      in_progress: '#3b82f6',
-      completed: '#10b981',
-      on_hold: '#f59e0b'
-    }};
+<script>
+var LOCS = {_json.dumps(loc_data, ensure_ascii=False)};
+var STATUS_COLORS = {{
+  pending: '#94a3b8',
+  in_progress: '#3b82f6',
+  completed: '#10b981',
+  on_hold: '#f59e0b'
+}};
 
-    function makeIcon(color) {{
-      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36">'
-        + '<path d="M14 0C6.3 0 0 6.3 0 14c0 9.3 14 22 14 22S28 23.3 28 14C28 6.3 21.7 0 14 0z" fill="'+color+'" stroke="#fff" stroke-width="1.5"/>'
-        + '<circle cx="14" cy="14" r="5.5" fill="white"/></svg>';
-      return L.divIcon({{html:svg, className:'', iconSize:[28,36], iconAnchor:[14,36], popupAnchor:[0,-38]}});
-    }}
+function makeIcon(color) {{
+  var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36">'
+    + '<path d="M14 0C6.3 0 0 6.3 0 14c0 9.3 14 22 14 22S28 23.3 28 14C28 6.3 21.7 0 14 0z" fill="'+color+'" stroke="#fff" stroke-width="1.5"/>'
+    + '<circle cx="14" cy="14" r="5.5" fill="white"/></svg>';
+  return L.divIcon({{html:svg, className:'', iconSize:[28,36], iconAnchor:[14,36], popupAnchor:[0,-38]}});
+}}
 
-    var map = L.map('map');
-    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
-      subdomains: 'abcd',
-      maxZoom: 20
-    }}).addTo(map);
+var map = L.map('map');
+L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+  attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+  subdomains: 'abcd',
+  maxZoom: 20
+}}).addTo(map);
 
-    var bounds = [];
-    var markers = [];
-    var listEl = document.getElementById('loc-list');
+var bounds = [];
+var markers = [];
+var listEl = document.getElementById('loc-list');
 
-    LOCS.forEach(function(loc, idx) {{
-      var color = loc.color || STATUS_COLORS[loc.status] || '#64748b';
+LOCS.forEach(function(loc, idx) {{
+  var color = loc.color || STATUS_COLORS[loc.status] || '#64748b';
 
-      var popup = '<div style="font-weight:700;font-size:.92rem;margin-bottom:6px">' + (loc.name || '') + '</div>'
-        + '<span style="font-size:.7rem;font-weight:700;padding:2px 7px;border-radius:999px;background:'+color+'20;color:'+color+'">' + (loc.statusLabel || '') + '</span>';
+  var popup = '<div style="font-weight:700;font-size:.92rem;margin-bottom:6px">' + (loc.name || '') + '</div>'
+    + '<span style="font-size:.7rem;font-weight:700;padding:2px 7px;border-radius:999px;background:'+color+'20;color:'+color+'">' + (loc.statusLabel || '') + '</span>';
 
-      if (loc.category) popup += '<div style="font-size:.78rem;color:#475569;margin-top:6px"><b>Category:</b> ' + loc.category + '</div>';
-      if (loc.address) popup += '<div style="font-size:.78rem;color:#475569"><b>Address:</b> ' + loc.address + '</div>';
-      if (loc.assignedTo) popup += '<div style="font-size:.78rem;color:#475569"><b>Assigned:</b> ' + loc.assignedTo + '</div>';
-      if (loc.description) popup += '<div style="font-size:.78rem;color:#475569;margin-top:4px">' + loc.description + '</div>';
-      if (loc.notes) popup += '<div style="font-size:.78rem;color:#475569;margin-top:4px"><b>Notes:</b> ' + loc.notes + '</div>';
-      popup += '<div style="font-size:.72rem;color:#94a3b8;margin-top:6px;font-family:monospace">' + loc.lat + ', ' + loc.lng + '</div>';
+  if (loc.category) popup += '<div style="font-size:.78rem;color:#475569;margin-top:6px"><b>Category:</b> ' + loc.category + '</div>';
+  if (loc.address) popup += '<div style="font-size:.78rem;color:#475569"><b>Address:</b> ' + loc.address + '</div>';
+  if (loc.assignedTo) popup += '<div style="font-size:.78rem;color:#475569"><b>Assigned:</b> ' + loc.assignedTo + '</div>';
+  if (loc.description) popup += '<div style="font-size:.78rem;color:#475569;margin-top:4px">' + loc.description + '</div>';
+  if (loc.notes) popup += '<div style="font-size:.78rem;color:#475569;margin-top:4px"><b>Notes:</b> ' + loc.notes + '</div>';
+  popup += '<div style="font-size:.72rem;color:#94a3b8;margin-top:6px;font-family:monospace">' + loc.lat + ', ' + loc.lng + '</div>';
 
-      var marker = L.marker([loc.lat, loc.lng], {{icon: makeIcon(color)}}).addTo(map);
-      marker.bindPopup(popup, {{maxWidth: 280}});
-      markers.push(marker);
-      bounds.push([loc.lat, loc.lng]);
+  var marker = L.marker([loc.lat, loc.lng], {{icon: makeIcon(color)}}).addTo(map);
+  marker.bindPopup(popup, {{maxWidth: 280}});
+  markers.push(marker);
+  bounds.push([loc.lat, loc.lng]);
 
-      var badgeBg = color + '20';
-      var card = document.createElement('div');
-      card.className = 'card';
-      card.innerHTML =
-          '<div class="card-title">' + (loc.name || '') + '</div>'
-        + (loc.category ? '<div class="card-meta">' + loc.category + '</div>' : '')
-        + '<span class="badge" style="background:'+badgeBg+';color:'+color+'">' + (loc.statusLabel || '') + '</span>'
-        + (loc.address ? '<div class="card-meta">' + loc.address + '</div>' : '');
+  var badgeBg = color + '20';
+  var card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML =
+      '<div class="card-title">' + (loc.name || '') + '</div>'
+    + (loc.category ? '<div class="card-meta">' + loc.category + '</div>' : '')
+    + '<span class="badge" style="background:'+badgeBg+';color:'+color+'">' + (loc.statusLabel || '') + '</span>'
+    + (loc.address ? '<div class="card-meta">' + loc.address + '</div>' : '');
 
-      card.addEventListener('click', function() {{
-        map.flyTo([loc.lat, loc.lng], 16, {{duration: 0.8}});
-        setTimeout(function() {{ marker.openPopup(); }}, 500);
-      }});
+  card.addEventListener('click', function() {{
+    map.flyTo([loc.lat, loc.lng], 16, {{duration: 0.8}});
+    setTimeout(function() {{ marker.openPopup(); }}, 500);
+  }});
 
-      listEl.appendChild(card);
-    }});
+  listEl.appendChild(card);
+}});
 
-    if (bounds.length > 1) {{
-      map.fitBounds(bounds, {{padding:[40,40]}});
-    }} else if (bounds.length === 1) {{
-      map.setView(bounds[0], 15);
-    }} else {{
-      map.setView([13.4549, -16.5790], 8);
-    }}
-    </script>
-    </body>
-    </html>"""
+if (bounds.length > 1) {{
+  map.fitBounds(bounds, {{padding:[40,40]}});
+}} else if (bounds.length === 1) {{
+  map.setView(bounds[0], 15);
+}} else {{
+  map.setView([13.4549, -16.5790], 8);
+}}
+</script>
+</body>
+</html>"""
 
+
+# =============================================================================
+# LOCATION MAP PDF EXPORT
+# =============================================================================
 
 class LocationMapPDFExportView(LoginRequiredMixin, View):
     """Export a formatted PDF table of all project locations."""
@@ -1731,3 +2198,283 @@ class LocationMapPDFExportView(LoginRequiredMixin, View):
 
         except ImportError:
             return HttpResponse('ReportLab is required for PDF export.', status=500)
+
+# =============================================================================
+# PUBLIC SURVEY — no login required
+# =============================================================================
+
+def _get_client_ip(request):
+    """Extract real IP even behind a proxy."""
+    xff = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR', '')
+
+def _save_survey_questions(survey, request):
+    """
+    Rebuild survey questions from posted form fields.
+    """
+    survey.questions.all().delete()
+
+    q_texts = request.POST.getlist('q_text')
+    q_types = request.POST.getlist('q_type')
+    q_options = request.POST.getlist('q_options')
+    q_required = set(request.POST.getlist('q_required'))
+
+    order = 0
+    for i, text in enumerate(q_texts):
+        text = (text or '').strip()
+        if not text:
+            continue
+
+        SurveyQuestion.objects.create(
+            survey=survey,
+            text=text,
+            q_type=q_types[i] if i < len(q_types) else 'text',
+            options=(q_options[i] if i < len(q_options) else '').strip(),
+            is_required=str(i) in q_required,
+            order=order,
+        )
+        order += 1
+
+class PublicSurveyView(View):
+    """
+    Token-based public survey — accessible without login.
+    URL: /projects/surveys/public/<token>/
+    Captures IP, User-Agent and optional JS device fingerprint.
+    """
+
+    def _guard(self, survey):
+        from django.utils import timezone as tz
+        if not survey.is_active:
+            return 'closed'
+        if not survey.is_public:
+            return 'private'
+        if survey.closes_at and survey.closes_at < tz.now().date():
+            return 'expired'
+        return None
+
+    def _already_responded(self, request, survey):
+        """Block duplicate submissions by IP when multiple responses off."""
+        if survey.allow_multiple_responses:
+            return False
+        ip = _get_client_ip(request)
+        device_id = request.COOKIES.get('_fp', '')
+        qs = survey.responses.filter(is_public_response=True)
+        if ip:
+            qs = qs.filter(ip_address=ip)
+        if device_id:
+            qs = qs.filter(device_id=device_id)
+        return qs.exists()
+
+    def get(self, request, token):
+        survey = get_object_or_404(Survey, public_token=token)
+        reason = self._guard(survey)
+        if reason:
+            return render(request, 'projects/survey_public_closed.html', {
+                'survey': survey, 'reason': reason
+            })
+        already = self._already_responded(request, survey)
+        return render(request, 'projects/survey_public.html', {
+            'survey': survey,
+            'questions': survey.questions.order_by('order'),
+            'already_responded': already,
+        })
+
+    def post(self, request, token):
+        survey = get_object_or_404(Survey, public_token=token)
+        reason = self._guard(survey)
+        if reason:
+            return render(request, 'projects/survey_public_closed.html', {
+                'survey': survey, 'reason': reason
+            })
+        if self._already_responded(request, survey):
+            return render(request, 'projects/survey_public.html', {
+                'survey': survey,
+                'questions': survey.questions.order_by('order'),
+                'already_responded': True,
+            })
+
+        ip = _get_client_ip(request)
+        device_id = request.POST.get('_fp', '') or request.COOKIES.get('_fp', '')
+        user_agent = request.META.get('HTTP_USER_AGENT', '')[:500]
+        name = request.POST.get('respondent_name', '').strip()
+
+        resp = SurveyResponse.objects.create(
+            survey=survey,
+            respondent=None,
+            respondent_name=name,
+            ip_address=ip or None,
+            device_id=device_id,
+            user_agent=user_agent,
+            is_public_response=True,
+        )
+
+        for q in survey.questions.order_by('order'):
+            if q.q_type == 'multi_choice':
+                val = ', '.join(request.POST.getlist(f'q_{q.pk}'))
+            else:
+                val = request.POST.get(f'q_{q.pk}', '').strip()
+            SurveyAnswer.objects.create(response=resp, question=q, value=val)
+
+        response = render(request, 'projects/survey_public_thanks.html', {'survey': survey})
+        # Set a cookie so the browser remembers it submitted (30-day)
+        response.set_cookie('_survey_done_' + str(survey.pk), '1', max_age=60 * 60 * 24 * 30, httponly=True)
+        return response
+
+
+# =============================================================================
+# SURVEY DASHBOARD  — live charts for CEO / Admin / PM
+# =============================================================================
+
+def _build_survey_chart_data(survey):
+    """
+    Return a JSON-serialisable dict with per-question chart data,
+    response timeline, and respondent breakdown.
+    Used by both the dashboard page and the polling API.
+    """
+    from collections import Counter
+    from django.utils import timezone as tz
+
+    questions = list(survey.questions.order_by('order'))
+    responses = list(
+        survey.responses
+        .select_related('respondent')
+        .prefetch_related('answers__question')
+        .order_by('submitted_at')
+    )
+    total = len(responses)
+
+    # ── Per-question data ─────────────────────────────────────────────────────
+    question_charts = []
+    for q in questions:
+        raw = list(SurveyAnswer.objects.filter(question=q).values_list('value', flat=True))
+        entry = {
+            'id': str(q.pk),
+            'text': q.text,
+            'type': q.q_type,
+            'count': len(raw),
+        }
+
+        if q.q_type in ('single_choice', 'multi_choice'):
+            all_vals = []
+            for a in raw:
+                all_vals.extend([v.strip() for v in a.split(',') if v.strip()])
+            tally = Counter(all_vals)
+            tot = sum(tally.values()) or 1
+            opts = q.get_options_list()
+            labels, counts = [], []
+            for opt in opts:
+                labels.append(opt)
+                counts.append(tally.get(opt, 0))
+            # write-ins
+            for k, v in tally.items():
+                if k not in opts:
+                    labels.append(k + ' *')
+                    counts.append(v)
+            entry.update({'labels': labels, 'counts': counts, 'total': sum(tally.values())})
+
+        elif q.q_type == 'rating':
+            nums = [int(a) for a in raw if a.strip().isdigit()]
+            tally = Counter(nums)
+            entry.update({
+                'labels': ['1', '2', '3', '4', '5'],
+                'counts': [tally.get(i, 0) for i in range(1, 6)],
+                'avg': round(sum(nums) / len(nums), 2) if nums else None,
+            })
+
+        elif q.q_type == 'yes_no':
+            tally = Counter(raw)
+            tot = sum(tally.values()) or 1
+            entry.update({
+                'labels': ['Yes', 'No'],
+                'counts': [tally.get('Yes', 0), tally.get('No', 0)],
+                'total': tot,
+            })
+
+        elif q.q_type in ('text', 'paragraph', 'number'):
+            entry['samples'] = [v for v in raw if v][:20]
+
+        question_charts.append(entry)
+
+    # ── Response timeline (responses per day) ─────────────────────────────────
+    from collections import defaultdict
+    from django.utils.timezone import localtime
+    day_counts = defaultdict(int)
+    for r in responses:
+        day = localtime(r.submitted_at).strftime('%Y-%m-%d')
+        day_counts[day] += 1
+    timeline_labels = sorted(day_counts.keys())
+    timeline_counts = [day_counts[d] for d in timeline_labels]
+
+    # ── Respondent breakdown: internal vs public ──────────────────────────────
+    internal = sum(1 for r in responses if not r.is_public_response)
+    public = sum(1 for r in responses if r.is_public_response)
+
+    # ── Recent responses list ─────────────────────────────────────────────────
+    recent = []
+    for r in reversed(responses[-20:]):
+        recent.append({
+            'id': str(r.pk),
+            'name': r.respondent_name or (r.respondent.get_full_name() if r.respondent else 'Anonymous'),
+            'ip': r.ip_address or '—',
+            'device': r.device_id[:12] + '…' if len(r.device_id) > 12 else r.device_id or '—',
+            'is_public': r.is_public_response,
+            'submitted_at': localtime(r.submitted_at).strftime('%d %b %Y %H:%M'),
+        })
+
+    return {
+        'survey_id': str(survey.pk),
+        'title': survey.title,
+        'total_responses': total,
+        'internal_responses': internal,
+        'public_responses': public,
+        'is_active': survey.is_active,
+        'question_charts': question_charts,
+        'timeline': {'labels': timeline_labels, 'counts': timeline_counts},
+        'recent': recent,
+        'generated_at': tz.now().isoformat(),
+    }
+
+
+class SurveyDashboardDataView(LoginRequiredMixin, View):
+    """
+    JSON polling endpoint.  GET returns fresh chart data every ~10 s.
+    Access: project manager, superuser, or team member.
+    """
+
+    def get(self, request, pk, sid):
+        project = get_object_or_404(Project, pk=pk)
+        if not (request.user.is_superuser or
+                project.project_manager == request.user or
+                _is_project_member(request.user, project)):
+            return JsonResponse({'error': 'Forbidden'}, status=403)
+
+        survey = get_object_or_404(Survey, pk=sid, project=project)
+        return JsonResponse(_build_survey_chart_data(survey))
+
+
+class SurveyDashboardView(LoginRequiredMixin, View):
+    """
+    Full-page live dashboard.
+    Renders a Chart.js dashboard that polls /dashboard/data/ every 10 s.
+    """
+
+    def get(self, request, pk, sid):
+        project = get_object_or_404(Project, pk=pk)
+        if not (request.user.is_superuser or
+                project.project_manager == request.user or
+                _is_project_member(request.user, project)):
+            return HttpResponseForbidden()
+
+        survey = get_object_or_404(Survey, pk=sid, project=project)
+        initial_data = _build_survey_chart_data(survey)
+
+        import json as _json
+        return render(request, 'projects/survey_dashboard.html', {
+            'project': project,
+            'survey': survey,
+            'initial_data_json': _json.dumps(initial_data),
+            'is_manager': request.user.is_superuser or project.project_manager == request.user,
+            'public_url': request.build_absolute_uri(survey.get_public_url()) if survey.is_public else None,
+        })

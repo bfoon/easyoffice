@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+{% block title %}Survey Dashboard — {{ survey.title }}{% endblock %}
+
+{% block content %}
+<style>
+.dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+.stat-card{background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:14px;padding:18px 20px}
+.stat-card .val{font-size:2rem;font-weight:800;color:var(--eo-text);line-height:1}
+.stat-card .lbl{font-size:.78rem;color:var(--eo-text-muted);margin-top:5px}
+.chart-card{background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:14px;padding:20px 24px;margin-bottom:20px}
+.chart-card h3{font-size:.9rem;font-weight:700;color:var(--eo-text);margin-bottom:16px}
+.q-card{background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:14px;padding:20px 24px;margin-bottom:16px}
+.q-card h4{font-size:.88rem;font-weight:700;color:var(--eo-text);margin-bottom:14px;line-height:1.4}
+.bar-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:.82rem}
+.bar-track{flex:1;background:var(--eo-border);border-radius:999px;height:10px;overflow:hidden}
+.bar-fill{height:100%;border-radius:999px;transition:width .5s}
+.bar-label{min-width:120px;color:var(--eo-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar-count{min-width:30px;text-align:right;color:var(--eo-text);font-weight:600}
+.bar-pct{min-width:36px;text-align:right;color:var(--eo-text-muted)}
+.resp-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.resp-table th{text-align:left;padding:8px 12px;border-bottom:1px solid var(--eo-border);font-weight:600;color:var(--eo-text-muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.04em}
+.resp-table td{padding:9px 12px;border-bottom:1px solid var(--eo-border);color:var(--eo-text)}
+.resp-table tr:last-child td{border-bottom:none}
+.badge-pub{background:#dbeafe;color:#1d4ed8;border-radius:999px;padding:2px 8px;font-size:.7rem;font-weight:700}
+.badge-int{background:#d1fae5;color:#065f46;border-radius:999px;padding:2px 8px;font-size:.7rem;font-weight:700}
+.live-dot{width:8px;height:8px;background:#10b981;border-radius:50%;display:inline-block;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.share-box{background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px;padding:12px 16px;display:flex;align-items:center;gap:10px;font-size:.82rem;color:var(--eo-text-muted);word-break:break-all}
+.copy-btn{flex-shrink:0;background:var(--eo-primary,#1e3a5f);color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:.78rem;font-weight:600;cursor:pointer}
+.avg-badge{display:inline-block;background:var(--eo-primary,#1e3a5f);color:#fff;border-radius:10px;padding:6px 16px;font-size:1.1rem;font-weight:800;margin-bottom:12px}
+.text-samples{list-style:none;display:flex;flex-direction:column;gap:6px}
+.text-samples li{background:var(--eo-bg);border-radius:8px;padding:8px 12px;font-size:.82rem;color:var(--eo-text);border-left:3px solid var(--eo-border)}
+@media(max-width:900px){.dash-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:600px){.dash-grid{grid-template-columns:1fr}}
+</style>
+
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <div class="d-flex align-items-center gap-2 mb-1">
+      <span class="live-dot"></span>
+      <span style="font-size:.78rem;color:var(--eo-text-muted)">Live — refreshing every 10 s</span>
+    </div>
+    <h2 style="font-size:1.2rem;font-weight:800;color:var(--eo-text);margin:0">{{ survey.title }}</h2>
+    <div style="font-size:.8rem;color:var(--eo-text-muted)">{{ project.name }}</div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="{% url 'survey_detail' project.pk survey.pk %}" class="eo-btn eo-btn-sm eo-btn-secondary">
+      <i class="bi bi-arrow-left"></i> Back to Survey
+    </a>
+    {% if is_manager %}
+    <form method="post" action="{% url 'survey_toggle' project.pk survey.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="toggle_active">
+      <button class="eo-btn eo-btn-sm {% if survey.is_active %}eo-btn-danger{% else %}eo-btn-success{% endif %}">
+        {% if survey.is_active %}<i class="bi bi-stop-circle"></i> Close Survey{% else %}<i class="bi bi-play-circle"></i> Reopen{% endif %}
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{# Public share link #}
+{% if public_url %}
+<div class="chart-card mb-3">
+  <h3><i class="bi bi-share me-2"></i>Public Share Link</h3>
+  <div class="share-box">
+    <span id="pub-url">{{ public_url }}</span>
+    <button class="copy-btn" onclick="copyUrl()">Copy</button>
+  </div>
+  <div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:8px">
+    Anyone with this link can respond without logging in.
+  </div>
+</div>
+{% endif %}
+
+{# KPI strip #}
+<div class="dash-grid" id="kpi-strip">
+  <div class="stat-card">
+    <div class="val" id="kpi-total">—</div>
+    <div class="lbl">Total Responses</div>
+  </div>
+  <div class="stat-card">
+    <div class="val" id="kpi-internal">—</div>
+    <div class="lbl">Internal</div>
+  </div>
+  <div class="stat-card">
+    <div class="val" id="kpi-public">—</div>
+    <div class="lbl">Public / External</div>
+  </div>
+  <div class="stat-card">
+    <div class="val" id="kpi-status">—</div>
+    <div class="lbl">Status</div>
+  </div>
+</div>
+
+{# Timeline chart #}
+<div class="chart-card">
+  <h3><i class="bi bi-graph-up me-2"></i>Responses Over Time</h3>
+  <canvas id="timeline-chart" height="90"></canvas>
+</div>
+
+{# Per-question charts #}
+<div id="q-charts"></div>
+
+{# Recent responses table #}
+<div class="chart-card">
+  <h3><i class="bi bi-people me-2"></i>Recent Submissions</h3>
+  <div style="overflow-x:auto">
+    <table class="resp-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Source</th>
+          <th>IP Address</th>
+          <th>Device ID</th>
+          <th>Submitted</th>
+        </tr>
+      </thead>
+      <tbody id="recent-tbody">
+        <tr><td colspan="5" style="text-align:center;color:var(--eo-text-muted);padding:24px">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+var DATA_URL = "{% url 'survey_dashboard_data' project.pk survey.pk %}";
+var COVER = "{{ project.cover_color|default:'#1e3a5f' }}";
+var PALETTE = [COVER,'#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316'];
+
+var initialData = {{ initial_data_json|safe }};
+var timelineChart = null;
+var qChartInstances = {};
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+function hex2rgba(hex, alpha) {
+  var r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return 'rgba('+r+','+g+','+b+','+alpha+')';
+}
+
+function copyUrl() {
+  navigator.clipboard.writeText(document.getElementById('pub-url').textContent.trim());
+  var btn = document.querySelector('.copy-btn');
+  btn.textContent = 'Copied!';
+  setTimeout(function(){ btn.textContent = 'Copy'; }, 2000);
+}
+
+// ── KPI update ───────────────────────────────────────────────────────────────
+function updateKPIs(d) {
+  document.getElementById('kpi-total').textContent = d.total_responses;
+  document.getElementById('kpi-internal').textContent = d.internal_responses;
+  document.getElementById('kpi-public').textContent = d.public_responses;
+  var s = document.getElementById('kpi-status');
+  s.textContent = d.is_active ? 'Active' : 'Closed';
+  s.style.color = d.is_active ? '#10b981' : '#94a3b8';
+}
+
+// ── Timeline chart ───────────────────────────────────────────────────────────
+function buildTimeline(d) {
+  var ctx = document.getElementById('timeline-chart').getContext('2d');
+  if (timelineChart) {
+    timelineChart.data.labels = d.timeline.labels;
+    timelineChart.data.datasets[0].data = d.timeline.counts;
+    timelineChart.update('none');
+    return;
+  }
+  timelineChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: d.timeline.labels,
+      datasets: [{
+        label: 'Responses',
+        data: d.timeline.counts,
+        borderColor: COVER,
+        backgroundColor: hex2rgba(COVER, 0.1),
+        fill: true,
+        tension: 0.4,
+        pointRadius: 4,
+        pointBackgroundColor: COVER,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } }
+      }
+    }
+  });
+}
+
+// ── Per-question charts ───────────────────────────────────────────────────────
+function renderQuestions(data) {
+  var container = document.getElementById('q-charts');
+  data.question_charts.forEach(function(q, qi) {
+    var cardId = 'qcard-' + q.id;
+    var card = document.getElementById(cardId);
+
+    if (!card) {
+      card = document.createElement('div');
+      card.className = 'q-card';
+      card.id = cardId;
+      container.appendChild(card);
+    }
+
+    // Bar / donut chart types
+    if (q.type === 'single_choice' || q.type === 'multi_choice' || q.type === 'yes_no') {
+      var total = q.total || q.counts.reduce(function(a,b){return a+b},0) || 1;
+      var barsHtml = q.labels.map(function(lbl, i) {
+        var cnt = q.counts[i] || 0;
+        var pct = Math.round(cnt / total * 100);
+        var col = PALETTE[i % PALETTE.length];
+        return '<div class="bar-row">'
+          + '<div class="bar-label" title="'+lbl+'">'+lbl+'</div>'
+          + '<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:'+col+'"></div></div>'
+          + '<div class="bar-count">'+cnt+'</div>'
+          + '<div class="bar-pct">'+pct+'%</div>'
+          + '</div>';
+      }).join('');
+
+      card.innerHTML = '<h4>Q'+(qi+1)+'. '+q.text+'</h4>'
+        + '<div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:12px">'+q.count+' response(s)</div>'
+        + barsHtml;
+
+    } else if (q.type === 'rating') {
+      var avgHtml = q.avg !== null ? '<div class="avg-badge">★ '+q.avg+' / 5</div>' : '';
+      var total2 = q.counts.reduce(function(a,b){return a+b},0) || 1;
+      var barsHtml2 = q.labels.map(function(lbl,i){
+        var cnt = q.counts[i]||0;
+        var pct = Math.round(cnt/total2*100);
+        return '<div class="bar-row"><div class="bar-label">'+lbl+' star</div>'
+          +'<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:'+PALETTE[i%PALETTE.length]+'"></div></div>'
+          +'<div class="bar-count">'+cnt+'</div><div class="bar-pct">'+pct+'%</div></div>';
+      }).join('');
+      card.innerHTML = '<h4>Q'+(qi+1)+'. '+q.text+'</h4>'+avgHtml+barsHtml2;
+
+    } else if (q.type === 'text' || q.type === 'paragraph' || q.type === 'number') {
+      var samples = (q.samples || []).slice(0,10);
+      var sHtml = samples.length
+        ? '<ul class="text-samples">'+samples.map(function(s){ return '<li>'+s+'</li>'; }).join('')+'</ul>'
+        : '<div style="color:var(--eo-text-muted);font-size:.82rem">No responses yet.</div>';
+      card.innerHTML = '<h4>Q'+(qi+1)+'. '+q.text+'</h4>'
+        +'<div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:10px">'+q.count+' response(s) — showing up to 10 samples</div>'
+        + sHtml;
+    }
+  });
+}
+
+// ── Recent responses table ────────────────────────────────────────────────────
+function renderRecent(data) {
+  var tbody = document.getElementById('recent-tbody');
+  if (!data.recent.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--eo-text-muted);padding:24px">No responses yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.recent.map(function(r) {
+    var badge = r.is_public
+      ? '<span class="badge-pub">Public</span>'
+      : '<span class="badge-int">Internal</span>';
+    return '<tr><td>'+r.name+'</td><td>'+badge+'</td><td style="font-family:monospace;font-size:.78rem">'+r.ip+'</td><td style="font-family:monospace;font-size:.78rem">'+r.device+'</td><td>'+r.submitted_at+'</td></tr>';
+  }).join('');
+}
+
+// ── Main render ───────────────────────────────────────────────────────────────
+function render(data) {
+  updateKPIs(data);
+  buildTimeline(data);
+  renderQuestions(data);
+  renderRecent(data);
+}
+
+// ── Polling ───────────────────────────────────────────────────────────────────
+function poll() {
+  fetch(DATA_URL, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+    .then(function(r){ return r.json(); })
+    .then(render)
+    .catch(function(e){ console.warn('Dashboard poll error:', e); });
+}
+
+// Boot with initial data, then poll every 10 s
+render(initialData);
+setInterval(poll, 10000);
+</script>
+{% endblock %}

@@ -46,6 +46,11 @@ urlpatterns = [
     path('<uuid:pk>/locations/export/pdf/', views.LocationMapPDFExportView.as_view(), name='location_export_pdf'),
     path('<uuid:pk>/locations/export/html/', views.LocationMapHTMLExportView.as_view(), name='location_export_html'),
     path('<uuid:pk>/locations/tools/plus-code-convert/', views.PlusCodeConvertView.as_view(), name='location_plus_code_convert'),
+    path('<pk>/zones/', views.ProjectZoneListView.as_view(), name='project_zones_json'),
+    path('<pk>/zones/create/', views.ProjectZoneCreateView.as_view(), name='zone_create'),
+    path('<pk>/zones/<zid>/edit/', views.ProjectZoneEditView.as_view(), name='zone_edit'),
+    path('<pk>/zones/<zid>/delete/', views.ProjectZoneDeleteView.as_view(), name='zone_delete'),
+    path('<pk>/locations/bulk-zone/', views.ProjectLocationBulkZoneView.as_view(), name='location_bulk_zone'),
 
     # ── 📎  Documents ────────────────────────────────────────────────────────
     path('<uuid:pk>/documents/link/', views.ProjectDocumentLinkView.as_view(), name='project_document_link'),

@@ -288,6 +288,25 @@ class TrackingRow(models.Model):
 
 # ─── Location Map ─────────────────────────────────────────────────────────────
 
+class ProjectZone(models.Model):
+    """
+    A named zone / sector that groups ProjectLocations together.
+    When zone view is enabled on the map, every zone's locations are
+    enclosed in a convex-hull polygon with the zone's colour.
+    """
+    project = models.ForeignKey('Project', on_delete=models.CASCADE, related_name='zones')
+    name = models.CharField(max_length=100)
+    color = models.CharField(max_length=7, default='#6366f1',
+                             help_text='Hex colour for the polygon fill/border.')
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return f'{self.project.name} – {self.name}'
+
 class ProjectLocation(models.Model):
     class Status(models.TextChoices):
         PENDING = 'pending', _('Pending')
@@ -311,6 +330,12 @@ class ProjectLocation(models.Model):
         User, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='assigned_locations'
     )
+    zone = models.ForeignKey(
+              'ProjectZone',
+              on_delete=models.SET_NULL,
+              null=True, blank=True,
+              related_name='locations',
+          )
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

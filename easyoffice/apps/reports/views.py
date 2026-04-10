@@ -1,3 +1,4 @@
+import json
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import TemplateView
 from django.utils import timezone
@@ -58,8 +59,8 @@ class TaskReportView(LoginRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         from apps.tasks.models import Task
         now = timezone.now()
-        ctx['tasks_by_status'] = list(Task.objects.values('status').annotate(count=Count('id')))
-        ctx['tasks_by_priority'] = list(Task.objects.values('priority').annotate(count=Count('id')))
+        ctx['tasks_by_status_json'] = json.dumps(list(Task.objects.values('status').annotate(count=Count('id'))))
+        ctx['tasks_by_priority_json'] = json.dumps(list(Task.objects.values('priority').annotate(count=Count('id'))))
         ctx['overdue_count'] = Task.objects.filter(
             status__in=['todo', 'in_progress'], due_date__lt=now
         ).count()
@@ -81,7 +82,7 @@ class ProjectReportView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         from apps.projects.models import Project
-        ctx['projects_by_status'] = list(Project.objects.values('status').annotate(count=Count('id')))
+        ctx['projects_by_status_json'] = json.dumps(list(Project.objects.values('status').annotate(count=Count('id'))))
         ctx['avg_progress'] = round(
             Project.objects.filter(status='active').aggregate(avg=Avg('progress_pct'))['avg'] or 0
         )
@@ -90,7 +91,7 @@ class ProjectReportView(LoginRequiredMixin, TemplateView):
         ).aggregate(t=Sum('budget'))['t'] or 0
         ctx['total_projects'] = Project.objects.count()
         ctx['active_projects'] = Project.objects.filter(status='active').count()
-        ctx['projects'] = Project.objects.select_related('manager').order_by('-progress_pct')[:15]
+        ctx['projects'] = Project.objects.select_related("project_manager").order_by('-progress_pct')[:15]
         return ctx
 
 
@@ -101,18 +102,22 @@ class StaffReportView(LoginRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         from apps.core.models import User
         from apps.staff.models import LeaveRequest
-        ctx['staff_by_dept'] = list(
+        staff_by_dept = list(
             User.objects.filter(is_active=True, status='active')
             .values('staffprofile__department__name')
             .annotate(count=Count('id'))
             .order_by('-count')
         )
-        ctx['leave_by_type'] = list(
+        leave_by_type = list(
             LeaveRequest.objects.filter(status='approved')
             .values('leave_type__name')
             .annotate(count=Count('id'))
             .order_by('-count')
         )
+        ctx['staff_by_dept'] = staff_by_dept
+        ctx['leave_by_type'] = leave_by_type
+        ctx['staff_by_dept_json'] = json.dumps(staff_by_dept)
+        ctx['leave_by_type_json'] = json.dumps(leave_by_type)
         ctx['total_staff'] = User.objects.filter(is_active=True, status='active').count()
         ctx['pending_leaves'] = LeaveRequest.objects.filter(status='pending').count()
         ctx['approved_leaves'] = LeaveRequest.objects.filter(status='approved').count()
@@ -138,11 +143,15 @@ class FinanceReportView(LoginRequiredMixin, TemplateView):
         ctx['payments_this_year'] = Payment.objects.filter(
             payment_date__year=year
         ).aggregate(total=Sum('amount'))['total'] or 0
-        ctx['payments_by_month'] = list(
+        payments_by_month = list(
             Payment.objects.filter(payment_date__year=year)
             .values('payment_date__month')
             .annotate(total=Sum('amount'))
             .order_by('payment_date__month')
+        )
+        ctx['payments_by_month'] = payments_by_month
+        ctx['payments_by_month_json'] = json.dumps(
+            [{'payment_date__month': r['payment_date__month'], 'total': float(r['total'] or 0)} for r in payments_by_month]
         )
         ctx['year'] = year
         return ctx

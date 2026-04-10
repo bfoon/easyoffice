@@ -9,6 +9,21 @@
 
 {% block content %}
 <style>
+  /* ── Fullscreen Map ── */
+#map-wrap.fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw;
+  height: 100vh;
+  z-index: 2000;
+  margin: 0;
+  border-radius: 0;
+}
+
+#map-wrap.fullscreen #leaflet-map {
+  height: 100vh !important;
+  border-radius: 0;
+}
 /* ── Modal ── */
 .proj-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1050;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .18s}
 .proj-modal-backdrop.open{opacity:1;pointer-events:all}
@@ -70,6 +85,10 @@
       <button class="view-btn"        id="btn-tile" onclick="setView('tile')"><i class="bi bi-grid-3x3-gap"></i> Tiles</button>
       <button class="view-btn"        id="btn-list" onclick="setView('list')"><i class="bi bi-list-ul"></i> List</button>
     </div>
+    <!-- Zone sector toggle (always visible when on map view) -->
+    <button class="eo-btn eo-btn-sm eo-btn-secondary" id="btn-zone-toggle" onclick="toggleZoneLayer()" title="Toggle zone/sector polygons">
+      <i class="bi bi-pentagon" id="zone-toggle-icon"></i> <span id="zone-toggle-label">Zones Off</span>
+    </button>
 
     {# ── Tools dropdown (Export + Templates + Converter tools) ── #}
     <div style="position:relative">
@@ -82,6 +101,9 @@
         <div style="padding:6px 14px 4px;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted)">Converters</div>
         <button type="button" class="dd-item dd-item-btn" onclick="toggleDD('toolsDD');openModal('pcConvertModal')">
           <i class="bi bi-pin-map me-2"></i>Plus Code → Lat / Lng
+        </button>
+        <button type="button" class="dd-item dd-item-btn" onclick="toggleDD('toolsDD');openBulkAdd()">
+          <i class="bi bi-geo-alt-fill me-2"></i>Bulk Add to Zone
         </button>
 
         {# ── Export ──────────────────────────────────────────── #}
@@ -108,6 +130,9 @@
     <button onclick="openModal('addLocModal')" class="eo-btn eo-btn-sm eo-btn-primary">
       <i class="bi bi-plus-lg"></i> Add Location
     </button>
+    <button class="eo-btn eo-btn-sm eo-btn-secondary" onclick="openModal('zoneModal')" title="Manage zones/sectors">
+      <i class="bi bi-pentagon"></i> Zones
+    </button>
     {% endif %}
   </div>
 </div>
@@ -117,6 +142,146 @@
 .dd-item:hover{background:var(--eo-bg)}
 .dd-item-btn{width:100%;background:none;border:none;cursor:pointer;text-align:left}
 </style>
+
+
+{# ═══ Bulk Add to Zone Modal ══════════════════════════════════════════════════ #}
+<div class="proj-modal-backdrop" id="bulkAddModal">
+  <div class="proj-modal" style="width:880px;max-width:98vw">
+    <div class="proj-modal-head">
+      <div>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text)"><i class="bi bi-geo-alt-fill me-2" style="color:var(--eo-accent)"></i>Bulk Assign Locations to Zone</div>
+        <div style="font-size:.76rem;color:var(--eo-text-muted);margin-top:3px">Select existing locations or add new ones and assign them all to a zone at once.</div>
+      </div>
+      <button onclick="closeBulkAdd()" style="background:none;border:none;font-size:1.3rem;cursor:pointer;color:var(--eo-text-muted)">&times;</button>
+    </div>
+    <div class="proj-modal-body" style="padding:16px 20px">
+
+      {# ── Shared: zone selector ── #}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;padding:12px 14px;background:var(--eo-bg);border-radius:10px;border:1px solid var(--eo-border)">
+        <div>
+          <label class="eo-form-label" style="font-size:.74rem">Target Zone / Sector</label>
+          <select id="bulk-zone" class="eo-form-select" style="font-size:.83rem">
+            <option value="">— No Zone (unassign) —</option>
+            {% for zone in zones %}
+            <option value="{{ zone.id }}" data-color="{{ zone.color }}">{{ zone.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;justify-content:flex-end">
+          <div style="font-size:.76rem;color:var(--eo-text-muted);line-height:1.55">
+            Choose a zone, then pick locations below. Selecting <em>No Zone</em> removes the zone from chosen locations.
+          </div>
+        </div>
+      </div>
+
+      {# ── Tabs ── #}
+      <div style="display:flex;border-bottom:2px solid var(--eo-border);margin-bottom:14px">
+        <button type="button" id="bulk-tab-existing" onclick="setBulkTab('existing')"
+          style="padding:8px 18px;border:none;background:none;font-size:.84rem;font-weight:700;color:var(--eo-accent);border-bottom:2px solid var(--eo-accent);margin-bottom:-2px;cursor:pointer">
+          <i class="bi bi-database me-1"></i>Select Existing
+        </button>
+        <button type="button" id="bulk-tab-new" onclick="setBulkTab('new')"
+          style="padding:8px 18px;border:none;background:none;font-size:.84rem;font-weight:600;color:var(--eo-text-muted);border-bottom:2px solid transparent;margin-bottom:-2px;cursor:pointer">
+          <i class="bi bi-plus-circle me-1"></i>Add New
+        </button>
+      </div>
+
+      {# ══ TAB: SELECT EXISTING ══ #}
+      <div id="bulk-panel-existing">
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
+          <input type="text" id="bulk-search" class="eo-form-control" style="max-width:230px;font-size:.83rem"
+            placeholder="Search name, category…" oninput="bulkFilterExisting()"/>
+          <select id="bulk-filter-zone" class="eo-form-select" style="max-width:175px;font-size:.83rem" onchange="bulkFilterExisting()">
+            <option value="">All zones</option>
+            <option value="__none__">Unassigned only</option>
+            {% for zone in zones %}
+            <option value="{{ zone.id }}">{{ zone.name }}</option>
+            {% endfor %}
+          </select>
+          <label style="display:flex;align-items:center;gap:5px;font-size:.82rem;color:var(--eo-text);cursor:pointer">
+            <input type="checkbox" id="bulk-select-all" onchange="bulkToggleAll(this.checked)"/> Select all visible
+          </label>
+          <span id="bulk-selected-count" style="font-size:.78rem;color:var(--eo-accent);font-weight:700;margin-left:auto"></span>
+        </div>
+        <div id="bulk-loc-list" style="max-height:310px;overflow-y:auto;border:1px solid var(--eo-border);border-radius:8px"></div>
+        <div style="display:flex;gap:10px;padding-top:12px;border-top:1px solid var(--eo-border);margin-top:12px;align-items:center">
+          <button type="button" class="eo-btn eo-btn-primary" onclick="bulkAssignExisting()">
+            <i class="bi bi-pentagon-fill me-1"></i><span id="bulk-assign-label">Assign to Zone</span>
+          </button>
+          <button type="button" class="eo-btn eo-btn-secondary" onclick="closeBulkAdd()">Cancel</button>
+          <span id="bulk-assign-error" style="font-size:.78rem;color:#ef4444;margin-left:8px"></span>
+        </div>
+      </div>
+
+      {# ══ TAB: ADD NEW ══ #}
+      <div id="bulk-panel-new" style="display:none">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;padding:10px 12px;background:var(--eo-bg);border-radius:8px;border:1px solid var(--eo-border)">
+          <div>
+            <label class="eo-form-label" style="font-size:.74rem">Default Category</label>
+            <input type="text" id="bulk-default-cat" class="eo-form-control" style="font-size:.83rem" placeholder="e.g. Installation" oninput="applyBulkDefault('category',this.value)"/>
+          </div>
+          <div>
+            <label class="eo-form-label" style="font-size:.74rem">Default Status</label>
+            <select id="bulk-default-status" class="eo-form-select" style="font-size:.83rem" onchange="applyBulkDefault('status',this.value)">
+              {% for val, label in status_choices %}<option value="{{ val }}">{{ label }}</option>{% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="eo-form-label" style="font-size:.74rem">Assigned To</label>
+            <select id="bulk-default-assigned" class="eo-form-select" style="font-size:.83rem" onchange="applyBulkDefault('assigned',this.value)">
+              <option value="">— None —</option>
+              {% for s in staff_list %}<option value="{{ s.id }}">{{ s.full_name }}</option>{% endfor %}
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:.8rem;color:#1e40af;margin-bottom:10px">
+          <i class="bi bi-info-circle-fill" style="flex-shrink:0"></i>
+          <span>Click anywhere on the map to auto-fill the next empty row's coordinates.</span>
+          <button type="button" onclick="toggleBulkMapClick()" id="bulk-map-click-btn" class="eo-btn eo-btn-sm eo-btn-secondary" style="margin-left:auto;white-space:nowrap;flex-shrink:0">
+            <i class="bi bi-cursor-fill me-1"></i>Enable Map Click
+          </button>
+        </div>
+        <div style="overflow-x:auto;margin-bottom:10px">
+          <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+            <thead>
+              <tr style="background:var(--eo-bg)">
+                <th style="padding:6px 8px;font-size:.7rem;font-weight:700;text-transform:uppercase;color:var(--eo-text-muted);border-bottom:2px solid var(--eo-border);width:26px">#</th>
+                <th style="padding:6px 8px;font-size:.7rem;font-weight:700;text-transform:uppercase;color:var(--eo-text-muted);border-bottom:2px solid var(--eo-border);min-width:145px">Name *</th>
+                <th style="padding:6px 8px;font-size:.7rem;font-weight:700;text-transform:uppercase;color:var(--eo-text-muted);border-bottom:2px solid var(--eo-border);width:108px">Latitude *</th>
+                <th style="padding:6px 8px;font-size:.7rem;font-weight:700;text-transform:uppercase;color:var(--eo-text-muted);border-bottom:2px solid var(--eo-border);width:108px">Longitude *</th>
+                <th style="padding:6px 8px;font-size:.7rem;font-weight:700;text-transform:uppercase;color:var(--eo-text-muted);border-bottom:2px solid var(--eo-border);min-width:90px">Category</th>
+                <th style="padding:6px 8px;font-size:.7rem;font-weight:700;text-transform:uppercase;color:var(--eo-text-muted);border-bottom:2px solid var(--eo-border);width:105px">Status</th>
+                <th style="padding:6px 8px;font-size:.7rem;font-weight:700;text-transform:uppercase;color:var(--eo-text-muted);border-bottom:2px solid var(--eo-border);min-width:105px">Address</th>
+                <th style="width:30px;border-bottom:2px solid var(--eo-border)"></th>
+              </tr>
+            </thead>
+            <tbody id="bulk-tbody"></tbody>
+          </table>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          <button type="button" class="eo-btn eo-btn-sm eo-btn-secondary" onclick="bulkAddRow()"><i class="bi bi-plus-circle me-1"></i>Add Row</button>
+          <button type="button" class="eo-btn eo-btn-sm eo-btn-secondary" onclick="bulkAddRows(5)">+5 Rows</button>
+          <button type="button" class="eo-btn eo-btn-sm eo-btn-secondary" onclick="bulkClearEmpty()"><i class="bi bi-eraser me-1"></i>Clear Empty</button>
+          <span id="bulk-row-count" style="font-size:.78rem;color:var(--eo-text-muted);margin-left:4px"></span>
+          <span id="bulk-error-msg" style="font-size:.78rem;color:#ef4444;margin-left:8px"></span>
+        </div>
+        <div style="display:flex;gap:10px;padding-top:12px;border-top:1px solid var(--eo-border);align-items:center">
+          <button type="button" class="eo-btn eo-btn-primary" id="bulk-submit-btn" onclick="bulkSubmit()">
+            <i class="bi bi-geo-alt-fill me-1"></i><span id="bulk-submit-label">Save All Locations</span>
+          </button>
+          <button type="button" class="eo-btn eo-btn-secondary" onclick="closeBulkAdd()">Cancel</button>
+          <div id="bulk-progress" style="display:none;flex:1;background:var(--eo-border);border-radius:99px;height:8px;overflow:hidden">
+            <div id="bulk-progress-fill" style="height:100%;background:var(--eo-accent);border-radius:99px;width:0%;transition:width .2s"></div>
+          </div>
+          <span id="bulk-progress-text" style="font-size:.78rem;color:var(--eo-text-muted);display:none"></span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+</div>
 
 <!-- {# ════════════════════════════════════════════════════════════════════════════
    Plus Code → Lat/Lng Converter modal
@@ -273,6 +438,14 @@ function pcSubmit() {
 {# ── MAP VIEW ── always in DOM so Leaflet can init #}
 <div id="view-map">
   <div id="map-wrap">
+    <!-- Fullscreen Button -->
+  <button id="map-fullscreen-btn"
+          onclick="toggleMapFullscreen()"
+          style="position:absolute;top:10px;right:10px;z-index:1000;
+                 background:var(--eo-surface);border:1px solid var(--eo-border);
+                 padding:6px 10px;border-radius:8px;cursor:pointer;font-size:.8rem">
+    <i class="bi bi-arrows-fullscreen"></i> Fullscreen
+  </button>
     <div id="leaflet-map"></div>
     {% if location_count == 0 %}
     <div id="map-empty-overlay">
@@ -309,7 +482,7 @@ function pcSubmit() {
         <div style="font-size:.72rem;color:var(--eo-text-muted);font-family:monospace;margin-bottom:10px">{{ loc.latitude }}, {{ loc.longitude }}</div>
         {% if is_member %}
         <div style="display:flex;gap:6px;border-top:1px solid var(--eo-border);padding-top:10px" onclick="event.stopPropagation()">
-          <button onclick="openEdit('{{ loc.pk }}','{{ loc.name|escapejs }}','{{ loc.description|escapejs }}','{{ loc.address|escapejs }}',{{ loc.latitude }},{{ loc.longitude }},'{{ loc.category|escapejs }}','{{ loc.status }}','{% if loc.assigned_to %}{{ loc.assigned_to.pk }}{% endif %}','{{ loc.notes|escapejs }}')" class="eo-btn eo-btn-sm eo-btn-secondary"><i class="bi bi-pencil"></i> Edit</button>
+          <button onclick="openEdit('{{ loc.pk }}','{{ loc.name|escapejs }}','{{ loc.description|escapejs }}','{{ loc.address|escapejs }}',{{ loc.latitude }},{{ loc.longitude }},'{{ loc.category|escapejs }}','{{ loc.status }}','{% if loc.assigned_to %}{{ loc.assigned_to.pk }}{% endif %}','{{ loc.notes|escapejs }}','{% if loc.zone %}{{ loc.zone.id }}{% endif %}')" class="eo-btn eo-btn-sm eo-btn-secondary"><i class="bi bi-pencil"></i> Edit</button>
           <form method="post" action="{% url 'location_delete' project.pk loc.pk %}" style="display:inline" onsubmit="return confirm('Remove {{ loc.name|escapejs }}?')">
             {% csrf_token %}<button type="submit" class="eo-btn eo-btn-sm" style="color:var(--eo-danger)"><i class="bi bi-trash3"></i></button>
           </form>
@@ -385,7 +558,7 @@ function pcSubmit() {
             {% if is_member %}
             <td style="text-align:right;white-space:nowrap">
               <button onclick="switchToMapPin({{ loc.latitude }},{{ loc.longitude }},'{{ loc.pk }}')" class="eo-btn eo-btn-sm eo-btn-secondary" title="Show on map"><i class="bi bi-map"></i></button>
-              <button onclick="openEdit('{{ loc.pk }}','{{ loc.name|escapejs }}','{{ loc.description|escapejs }}','{{ loc.address|escapejs }}',{{ loc.latitude }},{{ loc.longitude }},'{{ loc.category|escapejs }}','{{ loc.status }}','{% if loc.assigned_to %}{{ loc.assigned_to.pk }}{% endif %}','{{ loc.notes|escapejs }}')" class="eo-btn eo-btn-sm eo-btn-secondary"><i class="bi bi-pencil"></i></button>
+              <button onclick="openEdit('{{ loc.pk }}','{{ loc.name|escapejs }}','{{ loc.description|escapejs }}','{{ loc.address|escapejs }}',{{ loc.latitude }},{{ loc.longitude }},'{{ loc.category|escapejs }}','{{ loc.status }}','{% if loc.assigned_to %}{{ loc.assigned_to.pk }}{% endif %}','{{ loc.notes|escapejs }}','{% if loc.zone %}{{ loc.zone.id }}{% endif %}')" class="eo-btn eo-btn-sm eo-btn-secondary"><i class="bi bi-pencil"></i></button>
               <form method="post" action="{% url 'location_delete' project.pk loc.pk %}" style="display:inline" onsubmit="return confirm('Remove {{ loc.name|escapejs }}?')">
                 {% csrf_token %}<button type="submit" class="eo-btn eo-btn-sm" style="color:var(--eo-danger)"><i class="bi bi-trash3"></i></button>
               </form>
@@ -517,6 +690,15 @@ function pcSubmit() {
             <input type="text" name="notes" class="eo-form-control" placeholder="Any extra notes..."/>
           </div>
         </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Zone / Sector <span style="font-size:.68rem;font-weight:400;color:var(--eo-text-muted)">optional</span></label>
+          <select name="zone" class="eo-form-select">
+            <option value="">— No Zone —</option>
+            {% for zone in zones %}
+            <option value="{{ zone.id }}">{{ zone.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
         <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">
           <button type="submit" class="eo-btn eo-btn-primary">Add Location</button>
           <button type="button" onclick="closeModal('addLocModal');clearPreviewPin()" class="eo-btn eo-btn-secondary">Cancel</button>
@@ -536,6 +718,87 @@ function pcSubmit() {
     <div class="proj-modal-body" id="editLocBody"></div>
   </div>
 </div>
+{# ═══ Zone Management Modal ══════════════════════════════════════════════════ #}
+<div class="proj-modal-backdrop" id="zoneModal">
+  <div class="proj-modal" style="width:560px">
+    <div class="proj-modal-head">
+      <span style="font-size:1rem;font-weight:700"><i class="bi bi-pentagon me-2"></i>Zones / Sectors</span>
+      <button onclick="closeModal('zoneModal')" style="background:none;border:none;cursor:pointer;font-size:1.2rem;color:var(--eo-text-muted)">&times;</button>
+    </div>
+    <div class="proj-modal-body">
+
+      {# Create new zone #}
+      <div style="background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px;padding:16px;margin-bottom:18px">
+        <div style="font-size:.82rem;font-weight:700;color:var(--eo-text);margin-bottom:12px"><i class="bi bi-plus-circle me-1"></i>New Zone</div>
+        <form method="post" action="{% url 'zone_create' project.pk %}">
+          {% csrf_token %}
+          <div class="row g-2 mb-2">
+            <div class="col-sm-6">
+              <label class="eo-form-label">Zone Name *</label>
+              <input type="text" name="name" class="eo-form-control" placeholder="e.g. North Sector" required/>
+            </div>
+            <div class="col-sm-3">
+              <label class="eo-form-label">Colour</label>
+              <input type="color" name="color" class="eo-form-control" value="#6366f1" style="padding:3px 5px;height:38px;cursor:pointer"/>
+            </div>
+            <div class="col-sm-3 d-flex align-items-end">
+              <button type="submit" class="eo-btn eo-btn-primary w-100"><i class="bi bi-plus"></i> Add</button>
+            </div>
+          </div>
+          <div>
+            <label class="eo-form-label">Description (optional)</label>
+            <input type="text" name="description" class="eo-form-control" placeholder="Short description…"/>
+          </div>
+        </form>
+      </div>
+
+      {# Existing zones #}
+      <div style="font-size:.8rem;font-weight:700;color:var(--eo-text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">Existing Zones ({{ zone_count }})</div>
+      {% if zones %}
+      <div style="display:flex;flex-direction:column;gap:8px">
+        {% for zone in zones %}
+        <div style="border:1px solid var(--eo-border);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:12px">
+          <div style="width:20px;height:20px;border-radius:50%;background:{{ zone.color }};flex-shrink:0;border:2px solid rgba(0,0,0,.1)"></div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:700;font-size:.88rem;color:var(--eo-text)">{{ zone.name }}</div>
+            {% if zone.description %}<div style="font-size:.74rem;color:var(--eo-text-muted)">{{ zone.description }}</div>{% endif %}
+            <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:2px">{{ zone.locations.count }} location{{ zone.locations.count|pluralize }}</div>
+          </div>
+          <div style="display:flex;gap:5px;flex-shrink:0">
+            <button class="eo-btn eo-btn-sm eo-btn-secondary" onclick="openEditZone('{{ zone.id }}','{{ zone.name|escapejs }}','{{ zone.color }}','{{ zone.description|escapejs }}')">
+              <i class="bi bi-pencil"></i>
+            </button>
+            <form method="post" action="{% url 'zone_delete' project.pk zone.id %}" style="display:inline" onsubmit="return confirm('Delete zone &quot;{{ zone.name|escapejs }}&quot;? Locations will be unzoned.')">
+              {% csrf_token %}
+              <button type="submit" class="eo-btn eo-btn-sm" style="color:var(--eo-danger)"><i class="bi bi-trash3"></i></button>
+            </form>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:24px;color:var(--eo-text-muted);font-size:.85rem">
+        <i class="bi bi-pentagon" style="font-size:2rem;opacity:.3;display:block;margin-bottom:10px"></i>
+        No zones yet. Create one above.
+      </div>
+      {% endif %}
+
+    </div>
+  </div>
+</div>
+
+{# ═══ Edit Zone Modal ══════════════════════════════════════════════════════════ #}
+<div class="proj-modal-backdrop" id="editZoneModal">
+  <div class="proj-modal" style="width:480px">
+    <div class="proj-modal-head">
+      <span style="font-size:1rem;font-weight:700">Edit Zone</span>
+      <button onclick="closeModal('editZoneModal')" style="background:none;border:none;cursor:pointer;font-size:1.2rem;color:var(--eo-text-muted)">&times;</button>
+    </div>
+    <div class="proj-modal-body" id="editZoneBody"></div>
+  </div>
+</div>
+
+
 {% endif %}
 
 {% endblock %}
@@ -654,6 +917,8 @@ var LOCATIONS = [
     category:'{{ loc.category|escapejs }}', address:'{{ loc.address|escapejs }}',
     description:'{{ loc.description|truncatechars:100|escapejs }}',
     assignedTo:'{% if loc.assigned_to %}{{ loc.assigned_to.full_name|escapejs }}{% endif %}',
+    zoneId:'{% if loc.zone %}{{ loc.zone.id }}{% endif %}',
+    zoneName:'{% if loc.zone %}{{ loc.zone.name|escapejs }}{% endif %}',
   },{% endfor %}
 ];
 
@@ -823,8 +1088,10 @@ var CSRF = '{{ csrf_token }}';
 
 function _esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;'); }
 
-function openEdit(id, name, desc, addr, lat, lng, cat, status, assignedId, notes) {
+function openEdit(id, name, desc, addr, lat, lng, cat, status, assignedId, notes, zoneId) {
   var staffOpts='<option value="">— None —</option>';
+  var zoneOpts='<option value="">— No Zone —</option>';
+  ZONES.forEach(function(z){ zoneOpts+='<option value="'+z.id+'"'+(z.id===zoneId?' selected':'')+'>'+z.name+'</option>'; });
   STAFF.forEach(function(s){ staffOpts+='<option value="'+s.id+'"'+(s.id===assignedId?' selected':'')+'>'+s.name+'</option>'; });
   var statusOpts='';
   STATUS_CHOICES.forEach(function(s){ statusOpts+='<option value="'+s.val+'"'+(s.val===status?' selected':'')+'>'+s.label+'</option>'; });
@@ -862,6 +1129,8 @@ function openEdit(id, name, desc, addr, lat, lng, cat, status, assignedId, notes
     +'<input type="text" name="notes" class="eo-form-control" value="'+_esc(notes)+'"/></div></div>'
     +'<div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">'
     +'<button type="submit" class="eo-btn eo-btn-primary">Save Changes</button>'
+    +'<div class="eo-form-group"><label class="eo-form-label">Zone / Sector</label>'+ '<select name="zone" class="eo-form-select">'
+    + zoneOpts + '</select></div>'
     +'<button type="button" onclick="clearPreviewPin();closeModal(\'editLocModal\')" class="eo-btn eo-btn-secondary">Cancel</button>'
     +'</div></form>';
 
@@ -927,6 +1196,515 @@ function decodePlusCode(code,latId,lngId,errId){
     if(errEl) errEl.style.display='none';
     showPreviewPin(d.latitudeCenter,d.longitudeCenter);
   }catch(e){if(errEl){errEl.textContent='Error: '+e.message;errEl.style.display='block';}}
+}
+
+// ── Zones data ────────────────────────────────────────────────────────────────
+var ZONES = [
+  {% for zone in zones %}
+  { id:'{{ zone.id }}', name:'{{ zone.name|escapejs }}', color:'{{ zone.color }}', description:'{{ zone.description|escapejs }}' },
+  {% endfor %}
+];
+
+var zoneLayerGroup = L.featureGroup().addTo(leafMap);
+var zonesVisible = false;
+
+// Convex hull (Graham scan)
+function convexHull(points) {
+  if (points.length <= 2) return points.slice();
+  var sorted = points.slice().sort(function(a,b){ return a[0]-b[0] || a[1]-b[1]; });
+  function cross(O,A,B){ return (A[0]-O[0])*(B[1]-O[1])-(A[1]-O[1])*(B[0]-O[0]); }
+  var lower = [];
+  for (var i=0;i<sorted.length;i++){
+    while(lower.length>=2 && cross(lower[lower.length-2],lower[lower.length-1],sorted[i])<=0) lower.pop();
+    lower.push(sorted[i]);
+  }
+  var upper = [];
+  for (var i=sorted.length-1;i>=0;i--){
+    while(upper.length>=2 && cross(upper[upper.length-2],upper[upper.length-1],sorted[i])<=0) upper.pop();
+    upper.push(sorted[i]);
+  }
+  upper.pop(); lower.pop();
+  return lower.concat(upper);
+}
+
+function buildZonePolygons() {
+  zoneLayerGroup.clearLayers();
+  if (!zonesVisible) return;
+
+  var zonePoints = {};
+  LOCATIONS.forEach(function(loc) {
+    if (loc.zoneId) {
+      if (!zonePoints[loc.zoneId]) zonePoints[loc.zoneId] = [];
+      zonePoints[loc.zoneId].push([loc.lat, loc.lng]);
+    }
+  });
+
+  ZONES.forEach(function(zone) {
+    var pts = zonePoints[zone.id];
+    if (!pts || pts.length === 0) return;
+
+    var cx = pts.reduce(function(s,p){return s+p[0];},0)/pts.length;
+    var cy = pts.reduce(function(s,p){return s+p[1];},0)/pts.length;
+
+    if (pts.length === 1) {
+      var circle = L.circle(pts[0], {
+        radius: 400,
+        color: zone.color, fillColor: zone.color, fillOpacity: 0.18,
+        weight: 2, dashArray: '6 4',
+      });
+      circle.bindTooltip('<b>' + zone.name + '</b><br><span style="font-size:.76rem;color:#64748b">' + (zone.description||'') + '</span>', {sticky:true});
+      zoneLayerGroup.addLayer(circle);
+    } else {
+      var hull = pts.length === 2 ? pts : convexHull(pts);
+      var pad = 0.003;
+      var paddedHull = hull.map(function(p){
+        var dx=p[0]-cx, dy=p[1]-cy, len=Math.sqrt(dx*dx+dy*dy)||1;
+        return [p[0]+dx/len*pad, p[1]+dy/len*pad];
+      });
+      var polygon = L.polygon(paddedHull, {
+        color: zone.color, fillColor: zone.color,
+        fillOpacity: 0.15, weight: 2.5, dashArray: '8 5',
+      });
+      var tipHtml = '<div style="font-weight:700;font-size:.88rem">' + zone.name + '</div>'
+        + (zone.description ? '<div style="font-size:.76rem;color:#64748b;margin-top:2px">'+zone.description+'</div>' : '')
+        + '<div style="font-size:.72rem;color:#94a3b8;margin-top:3px">'+pts.length+' location'+(pts.length!==1?'s':'')+'</div>';
+      polygon.bindTooltip(tipHtml, {sticky:true});
+      zoneLayerGroup.addLayer(polygon);
+    }
+
+    // Zone label at centroid
+    var label = L.divIcon({
+      html: '<div style="background:'+zone.color+';color:#fff;font-size:.72rem;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.18)">'+zone.name+'</div>',
+      className: '', iconAnchor: [0, 0],
+    });
+    L.marker([cx, cy], {icon: label, interactive: false, zIndexOffset: -100}).addTo(zoneLayerGroup);
+  });
+}
+
+function toggleZoneLayer() {
+  zonesVisible = !zonesVisible;
+  var btn   = document.getElementById('btn-zone-toggle');
+  var icon  = document.getElementById('zone-toggle-icon');
+  var lbl   = document.getElementById('zone-toggle-label');
+  if (zonesVisible) {
+    btn.classList.remove('eo-btn-secondary'); btn.classList.add('eo-btn-primary');
+    icon.className = 'bi bi-pentagon-fill'; lbl.textContent = 'Zones On';
+  } else {
+    btn.classList.remove('eo-btn-primary'); btn.classList.add('eo-btn-secondary');
+    icon.className = 'bi bi-pentagon'; lbl.textContent = 'Zones Off';
+  }
+  buildZonePolygons();
+}
+
+// Edit zone modal
+var ZONE_CSRF = '{{ csrf_token }}';
+function openEditZone(id, name, color, desc) {
+  document.getElementById('editZoneBody').innerHTML =
+    '<form method="post" action="/projects/{{ project.pk }}/zones/'+id+'/edit/">'
+    +'<input type="hidden" name="csrfmiddlewaretoken" value="'+ZONE_CSRF+'">'
+    +'<div class="eo-form-group"><label class="eo-form-label">Zone Name *</label>'
+    +'<input type="text" name="name" class="eo-form-control" value="'+_esc(name)+'" required/></div>'
+    +'<div class="row g-3 mb-3">'
+    +'<div class="col-sm-4"><label class="eo-form-label">Colour</label>'
+    +'<input type="color" name="color" class="eo-form-control" value="'+color+'" style="padding:3px 5px;height:38px;cursor:pointer"/></div>'
+    +'<div class="col-sm-8"><label class="eo-form-label">Description</label>'
+    +'<input type="text" name="description" class="eo-form-control" value="'+_esc(desc)+'"/></div></div>'
+    +'<div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border)">'
+    +'<button type="submit" class="eo-btn eo-btn-primary">Save Zone</button>'
+    +'<button type="button" onclick="closeModal(\'editZoneModal\')" class="eo-btn eo-btn-secondary">Cancel</button>'
+    +'</div></form>';
+  closeModal('zoneModal');
+  openModal('editZoneModal');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BULK ADD TO ZONE
+// ═══════════════════════════════════════════════════════════════════════════════
+var BULK_STATUS_CHOICES = [{% for val,label in status_choices %}['{{ val }}','{{ label }}'],{% endfor %}];
+var bulkRowCount   = 0;
+var bulkMapClickOn = false;
+var bulkMapBadge   = null;
+
+function openBulkAdd() {
+  openModal('bulkAddModal');
+  setBulkTab('existing');
+  bulkRenderExisting();
+  bulkUpdateSelectedCount();
+}
+
+// ── Tab switcher ──────────────────────────────────────────────────────────────
+function setBulkTab(tab) {
+  var isExisting = tab === 'existing';
+  document.getElementById('bulk-panel-existing').style.display = isExisting ? 'block' : 'none';
+  document.getElementById('bulk-panel-new').style.display      = isExisting ? 'none'  : 'block';
+
+  var tE = document.getElementById('bulk-tab-existing');
+  var tN = document.getElementById('bulk-tab-new');
+  tE.style.color       = isExisting ? 'var(--eo-accent)' : 'var(--eo-text-muted)';
+  tE.style.borderBottomColor = isExisting ? 'var(--eo-accent)' : 'transparent';
+  tE.style.fontWeight  = isExisting ? '700' : '600';
+  tN.style.color       = isExisting ? 'var(--eo-text-muted)' : 'var(--eo-accent)';
+  tN.style.borderBottomColor = isExisting ? 'transparent' : 'var(--eo-accent)';
+  tN.style.fontWeight  = isExisting ? '600' : '700';
+
+  if (!isExisting && document.querySelectorAll('#bulk-tbody tr').length === 0) bulkAddRows(3);
+  if (!isExisting) bulkUpdateCount();
+}
+
+// ── Existing location picker ──────────────────────────────────────────────────
+var bulkVisibleIds = [];
+
+function bulkRenderExisting() {
+  var q       = (document.getElementById('bulk-search')      || {}).value || '';
+  var zFilter = (document.getElementById('bulk-filter-zone') || {}).value || '';
+  q = q.toLowerCase();
+
+  var list = document.getElementById('bulk-loc-list');
+  list.innerHTML = '';
+  bulkVisibleIds = [];
+
+  var SC = {pending:'#94a3b8', in_progress:'#3b82f6', completed:'#10b981', on_hold:'#f59e0b'};
+
+  LOCATIONS.forEach(function(loc) {
+    if (zFilter === '__none__' && loc.zoneId) return;
+    if (zFilter && zFilter !== '__none__' && loc.zoneId !== zFilter) return;
+    if (q && !loc.name.toLowerCase().includes(q) && !loc.category.toLowerCase().includes(q)
+           && !loc.address.toLowerCase().includes(q)) return;
+
+    bulkVisibleIds.push(loc.id);
+    var sc = SC[loc.status] || '#64748b';
+
+    var row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--eo-border);cursor:pointer;transition:background .1s';
+    row.addEventListener('mouseover', function(){ this.style.background='var(--eo-bg)'; });
+    row.addEventListener('mouseout',  function(){ this.style.background=''; });
+
+    var cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = loc.id; cb.className = 'bulk-existing-cb'; cb.style.flexShrink = '0';
+    cb.addEventListener('change', bulkUpdateSelectedCount);
+
+    var info = document.createElement('div');
+    info.style.cssText = 'flex:1;min-width:0';
+    info.innerHTML =
+        '<div style="font-size:.85rem;font-weight:600;color:var(--eo-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _esc(loc.name) + '</div>'
+      + '<div style="font-size:.73rem;color:var(--eo-text-muted);margin-top:1px">'
+      +   (loc.category ? _esc(loc.category) + ' &middot; ' : '')
+      +   loc.lat.toFixed(5) + ', ' + loc.lng.toFixed(5)
+      + '</div>';
+
+    var right = document.createElement('div');
+    right.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0';
+    right.innerHTML =
+        '<span style="font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:20px;background:'+sc+'20;color:'+sc+'">' + loc.statusLabel + '</span>'
+      + (loc.zoneName
+          ? '<span style="font-size:.68rem;color:var(--eo-text-muted)"><i class=\'bi bi-pentagon-fill\' style=\'margin-right:3px\'></i>' + _esc(loc.zoneName) + '</span>'
+          : '<span style="font-size:.68rem;color:var(--eo-text-muted)">No zone</span>');
+
+    row.appendChild(cb); row.appendChild(info); row.appendChild(right);
+    list.appendChild(row);
+  });
+
+  if (!bulkVisibleIds.length) {
+    list.innerHTML = '<div style="padding:28px;text-align:center;color:var(--eo-text-muted);font-size:.85rem">No locations match the filter.</div>';
+  }
+
+  bulkUpdateSelectedCount();
+  var sa = document.getElementById('bulk-select-all');
+  if (sa) sa.checked = false;
+}
+
+function bulkFilterExisting() { bulkRenderExisting(); }
+
+function bulkToggleAll(checked) {
+  document.querySelectorAll('.bulk-existing-cb').forEach(function(cb){ cb.checked = checked; });
+  bulkUpdateSelectedCount();
+}
+
+function bulkUpdateSelectedCount() {
+  var n   = document.querySelectorAll('.bulk-existing-cb:checked').length;
+  var el  = document.getElementById('bulk-selected-count');
+  var lbl = document.getElementById('bulk-assign-label');
+  if (el)  el.textContent  = n ? n + ' selected' : '';
+  if (lbl) lbl.textContent = n ? 'Assign ' + n + ' Location' + (n !== 1 ? 's' : '') + ' to Zone' : 'Assign to Zone';
+}
+
+// ── POST selected IDs to bulk-zone endpoint ───────────────────────────────────
+async function bulkAssignExisting() {
+  var errEl = document.getElementById('bulk-assign-error');
+  errEl.textContent = '';
+  var checked = Array.from(document.querySelectorAll('.bulk-existing-cb:checked'));
+  if (!checked.length) { errEl.textContent = 'Select at least one location.'; return; }
+
+  var zoneId = document.getElementById('bulk-zone').value;
+  var ids    = checked.map(function(cb){ return cb.value; });
+
+  var btn = document.querySelector('[onclick="bulkAssignExisting()"]');
+  if (btn) { btn.disabled = true; }
+
+  var fd = new FormData();
+  fd.append('csrfmiddlewaretoken', getCookie('csrftoken'));
+  fd.append('zone', zoneId);
+  ids.forEach(function(id){ fd.append('location_ids', id); });
+
+  try {
+    var resp = await fetch('{% url "location_bulk_zone" project.pk %}', { method: 'POST', body: fd, redirect: 'manual' });
+    if (resp.ok || resp.type === 'opaqueredirect' || resp.status === 0) {
+      closeBulkAdd();
+      window.location.reload();
+    } else {
+      errEl.textContent = 'Server error — please try again.';
+    }
+  } catch(e) {
+    errEl.textContent = 'Network error: ' + e.message;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function closeBulkAdd() {
+  closeModal('bulkAddModal');
+  if (bulkMapClickOn) toggleBulkMapClick();
+}
+
+// ── Build one table row ───────────────────────────────────────────────────────
+function bulkRowHTML(idx) {
+  var defaultCat    = (document.getElementById('bulk-default-cat')    || {}).value || '';
+  var defaultStatus = (document.getElementById('bulk-default-status') || {}).value || 'pending';
+  var statusOpts = BULK_STATUS_CHOICES.map(function(s) {
+    return '<option value="' + s[0] + '"' + (s[0] === defaultStatus ? ' selected' : '') + '>' + s[1] + '</option>';
+  }).join('');
+
+  return '<tr id="bulk-row-' + idx + '" style="border-bottom:1px solid var(--eo-border)">'
+    + '<td style="padding:5px 6px;color:var(--eo-text-muted);font-size:.75rem;text-align:center;width:28px">' + idx + '</td>'
+    + '<td style="padding:4px 5px"><input type="text"   class="eo-form-control bulk-name"   style="font-size:.82rem;padding:5px 8px" placeholder="Location name" /></td>'
+    + '<td style="padding:4px 5px"><input type="number" class="eo-form-control bulk-lat"    style="font-size:.82rem;padding:5px 8px;font-family:monospace" placeholder="13.4549"  step="0.000001" oninput="bulkPreviewPin(' + idx + ')" /></td>'
+    + '<td style="padding:4px 5px"><input type="number" class="eo-form-control bulk-lng"    style="font-size:.82rem;padding:5px 8px;font-family:monospace" placeholder="-16.5790" step="0.000001" oninput="bulkPreviewPin(' + idx + ')" /></td>'
+    + '<td style="padding:4px 5px"><input type="text"   class="eo-form-control bulk-cat"    style="font-size:.82rem;padding:5px 8px" placeholder="Category" value="' + _esc(defaultCat) + '" /></td>'
+    + '<td style="padding:4px 5px"><select class="eo-form-select bulk-status" style="font-size:.82rem;padding:5px 8px">' + statusOpts + '</select></td>'
+    + '<td style="padding:4px 5px"><input type="text"   class="eo-form-control bulk-addr"   style="font-size:.82rem;padding:5px 8px" placeholder="Address" /></td>'
+    + '<td style="padding:4px 5px;text-align:center">'
+    +   '<button type="button" onclick="bulkRemoveRow(' + idx + ')" style="background:none;border:none;cursor:pointer;color:var(--eo-text-muted);font-size:1rem;padding:3px 6px" title="Remove">&#x2715;</button>'
+    + '</td></tr>';
+}
+
+function bulkAddRow() {
+  bulkRowCount++;
+  var tbody = document.getElementById('bulk-tbody');
+  var tmp   = document.createElement('tbody');
+  tmp.innerHTML = bulkRowHTML(bulkRowCount);
+  tbody.appendChild(tmp.firstChild);
+  bulkUpdateCount();
+  var row = document.getElementById('bulk-row-' + bulkRowCount);
+  if (row) row.querySelector('.bulk-name').focus();
+}
+
+function bulkAddRows(n) { for (var i = 0; i < n; i++) bulkAddRow(); }
+
+function bulkRemoveRow(idx) {
+  var row = document.getElementById('bulk-row-' + idx);
+  if (row) row.remove();
+  bulkUpdateCount();
+}
+
+function bulkClearEmpty() {
+  document.querySelectorAll('#bulk-tbody tr').forEach(function(row) {
+    var n = row.querySelector('.bulk-name');
+    var la = row.querySelector('.bulk-lat');
+    var ln = row.querySelector('.bulk-lng');
+    if (n && !n.value.trim() && !la.value.trim() && !ln.value.trim()) row.remove();
+  });
+  bulkUpdateCount();
+}
+
+function bulkUpdateCount() {
+  var n  = document.querySelectorAll('#bulk-tbody tr').length;
+  var el = document.getElementById('bulk-row-count');
+  if (el) el.textContent = n + ' row' + (n !== 1 ? 's' : '');
+}
+
+// ── Apply default values to all existing rows ─────────────────────────────────
+function applyBulkDefault(field, val) {
+  var sel = { category: '.bulk-cat', status: '.bulk-status', assigned: '.bulk-assigned' }[field];
+  if (!sel) return;
+  document.querySelectorAll('#bulk-tbody tr').forEach(function(row) {
+    var el = row.querySelector(sel);
+    if (el) el.value = val;
+  });
+}
+
+// ── Map-click mode ────────────────────────────────────────────────────────────
+function toggleBulkMapClick() {
+  bulkMapClickOn = !bulkMapClickOn;
+  var btn = document.getElementById('bulk-map-click-btn');
+  var modal = document.getElementById('bulkAddModal');
+
+  if (bulkMapClickOn) {
+    btn.innerHTML = '<i class="bi bi-cursor-fill me-1"></i>Map Click ON';
+    btn.classList.replace('eo-btn-secondary', 'eo-btn-primary');
+    modal.style.opacity = '0.12';
+    modal.style.pointerEvents = 'none';
+    _showBulkBadge(true);
+  } else {
+    btn.innerHTML = '<i class="bi bi-cursor-fill me-1"></i>Enable Map Click';
+    btn.classList.replace('eo-btn-primary', 'eo-btn-secondary');
+    modal.style.opacity = '';
+    modal.style.pointerEvents = '';
+    _showBulkBadge(false);
+  }
+}
+
+function _showBulkBadge(show) {
+  if (!bulkMapBadge) {
+    bulkMapBadge = document.createElement('div');
+    bulkMapBadge.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:10000;background:var(--eo-accent);color:#fff;padding:10px 24px;border-radius:30px;font-size:.88rem;font-weight:700;box-shadow:0 4px 18px rgba(0,0,0,.22);cursor:pointer;display:flex;align-items:center;gap:10px;white-space:nowrap';
+    bulkMapBadge.innerHTML = '<i class="bi bi-cursor-fill"></i> Click the map to drop a point &nbsp;<span style="opacity:.7;font-size:.76rem;font-weight:400">(click here when done)</span>';
+    bulkMapBadge.onclick = toggleBulkMapClick;
+    document.body.appendChild(bulkMapBadge);
+  }
+  bulkMapBadge.style.display = show ? 'flex' : 'none';
+}
+
+// Hook into the existing leafMap click (extend, don't overwrite)
+leafMap.on('click', function(e) {
+  if (!bulkMapClickOn) return;
+  var lat = e.latlng.lat.toFixed(6);
+  var lng = e.latlng.lng.toFixed(6);
+
+  // Find first row with empty lat
+  var rows   = document.querySelectorAll('#bulk-tbody tr');
+  var filled = false;
+  for (var i = 0; i < rows.length; i++) {
+    var latEl = rows[i].querySelector('.bulk-lat');
+    if (latEl && !latEl.value.trim()) {
+      latEl.value = lng ? lat : lat;
+      rows[i].querySelector('.bulk-lng').value = lng;
+      var r = rows[i];
+      r.style.background = '#d1fae5';
+      setTimeout(function() { r.style.background = ''; }, 700);
+      filled = true;
+      break;
+    }
+  }
+  if (!filled) {
+    bulkAddRow();
+    var last = document.querySelector('#bulk-tbody tr:last-child');
+    if (last) { last.querySelector('.bulk-lat').value = lat; last.querySelector('.bulk-lng').value = lng; }
+  }
+  showPreviewPin(parseFloat(lat), parseFloat(lng));
+});
+
+function bulkPreviewPin(idx) {
+  var row = document.getElementById('bulk-row-' + idx);
+  if (!row) return;
+  var lat = parseFloat(row.querySelector('.bulk-lat').value);
+  var lng = parseFloat(row.querySelector('.bulk-lng').value);
+  if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180)
+    showPreviewPin(lat, lng);
+}
+
+// ── Submit — POST rows one by one to the existing add endpoint ─────────────────
+async function bulkSubmit() {
+  var errEl  = document.getElementById('bulk-error-msg');
+  errEl.textContent = '';
+
+  var zoneId = document.getElementById('bulk-zone').value;
+  var rows   = Array.from(document.querySelectorAll('#bulk-tbody tr'));
+  var toSave = [];
+
+  for (var i = 0; i < rows.length; i++) {
+    var name = rows[i].querySelector('.bulk-name').value.trim();
+    var lat  = rows[i].querySelector('.bulk-lat').value.trim();
+    var lng  = rows[i].querySelector('.bulk-lng').value.trim();
+    if (!name && !lat && !lng) continue;
+    if (!name)          { errEl.textContent = 'Row ' + (i+1) + ': name required.'; return; }
+    if (!lat || !lng || isNaN(+lat) || isNaN(+lng))
+                        { errEl.textContent = 'Row ' + (i+1) + ' ("' + name + '"): valid coordinates required.'; return; }
+    toSave.push({
+      name: name, latitude: lat, longitude: lng,
+      category: rows[i].querySelector('.bulk-cat').value.trim(),
+      status:   rows[i].querySelector('.bulk-status').value,
+      address:  rows[i].querySelector('.bulk-addr').value.trim(),
+      zone: zoneId,
+    });
+  }
+
+  if (!toSave.length) { errEl.textContent = 'No valid rows to save.'; return; }
+
+  var btn       = document.getElementById('bulk-submit-btn');
+  var lbl       = document.getElementById('bulk-submit-label');
+  var prog      = document.getElementById('bulk-progress');
+  var progFill  = document.getElementById('bulk-progress-fill');
+  var progText  = document.getElementById('bulk-progress-text');
+
+  btn.disabled = true;
+  prog.style.display = 'block';
+  progText.style.display = 'inline';
+
+  var csrf   = getCookie('csrftoken');
+  var saved  = 0;
+  var failed = 0;
+
+  for (var j = 0; j < toSave.length; j++) {
+    lbl.textContent    = 'Saving ' + (j+1) + ' / ' + toSave.length + '…';
+    progFill.style.width = Math.round((j / toSave.length) * 100) + '%';
+    progText.textContent = toSave[j].name;
+
+    var fd = new FormData();
+    fd.append('csrfmiddlewaretoken', csrf);
+    Object.keys(toSave[j]).forEach(function(k) { fd.append(k, toSave[j][k]); });
+
+    try {
+      var resp = await fetch('{% url "location_add" project.pk %}', { method: 'POST', body: fd, redirect: 'manual' });
+      // 200, 302, or opaqueredirect all mean success
+      if (resp.ok || resp.type === 'opaqueredirect' || resp.status === 0 || resp.status === 302) {
+        saved++;
+        if (rows[j]) rows[j].style.opacity = '0.35';
+      } else {
+        failed++;
+      }
+    } catch(e) {
+      failed++;
+    }
+  }
+
+  progFill.style.width = '100%';
+  btn.disabled = false;
+  lbl.textContent = 'Save All Locations';
+  prog.style.display = 'none';
+  progText.style.display = 'none';
+
+  if (failed === 0) {
+    closeBulkAdd();
+    window.location.reload();
+  } else {
+    errEl.textContent = saved + ' saved, ' + failed + ' failed — check coordinates.';
+  }
+}
+
+var isMapFullscreen = false;
+
+function toggleMapFullscreen() {
+  var wrap = document.getElementById('map-wrap');
+  var btn  = document.getElementById('map-fullscreen-btn');
+
+  isMapFullscreen = !isMapFullscreen;
+
+  if (isMapFullscreen) {
+    wrap.classList.add('fullscreen');
+    btn.innerHTML = '<i class="bi bi-fullscreen-exit"></i> Exit';
+    document.body.style.overflow = 'hidden';
+  } else {
+    wrap.classList.remove('fullscreen');
+    btn.innerHTML = '<i class="bi bi-arrows-fullscreen"></i> Fullscreen';
+    document.body.style.overflow = '';
+  }
+
+  // IMPORTANT: fix Leaflet rendering
+  setTimeout(function () {
+    if (typeof leafMap !== 'undefined') {
+      leafMap.invalidateSize();
+    }
+  }, 200);
 }
 </script>
 {% endblock %}

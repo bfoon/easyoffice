@@ -1614,6 +1614,8 @@ class ProjectLocationMapView(LoginRequiredMixin, View):
     def get(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
         locations = project.locations.select_related('assigned_to').order_by('name')
+        from apps.projects.models import ProjectZone
+        zones = project.zones.all()
         return render(request, 'projects/location_map.html', {
             'project': project,
             'locations': locations,
@@ -1622,6 +1624,8 @@ class ProjectLocationMapView(LoginRequiredMixin, View):
             'is_manager': request.user.is_superuser or project.project_manager == request.user,
             'status_choices': ProjectLocation.Status.choices,
             'staff_list': User.objects.filter(is_active=True).order_by('first_name'),
+            'zones': zones,
+            'zone_count': zones.count(),
         })
 
 
@@ -1642,6 +1646,11 @@ class ProjectLocationAddView(LoginRequiredMixin, View):
         assigned = None
         if assigned_id:
             assigned = User.objects.filter(pk=assigned_id).first()
+        from apps.projects.models import ProjectZone
+        zone_id = request.POST.get('zone') or None
+        zone = None
+        if zone_id:
+            zone = ProjectZone.objects.filter(pk=zone_id, project=project).first()
         ProjectLocation.objects.create(
             project=project,
             name=request.POST.get('name', '').strip(),
@@ -1653,6 +1662,7 @@ class ProjectLocationAddView(LoginRequiredMixin, View):
             status=request.POST.get('status', 'pending'),
             assigned_to=assigned,
             notes=request.POST.get('notes', '').strip(),
+            zone=zone,
         )
         messages.success(request, 'Location added.')
         return redirect('project_locations', pk=pk)
@@ -1678,8 +1688,12 @@ class ProjectLocationEditView(LoginRequiredMixin, View):
         loc.longitude = lng
         loc.category = request.POST.get('category', '').strip()
         loc.status = request.POST.get('status', 'pending')
-        loc.assigned_to = User.objects.filter(pk=request.POST.get('assigned_to')).first()
+        assigned_id = request.POST.get('assigned_to') or None
+        loc.assigned_to = User.objects.filter(pk=assigned_id).first() if assigned_id else None
         loc.notes = request.POST.get('notes', '').strip()
+        from apps.projects.models import ProjectZone
+        zone_id = request.POST.get('zone') or None
+        loc.zone = ProjectZone.objects.filter(pk=zone_id, project=project).first() if zone_id else None
         loc.save()
         messages.success(request, 'Location updated.')
         return redirect('project_locations', pk=pk)
@@ -2757,3 +2771,103 @@ class PlusCodeConvertView(LoginRequiredMixin, View):
                     {'error': 'openpyxl is required for Excel output.'},
                     status=500,
                 )
+
+
+# =============================================================================
+# ZONE / SECTOR VIEWS
+# =============================================================================
+
+class ProjectZoneListView(LoginRequiredMixin, View):
+    """Return all zones as JSON (used by the map page)."""
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        from apps.projects.models import ProjectZone
+        zones = list(project.zones.values('id', 'name', 'color', 'description'))
+        return JsonResponse({'zones': zones})
+
+
+class ProjectZoneCreateView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+        from apps.projects.models import ProjectZone
+        name = request.POST.get('name', '').strip()
+        if not name:
+            messages.error(request, 'Zone name is required.')
+            return redirect('project_locations', pk=pk)
+        ProjectZone.objects.create(
+            project=project,
+            name=name,
+            color=request.POST.get('color', '#6366f1'),
+            description=request.POST.get('description', '').strip(),
+        )
+        messages.success(request, f'Zone "{name}" created.')
+        return redirect('project_locations', pk=pk)
+
+
+class ProjectZoneEditView(LoginRequiredMixin, View):
+    def post(self, request, pk, zid):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+        from apps.projects.models import ProjectZone
+        zone = get_object_or_404(ProjectZone, pk=zid, project=project)
+        zone.name        = request.POST.get('name', zone.name).strip()
+        zone.color       = request.POST.get('color', zone.color)
+        zone.description = request.POST.get('description', zone.description).strip()
+        zone.save()
+        messages.success(request, f'Zone "{zone.name}" updated.')
+        return redirect('project_locations', pk=pk)
+
+
+class ProjectZoneDeleteView(LoginRequiredMixin, View):
+    def post(self, request, pk, zid):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+        from apps.projects.models import ProjectZone
+        zone = get_object_or_404(ProjectZone, pk=zid, project=project)
+        zname = zone.name
+        # Unlink locations — they stay, just lose their zone
+        zone.locations.update(zone=None)
+        zone.delete()
+        messages.success(request, f'Zone "{zname}" deleted.')
+        return redirect('project_locations', pk=pk)
+
+
+class ProjectLocationBulkZoneView(LoginRequiredMixin, View):
+    """
+    POST: assign (or un-assign) a list of location IDs to a zone in one shot.
+    Body params:
+      zone          — zone UUID or empty string (to unassign)
+      location_ids  — repeated field, one per selected location
+    """
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+
+        from apps.projects.models import ProjectZone
+        zone_id = request.POST.get('zone', '').strip() or None
+        zone    = None
+        if zone_id:
+            zone = get_object_or_404(ProjectZone, pk=zone_id, project=project)
+
+        loc_ids = request.POST.getlist('location_ids')
+        if not loc_ids:
+            messages.error(request, 'No locations selected.')
+            return redirect('project_locations', pk=pk)
+
+        updated = (
+            project.locations
+            .filter(pk__in=loc_ids)
+            .update(zone=zone)
+        )
+
+        if zone:
+            messages.success(request, f'{updated} location(s) assigned to "{zone.name}".')
+        else:
+            messages.success(request, f'{updated} location(s) removed from their zone.')
+
+        return redirect('project_locations', pk=pk)

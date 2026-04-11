@@ -70,6 +70,7 @@ class ChatMessage(models.Model):
         FILE   = 'file',   _('File')
         IMAGE  = 'image',  _('Image')
         SYSTEM = 'system', _('System')
+        POLL = 'poll', _('Poll')
         VOICE  = 'voice',  _('Voice Note')
 
     id           = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -152,3 +153,73 @@ class ChatMessage(models.Model):
             except Exception:
                 pass
         return 0
+
+
+class ChatRoomFile(models.Model):
+    """
+    Files explicitly pinned to a chat room by the room manager.
+    Grants every room member download access regardless of their
+    normal SharedFile visibility permissions.
+    """
+    room = models.ForeignKey(
+        'ChatRoom',
+        on_delete=models.CASCADE,
+        related_name='room_files',
+    )
+    file = models.ForeignKey(
+        'files.SharedFile',
+        on_delete=models.CASCADE,
+        related_name='room_shares',
+    )
+    shared_by = models.ForeignKey(
+        'core.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='room_file_shares',
+    )
+    note = models.CharField(max_length=200, blank=True)
+    shared_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [('room', 'file')]
+        ordering = ['-shared_at']
+
+    def __str__(self):
+        return f'{self.file.name} → {self.room.name}'
+
+class ChatPoll(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    message = models.OneToOneField(
+        ChatMessage,
+        on_delete=models.CASCADE,
+        related_name='poll'
+    )
+    question = models.CharField(max_length=300)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.question
+
+
+class ChatPollOption(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    poll = models.ForeignKey(ChatPoll, on_delete=models.CASCADE, related_name='options')
+    text = models.CharField(max_length=200)
+
+    def __str__(self):
+        return self.text
+
+    @property
+    def vote_count(self):
+        return self.votes.count()
+
+
+class ChatPollVote(models.Model):
+    poll = models.ForeignKey(ChatPoll, on_delete=models.CASCADE, related_name='votes')
+    option = models.ForeignKey(ChatPollOption, on_delete=models.CASCADE, related_name='votes')
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    voted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['poll', 'user']

@@ -99,9 +99,9 @@
     background: var(--eo-accent);
     position: relative;
   }
-  .msg-room-avatar.direct { background: #6366f1; }
-  .msg-room-avatar.group { background: #0ea5e9; }
-  .msg-room-avatar.unit { background: #10b981; }
+  .msg-room-avatar.direct  { background: #6366f1; }
+  .msg-room-avatar.group   { background: #0ea5e9; }
+  .msg-room-avatar.unit    { background: #10b981; }
   .msg-room-avatar.department { background: #f59e0b; }
   .msg-room-avatar.announcement { background: #ef4444; }
   .msg-room-avatar.project { background: #8b5cf6; }
@@ -346,13 +346,16 @@
     <div class="msg-modal-body">
       <form method="post" action="{% url 'create_chat_room' %}">
         {% csrf_token %}
+
         <div class="eo-form-group">
           <label class="eo-form-label">Room Name *</label>
           <input type="text" name="name" class="eo-form-control" placeholder="e.g. project-atlas" required autofocus/>
         </div>
+
         <div class="eo-form-group">
           <label class="eo-form-label">Type</label>
-          <select name="room_type" class="eo-form-select">
+          {# ✅ id + onchange so the project select shows/hides correctly #}
+          <select name="room_type" id="roomTypeSelect" class="eo-form-select" onchange="toggleProjectSelect(this.value)">
             {% for val, label in room_types %}
             {% if val != 'direct' %}
             <option value="{{ val }}">{{ label }}</option>
@@ -360,10 +363,30 @@
             {% endfor %}
           </select>
         </div>
+
         <div class="eo-form-group">
           <label class="eo-form-label">Description <span style="color:var(--eo-text-muted);font-weight:400">(optional)</span></label>
           <input type="text" name="description" class="eo-form-control" placeholder="What's this room for?"/>
         </div>
+
+        {# ✅ Hidden by default; shown only when room_type == 'project' #}
+        <div class="eo-form-group" id="projectSelectWrapper" style="display:none">
+          <label class="eo-form-label">Project <span style="color:#ef4444">*</span></label>
+          <select name="project_id" id="projectSelect" class="eo-form-select">
+            <option value="">-- Select a project --</option>
+            {% for project in managed_projects %}
+              <option value="{{ project.id }}">{{ project.name }}</option>
+            {% endfor %}
+          </select>
+          {% if not managed_projects %}
+            <small style="color:var(--eo-text-muted)">
+              No projects found. You must be a project manager or team member to link a project.
+            </small>
+          {% else %}
+            <small style="color:var(--eo-text-muted)">Required for Project Channel type.</small>
+          {% endif %}
+        </div>
+
         <div class="eo-form-group">
           <label class="eo-form-label">Add Members</label>
           <div class="msg-member-list">
@@ -380,6 +403,7 @@
             {% endfor %}
           </div>
         </div>
+
         <div style="display:flex;gap:8px">
           <button type="submit" class="eo-btn eo-btn-primary flex-grow-1">
             <i class="bi bi-plus-circle"></i> Create Room
@@ -437,7 +461,7 @@
 
 {% block extra_js %}
 <script>
-// Modal helpers
+// ── Modal helpers ────────────────────────────────────────────────────────────
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 document.querySelectorAll('.msg-modal-backdrop').forEach(function(el) {
@@ -447,7 +471,23 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') document.querySelectorAll('.msg-modal-backdrop.open').forEach(function(el) { el.classList.remove('open'); });
 });
 
-// Sidebar room search
+// ── Project select toggle ────────────────────────────────────────────────────
+// ✅ Identical to chat_room.html — shows project dropdown only for type=project
+function toggleProjectSelect(type) {
+  var wrapper = document.getElementById('projectSelectWrapper');
+  var sel     = document.getElementById('projectSelect');
+  if (!wrapper || !sel) return;
+  if (type === 'project') {
+    wrapper.style.display = '';
+    sel.required = true;
+  } else {
+    wrapper.style.display = 'none';
+    sel.required = false;
+    sel.value = '';
+  }
+}
+
+// ── Sidebar room search ──────────────────────────────────────────────────────
 document.getElementById('roomSearch').addEventListener('input', function() {
   var q = this.value.toLowerCase();
   document.querySelectorAll('.msg-room-item').forEach(function(el) {
@@ -455,7 +495,7 @@ document.getElementById('roomSearch').addEventListener('input', function() {
   });
 });
 
-// DM modal search
+// ── DM modal search ──────────────────────────────────────────────────────────
 document.getElementById('dmSearch').addEventListener('input', function() {
   var q = this.value.toLowerCase();
   document.querySelectorAll('#dmList a').forEach(function(el) {

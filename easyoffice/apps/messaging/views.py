@@ -7,9 +7,20 @@ from django.http import HttpResponseForbidden, JsonResponse
 from django.utils import timezone
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+import os
+from django.core.files.base import ContentFile
 
-from apps.messaging.models import ChatRoom, ChatRoomMember, ChatMessage
+from apps.messaging.models import (
+    ChatRoom,
+    ChatRoomMember,
+    ChatMessage,
+    ChatRoomFile,
+    ChatPoll,
+    ChatPollOption,
+    ChatPollVote,
+)
 from apps.core.models import User
+from apps.projects.models import Project
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +61,11 @@ def _sidebar_rooms(user):
 def _can_manage_room(user, room):
     if user.is_superuser:
         return True
-    return room.created_by_id == user.id
+    if room.created_by_id == user.id:
+        return True
+    if room.room_type == ChatRoom.RoomType.PROJECT and room.project_id:
+        return _user_can_link_project_room(user, room.project)
+    return False
 
 
 def _can_post_in_room(user, room):
@@ -72,7 +87,7 @@ def _safe_initials(user):
             return user.initials
     except Exception:
         pass
-    name  = _safe_full_name(user).strip()
+    name = _safe_full_name(user).strip()
     if not name:
         return '?'
     parts = name.split()
@@ -84,16 +99,11 @@ def _room_group_name(room_id):
 
 
 def _get_msg_file_url(msg):
-    """
-    Return the best available file URL for a message.
-    Handles both direct uploads (msg.file) and Files-app references (msg.linked_file).
-    """
     if getattr(msg, 'file', None):
         try:
             return msg.file.url
         except Exception:
             pass
-    # linked_file (FK added in messaging migration)
     if getattr(msg, 'linked_file_id', None):
         try:
             lf = msg.linked_file
@@ -131,10 +141,6 @@ def _get_msg_file_size(msg):
 
 
 def _reaction_summary(reactions):
-    """
-    Convert stored JSON { "👍": ["uid1", "uid2"] } to { "👍": 2 }.
-    Handles both list-of-user-ids and legacy int formats.
-    """
     out = {}
     for emoji, users in (reactions or {}).items():
         if isinstance(users, list):
@@ -145,15 +151,9 @@ def _reaction_summary(reactions):
 
 
 def _toggle_reaction_on_message(message, user, emoji):
-    """
-    Toggle a reaction. Stored as { "👍": ["user_id_1", ...] }.
-    Returns the updated raw reactions dict.
-    """
-    reactions = message.reactions or {}
-    user_id   = str(user.id)
-
+    reactions   = message.reactions or {}
+    user_id     = str(user.id)
     emoji_users = reactions.get(emoji, [])
-
     if user_id in emoji_users:
         emoji_users.remove(user_id)
         if emoji_users:
@@ -163,64 +163,75 @@ def _toggle_reaction_on_message(message, user, emoji):
     else:
         emoji_users.append(user_id)
         reactions[emoji] = emoji_users
-
     message.reactions = reactions
     message.save(update_fields=['reactions'])
     return reactions
 
 
 def _serialize_chat_message(msg):
-    """Build the full payload dict for a saved ChatMessage."""
     file_url  = _get_msg_file_url(msg)
     file_name = _get_msg_file_name(msg)
     file_size = _get_msg_file_size(msg)
 
-    # file_size as a human-readable string if it came from a linked SharedFile
     if not msg.file_size and getattr(msg, 'linked_file_id', None):
         try:
             lf = msg.linked_file
-            if lf:
-                file_size_display = lf.size_display
-            else:
-                file_size_display = str(file_size)
+            file_size_display = lf.size_display if lf else str(file_size)
         except Exception:
             file_size_display = str(file_size)
     else:
         file_size_display = str(file_size) if file_size else ''
 
+    poll_data = None
+    if getattr(msg, 'message_type', '') == 'poll':
+        try:
+            poll = msg.poll
+            poll_data = {
+                'id': str(poll.id),
+                'question': poll.question,
+                'options': [
+                    {
+                        'id': str(opt.id),
+                        'text': opt.text,
+                        'votes': opt.votes.count(),
+                    }
+                    for opt in poll.options.all().prefetch_related('votes')
+                ],
+            }
+        except Exception:
+            poll_data = None
+
     return {
-        'type':             'chat_message',
-        'message_id':       str(msg.id),
-        'room_id':          str(msg.room_id),
-        'sender_id':        str(msg.sender_id),
-        'sender_name':      _safe_full_name(msg.sender),
-        'sender_initials':  _safe_initials(msg.sender),
-        'message':          msg.content or '',
-        'content':          msg.content or '',
-        'message_type':     msg.message_type,
-        'timestamp':        timezone.localtime(msg.created_at).strftime('%H:%M'),
-        'created_at':       timezone.localtime(msg.created_at).isoformat(),
-        'reply_to_id':      str(msg.reply_to_id) if msg.reply_to_id else None,
-        'reply_to_sender':  (
+        'type':            'chat_message',
+        'message_id':      str(msg.id),
+        'room_id':         str(msg.room_id),
+        'sender_id':       str(msg.sender_id),
+        'sender_name':     _safe_full_name(msg.sender),
+        'sender_initials': _safe_initials(msg.sender),
+        'message':         msg.content or '',
+        'content':         msg.content or '',
+        'message_type':    msg.message_type,
+        'timestamp':       timezone.localtime(msg.created_at).strftime('%H:%M'),
+        'created_at':      timezone.localtime(msg.created_at).isoformat(),
+        'reply_to_id':     str(msg.reply_to_id) if msg.reply_to_id else None,
+        'reply_to_sender': (
             _safe_full_name(msg.reply_to.sender)
-            if msg.reply_to_id and msg.reply_to and msg.reply_to.sender
-            else ''
+            if msg.reply_to_id and msg.reply_to and msg.reply_to.sender else ''
         ),
         'reply_to_content': (
             msg.reply_to.content[:60]
-            if msg.reply_to_id and msg.reply_to and msg.reply_to.content
-            else ''
+            if msg.reply_to_id and msg.reply_to and msg.reply_to.content else ''
         ),
         'file_url':   file_url,
         'file_name':  file_name,
         'file_size':  file_size_display,
         'is_edited':  getattr(msg, 'is_edited', False),
         'reactions':  _reaction_summary(getattr(msg, 'reactions', {})),
+        'poll':       poll_data,
     }
 
 
 def _broadcast_chat_message(msg):
-    """Push a saved ChatMessage to all WS clients in the room."""
     try:
         channel_layer = get_channel_layer()
         if channel_layer is None:
@@ -235,7 +246,6 @@ def _broadcast_chat_message(msg):
 
 
 def _broadcast_reaction(room_id, message_id, summary):
-    """Push a reaction update to all WS clients in the room."""
     try:
         channel_layer = get_channel_layer()
         if channel_layer is None:
@@ -277,6 +287,176 @@ def _broadcast_typing(room_id, sender):
         pass
 
 
+def _combine_forwarded_text(source_msg, note=''):
+    original_sender = _safe_full_name(source_msg.sender)
+    original_text   = (source_msg.content or '').strip()
+    note            = (note or '').strip()
+    header          = f"Forwarded from {original_sender}"
+    if original_text and note:
+        return f"{note}\n\n{header}:\n{original_text}"
+    if original_text:
+        return f"{header}:\n{original_text}"
+    if note:
+        return f"{note}\n\n{header}"
+    return header
+
+
+def _copy_chat_file_to_contentfile(msg):
+    src_name   = _get_msg_file_name(msg) or 'attachment'
+    mime_type  = 'application/octet-stream'
+    file_bytes = b''
+
+    if getattr(msg, 'linked_file_id', None) and getattr(msg, 'linked_file', None):
+        lf        = msg.linked_file
+        src_name  = lf.name or src_name
+        mime_type = getattr(lf, 'file_type', None) or mime_type
+        lf.file.open('rb')
+        try:
+            file_bytes = lf.file.read()
+        finally:
+            try:
+                lf.file.close()
+            except Exception:
+                pass
+    elif getattr(msg, 'file', None):
+        try:
+            msg.file.open('rb')
+            file_bytes = msg.file.read()
+        finally:
+            try:
+                msg.file.close()
+            except Exception:
+                pass
+
+    if not file_bytes:
+        return None, None, 0, mime_type
+    return src_name, ContentFile(file_bytes), len(file_bytes), mime_type
+
+
+def _get_project_manager(project):
+    for attr in ['project_manager', 'manager', 'created_by', 'owner', 'team_lead']:
+        try:
+            value = getattr(project, attr, None)
+            if value:
+                return value
+        except Exception:
+            pass
+    return None
+
+
+def _user_can_link_project_room(user, project):
+    if user.is_superuser:
+        return True
+    pm = _get_project_manager(project)
+    if pm and getattr(pm, 'id', None) == user.id:
+        return True
+    return False
+
+
+def _get_project_chat_files_for_user(user, project, room=None):
+    """
+    Returns project files visible to this user PLUS any files the room manager
+    has explicitly pinned to the room — granting access to all room members
+    regardless of their normal file-visibility permissions.
+
+    Each dict entry contains 'room_pinned': bool so the template can show
+    a ROOM badge and allow managers to unpin.
+    """
+    from apps.files.models import SharedFile
+
+    profile = getattr(user, 'staffprofile', None)
+    unit    = profile.unit       if profile else None
+    dept    = profile.department if profile else None
+
+    # Files the user can see under normal permissions
+    # NOTE: filter only by direct project FK on SharedFile — NOT folder__project
+    # because FileFolder does not have a project field.
+    own_ids = set(
+        SharedFile.objects.filter(
+            Q(project=project)
+        ).filter(
+            Q(uploaded_by=user)
+            | Q(visibility='office')
+            | Q(visibility='unit',       unit=unit)
+            | Q(visibility='department', department=dept)
+            | Q(shared_with=user)
+            | Q(share_access__user=user)
+        ).filter(is_latest=True)
+        .values_list('id', flat=True)
+    )
+
+    # Files pinned to this room — visible to ALL members regardless of permissions
+    room_pinned_ids = set()
+    if room:
+        room_pinned_ids = set(
+            ChatRoomFile.objects.filter(room=room)
+            .values_list('file_id', flat=True)
+        )
+
+    combined_ids = own_ids | room_pinned_ids
+    if not combined_ids:
+        return []
+
+    qs = (
+        SharedFile.objects.filter(id__in=combined_ids, is_latest=True)
+        .select_related('folder')
+        .order_by('-created_at')
+    )
+
+    files = []
+    for f in qs[:100]:
+        try:
+            file_url = f.file.url
+        except Exception:
+            continue
+        files.append({
+            'id':          str(f.id),
+            'name':        f.name,
+            'url':         file_url,
+            'size':        getattr(f, 'size_display', '') or '',
+            'is_image':    getattr(f, 'is_image', False),
+            'icon_class':  getattr(f, 'icon_class', 'bi bi-file-earmark'),
+            'icon_color':  getattr(f, 'icon_color', '#6b7280'),
+            'folder':      f.folder.name if getattr(f, 'folder', None) else '',
+            'created_at':  f.created_at,
+            'room_pinned': f.id in room_pinned_ids,  # badge / unpin flag
+        })
+    return files
+
+def _broadcast_poll_update(poll):
+    channel_layer = get_channel_layer()
+
+    data = {
+        'type': 'poll_update',
+        'poll_id': str(poll.id),
+        'options': [
+            {
+                'id': str(opt.id),
+                'text': opt.text,
+                'votes': opt.vote_count
+            }
+            for opt in poll.options.all()
+        ]
+    }
+
+    async_to_sync(channel_layer.group_send)(
+        f'chat_{poll.message.room_id}',
+        {
+            'type': 'chat.poll',
+            'payload': data
+        }
+    )
+
+# ---------------------------------------------------------------------------
+# Shared context helper — project list for create-room modal
+# ---------------------------------------------------------------------------
+
+def _managed_projects_for_user(user):
+    return Project.objects.filter(
+        Q(project_manager=user) | Q(team_members=user)
+    ).distinct()
+
+
 # ---------------------------------------------------------------------------
 # Chat List
 # ---------------------------------------------------------------------------
@@ -286,14 +466,15 @@ class ChatListView(LoginRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx['rooms_meta'] = _sidebar_rooms(self.request.user)
-        ctx['all_staff']  = (
+        ctx['rooms_meta']      = _sidebar_rooms(self.request.user)
+        ctx['all_staff']       = (
             User.objects.filter(status='active', is_active=True)
             .exclude(id=self.request.user.id)
             .select_related('staffprofile', 'staffprofile__position', 'staffprofile__department')
             .order_by('first_name')
         )
-        ctx['room_types'] = ChatRoom.RoomType.choices
+        ctx['room_types']       = ChatRoom.RoomType.choices
+        ctx['managed_projects'] = _managed_projects_for_user(self.request.user)
         return ctx
 
 
@@ -305,11 +486,16 @@ class ChatRoomView(LoginRequiredMixin, View):
     template_name = 'messaging/chat_room.html'
 
     def get(self, request, room_id):
-        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        room = get_object_or_404(
+            ChatRoom.objects.select_related('project'),
+            id=room_id,
+            members=request.user,
+        )
 
         chat_messages = (
             room.messages.filter(is_deleted=False)
             .select_related('sender', 'reply_to', 'reply_to__sender', 'linked_file')
+            .prefetch_related('poll__options', 'poll__options__votes')
             .order_by('created_at')
         )
 
@@ -325,18 +511,28 @@ class ChatRoomView(LoginRequiredMixin, View):
 
         existing_member_ids = list(room.members.values_list('id', flat=True))
 
+        project_files    = []
+        can_link_project = False
+
+        if room.project_id:
+            project_files    = _get_project_chat_files_for_user(request.user, room.project, room=room)
+            can_link_project = _user_can_link_project_room(request.user, room.project)
+
         ctx = {
-            'room':            room,
-            'chat_messages':   chat_messages,
-            'members':         members,
-            'rooms_meta':      _sidebar_rooms(request.user),
+            'room':             room,
+            'chat_messages':    chat_messages,
+            'members':          members,
+            'rooms_meta':       _sidebar_rooms(request.user),
             'all_staff': (
                 User.objects.filter(status='active', is_active=True)
                 .exclude(id__in=existing_member_ids)
                 .order_by('first_name')
             ),
-            'room_types':      ChatRoom.RoomType.choices,
-            'can_manage_room': _can_manage_room(request.user, room),
+            'room_types':       ChatRoom.RoomType.choices,
+            'can_manage_room':  _can_manage_room(request.user, room),
+            'project_files':    project_files,
+            'can_link_project': can_link_project,
+            'managed_projects': _managed_projects_for_user(request.user),
         }
         return render(request, self.template_name, ctx)
 
@@ -362,33 +558,21 @@ class ChatRoomView(LoginRequiredMixin, View):
         if 'file' in request.FILES:
             f        = request.FILES['file']
             msg_type = 'image' if (getattr(f, 'content_type', '') or '').startswith('image/') else 'file'
-
             new_message = ChatMessage.objects.create(
-                room         = room,
-                sender       = request.user,
-                message_type = msg_type,
-                file         = f,
-                file_name    = f.name,
-                file_size    = f.size,
-                content      = content,
-                reply_to     = reply_to,
+                room=room, sender=request.user, message_type=msg_type,
+                file=f, file_name=f.name, file_size=f.size,
+                content=content, reply_to=reply_to,
             )
-
         elif content:
             new_message = ChatMessage.objects.create(
-                room         = room,
-                sender       = request.user,
-                content      = content,
-                message_type = 'text',
-                reply_to     = reply_to,
+                room=room, sender=request.user, content=content,
+                message_type='text', reply_to=reply_to,
             )
 
         if new_message:
             room.updated_at = timezone.now()
             room.save(update_fields=['updated_at'])
-            ChatRoomMember.objects.filter(room=room, user=request.user).update(
-                last_read=timezone.now()
-            )
+            ChatRoomMember.objects.filter(room=room, user=request.user).update(last_read=timezone.now())
             _broadcast_chat_message(new_message)
 
         return redirect('chat_room', room_id=room_id)
@@ -400,8 +584,7 @@ class ChatRoomView(LoginRequiredMixin, View):
 
 class DirectMessageView(LoginRequiredMixin, View):
     def get(self, request, user_id):
-        target = get_object_or_404(User, id=user_id)
-
+        target   = get_object_or_404(User, id=user_id)
         existing = (
             ChatRoom.objects.filter(room_type='direct', members=request.user)
             .filter(members=target)
@@ -411,9 +594,9 @@ class DirectMessageView(LoginRequiredMixin, View):
             return redirect('chat_room', room_id=existing.id)
 
         room = ChatRoom.objects.create(
-            name       = f'{_safe_full_name(request.user)} & {_safe_full_name(target)}',
-            room_type  = 'direct',
-            created_by = request.user,
+            name=f'{_safe_full_name(request.user)} & {_safe_full_name(target)}',
+            room_type='direct',
+            created_by=request.user,
         )
         ChatRoomMember.objects.create(room=room, user=request.user, role='admin')
         ChatRoomMember.objects.create(room=room, user=target,       role='admin')
@@ -429,29 +612,59 @@ class CreateChatRoomView(LoginRequiredMixin, View):
         return redirect('chat_list')
 
     def post(self, request):
-        name      = request.POST.get('name', '').strip()
-        room_type = request.POST.get('room_type', 'group')
+        name        = request.POST.get('name', '').strip()
+        room_type   = request.POST.get('room_type', 'group')
+        description = request.POST.get('description', '').strip()
+        project_id  = request.POST.get('project_id', '').strip()
 
         if not name:
             django_messages.error(request, 'Room name is required.')
             return redirect('chat_list')
 
+        linked_project = None
+
+        if room_type == ChatRoom.RoomType.PROJECT:
+            if not project_id:
+                django_messages.error(request, 'Please select a project for a project chat.')
+                return redirect('chat_list')
+
+            linked_project = get_object_or_404(Project, id=project_id)
+
+            if not _user_can_link_project_room(request.user, linked_project):
+                return HttpResponseForbidden('Only the project manager can create a project-linked chat.')
+
+            existing_room = ChatRoom.objects.filter(
+                room_type=ChatRoom.RoomType.PROJECT,
+                project=linked_project,
+                is_archived=False,
+            ).first()
+
+            if existing_room:
+                django_messages.info(request, f'A chat room for "{linked_project}" already exists.')
+                return redirect('chat_room', room_id=existing_room.id)
+
+            if not name:
+                name = str(linked_project)
+
         room = ChatRoom.objects.create(
-            name        = name,
-            room_type   = room_type,
-            created_by  = request.user,
-            description = request.POST.get('description', ''),
+            name=name, room_type=room_type, created_by=request.user,
+            description=description, project=linked_project,
         )
         ChatRoomMember.objects.create(room=room, user=request.user, role='admin')
 
+        added_user_ids = set()
         for uid in request.POST.getlist('members'):
             try:
-                u = User.objects.get(id=uid, is_active=True)
-                ChatRoomMember.objects.get_or_create(
-                    room=room, user=u, defaults={'role': 'member'}
-                )
+                u = User.objects.get(id=uid, is_active=True, status='active')
             except User.DoesNotExist:
-                pass
+                continue
+            ChatRoomMember.objects.get_or_create(room=room, user=u, defaults={'role': 'member'})
+            added_user_ids.add(str(u.id))
+
+        if linked_project:
+            pm = _get_project_manager(linked_project)
+            if pm and str(pm.id) not in added_user_ids and pm.id != request.user.id:
+                ChatRoomMember.objects.get_or_create(room=room, user=pm, defaults={'role': 'admin'})
 
         django_messages.success(request, f'"{room.name}" created.')
         return redirect('chat_room', room_id=room.id)
@@ -522,10 +735,8 @@ class RemoveRoomMemberView(LoginRequiredMixin, View):
 class DeleteRoomView(LoginRequiredMixin, View):
     def post(self, request, room_id):
         room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
-
         if not _can_manage_room(request.user, room):
             return HttpResponseForbidden('Only the room creator can delete this channel.')
-
         room_name = room.name
         room.delete()
         django_messages.success(request, f'"{room_name}" deleted successfully.')
@@ -550,19 +761,14 @@ class ChatTypingPingView(LoginRequiredMixin, View):
 # ---------------------------------------------------------------------------
 
 class ChatMessagesPollView(LoginRequiredMixin, View):
-    """
-    GET /messages/<room_id>/messages/poll/?after_id=<uuid>
-    Returns new messages since the given anchor message.
-    Includes reactions so the client can update stale reaction counts.
-    """
-
     def get(self, request, room_id):
         room     = get_object_or_404(ChatRoom, id=room_id, members=request.user)
         after_id = request.GET.get('after_id', '').strip()
 
         qs = (
             room.messages.filter(is_deleted=False)
-            .select_related('sender', 'reply_to', 'reply_to__sender', 'linked_file')
+            .select_related('sender', 'reply_to', 'reply_to__sender', 'linked_file', 'poll')
+            .prefetch_related('poll__options', 'poll__options__votes')
             .order_by('created_at')
         )
 
@@ -574,47 +780,30 @@ class ChatMessagesPollView(LoginRequiredMixin, View):
                 pass
 
         messages_data = [_serialize_chat_message(msg) for msg in qs]
-
-        ChatRoomMember.objects.filter(room=room, user=request.user).update(
-            last_read=timezone.now()
-        )
-
+        ChatRoomMember.objects.filter(room=room, user=request.user).update(last_read=timezone.now())
         return JsonResponse({'ok': True, 'messages': messages_data})
 
 
 # ---------------------------------------------------------------------------
-# Reactions poll  ← NEW — auto-refreshes reaction counts without WS
+# Reactions poll
 # ---------------------------------------------------------------------------
 
 class ChatReactionsPollView(LoginRequiredMixin, View):
-    """
-    GET /messages/<room_id>/reactions-poll/
-    Returns a mapping { message_id: { emoji: count } } for all visible
-    messages in the room (capped at 200 most recent).
-
-    The front-end polls this every 4 s and calls renderReactions() on each
-    entry so emoji counts stay in sync even when the WebSocket is down or
-    another tab has reacted.
-    """
-
     def get(self, request, room_id):
         room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
-
         qs = (
             room.messages
             .filter(is_deleted=False)
-            .exclude(reactions={})          # skip messages with no reactions
+            .exclude(reactions={})
             .order_by('-created_at')
             .values('id', 'reactions')
             [:200]
         )
-
         data = {}
         for row in qs:
             summary = _reaction_summary(row['reactions'])
-            if summary:                     # only include if there are actual counts
+            if summary:
                 data[str(row['id'])] = summary
-
         return JsonResponse({'ok': True, 'reactions': data})
 
 
@@ -623,25 +812,15 @@ class ChatReactionsPollView(LoginRequiredMixin, View):
 # ---------------------------------------------------------------------------
 
 class ToggleReactionView(LoginRequiredMixin, View):
-    """
-    POST /messages/<room_id>/message/<message_id>/react/
-    Toggle a reaction emoji; broadcasts the update via WS.
-    """
-
     def post(self, request, room_id, message_id):
         room    = get_object_or_404(ChatRoom,    id=room_id,    members=request.user)
         message = get_object_or_404(ChatMessage, id=message_id, room=room, is_deleted=False)
-
-        emoji = (request.POST.get('emoji') or '').strip()
+        emoji   = (request.POST.get('emoji') or '').strip()
         if not emoji:
             return JsonResponse({'ok': False, 'error': 'Emoji is required.'}, status=400)
-
         reactions = _toggle_reaction_on_message(message, request.user, emoji)
         summary   = _reaction_summary(reactions)
-
-        # Broadcast to all WS clients in the room
         _broadcast_reaction(room.id, message.id, summary)
-
         return JsonResponse({'ok': True, 'message_id': str(message.id), 'reactions': summary})
 
 
@@ -650,14 +829,9 @@ class ToggleReactionView(LoginRequiredMixin, View):
 # ---------------------------------------------------------------------------
 
 class DeleteMessageView(LoginRequiredMixin, View):
-    """POST /messages/api/delete/<message_id>/"""
-
     def post(self, request, message_id):
         msg = get_object_or_404(
-            ChatMessage,
-            id         = message_id,
-            sender     = request.user,
-            is_deleted = False,
+            ChatMessage, id=message_id, sender=request.user, is_deleted=False,
         )
         msg.is_deleted = True
         msg.deleted_at = timezone.now()
@@ -666,20 +840,17 @@ class DeleteMessageView(LoginRequiredMixin, View):
 
 
 # ---------------------------------------------------------------------------
-# Files-app picker API  ← NEW
+# Files-app picker API
 # ---------------------------------------------------------------------------
 
 class ChatFilePickerAPIView(LoginRequiredMixin, View):
     """
     GET /messages/<room_id>/files/?q=<search>
-    Returns the requesting user's accessible SharedFiles as JSON for the
-    in-chat file picker modal.
+    Returns files the requesting user can access, for the in-chat file picker.
     """
-
     def get(self, request, room_id):
         from apps.files.models import SharedFile
 
-        # Confirm the user is a member of this room
         get_object_or_404(ChatRoom, id=room_id, members=request.user)
 
         q       = request.GET.get('q', '').strip()
@@ -706,7 +877,7 @@ class ChatFilePickerAPIView(LoginRequiredMixin, View):
             try:
                 url = f.file.url
             except Exception:
-                continue  # skip files with broken storage
+                continue
             files.append({
                 'id':            str(f.id),
                 'name':          f.name,
@@ -720,27 +891,14 @@ class ChatFilePickerAPIView(LoginRequiredMixin, View):
                 'folder':        f.folder.name if f.folder else '',
                 'created_at':    f.created_at.strftime('%d %b %Y'),
             })
-
         return JsonResponse({'files': files})
 
 
 # ---------------------------------------------------------------------------
-# Attach Files-app file to chat  ← NEW
+# Attach Files-app file to chat message
 # ---------------------------------------------------------------------------
 
 class ChatAttachSharedFileView(LoginRequiredMixin, View):
-    """
-    POST /messages/<room_id>/attach-file/
-    Attaches an existing SharedFile to a chat message.
-    No re-upload; creates a ChatMessage with linked_file set,
-    then broadcasts the payload via WebSocket.
-
-    POST params:
-        file_id   — UUID of the SharedFile
-        caption   — optional text
-        reply_to  — optional ChatMessage UUID
-    """
-
     def post(self, request, room_id):
         from apps.files.models import SharedFile
 
@@ -755,7 +913,6 @@ class ChatAttachSharedFileView(LoginRequiredMixin, View):
         if not file_id:
             return JsonResponse({'error': 'No file_id provided.'}, status=400)
 
-        # Check the user can access this file (same visibility rules as the Files app)
         profile = getattr(request.user, 'staffprofile', None)
         unit    = profile.unit       if profile else None
         dept    = profile.department if profile else None
@@ -772,7 +929,6 @@ class ChatAttachSharedFileView(LoginRequiredMixin, View):
             pk=file_id,
         )
 
-        # Resolve optional reply
         reply_obj         = None
         reply_sender_name = ''
         reply_content     = ''
@@ -785,23 +941,17 @@ class ChatAttachSharedFileView(LoginRequiredMixin, View):
                 reply_obj = None
 
         msg_type = 'image' if shared_file.is_image else 'file'
-
         msg = ChatMessage.objects.create(
-            room         = room,
-            sender       = request.user,
-            content      = caption,
-            message_type = msg_type,
-            reply_to     = reply_obj,
-            linked_file  = shared_file,
-            file_name    = shared_file.name,
-            file_size    = shared_file.file_size,
+            room=room, sender=request.user, content=caption,
+            message_type=msg_type, reply_to=reply_obj,
+            linked_file=shared_file, file_name=shared_file.name,
+            file_size=shared_file.file_size,
         )
 
         room.updated_at = timezone.now()
         room.save(update_fields=['updated_at'])
         ChatRoomMember.objects.filter(room=room, user=request.user).update(last_read=timezone.now())
 
-        # Build payload (reuse serialiser; msg.linked_file is already the obj)
         try:
             file_url = shared_file.file.url
         except Exception:
@@ -829,7 +979,6 @@ class ChatAttachSharedFileView(LoginRequiredMixin, View):
             'is_edited':        False,
         }
 
-        # Broadcast to the room's WS group
         try:
             channel_layer = get_channel_layer()
             if channel_layer:
@@ -838,6 +987,291 @@ class ChatAttachSharedFileView(LoginRequiredMixin, View):
                     {'type': 'chat.message', 'payload': payload},
                 )
         except Exception:
-            pass  # WS unavailable — polling will pick it up
+            pass
 
         return JsonResponse({'ok': True, 'payload': payload})
+
+
+# ---------------------------------------------------------------------------
+# Forward message
+# ---------------------------------------------------------------------------
+
+class ForwardChatMessageView(LoginRequiredMixin, View):
+    def post(self, request, room_id, message_id):
+        source_room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        source_msg  = get_object_or_404(
+            ChatMessage.objects.select_related('sender', 'linked_file', 'room'),
+            id=message_id, room=source_room, is_deleted=False,
+        )
+
+        target_room_id = (request.POST.get('target_room_id') or '').strip()
+        note           = (request.POST.get('note') or '').strip()
+
+        if not target_room_id:
+            return JsonResponse({'ok': False, 'error': 'Target room is required.'}, status=400)
+
+        target_room = get_object_or_404(ChatRoom, id=target_room_id, members=request.user)
+        if target_room.is_readonly:
+            return JsonResponse({'ok': False, 'error': 'Target room is read-only.'}, status=403)
+
+        forwarded = None
+
+        if source_msg.linked_file_id:
+            forwarded = ChatMessage.objects.create(
+                room=target_room, sender=request.user,
+                message_type=source_msg.message_type,
+                linked_file=source_msg.linked_file,
+                file_name=_get_msg_file_name(source_msg),
+                file_size=_get_msg_file_size(source_msg),
+                content=_combine_forwarded_text(source_msg, note),
+            )
+        elif source_msg.message_type in ('file', 'image') and source_msg.file:
+            file_name, content_file, file_size, _mime = _copy_chat_file_to_contentfile(source_msg)
+            if not content_file:
+                return JsonResponse({'ok': False, 'error': 'Could not read the source file.'}, status=400)
+            forwarded = ChatMessage(
+                room=target_room, sender=request.user,
+                message_type=source_msg.message_type,
+                file_name=file_name, file_size=file_size,
+                content=_combine_forwarded_text(source_msg, note),
+            )
+            forwarded.file.save(os.path.basename(file_name), content_file, save=False)
+            forwarded.save()
+        else:
+            forwarded = ChatMessage.objects.create(
+                room=target_room, sender=request.user,
+                message_type='text',
+                content=_combine_forwarded_text(source_msg, note),
+            )
+
+        target_room.updated_at = timezone.now()
+        target_room.save(update_fields=['updated_at'])
+        ChatRoomMember.objects.filter(room=target_room, user=request.user).update(last_read=timezone.now())
+        _broadcast_chat_message(forwarded)
+
+        return JsonResponse({
+            'ok': True,
+            'message': 'Message forwarded successfully.',
+            'payload': _serialize_chat_message(forwarded),
+        })
+
+
+# ---------------------------------------------------------------------------
+# Save chat file to Files app
+# ---------------------------------------------------------------------------
+
+class SaveChatMessageToFilesView(LoginRequiredMixin, View):
+    def post(self, request, room_id, message_id):
+        from apps.files.models import SharedFile, FileFolder
+
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        msg  = get_object_or_404(
+            ChatMessage.objects.select_related('sender', 'linked_file'),
+            id=message_id, room=room, is_deleted=False,
+        )
+
+        if msg.message_type not in ('file', 'image'):
+            return JsonResponse({'ok': False, 'error': 'Only file or image messages can be saved.'}, status=400)
+
+        folder    = None
+        folder_id = (request.POST.get('folder_id') or '').strip()
+        if folder_id:
+            folder = get_object_or_404(FileFolder, id=folder_id, owner=request.user)
+
+        file_name, content_file, file_size, mime_type = _copy_chat_file_to_contentfile(msg)
+        if not content_file:
+            return JsonResponse({'ok': False, 'error': 'Could not read file data.'}, status=400)
+
+        saved = SharedFile.objects.create(
+            name=file_name, uploaded_by=request.user, folder=folder,
+            visibility='private',
+            description=f'Saved from chat room "{room.name}"',
+            file_size=file_size, file_type=mime_type,
+        )
+        saved.file.save(os.path.basename(file_name), content_file, save=True)
+
+        try:
+            saved.file_hash = saved.compute_hash()
+            saved.save(update_fields=['file_hash'])
+        except Exception:
+            pass
+
+        return JsonResponse({
+            'ok': True,
+            'message': f'"{saved.name}" saved to Files successfully.',
+            'file_id': str(saved.id),
+            'file_name': saved.name,
+        })
+
+
+# ---------------------------------------------------------------------------
+# Pin a project file to the chat room
+# ---------------------------------------------------------------------------
+
+class ChatRoomFilePinView(LoginRequiredMixin, View):
+    """
+    POST /messages/<room_id>/files/pin/
+    Pins a SharedFile to the room so ALL members can access it,
+    bypassing normal file-visibility rules. Only room managers can pin.
+    """
+    def post(self, request, room_id):
+        from apps.files.models import SharedFile
+
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        if not _can_manage_room(request.user, room):
+            return JsonResponse({'ok': False, 'error': 'Only room managers can share files.'}, status=403)
+
+        file_id = request.POST.get('file_id', '').strip()
+        note    = request.POST.get('note', '').strip()
+
+        if not file_id:
+            return JsonResponse({'ok': False, 'error': 'file_id is required.'}, status=400)
+
+        shared_file = get_object_or_404(SharedFile, pk=file_id)
+
+        obj, created = ChatRoomFile.objects.get_or_create(
+            room=room,
+            file=shared_file,
+            defaults={'shared_by': request.user, 'note': note},
+        )
+
+        if created:
+            # Post a system message so all members see the file was shared
+            sys_msg = ChatMessage.objects.create(
+                room=room,
+                sender=request.user,
+                message_type='system',
+                content=(
+                    f'📎 {_safe_full_name(request.user)} shared '
+                    f'"{shared_file.name}" with this room.'
+                ),
+            )
+            room.updated_at = timezone.now()
+            room.save(update_fields=['updated_at'])
+            _broadcast_chat_message(sys_msg)
+
+        return JsonResponse({
+            'ok':        True,
+            'pinned':    created,
+            'file_id':   str(shared_file.id),
+            'file_name': shared_file.name,
+        })
+
+
+# ---------------------------------------------------------------------------
+# Unpin a project file from the chat room
+# ---------------------------------------------------------------------------
+
+class ChatRoomFileUnpinView(LoginRequiredMixin, View):
+    """
+    POST /messages/<room_id>/files/<file_id>/unpin/
+    Removes a pinned file from room access. Only room managers.
+    """
+    def post(self, request, room_id, file_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        if not _can_manage_room(request.user, room):
+            return JsonResponse({'ok': False, 'error': 'Only room managers can remove shared files.'}, status=403)
+
+        deleted, _ = ChatRoomFile.objects.filter(room=room, file_id=file_id).delete()
+        return JsonResponse({'ok': True, 'removed': deleted > 0})
+
+class CreatePollView(LoginRequiredMixin, View):
+    def post(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        if room.is_readonly:
+            return JsonResponse({'ok': False, 'error': 'This room is read-only.'}, status=403)
+
+        question = (request.POST.get('question') or '').strip()
+        options = [o.strip() for o in request.POST.getlist('options[]') if o.strip()]
+
+        if not question:
+            return JsonResponse({'ok': False, 'error': 'Question is required.'}, status=400)
+
+        if len(options) < 2:
+            return JsonResponse({'ok': False, 'error': 'At least two options are required.'}, status=400)
+
+        msg = ChatMessage.objects.create(
+            room=room,
+            sender=request.user,
+            message_type='poll',
+            content=question,
+        )
+
+        poll = ChatPoll.objects.create(
+            message=msg,
+            question=question,
+        )
+
+        created_options = []
+        for opt in options:
+            created_options.append(ChatPollOption.objects.create(
+                poll=poll,
+                text=opt
+            ))
+
+        room.updated_at = timezone.now()
+        room.save(update_fields=['updated_at'])
+        ChatRoomMember.objects.filter(room=room, user=request.user).update(last_read=timezone.now())
+
+        payload = _serialize_chat_message(msg)
+        payload['poll'] = {
+            'id': str(poll.id),
+            'question': poll.question,
+            'options': [
+                {'id': str(opt.id), 'text': opt.text, 'votes': 0}
+                for opt in created_options
+            ]
+        }
+
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer is not None:
+                async_to_sync(channel_layer.group_send)(
+                    _room_group_name(room.id),
+                    {'type': 'chat.message', 'payload': payload},
+                )
+        except Exception:
+            pass
+
+        return JsonResponse({'ok': True, 'payload': payload})
+
+
+class VotePollView(LoginRequiredMixin, View):
+    def post(self, request, poll_id):
+        poll = get_object_or_404(
+            ChatPoll.objects.select_related('message', 'message__room'),
+            id=poll_id
+        )
+
+        if not poll.message.room.members.filter(id=request.user.id).exists():
+            return JsonResponse({'ok': False, 'error': 'You are not allowed to vote in this poll.'}, status=403)
+
+        option_id = request.POST.get('option_id')
+        option = get_object_or_404(ChatPollOption, id=option_id, poll=poll)
+
+        ChatPollVote.objects.filter(poll=poll, user=request.user).delete()
+        ChatPollVote.objects.create(poll=poll, option=option, user=request.user)
+
+        data = {
+            'type': 'poll_update',
+            'poll_id': str(poll.id),
+            'options': [
+                {'id': str(opt.id), 'votes': opt.votes.count()}
+                for opt in poll.options.all().prefetch_related('votes')
+            ]
+        }
+
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer is not None:
+                async_to_sync(channel_layer.group_send)(
+                    _room_group_name(poll.message.room_id),
+                    {'type': 'chat.poll', 'payload': data},
+                )
+        except Exception:
+            pass
+
+        return JsonResponse({'ok': True, 'poll_id': str(poll.id)})

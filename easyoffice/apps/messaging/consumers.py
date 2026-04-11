@@ -25,6 +25,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def chat_reaction(self, event):
         await self.send(text_data=json.dumps(event['payload']))
 
+    async def chat_poll(self, event):
+        await self.send(text_data=json.dumps(event['payload']))
+
     async def disconnect(self, code):
         try:
             await self.channel_layer.group_discard(self.room_group, self.channel_name)

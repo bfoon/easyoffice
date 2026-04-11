@@ -9,6 +9,7 @@ from apps.projects.models import (
     Survey, SurveyQuestion, SurveyResponse, SurveyAnswer,
     TrackingSheet, TrackingRow, ProjectLocation,
 )
+from apps.messaging.models import ChatRoom
 import csv
 import json
 from collections import Counter
@@ -130,6 +131,13 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         if project.tags:
             project_tags = [tag.strip() for tag in project.tags.split(",") if tag.strip()]
 
+        # ── Linked project channel ─────────────────────────────────────────────
+        project_channel = ChatRoom.objects.filter(
+            project=project,
+            room_type='project',
+            is_archived=False,
+        ).first()
+
         # ── Linked project documents ───────────────────────────────────────
         try:
             from apps.files.models import SharedFile
@@ -224,6 +232,7 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             'days_remaining_abs': days_remaining_abs,
             'is_overdue': is_overdue,
             'project_tags': project_tags,
+            'project_channel': project_channel,
 
             'status_choices': Project.Status.choices,
             'risk_levels': Risk.Level.choices,

@@ -1247,31 +1247,46 @@ class VotePollView(LoginRequiredMixin, View):
         )
 
         if not poll.message.room.members.filter(id=request.user.id).exists():
-            return JsonResponse({'ok': False, 'error': 'You are not allowed to vote in this poll.'}, status=403)
+            return JsonResponse({'ok': False, 'error': 'Unauthorized'}, status=403)
 
         option_id = request.POST.get('option_id')
         option = get_object_or_404(ChatPollOption, id=option_id, poll=poll)
 
+        # Update the vote
         ChatPollVote.objects.filter(poll=poll, user=request.user).delete()
         ChatPollVote.objects.create(poll=poll, option=option, user=request.user)
 
-        data = {
+        # Calculate new stats for real-time refresh
+        total_votes = poll.votes.count()
+        options_data = []
+        for opt in poll.options.all():
+            v_count = opt.votes.count()
+            pct = (v_count / total_votes * 100) if total_votes > 0 else 0
+            options_data.append({
+                'id': str(opt.id),
+                'votes': v_count,
+                'percentage': round(pct, 1)
+            })
+
+        payload = {
             'type': 'poll_update',
             'poll_id': str(poll.id),
-            'options': [
-                {'id': str(opt.id), 'votes': opt.votes.count()}
-                for opt in poll.options.all().prefetch_related('votes')
-            ]
+            'total_votes': total_votes,
+            'options': options_data
         }
 
+        # Broadcast to the room via WebSocket
         try:
             channel_layer = get_channel_layer()
-            if channel_layer is not None:
+            if channel_layer:
                 async_to_sync(channel_layer.group_send)(
-                    _room_group_name(poll.message.room_id),
-                    {'type': 'chat.poll', 'payload': data},
+                    f"chat_{poll.message.room_id}",
+                    {
+                        'type': 'chat_poll',
+                        'payload': payload
+                    }
                 )
         except Exception:
             pass
 
-        return JsonResponse({'ok': True, 'poll_id': str(poll.id)})
+        return JsonResponse({'ok': True, 'payload': payload})

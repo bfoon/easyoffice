@@ -2,15 +2,18 @@ import os, subprocess, tempfile, hashlib
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import TemplateView, View
 from django.shortcuts import render, redirect, get_object_or_404
-from django.http import FileResponse, Http404, JsonResponse
+from django.http import FileResponse, Http404, JsonResponse, HttpResponse
 from django.contrib import messages
 from django.utils import timezone
 from django.db.models import Q, Sum
+from django.db import transaction
+from django.utils.text import slugify
 from django.core.mail import send_mail
 from django.conf import settings
-import os, subprocess, tempfile, hashlib, mimetypes, re
+import os, subprocess, tempfile, hashlib, mimetypes, re, html, zipfile
 from django.utils.decorators import method_decorator
 from io import BytesIO
+from pathlib import Path
 from django.core.files.base import ContentFile
 from pypdf import PdfReader, PdfWriter
 from PIL import Image
@@ -42,20 +45,129 @@ def _get_client_ip(request):
         return x_forwarded.split(',')[0].strip()
     return request.META.get('REMOTE_ADDR')
 
+def _folder_chain(folder):
+    chain = []
+    current = folder
+    while current:
+        chain.append(current)
+        current = current.parent
+    return chain
+
+
+def _folder_inherits_from_parent(folder):
+    """
+    Safe fallback:
+    if inherit_parent_sharing field does not exist yet,
+    assume inheritance is allowed.
+    """
+    return getattr(folder, 'inherit_parent_sharing', True)
+
+
+def _folder_shares_children(folder):
+    """
+    Safe fallback:
+    if share_children field does not exist yet,
+    assume parent folder sharing applies to children.
+    You can change default to False if you prefer stricter behavior.
+    """
+    return getattr(folder, 'share_children', True)
+
+
+def _user_matches_folder_visibility(user, folder):
+    if not folder:
+        return False
+
+    if folder.owner_id == user.id or user.is_superuser:
+        return True
+
+    access = folder.share_access.filter(user=user).exists()
+    if access:
+        return True
+
+    profile = getattr(user, 'staffprofile', None)
+    unit = profile.unit if profile else None
+    dept = profile.department if profile else None
+
+    if folder.visibility == 'office':
+        return True
+    if folder.visibility == 'unit' and folder.unit == unit:
+        return True
+    if folder.visibility == 'department' and folder.department == dept:
+        return True
+    if getattr(folder, 'visibility', None) == 'shared_with' and getattr(folder, 'shared_with', None):
+        return folder.shared_with.filter(id=user.id).exists()
+
+    return False
+
+
+def _file_is_visible_via_folder(user, file_obj):
+    """
+    Checks whether a file becomes visible because its folder
+    or one of its ancestor folders is shared with the user.
+    """
+    if not file_obj.folder:
+        return False
+
+    # file can opt out of inherited folder sharing
+    if not getattr(file_obj, 'inherit_folder_sharing', True):
+        return False
+
+    chain = _folder_chain(file_obj.folder)   # current folder -> parent -> root
+    blocked = False
+
+    for index, folder in enumerate(chain):
+        if index > 0:
+            child_folder = chain[index - 1]
+            if not _folder_inherits_from_parent(child_folder):
+                blocked = True
+
+        if blocked:
+            break
+
+        # current folder always applies directly
+        if index == 0 and _user_matches_folder_visibility(user, folder):
+            return True
+
+        # ancestor folders only apply if they are allowed to share children
+        if index > 0 and _folder_shares_children(folder):
+            if _user_matches_folder_visibility(user, folder):
+                return True
+
+    return False
+
 
 def _visible_files_qs(user):
     profile = getattr(user, 'staffprofile', None)
     unit = profile.unit if profile else None
     dept = profile.department if profile else None
-    return SharedFile.objects.filter(
+
+    direct_qs = SharedFile.objects.filter(
         Q(uploaded_by=user) |
         Q(visibility='office') |
         Q(visibility='unit', unit=unit) |
         Q(visibility='department', department=dept) |
         Q(shared_with=user) |
         Q(share_access__user=user)
+    ).select_related('folder').distinct()
+
+    all_candidate_files = SharedFile.objects.select_related('folder').prefetch_related(
+        'share_access',
+        'shared_with',
+        'folder__share_access',
     ).distinct()
 
+    inherited_ids = [
+        f.id for f in all_candidate_files
+        if _file_is_visible_via_folder(user, f)
+    ]
+
+    if not inherited_ids:
+        return direct_qs.distinct()
+
+    return SharedFile.objects.filter(
+        Q(id__in=direct_qs.values_list('id', flat=True)) |
+        Q(id__in=inherited_ids)
+    ).select_related('folder').distinct()
 
 def _visible_folders_qs(user):
     profile = getattr(user, 'staffprofile', None)
@@ -81,16 +193,21 @@ def _file_permission_for(user, f):
     unit = profile.unit if profile else None
     dept = profile.department if profile else None
 
+    direct_perm = None
     if f.visibility == 'office':
-        return 'view'
-    if f.visibility == 'unit' and f.unit == unit:
-        return 'view'
-    if f.visibility == 'department' and f.department == dept:
-        return 'view'
-    if f.shared_with.filter(id=user.id).exists():
-        return 'view'
+        direct_perm = 'view'
+    elif f.visibility == 'unit' and f.unit == unit:
+        direct_perm = 'view'
+    elif f.visibility == 'department' and f.department == dept:
+        direct_perm = 'view'
+    elif f.shared_with.filter(id=user.id).exists():
+        direct_perm = 'view'
 
-    return None
+    inherited_perm = None
+    if getattr(f, 'inherit_folder_sharing', True) and f.folder_id:
+        inherited_perm = _inherited_folder_permission_for(user, f.folder)
+
+    return _max_perm(direct_perm, inherited_perm)
 
 
 def _folder_permission_for(user, folder):
@@ -970,6 +1087,141 @@ def _embed_signatures_in_pdf(sig_req):
 
     return signed_file
 
+# views.py
+
+def _perm_rank(perm):
+    return {'view': 1, 'edit': 2, 'full': 3}.get(perm or '', 0)
+
+
+def _max_perm(*perms):
+    best = None
+    for p in perms:
+        if _perm_rank(p) > _perm_rank(best):
+            best = p
+    return best
+
+
+def _inherited_folder_permission_for(user, folder):
+    """
+    Returns permission inherited from this folder or its ancestors.
+    Respects:
+      - share_children on ancestor folder
+      - inherit_parent_sharing on intermediate subfolders
+    """
+    if not folder:
+        return None
+
+    chain = _folder_chain(folder)  # current -> parent -> root
+    best = None
+    blocked = False
+
+    for idx, current in enumerate(chain):
+        if idx > 0:
+            child = chain[idx - 1]
+            if hasattr(child, 'inherit_parent_sharing') and not child.inherit_parent_sharing:
+                blocked = True
+        if blocked:
+            break
+
+        perm = _folder_permission_for(user, current)
+
+        # direct folder itself always applies
+        if idx == 0 and perm:
+            best = _max_perm(best, perm)
+            continue
+
+        # ancestors only apply if share_children=True
+        if perm and getattr(current, 'share_children', False):
+            best = _max_perm(best, perm)
+
+    return best
+
+def _zip_preview(self, f):
+    import zipfile
+    from datetime import datetime
+
+    try:
+        f.file.open('rb')
+        z = zipfile.ZipFile(f.file)
+
+        file_list = []
+
+        for info in z.infolist():
+            file_list.append({
+                'name': info.filename,
+                'size': info.file_size,
+                'compressed_size': info.compress_size,
+                'is_dir': info.is_dir(),
+                'modified': datetime(*info.date_time),
+            })
+
+        z.close()
+        f.file.close()
+
+        return render(self.request, 'files/preview_zip.html', {
+            'file': f,
+            'zip_files': file_list
+        })
+
+    except zipfile.BadZipFile:
+        return render(self.request, 'files/preview_error.html', {
+            'error': 'Invalid or corrupted ZIP file.'
+        })
+
+def _safe_zip_member_name(member_name):
+    """
+    Normalize a zip member name and block dangerous paths.
+    Returns a safe relative path string or None if unsafe.
+    """
+    if not member_name:
+        return None
+
+    name = member_name.replace('\\', '/').strip()
+
+    # remove leading slashes
+    while name.startswith('/'):
+        name = name[1:]
+
+    if not name:
+        return None
+
+    parts = []
+    for part in name.split('/'):
+        part = part.strip()
+        if not part or part == '.':
+            continue
+        if part == '..':
+            return None
+        parts.append(part)
+
+    if not parts:
+        return None
+
+    return '/'.join(parts)
+
+
+def _guess_content_type(filename):
+    content_type, _ = mimetypes.guess_type(filename)
+    return content_type or 'application/octet-stream'
+
+
+def _unique_file_name_for_folder(base_name, folder):
+    """
+    Avoid duplicate names in the same folder.
+    """
+    original_root, original_ext = os.path.splitext(base_name)
+    candidate = base_name
+    counter = 1
+
+    while SharedFile.objects.filter(
+        folder=folder,
+        name=candidate,
+        is_latest=True
+    ).exists():
+        candidate = f'{original_root} ({counter}){original_ext}'
+        counter += 1
+
+    return candidate
 
 # ─────────────────────────────────────────────────────────────────────────────
 # File Manager
@@ -1238,9 +1490,11 @@ class FileDownloadView(LoginRequiredMixin, View):
 class FilePreviewView(LoginRequiredMixin, View):
     """
     Serve a file inline for the preview modal.
-    For Office documents (docx, xlsx, pptx, etc.) LibreOffice converts them
-    to PDF on first request; the result is cached in /tmp so repeat previews
-    are instant.  All other types are served as-is.
+
+    - Office documents are converted to PDF and cached.
+    - Text files are served as plain text.
+    - ZIP files are previewed as an HTML listing using zipfile.
+    - Everything else is served inline as-is.
     """
 
     _OFFICE_EXTS = {
@@ -1248,6 +1502,13 @@ class FilePreviewView(LoginRequiredMixin, View):
         'xls', 'xlsx', 'ods',
         'ppt', 'pptx', 'odp',
     }
+
+    _TEXT_EXTS = {
+        'md', 'py', 'js', 'html', 'css', 'sql', 'xml', 'json', 'csv', 'txt',
+        'yml', 'yaml', 'ini', 'log'
+    }
+
+    _ZIP_EXTS = {'zip'}
 
     def get(self, request, pk):
         f = get_object_or_404(SharedFile, pk=pk)
@@ -1265,20 +1526,27 @@ class FilePreviewView(LoginRequiredMixin, View):
         ):
             raise Http404
 
-        ext = f.extension.lower()
+        ext = (f.extension or '').lower().strip('.')
 
-        # ── Office documents → convert to PDF, serve inline ──────────────────
+        # ── ZIP files → preview archive contents ─────────────────────────────
+        if ext in self._ZIP_EXTS:
+            return self._zip_preview(f)
+
+        # ── Office documents → convert to PDF, serve inline ─────────────────
         if ext in self._OFFICE_EXTS:
             return self._office_preview(f, ext)
 
-        # ── Text files → plain text so JS can fetch & display ────────────────
-        if ext in ('md', 'py', 'js', 'html', 'css', 'sql', 'xml', 'json', 'csv', 'txt'):
-            response = FileResponse(f.file.open('rb'), content_type='text/plain; charset=utf-8')
+        # ── Text files → plain text so JS can fetch & display ───────────────
+        if ext in self._TEXT_EXTS:
+            response = FileResponse(
+                f.file.open('rb'),
+                content_type='text/plain; charset=utf-8'
+            )
             response['Content-Disposition'] = f'inline; filename="{f.name}"'
             response['X-Frame-Options'] = 'SAMEORIGIN'
             return response
 
-        # ── Everything else (PDF, image, video, audio) ────────────────────────
+        # ── Everything else (PDF, image, video, audio, etc.) ───────────────
         content_type, _ = mimetypes.guess_type(f.name)
         content_type = content_type or 'application/octet-stream'
         response = FileResponse(f.file.open('rb'), content_type=content_type)
@@ -1286,33 +1554,214 @@ class FilePreviewView(LoginRequiredMixin, View):
         response['X-Frame-Options'] = 'SAMEORIGIN'
         return response
 
-    def _office_preview(self, f, ext):
-        """Convert Office file to PDF (LibreOffice) with a file-system cache."""
-        import shutil
-        from pathlib import Path
+    def _zip_preview(self, f):
+        """
+        Preview ZIP archive contents as simple inline HTML.
+        """
+        try:
+            with f.file.open('rb') as fh:
+                with zipfile.ZipFile(fh) as zf:
+                    infos = zf.infolist()
 
-        # Cache dir and key — keyed on pk + file_hash so a new upload busts cache
+                    total_files = 0
+                    total_dirs = 0
+                    total_uncompressed = 0
+                    total_compressed = 0
+                    rows = []
+
+                    for info in infos:
+                        is_dir = info.is_dir()
+                        if is_dir:
+                            total_dirs += 1
+                            kind = 'Folder'
+                            size_display = '—'
+                            compressed_display = '—'
+                        else:
+                            total_files += 1
+                            total_uncompressed += info.file_size
+                            total_compressed += info.compress_size
+                            kind = 'File'
+                            size_display = self._human_size(info.file_size)
+                            compressed_display = self._human_size(info.compress_size)
+
+                        rows.append(
+                            f"""
+                            <tr>
+                                <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;white-space:nowrap;">{kind}</td>
+                                <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">{html.escape(info.filename)}</td>
+                                <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;white-space:nowrap;text-align:right;">{size_display}</td>
+                                <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;white-space:nowrap;text-align:right;">{compressed_display}</td>
+                            </tr>
+                            """
+                        )
+
+        except zipfile.BadZipFile:
+            return HttpResponse(
+                'ZIP preview unavailable: invalid or corrupted ZIP archive.',
+                content_type='text/plain',
+                status=422,
+            )
+        except Exception as exc:
+            return HttpResponse(
+                f'ZIP preview unavailable: {exc}',
+                content_type='text/plain',
+                status=422,
+            )
+
+        archive_size = self._human_size(getattr(f, 'file_size', 0) or 0)
+        total_uncompressed_display = self._human_size(total_uncompressed)
+        total_compressed_display = self._human_size(total_compressed)
+
+        body_rows = ''.join(rows) or """
+            <tr>
+                <td colspan="4" style="padding:14px;text-align:center;color:#6b7280;">
+                    Archive is empty.
+                </td>
+            </tr>
+        """
+
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>{html.escape(f.name)} - ZIP Preview</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    margin: 0;
+                    padding: 0;
+                    background: #f9fafb;
+                    color: #111827;
+                }}
+                .wrap {{
+                    max-width: 1100px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }}
+                .card {{
+                    background: #fff;
+                    border: 1px solid #e5e7eb;
+                    border-radius: 12px;
+                    overflow: hidden;
+                    box-shadow: 0 4px 14px rgba(0,0,0,0.04);
+                }}
+                .head {{
+                    padding: 18px 20px;
+                    border-bottom: 1px solid #e5e7eb;
+                    background: #f3f4f6;
+                }}
+                .title {{
+                    margin: 0;
+                    font-size: 18px;
+                    font-weight: 700;
+                    word-break: break-word;
+                }}
+                .meta {{
+                    margin-top: 8px;
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 10px;
+                    font-size: 13px;
+                    color: #4b5563;
+                }}
+                .badge {{
+                    display: inline-block;
+                    padding: 4px 8px;
+                    border-radius: 999px;
+                    background: #eef2ff;
+                    color: #4338ca;
+                    font-weight: 600;
+                }}
+                .table-wrap {{
+                    overflow: auto;
+                }}
+                table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 14px;
+                }}
+                thead th {{
+                    text-align: left;
+                    padding: 10px;
+                    background: #f9fafb;
+                    border-bottom: 1px solid #e5e7eb;
+                    position: sticky;
+                    top: 0;
+                }}
+                .muted {{
+                    color: #6b7280;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="wrap">
+                <div class="card">
+                    <div class="head">
+                        <h1 class="title">ZIP Preview: {html.escape(f.name)}</h1>
+                        <div class="meta">
+                            <span class="badge">{total_files} file{"s" if total_files != 1 else ""}</span>
+                            <span class="badge">{total_dirs} folder{"s" if total_dirs != 1 else ""}</span>
+                            <span>Archive size: <strong>{archive_size}</strong></span>
+                            <span>Total content size: <strong>{total_uncompressed_display}</strong></span>
+                            <span>Total compressed size: <strong>{total_compressed_display}</strong></span>
+                        </div>
+                    </div>
+
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="width:110px;">Type</th>
+                                    <th>Name</th>
+                                    <th style="width:140px;text-align:right;">Size</th>
+                                    <th style="width:170px;text-align:right;">Compressed</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {body_rows}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+        response = HttpResponse(html_content, content_type='text/html; charset=utf-8')
+        response['Content-Disposition'] = f'inline; filename="{f.name}.zip-preview.html"'
+        response['X-Frame-Options'] = 'SAMEORIGIN'
+        return response
+
+    def _office_preview(self, f, ext):
+        """
+        Convert Office file to PDF (LibreOffice) with a file-system cache.
+        """
+        import shutil
+
         cache_dir = Path(tempfile.gettempdir()) / 'eo_preview_cache'
         cache_dir.mkdir(exist_ok=True)
-        cache_key  = f'{f.pk}_{f.file_hash or "v1"}.pdf'
+
+        cache_key = f'{f.pk}_{getattr(f, "file_hash", None) or "v1"}.pdf'
         cache_path = cache_dir / cache_key
 
         if not cache_path.exists():
-            # Write original file to a temp path with the correct extension so
-            # LibreOffice picks up the right filter automatically.
             src_tmp = tempfile.NamedTemporaryFile(
-                suffix=f'.{ext}', delete=False,
+                suffix=f'.{ext}',
+                delete=False,
                 dir=tempfile.gettempdir()
             )
             try:
-                src_tmp.write(f.file.open('rb').read())
+                with f.file.open('rb') as original:
+                    src_tmp.write(original.read())
                 src_tmp.flush()
                 src_tmp.close()
 
-                pdf_path = _convert_to_pdf(src_tmp.name)   # existing helper
+                pdf_path = _convert_to_pdf(src_tmp.name)  # existing helper
                 shutil.copy2(pdf_path, str(cache_path))
             except Exception as exc:
-                # Conversion failed — tell the browser so the frontend can show a message
                 return HttpResponse(
                     f'Office preview unavailable: {exc}',
                     content_type='text/plain',
@@ -1332,6 +1781,26 @@ class FilePreviewView(LoginRequiredMixin, View):
         response['X-Frame-Options'] = 'SAMEORIGIN'
         return response
 
+    def _human_size(self, size):
+        """
+        Convert byte size to human readable string.
+        """
+        try:
+            size = int(size or 0)
+        except (TypeError, ValueError):
+            return '0 B'
+
+        units = ['B', 'KB', 'MB', 'GB', 'TB']
+        value = float(size)
+        unit = 0
+
+        while value >= 1024 and unit < len(units) - 1:
+            value /= 1024.0
+            unit += 1
+
+        if unit == 0:
+            return f'{int(value)} {units[unit]}'
+        return f'{value:.1f} {units[unit]}'
 
 class FileDeleteView(LoginRequiredMixin, View):
     def post(self, request, pk):
@@ -1395,7 +1864,8 @@ class FileShareView(LoginRequiredMixin, View):
         f.visibility = vis
         f.unit = None
         f.department = None
-        f.save(update_fields=['visibility', 'unit', 'department'])
+        f.inherit_folder_sharing = request.POST.get('inherit_folder_sharing', '1') == '1'
+        f.save(update_fields=['visibility', 'unit', 'department', 'inherit_folder_sharing'])
 
         # Clear previous direct shares + permission rows
         f.shared_with.clear()
@@ -1539,6 +2009,55 @@ class FolderCreateView(LoginRequiredMixin, View):
         return redirect(next_url if next_url.startswith('/') else 'file_manager')
 
 
+class FolderMoveView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        folder = get_object_or_404(FileFolder, pk=pk)
+
+        if not _can_edit_folder(request.user, folder):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'You do not have permission to move this folder.',
+            }, status=403)
+
+        parent_id = (request.POST.get('parent_id') or '').strip()
+        new_parent = None
+
+        if parent_id:
+            new_parent = get_object_or_404(FileFolder, pk=parent_id)
+
+            if not _can_edit_folder(request.user, new_parent):
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'You do not have permission to move into that folder.',
+                }, status=403)
+
+            # prevent moving into itself
+            if str(new_parent.id) == str(folder.id):
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'A folder cannot be moved into itself.',
+                }, status=400)
+
+            # prevent moving into descendant
+            current = new_parent
+            while current:
+                if str(current.id) == str(folder.id):
+                    return JsonResponse({
+                        'status': 'error',
+                        'message': 'Cannot move a folder into one of its subfolders.',
+                    }, status=400)
+                current = current.parent
+
+        folder.parent = new_parent
+        folder.save(update_fields=['parent'])
+
+        return JsonResponse({
+            'status': 'ok',
+            'message': 'Folder moved successfully.',
+            'folder_id': str(folder.id),
+            'parent_id': str(new_parent.id) if new_parent else None,
+        })
+
 class FolderDeleteView(LoginRequiredMixin, View):
     def post(self, request, pk):
         folder = get_object_or_404(FileFolder, pk=pk)
@@ -1584,6 +2103,9 @@ class FolderShareView(LoginRequiredMixin, View):
         folder.visibility = vis
         folder.unit = None
         folder.department = None
+
+        folder.share_children = request.POST.get('share_children') == '1'
+        folder.inherit_parent_sharing = request.POST.get('inherit_parent_sharing', '1') == '1'
 
         # Clear old direct-share permissions first
         folder.share_access.all().delete()
@@ -3946,6 +4468,226 @@ class PDFToImageView(LoginRequiredMixin, View):
             messages.error(request, f'Conversion failed: {e}')
             return redirect('pdf_to_image')
 
+class ZipExtractView(LoginRequiredMixin, TemplateView):
+    template_name = 'files/zip_extract.html'
+    MAX_FILE_SIZE = 50 * 1024 * 1024      # 50 MB per extracted file
+    MAX_TOTAL_SIZE = 300 * 1024 * 1024    # 300 MB total extracted size
+    MAX_FILE_COUNT = 500
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+
+        editable_files = _editable_files_qs(user).filter(
+            name__iendswith='.zip',
+            is_latest=True
+        ).select_related('folder', 'uploaded_by').order_by('-created_at')
+
+        visible_folders = _visible_folders_qs(user).order_by('name')
+
+        selected_zip = None
+        zip_entries = []
+        selected_zip_id = self.request.GET.get('file', '').strip()
+
+        if selected_zip_id:
+            try:
+                selected_zip = editable_files.get(id=selected_zip_id)
+                zip_entries = self._read_zip_entries(selected_zip)
+            except SharedFile.DoesNotExist:
+                selected_zip = None
+            except zipfile.BadZipFile:
+                messages.error(self.request, 'That ZIP file is invalid or corrupted.')
+
+        ctx.update({
+            'zip_files': editable_files,
+            'all_folders': visible_folders,
+            'selected_zip': selected_zip,
+            'zip_entries': zip_entries,
+        })
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        zip_file_id = request.POST.get('zip_file_id', '').strip()
+        target_folder_id = request.POST.get('target_folder_id', '').strip()
+        create_subfolder = request.POST.get('create_subfolder') == '1'
+
+        zip_file = get_object_or_404(
+            _editable_files_qs(user).filter(name__iendswith='.zip', is_latest=True),
+            id=zip_file_id
+        )
+
+        target_folder = None
+        if target_folder_id:
+            target_folder = get_object_or_404(FileFolder, id=target_folder_id)
+            if not _can_edit_folder(user, target_folder):
+                messages.error(request, 'You do not have permission to extract into that folder.')
+                return redirect('zip_extract')
+
+        try:
+            extracted_count, skipped_count, saved_folder = self._extract_zip_to_files(
+                request=request,
+                zip_shared_file=zip_file,
+                target_folder=target_folder,
+                create_subfolder=create_subfolder,
+            )
+        except zipfile.BadZipFile:
+            messages.error(request, 'The selected ZIP file is invalid or corrupted.')
+            return redirect('zip_extract')
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect(f"{reverse('zip_extract')}?file={zip_file.id}")
+        except Exception as exc:
+            messages.error(request, f'ZIP extraction failed: {exc}')
+            return redirect(f"{reverse('zip_extract')}?file={zip_file.id}")
+
+        msg = f'Extracted {extracted_count} file'
+        if extracted_count != 1:
+            msg += 's'
+        if skipped_count:
+            msg += f' ({skipped_count} skipped)'
+        if saved_folder:
+            msg += f' into "{saved_folder.name}"'
+        msg += '.'
+
+        messages.success(request, msg)
+        return redirect('file_manager')
+
+    def _read_zip_entries(self, shared_file):
+        entries = []
+        total_size = 0
+
+        with shared_file.file.open('rb') as fh:
+            with zipfile.ZipFile(fh) as zf:
+                for info in zf.infolist():
+                    safe_name = _safe_zip_member_name(info.filename)
+                    if not safe_name:
+                        continue
+
+                    is_dir = info.is_dir()
+                    if not is_dir:
+                        total_size += int(info.file_size or 0)
+
+                    entries.append({
+                        'name': safe_name,
+                        'is_dir': is_dir,
+                        'size': info.file_size,
+                        'compressed_size': info.compress_size,
+                    })
+
+        return entries
+
+    def _extract_zip_to_files(self, request, zip_shared_file, target_folder=None, create_subfolder=False):
+        archive_name_root = os.path.splitext(zip_shared_file.name)[0].strip() or 'Extracted ZIP'
+        destination_folder = target_folder
+
+        if create_subfolder:
+            destination_folder = FileFolder.objects.create(
+                name=_unique_folder_name(archive_name_root, target_folder, request.user),
+                owner=request.user,
+                parent=target_folder,
+                visibility=FileFolder.Visibility.PRIVATE,
+                unit=None,
+                department=None,
+                color='#f59e0b',
+            )
+
+        extracted_count = 0
+        skipped_count = 0
+        running_total_size = 0
+
+        with zip_shared_file.file.open('rb') as fh:
+            with zipfile.ZipFile(fh) as zf:
+                infos = zf.infolist()
+
+                if len(infos) > self.MAX_FILE_COUNT:
+                    raise ValueError(f'ZIP contains too many items. Limit is {self.MAX_FILE_COUNT}.')
+
+                with transaction.atomic():
+                    for info in infos:
+                        safe_name = _safe_zip_member_name(info.filename)
+                        if not safe_name:
+                            skipped_count += 1
+                            continue
+
+                        if info.is_dir():
+                            continue
+
+                        file_size = int(info.file_size or 0)
+                        if file_size <= 0:
+                            skipped_count += 1
+                            continue
+
+                        if file_size > self.MAX_FILE_SIZE:
+                            skipped_count += 1
+                            continue
+
+                        running_total_size += file_size
+                        if running_total_size > self.MAX_TOTAL_SIZE:
+                            raise ValueError(
+                                f'ZIP extraction exceeds total allowed size of {self._human_size(self.MAX_TOTAL_SIZE)}.'
+                            )
+
+                        try:
+                            with zf.open(info, 'r') as extracted_fp:
+                                raw = extracted_fp.read()
+                        except Exception:
+                            skipped_count += 1
+                            continue
+
+                        if len(raw) != file_size:
+                            file_size = len(raw)
+
+                        base_name = os.path.basename(safe_name)
+                        if not base_name:
+                            skipped_count += 1
+                            continue
+
+                        final_name = _unique_file_name_for_folder(base_name, destination_folder)
+
+                        new_file = SharedFile(
+                            name=final_name,
+                            folder=destination_folder,
+                            uploaded_by=request.user,
+                            visibility=SharedFile.Visibility.PRIVATE,
+                            unit=None,
+                            department=None,
+                            file_size=file_size,
+                            file_type=_guess_content_type(final_name),
+                            description=f'Extracted from ZIP: {zip_shared_file.name}',
+                            tags='zip, extracted',
+                            is_latest=True,
+                        )
+                        new_file.file.save(final_name, ContentFile(raw), save=False)
+                        new_file.file_hash = hashlib.sha256(raw).hexdigest()
+                        new_file.save()
+
+                        _log_file_history(
+                            new_file,
+                            FileHistory.Action.CREATED,
+                            actor=request.user,
+                            notes=f'Extracted from ZIP "{zip_shared_file.name}"'
+                        )
+
+                        extracted_count += 1
+
+        return extracted_count, skipped_count, destination_folder
+
+
+def _unique_folder_name(base_name, parent_folder, owner):
+    candidate = base_name
+    counter = 1
+
+    while FileFolder.objects.filter(
+        owner=owner,
+        parent=parent_folder,
+        name=candidate
+    ).exists():
+        candidate = f'{base_name} ({counter})'
+        counter += 1
+
+    return candidate
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Pin / Unpin
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4018,3 +4760,87 @@ class SignatureViewOnlyView(View):
             'cc':       cc,
             'audit':    req.audit_trail.order_by('timestamp')[:20],
         })
+
+class FileRenameView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        f = get_object_or_404(SharedFile, pk=pk)
+
+        if not _can_edit_file(request.user, f):
+            messages.error(request, 'You do not have permission to rename this file.')
+            return redirect('file_manager')
+
+        new_name = (request.POST.get('name') or '').strip()
+        if not new_name:
+            messages.error(request, 'File name cannot be empty.')
+            return redirect(request.POST.get('next') or 'file_manager')
+
+        old_name = f.name
+        if new_name == old_name:
+            messages.info(request, 'File name was not changed.')
+            return redirect(request.POST.get('next') or 'file_manager')
+
+        # preserve extension if user removed it
+        old_root, old_ext = os.path.splitext(old_name)
+        new_root, new_ext = os.path.splitext(new_name)
+        if old_ext and not new_ext:
+            new_name = new_name + old_ext
+
+        # avoid duplicate latest file names in same folder
+        qs = SharedFile.objects.filter(
+            folder=f.folder,
+            name=new_name,
+            is_latest=True
+        ).exclude(pk=f.pk)
+        if qs.exists():
+            messages.error(request, f'A file named "{new_name}" already exists in this location.')
+            return redirect(request.POST.get('next') or 'file_manager')
+
+        f.name = new_name
+        f.save(update_fields=['name', 'updated_at'])
+
+        _log_file_history(
+            f,
+            FileHistory.Action.RENAMED,
+            actor=request.user,
+            notes=f'Renamed from "{old_name}" to "{new_name}"'
+        )
+
+        messages.success(request, f'File renamed to "{new_name}".')
+        next_url = request.POST.get('next', '')
+        return redirect(next_url if next_url.startswith('/') else 'file_manager')
+
+
+class FolderRenameView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        folder = get_object_or_404(FileFolder, pk=pk)
+
+        if not _can_edit_folder(request.user, folder):
+            messages.error(request, 'You do not have permission to rename this folder.')
+            return redirect('file_manager')
+
+        new_name = (request.POST.get('name') or '').strip()
+        if not new_name:
+            messages.error(request, 'Folder name cannot be empty.')
+            return redirect(request.POST.get('next') or 'file_manager')
+
+        old_name = folder.name
+        if new_name == old_name:
+            messages.info(request, 'Folder name was not changed.')
+            return redirect(request.POST.get('next') or 'file_manager')
+
+        exists = FileFolder.objects.filter(
+            owner=folder.owner,
+            parent=folder.parent,
+            name=new_name
+        ).exclude(pk=folder.pk).exists()
+
+        if exists:
+            messages.error(request, f'A folder named "{new_name}" already exists here.')
+            return redirect(request.POST.get('next') or 'file_manager')
+
+        folder.name = new_name
+        folder.save(update_fields=['name'])
+
+        messages.success(request, f'Folder renamed to "{new_name}".')
+        next_url = request.POST.get('next', '')
+        return redirect(next_url if next_url.startswith('/') else 'file_manager')

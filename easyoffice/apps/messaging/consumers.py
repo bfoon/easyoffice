@@ -5,6 +5,7 @@ from django.utils import timezone
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
+
     async def connect(self):
         self.room_id = self.scope['url_route']['kwargs']['room_id']
         self.room_group = f'chat_{self.room_id}'
@@ -22,17 +23,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_add(self.room_group, self.channel_name)
         await self.accept()
 
-    async def chat_reaction(self, event):
-        await self.send(text_data=json.dumps(event['payload']))
-
-    async def chat_poll(self, event):
-        await self.send(text_data=json.dumps(event['payload']))
-
     async def disconnect(self, code):
         try:
             await self.channel_layer.group_discard(self.room_group, self.channel_name)
         except Exception:
             pass
+
+    # --------------------------------------------------
+    # RECEIVE
+    # --------------------------------------------------
 
     async def receive(self, text_data=None, bytes_data=None):
         if not text_data:
@@ -49,6 +48,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         msg_type = data.get('type', 'chat_message')
 
+        # -------------------------
+        # TYPING
+        # -------------------------
         if msg_type == 'typing':
             await self.channel_layer.group_send(
                 self.room_group,
@@ -64,12 +66,27 @@ class ChatConsumer(AsyncWebsocketConsumer):
             )
             return
 
+        # -------------------------
+        # ONLY HANDLE TEXT HERE
+        # (polls handled via views)
+        # -------------------------
+        if msg_type != 'chat_message':
+            return
+
         message = (data.get('message') or data.get('content') or '').strip()
         if not message:
             return
 
         reply_to_id = data.get('reply_to') or None
-        payload = await self.save_and_build_payload(user, message, reply_to_id)
+
+        payload = await self.save_and_build_payload(
+            user,
+            message,
+            reply_to_id
+        )
+
+        if not payload:
+            return
 
         await self.channel_layer.group_send(
             self.room_group,
@@ -79,35 +96,72 @@ class ChatConsumer(AsyncWebsocketConsumer):
             }
         )
 
+    # --------------------------------------------------
+    # SEND EVENTS
+    # --------------------------------------------------
+
     async def chat_message(self, event):
         await self.send(text_data=json.dumps(event['payload']))
 
     async def chat_typing(self, event):
         await self.send(text_data=json.dumps(event['payload']))
 
+    async def chat_reaction(self, event):
+        await self.send(text_data=json.dumps(event['payload']))
+
+    async def chat_poll(self, event):
+        await self.send(text_data=json.dumps(event['payload']))
+
+    # --------------------------------------------------
+    # DB HELPERS
+    # --------------------------------------------------
+
     @database_sync_to_async
     def user_in_room(self):
         from apps.messaging.models import ChatRoom
-        return ChatRoom.objects.filter(id=self.room_id, members=self.user).exists()
+        return ChatRoom.objects.filter(
+            id=self.room_id,
+            members=self.user
+        ).exists()
 
     @database_sync_to_async
     def save_and_build_payload(self, user, content, reply_to_id=None):
+        """
+        FULL CORRECT MESSAGE SAVE
+        Uses central serializer for consistency
+        """
         from apps.messaging.models import ChatRoom, ChatMessage, ChatRoomMember
+        from apps.messaging.views import _serialize_chat_message, _save_mentions
 
-        room = ChatRoom.objects.get(id=self.room_id)
+        room = ChatRoom.objects.filter(id=self.room_id).first()
+        if not room:
+            return None
 
+        # ❌ Prevent sending in readonly rooms
+        if room.is_readonly:
+            return None
+
+        # ❌ Must be member
+        if not room.members.filter(id=user.id).exists():
+            return None
+
+        # -------------------------
+        # REPLY
+        # -------------------------
         reply_obj = None
-        reply_sender_name = ''
-        reply_content = ''
-
         if reply_to_id:
             try:
-                reply_obj = ChatMessage.objects.select_related('sender').get(id=reply_to_id, room=room)
-                reply_sender_name = self._safe_full_name(reply_obj.sender)
-                reply_content = (reply_obj.content or '')[:80]
+                reply_obj = ChatMessage.objects.select_related('sender').get(
+                    id=reply_to_id,
+                    room=room,
+                    is_deleted=False
+                )
             except ChatMessage.DoesNotExist:
                 reply_obj = None
 
+        # -------------------------
+        # CREATE MESSAGE
+        # -------------------------
         msg = ChatMessage.objects.create(
             room=room,
             sender=user,
@@ -116,33 +170,33 @@ class ChatConsumer(AsyncWebsocketConsumer):
             reply_to=reply_obj,
         )
 
+        # -------------------------
+        # SAVE MENTIONS (@user)
+        # -------------------------
+        try:
+            _save_mentions(msg)
+        except Exception:
+            pass
+
+        # -------------------------
+        # UPDATE ROOM
+        # -------------------------
         room.updated_at = timezone.now()
         room.save(update_fields=['updated_at'])
 
-        ChatRoomMember.objects.filter(room=room, user=user).update(
-            last_read=timezone.now()
-        )
+        ChatRoomMember.objects.filter(
+            room=room,
+            user=user
+        ).update(last_read=timezone.now())
 
-        return {
-            'type': 'chat_message',
-            'message_id': str(msg.id),
-            'room_id': str(room.id),
-            'sender_id': str(user.id),
-            'sender_name': self._safe_full_name(user),
-            'sender_initials': self._safe_initials(user),
-            'message': msg.content or '',
-            'content': msg.content or '',
-            'message_type': msg.message_type,
-            'timestamp': timezone.localtime(msg.created_at).strftime('%H:%M'),
-            'created_at': timezone.localtime(msg.created_at).isoformat(),
-            'reply_to_id': str(reply_obj.id) if reply_obj else None,
-            'reply_to_sender': reply_sender_name,
-            'reply_to_content': reply_content,
-            'file_url': '',
-            'file_name': '',
-            'file_size': 0,
-            'is_edited': False,
-        }
+        # -------------------------
+        # RETURN FULL SERIALIZED PAYLOAD
+        # -------------------------
+        return _serialize_chat_message(msg, viewer=user)
+
+    # --------------------------------------------------
+    # SAFE DISPLAY HELPERS
+    # --------------------------------------------------
 
     def _safe_full_name(self, user):
         try:

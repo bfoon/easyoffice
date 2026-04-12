@@ -12,6 +12,7 @@ urlpatterns = [
     path('<uuid:pk>/download/',                 views.FileDownloadView.as_view(),               name='file_download'),
     path('<uuid:pk>/preview/',                  views.FilePreviewView.as_view(),                name='file_preview'),
     path('<uuid:pk>/move/',                     views.FileMoveView.as_view(),                   name='file_move'),
+    path('<uuid:pk>/rename/',                   views.FileRenameView.as_view(),                 name='file_rename'),
     path('<uuid:pk>/delete/',                   views.FileDeleteView.as_view(),                 name='file_delete'),
     path('<uuid:pk>/share/',                    views.FileShareView.as_view(),                  name='file_share'),
     path('<uuid:pk>/convert-pdf/',              views.ConvertToPDFView.as_view(),               name='file_convert_pdf'),
@@ -19,10 +20,12 @@ urlpatterns = [
 
     path('folder/create/',                      views.FolderCreateView.as_view(),               name='folder_create'),
     path('folder/<uuid:pk>/delete/',            views.FolderDeleteView.as_view(),               name='folder_delete'),
+    path('folder/<uuid:pk>/rename/',            views.FolderRenameView.as_view(),               name='folder_rename'),
     path('folder/<uuid:pk>/share/',             views.FolderShareView.as_view(),                name='folder_share'),
     path('recycle-bin/', views.RecycleBinView.as_view(), name='recycle_bin'),
     path('recycle-bin/<int:pk>/restore/', views.RestoreTrashItemView.as_view(), name='restore_trash_item'),
     path('history/<uuid:pk>/', views.FileHistoryView.as_view(), name='file_history'),
+    path('folder/<uuid:pk>/move/', views.FolderMoveView.as_view(), name='folder_move'),
 
     path('signatures/new/',                     views.SignatureRequestCreateView.as_view(),     name='signature_request_new'),
     path('signatures/<uuid:pk>/',               views.SignatureRequestDetailView.as_view(),     name='signature_request_detail'),
@@ -41,6 +44,7 @@ urlpatterns = [
     path('pdf-tools/rotate-pages/<uuid:pk>/',  views.PDFRotatePagesView.as_view(),     name='pdf_rotate_pages'),
     path('pdf-tools/split/<uuid:pk>/',         views.PDFSplitView.as_view(),           name='pdf_split'),
     path('pdf-tools/merge-images/',            views.PDFMergeImagesView.as_view(),     name='pdf_merge_images'),
+    path('tools/zip-extract/', views.ZipExtractView.as_view(), name='zip_extract'),
 
     path('quick-sign/',          views.QuickSignView.as_view(),  name='quick_sign'),
     path('quick-sign/<uuid:pk>/', views.QuickSignView.as_view(), name='quick_sign_file'),

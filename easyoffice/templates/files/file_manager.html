@@ -511,6 +511,30 @@
   background: #111827;
 }
 
+.fm-drop-target.drop-active {
+  outline: 2px dashed var(--eo-accent);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+.fm-draggable.dragging-item {
+  opacity: .55;
+}
+
+.fm-drop-root {
+  border: 1px dashed var(--eo-border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background: var(--eo-bg);
+  transition: border-color .12s, background .12s;
+}
+
+.fm-drop-root.drop-active {
+  border-color: var(--eo-accent);
+  background: color-mix(in srgb, var(--eo-accent) 8%, white);
+}
+
 /* Spinner animation used by loaders */
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>
@@ -628,6 +652,10 @@
       <a href="{% url 'pdf_to_word' %}"
          class="fm-nav-item {% if request.resolver_match.url_name in 'pdf_to_word,pdf_to_image' %}active{% endif %}">
         <i class="bi bi-arrow-left-right" style="color:#2563eb"></i> PDF Converter
+      </a>
+      <a href="{% url 'zip_extract' %}"
+         class="fm-nav-item {% if request.resolver_match.url_name == 'zip_extract' %}active{% endif %}">
+        <i class="bi bi-file-earmark-zip" style="color:#d97706"></i> ZIP Extractor
       </a>
     </div>
 
@@ -802,6 +830,16 @@
       </div>
       {% else %}
 
+      <div class="fm-drop-root" id="rootDropZone" data-drop-folder-id="">
+        <div style="display:flex;align-items:center;gap:10px">
+          <i class="bi bi-hdd" style="font-size:1.1rem;color:var(--eo-accent)"></i>
+          <div>
+            <div style="font-weight:700;color:var(--eo-text);font-size:.86rem">Quick move to My Drive</div>
+            <div style="font-size:.74rem;color:var(--eo-text-muted)">Drag a file or folder here to move it to root</div>
+          </div>
+        </div>
+      </div>
+
       <!-- ─── GRID VIEW ─── -->
       <div id="viewGrid">
 
@@ -822,8 +860,14 @@
           {% endif %}
           {% endwith %}
           {% endif %}
-          <div style="position:relative">
-            <a href="?folder={{ folder.id }}" class="fm-folder-card" style="border-left:4px solid {{ folder.color }}">
+          <div style="position:relative"
+             class="fm-draggable fm-drop-target"
+             draggable="true"
+             data-item-type="folder"
+             data-item-id="{{ folder.id }}"
+             data-drop-folder-id="{{ folder.id }}"
+             data-folder-name="{{ folder.name|escapejs }}">
+            <a href="?folder={{ folder.id }}" class="fm-folder-card" draggable="false" style="border-left:4px solid {{ folder.color }}">
               <i class="bi bi-folder-fill fm-card-icon" style="color:{{ folder.color }}"></i>
               <div class="fm-card-name">{{ folder.name|truncatechars:40 }}</div>
               <div class="fm-card-meta">
@@ -841,9 +885,28 @@
                 <i class="bi bi-pin-angle{% if folder.is_pinned %}-fill{% endif %}"></i>
               </button>
               {% if folder.user_permission == 'edit' or folder.user_permission == 'full' %}
-              <button class="fm-action-btn {% if folder.visibility != 'private' %}shared-active{% endif %}" title="Share"
-                      onclick="event.preventDefault();openShareModal('{{ folder.id }}','{{ folder.name|escapejs }}','{{ folder.visibility }}','folder',[],[],[],{},'{{ folder.user_permission }}')">
+              <button class="fm-action-btn {% if folder.visibility != 'private' %}shared-active{% endif %}" title="Share" onclick="event.preventDefault();openShareModal(
+                    '{{ folder.id }}',
+                    '{{ folder.name|escapejs }}',
+                    '{{ folder.visibility }}',
+                    'folder',
+                    {{ folder.shared_user_ids|default:'[]' }},
+                    '{{ folder.unit_id|default:'' }}',
+                    '{{ folder.department_id|default:'' }}',
+                    {{ folder.share_access_data|default:'{}' }},
+                    '{{ folder.user_permission }}',
+                    {
+                      shareChildren: {{ folder.share_children|yesno:"true,false" }},
+                      inheritParentSharing: {{ folder.inherit_parent_sharing|yesno:"true,false" }}
+                    }
+                  )">
                 <i class="bi bi-share"></i>
+              </button>
+              {% endif %}
+              {% if folder.user_permission == 'edit' or folder.user_permission == 'full' %}
+              <button class="fm-action-btn" title="Rename"
+                      onclick="event.preventDefault();openRenameModal('folder','{{ folder.id }}','{{ folder.name|escapejs }}')">
+                <i class="bi bi-pencil"></i>
               </button>
               {% endif %}
               {% if folder.user_permission == 'full' %}
@@ -866,8 +929,13 @@
         {% if folders %}<div style="font-size:.75rem;font-weight:700;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Files</div>{% endif %}
         <div class="fm-grid">
           {% for file in files %}
-          <div style="position:relative">
-            <a href="{% url 'file_download' file.pk %}" class="fm-file-card" title="{{ file.name }}">
+          <div style="position:relative"
+             class="fm-draggable"
+             draggable="true"
+             data-item-type="file"
+             data-item-id="{{ file.id }}"
+             data-file-name="{{ file.name|escapejs }}">
+            <a href="{% url 'file_download' file.pk %}" class="fm-file-card" draggable="false" title="{{ file.name }}">
               <span class="fm-vis-badge vis-{{ file.visibility }}">{{ file.get_visibility_display }}</span>
               <i class="bi {{ file.icon_class }} fm-card-icon" style="color:{{ file.icon_color }};margin-top:18px"></i>
               <div class="fm-card-name">{{ file.name|truncatechars:40 }}</div>
@@ -893,7 +961,20 @@
               {% if file.user_permission == 'edit' or file.user_permission == 'full' %}
               {# ── edit + full: share, move, history, convert, signature ── #}
               <button class="fm-action-btn {% if file.visibility != 'private' %}shared-active{% endif %}" title="Share"
-                      onclick="event.preventDefault();openShareModal('{{ file.id }}','{{ file.name|escapejs }}','{{ file.visibility }}','file',{{ file.shared_user_ids|default:'[]' }},'','',{{ file.share_access_data|default:'{}' }},'{{ file.user_permission }}')">
+                      onclick="event.preventDefault();openShareModal(
+                        '{{ file.id }}',
+                        '{{ file.name|escapejs }}',
+                        '{{ file.visibility }}',
+                        'file',
+                        {{ file.shared_user_ids|default:'[]' }},
+                        '{{ file.unit_id|default:'' }}',
+                        '{{ file.department_id|default:'' }}',
+                        {{ file.share_access_data|default:'{}' }},
+                        '{{ file.user_permission }}',
+                        {
+                          inheritFolderSharing: {{ file.inherit_folder_sharing|yesno:"true,false" }}
+                        }
+                      )">
                 <i class="bi bi-share"></i>
               </button>
               <button class="fm-action-btn" title="Move to folder"
@@ -916,6 +997,12 @@
                  class="fm-action-btn" title="Send for Signature" style="color:#8b5cf6">
                 <i class="bi bi-pen"></i>
               </a>
+              {% endif %}
+              {% if file.user_permission == 'edit' or file.user_permission == 'full' %}
+              <button class="fm-action-btn" title="Rename"
+                      onclick="event.preventDefault();openRenameModal('file','{{ file.id }}','{{ file.name|escapejs }}')">
+                <i class="bi bi-pencil"></i>
+              </button>
               {% endif %}
               {% if file.user_permission == 'full' %}
               {# ── full only: delete ── #}
@@ -1009,8 +1096,28 @@
                   </button>
                   {% if folder.user_permission == 'edit' or folder.user_permission == 'full' %}
                   <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon {% if folder.visibility != 'private' %}shared-active-list{% endif %}" title="Share"
-                          onclick="openShareModal('{{ folder.id }}','{{ folder.name|escapejs }}','{{ folder.visibility }}','folder',[],[],[],{},'{{ folder.user_permission }}')">
+                          onclick="openShareModal(
+                          '{{ folder.id }}',
+                          '{{ folder.name|escapejs }}',
+                          '{{ folder.visibility }}',
+                          'folder',
+                          {{ folder.shared_user_ids|default:'[]' }},
+                          '{{ folder.unit_id|default:'' }}',
+                          '{{ folder.department_id|default:'' }}',
+                          {{ folder.share_access_data|default:'{}' }},
+                          '{{ folder.user_permission }}',
+                          {
+                            shareChildren: {{ folder.share_children|yesno:"true,false" }},
+                            inheritParentSharing: {{ folder.inherit_parent_sharing|yesno:"true,false" }}
+                          }
+                        )">
                     <i class="bi bi-share"></i>
+                  </button>
+                  {% endif %}
+                  {% if folder.user_permission == 'edit' or folder.user_permission == 'full' %}
+                  <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Rename"
+                          onclick="openRenameModal('folder','{{ folder.id }}','{{ folder.name|escapejs }}')">
+                    <i class="bi bi-pencil"></i>
                   </button>
                   {% endif %}
                   {% if folder.user_permission == 'full' %}
@@ -1069,6 +1176,12 @@
                             onclick="togglePin('file','{{ file.id }}',this)">
                       <i class="bi bi-pin-angle{% if file.is_pinned %}-fill{% endif %}"></i>
                     </button>
+                    {% if file.user_permission == 'edit' or file.user_permission == 'full' %}
+                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Rename"
+                            onclick="openRenameModal('file','{{ file.id }}','{{ file.name|escapejs }}')">
+                      <i class="bi bi-pencil"></i>
+                    </button>
+                    {% endif %}
                     {# Preview — always #}
                     <button class="fm-action-btn" title="Preview"
                            onclick="event.preventDefault(); openPreviewModal('{{ file.id }}', '{{ file.name|escapejs }}', '{{ file.extension|default:'' }}')">
@@ -1140,25 +1253,36 @@
      MOVE FILE MODAL
 ══════════════════════════════════ -->
 <div class="fm-modal-backdrop" id="moveModal">
-  <div class="fm-modal" style="width:420px">
+  <div class="fm-modal" style="width:420px;max-width:96vw">
     <div class="fm-modal-head">
       <div>
         <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">
-          <i class="bi bi-folder-symlink me-2" style="color:var(--eo-accent)"></i>Move File
+          <i class="bi bi-folder-symlink me-2" style="color:var(--eo-accent)"></i>
+          Move File
         </div>
         <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px" id="moveModalFileName"></div>
       </div>
-      <button onclick="closeModal('moveModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+
+      <button type="button"
+              onclick="closeModal('moveModal')"
+              class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
         <i class="bi bi-x-lg"></i>
       </button>
     </div>
+
     <div class="fm-modal-body" style="padding-top:12px">
       <div style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--eo-text-muted);margin-bottom:10px">
         Select destination
       </div>
-      <div style="display:flex;flex-direction:column;gap:4px;max-height:340px;overflow-y:auto" id="moveFolderList">
+
+      <div id="moveFolderList"
+           style="display:flex;flex-direction:column;gap:4px;max-height:340px;overflow-y:auto">
+
         <!-- Root -->
-        <button type="button" class="move-folder-opt" data-folder-id="" data-folder-name="My Drive"
+        <button type="button"
+                class="move-folder-opt"
+                data-folder-id=""
+                data-folder-name="My Drive"
                 onclick="selectMoveFolder(this)"
                 style="display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:9px;border:2px solid var(--eo-border);background:var(--eo-bg);cursor:pointer;text-align:left;width:100%;transition:border-color .12s,background .12s">
           <i class="bi bi-hdd" style="font-size:1.3rem;color:var(--eo-accent);flex-shrink:0"></i>
@@ -1167,35 +1291,53 @@
             <div style="font-size:.74rem;color:var(--eo-text-muted)">Root — no folder</div>
           </div>
         </button>
+
         <!-- All folders -->
         {% for folder in all_folders %}
-        <button type="button" class="move-folder-opt"
-                data-folder-id="{{ folder.id }}" data-folder-name="{{ folder.name|escapejs }}"
+        <button type="button"
+                class="move-folder-opt"
+                data-folder-id="{{ folder.id }}"
+                data-folder-name="{{ folder.name|escapejs }}"
                 onclick="selectMoveFolder(this)"
                 style="display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:9px;border:2px solid var(--eo-border);background:var(--eo-bg);cursor:pointer;text-align:left;width:100%;transition:border-color .12s,background .12s">
           <i class="bi bi-folder-fill" style="font-size:1.3rem;color:{{ folder.color }};flex-shrink:0"></i>
+
           <div style="min-width:0">
-            <div style="font-size:.9rem;font-weight:700;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ folder.name }}</div>
-            <div style="font-size:.74rem;color:var(--eo-text-muted)">{{ folder.file_count }} file{{ folder.file_count|pluralize }} · {{ folder.get_visibility_display }}</div>
+            <div style="font-size:.9rem;font-weight:700;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              {{ folder.name }}
+            </div>
+            <div style="font-size:.74rem;color:var(--eo-text-muted)">
+              {{ folder.file_count }} file{{ folder.file_count|pluralize }} · {{ folder.get_visibility_display }}
+            </div>
           </div>
         </button>
         {% empty %}
         <div style="padding:24px;text-align:center;color:var(--eo-text-muted);font-size:.84rem">
           <i class="bi bi-folder-x" style="font-size:1.8rem;display:block;margin-bottom:8px;opacity:.4"></i>
           No folders yet —
-          <button onclick="closeModal('moveModal');openModal('newFolderModal')"
+          <button type="button"
+                  onclick="closeModal('moveModal');openModal('newFolderModal')"
                   style="background:none;border:none;color:var(--eo-accent);cursor:pointer;font-weight:600;padding:0">
             create one first
           </button>
         </div>
         {% endfor %}
       </div>
-      <div style="display:flex;gap:8px;margin-top:16px">
-        <button type="button" id="moveConfirmBtn" class="eo-btn eo-btn-primary flex-grow-1"
-                onclick="confirmMove()" disabled>
-          <i class="bi bi-folder-symlink"></i> Move Here
+
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+        <button type="button"
+                onclick="closeModal('moveModal')"
+                class="eo-btn eo-btn-secondary">
+          Cancel
         </button>
-        <button type="button" onclick="closeModal('moveModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+
+        <button type="button"
+                id="moveConfirmBtn"
+                class="eo-btn eo-btn-primary"
+                onclick="confirmMove()"
+                disabled>
+          <i class="bi bi-check2"></i> Move Here
+        </button>
       </div>
     </div>
   </div>
@@ -1387,6 +1529,25 @@
             <div id="yourPermDesc"  style="font-size:.74rem;color:var(--eo-text-muted);margin-top:1px"></div>
           </div>
           <span id="yourPermBadge" style="font-size:.72rem;font-weight:700;padding:3px 10px;border-radius:12px;flex-shrink:0"></span>
+        </div>
+
+        <div id="folderShareOptions" style="display:none;margin-top:14px">
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+            <input type="checkbox" name="share_children" value="1" id="shareChildrenChk">
+            <span>Apply sharing to files and subfolders inside this folder</span>
+          </label>
+
+          <label style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" name="inherit_parent_sharing" value="1" id="inheritParentSharingChk" checked>
+            <span>This folder can inherit sharing from its parent</span>
+          </label>
+        </div>
+
+        <div id="fileShareOptions" style="display:none;margin-top:14px">
+          <label style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" name="inherit_folder_sharing" value="1" id="inheritFolderSharingChk" checked>
+            <span>This file inherits sharing from its parent folder</span>
+          </label>
         </div>
 
         <div class="eo-form-group">
@@ -1602,8 +1763,190 @@
     </div>
   </div>
 </div>
+
+<div class="fm-modal-backdrop" id="renameModal">
+  <div class="fm-modal" style="width:420px">
+    <div class="fm-modal-head">
+      <div>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">
+          <i class="bi bi-pencil-square me-2" style="color:var(--eo-accent)"></i>
+          Rename
+        </div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px" id="renameModalSubtext"></div>
+      </div>
+      <button type="button" onclick="closeModal('renameModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+
+    <form method="post" id="renameForm">
+      {% csrf_token %}
+      <div class="fm-modal-body">
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <div class="mb-3">
+          <label class="form-label">New name</label>
+          <input type="text" name="name" id="renameInput" class="form-control" required>
+        </div>
+
+        <div class="d-flex justify-content-end gap-2">
+          <button type="button" class="eo-btn eo-btn-secondary" onclick="closeModal('renameModal')">
+            Cancel
+          </button>
+          <button type="submit" class="eo-btn eo-btn-primary">
+            <i class="bi bi-check2"></i> Save
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
 {% endblock %}
 {% block extra_js %}
+
+<script>
+(function () {
+  let dragItemType = null;
+  let dragItemId = null;
+
+  function getCsrfToken() {
+    const match = document.cookie.match(/(^|;)\s*csrftoken=([^;]*)/);
+    return match ? match[2] : '';
+  }
+
+  function setDropState(el, active) {
+    if (!el) return;
+    if (active) {
+      el.classList.add('drop-active');
+    } else {
+      el.classList.remove('drop-active');
+    }
+  }
+
+  function attachDragHandlers() {
+    document.querySelectorAll('.fm-draggable').forEach(function (el) {
+      el.setAttribute('draggable', 'true');
+
+      el.addEventListener('dragstart', function (e) {
+        dragItemType = el.dataset.itemType;
+        dragItemId = el.dataset.itemId;
+
+        if (!dragItemType || !dragItemId) return;
+
+        el.classList.add('dragging-item');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', JSON.stringify({
+          itemType: dragItemType,
+          itemId: dragItemId
+        }));
+      });
+
+      el.addEventListener('dragend', function () {
+        el.classList.remove('dragging-item');
+        document.querySelectorAll('[data-drop-folder-id]').forEach(function (dropEl) {
+          setDropState(dropEl, false);
+        });
+      });
+    });
+
+    document.querySelectorAll('[data-drop-folder-id]').forEach(function (el) {
+      el.addEventListener('dragenter', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        setDropState(el, true);
+      });
+
+      el.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'move';
+        setDropState(el, true);
+      });
+
+      el.addEventListener('dragleave', function (e) {
+        if (!el.contains(e.relatedTarget)) {
+          setDropState(el, false);
+        }
+      });
+
+      el.addEventListener('drop', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        setDropState(el, false);
+
+        let raw = e.dataTransfer.getData('text/plain');
+        if (!raw) return;
+
+        let payload;
+        try {
+          payload = JSON.parse(raw);
+        } catch (err) {
+          console.error('Invalid drag payload', err);
+          return;
+        }
+
+        const targetFolderId = el.dataset.dropFolderId || '';
+        quickMoveItem(payload.itemType, payload.itemId, targetFolderId);
+      });
+    });
+  }
+
+  function quickMoveItem(itemType, itemId, targetFolderId) {
+    let url = '';
+    const formData = new FormData();
+
+    if (itemType === 'file') {
+      url = '/files/' + itemId + '/move/';
+      formData.append('folder_id', targetFolderId || '');
+    } else if (itemType === 'folder') {
+      url = '/files/folder/' + itemId + '/move/';
+      formData.append('parent_id', targetFolderId || '');
+    } else {
+      return;
+    }
+
+    fetch(url, {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': getCsrfToken(),
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: formData
+    })
+      .then(function (res) {
+        return res.json();
+      })
+      .then(function (data) {
+        if (data.status === 'ok') {
+          if (typeof fmToast === 'function') {
+            fmToast(data.message || 'Moved successfully.', 'success');
+          }
+          window.location.reload();
+        } else {
+          if (typeof fmToast === 'function') {
+            fmToast(data.message || 'Move failed.', 'error');
+          } else {
+            alert(data.message || 'Move failed.');
+          }
+        }
+      })
+      .catch(function (err) {
+        console.error('Drag move failed:', err);
+        if (typeof fmToast === 'function') {
+          fmToast('Move request failed.', 'error');
+        } else {
+          alert('Move request failed.');
+        }
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', attachDragHandlers);
+  } else {
+    attachDragHandlers();
+  }
+})();
+</script>
 <script>
 /* ─────────────────────────────────────────────
    Helpers
@@ -1879,7 +2222,12 @@ function stopSharingNow() {
   countSelected();
 }
 
-function openShareModal(id, name, currentVisibility, type, sharedIds, unitId, deptId, permissions, viewerPermission) {
+function openShareModal(id, name, currentVisibility, type, sharedIds, unitId, deptId, permissions, viewerPermission, opts) {
+  opts = opts || {};
+  var shareChildren = !!opts.shareChildren;
+  var inheritParentSharing = opts.inheritParentSharing !== false;
+  var inheritFolderSharing = opts.inheritFolderSharing !== false;
+
   type = type || 'file';
   sharedIds = Array.isArray(sharedIds) ? sharedIds : [];
   unitId = unitId || '';
@@ -1899,6 +2247,13 @@ function openShareModal(id, name, currentVisibility, type, sharedIds, unitId, de
       ? 'Who can access this folder?'
       : 'Who can access this file?';
   }
+
+  if ($('folderShareOptions')) $('folderShareOptions').style.display = isFolder ? '' : 'none';
+  if ($('fileShareOptions')) $('fileShareOptions').style.display = isFolder ? 'none' : '';
+
+  if ($('shareChildrenChk')) $('shareChildrenChk').checked = shareChildren;
+  if ($('inheritParentSharingChk')) $('inheritParentSharingChk').checked = inheritParentSharing;
+  if ($('inheritFolderSharingChk')) $('inheritFolderSharingChk').checked = inheritFolderSharing;
 
   // ── Your Permission banner ──────────────────────────────────────────────
   var banner = $('yourPermBanner');
@@ -2014,7 +2369,30 @@ function openShareModal(id, name, currentVisibility, type, sharedIds, unitId, de
    Move modal
 ───────────────────────────────────────────── */
 let currentMoveFileId = null;
-let selectedMoveFolderId = null;
+let selectedMoveFolderId = '';
+
+function $(id) {
+  return document.getElementById(id);
+}
+
+function getCsrfToken() {
+  const match = document.cookie.match(/(^|;)\s*csrftoken=([^;]+)/);
+  return match ? match[2] : '';
+}
+
+function openModal(id) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeModal(id) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.remove('open');
+  document.body.style.overflow = '';
+}
 
 function openMoveModal(fileId, fileName) {
   currentMoveFileId = fileId;
@@ -2040,10 +2418,18 @@ function selectMoveFolder(el) {
   });
 
   el.style.borderColor = 'var(--eo-accent)';
-  el.style.background = 'rgba(59,130,246,.08)';
+  el.style.background = 'color-mix(in srgb, var(--eo-accent) 8%, white)';
 
   if ($('moveConfirmBtn')) $('moveConfirmBtn').disabled = false;
 }
+
+// close modal when clicking backdrop
+document.addEventListener('click', function(e) {
+  const moveModal = $('moveModal');
+  if (moveModal && e.target === moveModal) {
+    closeModal('moveModal');
+  }
+});
 
 function fmToast(msg, type) {
   var old = $('fmToast');
@@ -2152,6 +2538,7 @@ function openPreviewModal(fileId, fileName, extension) {
   const ext = (extension || '').toLowerCase();
   const previewUrl = '/files/' + fileId + '/preview/';
 
+  // PDF
   if (ext === 'pdf') {
     content.innerHTML = `
       <object class="preview-frame" data="${previewUrl}" type="application/pdf">
@@ -2171,6 +2558,15 @@ function openPreviewModal(fileId, fileName, extension) {
     return;
   }
 
+  // ZIP
+  if (ext === 'zip') {
+    content.innerHTML = `<iframe class="preview-frame" src="${previewUrl}"></iframe>`;
+    loading.style.display = 'none';
+    content.style.display = 'block';
+    return;
+  }
+
+  // Office docs
   const officeExts = ['doc', 'docx', 'odt', 'rtf', 'xls', 'xlsx', 'ods', 'ppt', 'pptx', 'odp'];
   if (officeExts.includes(ext)) {
     loading.innerHTML = `
@@ -2213,6 +2609,7 @@ function openPreviewModal(fileId, fileName, extension) {
     return;
   }
 
+  // Images
   if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) {
     content.innerHTML = `<img class="preview-image" src="${previewUrl}" alt="">`;
     loading.style.display = 'none';
@@ -2220,6 +2617,7 @@ function openPreviewModal(fileId, fileName, extension) {
     return;
   }
 
+  // Video
   if (['mp4', 'webm', 'ogg', 'mov'].includes(ext)) {
     content.innerHTML = `
       <video class="preview-video" controls>
@@ -2232,6 +2630,7 @@ function openPreviewModal(fileId, fileName, extension) {
     return;
   }
 
+  // Audio
   if (['mp3', 'wav', 'm4a', 'ogg'].includes(ext)) {
     content.innerHTML = `
       <div class="preview-audio">
@@ -2246,7 +2645,8 @@ function openPreviewModal(fileId, fileName, extension) {
     return;
   }
 
-  if (['txt', 'md', 'py', 'js', 'html', 'css', 'json', 'xml', 'sql', 'csv'].includes(ext)) {
+  // Text/code
+  if (['txt', 'md', 'py', 'js', 'html', 'css', 'json', 'xml', 'sql', 'csv', 'yml', 'yaml', 'ini', 'log'].includes(ext)) {
     fetch(previewUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
       .then(function(res) { return res.text(); })
       .then(function(text) {
@@ -2323,6 +2723,30 @@ function togglePin(type, id, btn) {
       setTimeout(function() { window.location.reload(); }, 800);
     })
     .catch(function() { fmToast('Failed to update pin', 'error'); });
+}
+
+function openRenameModal(type, id, currentName) {
+  const form = document.getElementById('renameForm');
+  const input = document.getElementById('renameInput');
+  const subtext = document.getElementById('renameModalSubtext');
+
+  if (!form || !input) return;
+
+  if (type === 'file') {
+    form.action = `/files/${id}/rename/`;
+    subtext.textContent = 'Rename file';
+  } else {
+    form.action = `/files/folder/${id}/rename/`;
+    subtext.textContent = 'Rename folder';
+  }
+
+  input.value = currentName || '';
+  openModal('renameModal');
+
+  setTimeout(function() {
+    input.focus();
+    input.select();
+  }, 80);
 }
 </script>
 {% endblock %}

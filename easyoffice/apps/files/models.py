@@ -21,6 +21,14 @@ class FileFolder(models.Model):
     visibility = models.CharField(max_length=20, choices=Visibility.choices, default=Visibility.PRIVATE)
     unit       = models.ForeignKey('organization.Unit', on_delete=models.SET_NULL, null=True, blank=True)
     department = models.ForeignKey('organization.Department', on_delete=models.SET_NULL, null=True, blank=True)
+    share_children = models.BooleanField(
+        default=False,
+        help_text='If true, this folder share also applies to files/subfolders inside it.'
+    )
+    inherit_parent_sharing = models.BooleanField(
+        default=True,
+        help_text='If false, this folder will not inherit sharing from parent folders.'
+    )
     color      = models.CharField(max_length=7, default='#f59e0b')
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -132,6 +140,10 @@ class SharedFile(models.Model):
     previous_version = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True)
     # SHA-256 hash for tamper detection
     file_hash        = models.CharField(max_length=64, blank=True)
+    inherit_folder_sharing = models.BooleanField(
+        default=True,
+        help_text='If false, this file ignores inherited sharing from parent folders.'
+    )
     created_at       = models.DateTimeField(auto_now_add=True)
     updated_at       = models.DateTimeField(auto_now=True)
 
@@ -145,6 +157,10 @@ class SharedFile(models.Model):
     def extension(self):
         _, ext = os.path.splitext(self.name)
         return ext.lower().lstrip('.')
+
+    @property
+    def is_zip(self):
+        return self.extension == 'zip'
 
     @property
     def icon_class(self):

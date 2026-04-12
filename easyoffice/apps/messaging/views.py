@@ -1,3 +1,5 @@
+import json
+import os
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import TemplateView, View
 from django.shortcuts import render, redirect, get_object_or_404
@@ -7,74 +9,154 @@ from django.http import HttpResponseForbidden, JsonResponse
 from django.utils import timezone
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
-import os
+from spellchecker import SpellChecker
+
 from django.core.files.base import ContentFile
 
 from apps.messaging.models import (
-    ChatRoom,
-    ChatRoomMember,
-    ChatMessage,
-    ChatRoomFile,
-    ChatPoll,
-    ChatPollOption,
-    ChatPollVote,
+    ChatRoom, ChatRoomMember, ChatMessage, ChatRoomFile,
+    ChatPoll, ChatPollOption, ChatPollVote, ChatMessageMention,
 )
 from apps.core.models import User
-from apps.projects.models import Project
-
+from apps.projects.models import Project, TrackingSheet, TrackingRow, TrackingSheetAccess
+from apps.tasks.models import Task
+from apps.files.models import SharedFile, FileShareAccess
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
 def _sidebar_rooms(user):
-    """Return rooms for the sidebar with unread counts and last message."""
+    """
+    Return rooms for the sidebar with unread counts and last message.
+    """
     all_rooms = (
         ChatRoom.objects.filter(members=user, is_archived=False)
-        .select_related('created_by')
+        .select_related('created_by', 'project')
         .prefetch_related('chatroommember_set')
         .order_by('-updated_at')
     )
+
     rooms_with_meta = []
     for room in all_rooms:
         try:
             membership = room.chatroommember_set.get(user=user)
-            last_read  = membership.last_read
+            last_read = membership.last_read
         except ChatRoomMember.DoesNotExist:
             last_read = None
 
-        unread = room.messages.filter(is_deleted=False).exclude(sender=user)
+        unread_qs = room.messages.filter(is_deleted=False).exclude(sender=user)
         if last_read:
-            unread = unread.filter(created_at__gt=last_read)
-        unread_count = unread.count()
+            unread_qs = unread_qs.filter(created_at__gt=last_read)
 
-        last_msg = room.messages.filter(is_deleted=False).order_by('-created_at').first()
+        last_msg = (
+            room.messages.filter(is_deleted=False)
+            .select_related('sender', 'reply_to', 'reply_to__sender', 'linked_file', 'poll')
+            .order_by('-created_at')
+            .first()
+        )
 
         rooms_with_meta.append({
-            'room':         room,
-            'unread':       unread_count,
+            'room': room,
+            'unread': unread_qs.count(),
             'last_message': last_msg,
         })
     return rooms_with_meta
 
 
-def _can_manage_room(user, room):
+def _get_project_manager(project):
+    """
+    Safely find the project manager-like field across possible project schemas.
+    """
+    for attr in ['project_manager', 'manager', 'created_by', 'owner', 'team_lead']:
+        try:
+            value = getattr(project, attr, None)
+            if value:
+                return value
+        except Exception:
+            pass
+    return None
+
+
+def _user_can_link_project_room(user, project):
+    """
+    Determines whether a user can manage/link a project room.
+    """
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+
     if user.is_superuser:
         return True
-    if room.created_by_id == user.id:
+
+    pm = _get_project_manager(project)
+    if pm and getattr(pm, 'id', None) == user.id:
         return True
-    if room.room_type == ChatRoom.RoomType.PROJECT and room.project_id:
-        return _user_can_link_project_room(user, room.project)
+
+    try:
+        if hasattr(project, 'team_members') and project.team_members.filter(id=user.id).exists():
+            return True
+    except Exception:
+        pass
+
     return False
 
 
+def _can_manage_room(user, room):
+    """
+    Room managers:
+    - superuser
+    - room creator
+    - project manager/team members for project rooms
+    """
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+
+    if user.is_superuser:
+        return True
+
+    if room.created_by_id == user.id:
+        return True
+
+    if room.room_type == ChatRoom.RoomType.PROJECT and room.project_id:
+        return _user_can_link_project_room(user, room.project)
+
+    return False
+
+def _room_project_or_403(room):
+    """
+    Return the project linked to a room, or raise PermissionError if the room
+    is not a valid project room.
+
+    Used by chat command actions like:
+    - create_tracker
+    - add_tracker_row
+    - grant_tracker_access
+    """
+    if not room:
+        raise PermissionError('Room not found.')
+
+    if room.room_type != ChatRoom.RoomType.PROJECT:
+        raise PermissionError('This action is only available in project rooms.')
+
+    if not room.project_id or not getattr(room, 'project', None):
+        raise PermissionError('This project room is not linked to a project.')
+
+    return room.project
+
 def _can_post_in_room(user, room):
+    """
+    Posting is blocked for readonly rooms and for non-members.
+    """
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
     if room.is_readonly:
         return False
     return room.members.filter(id=user.id).exists()
 
 
 def _safe_full_name(user):
+    if not user:
+        return 'System'
     try:
         return user.full_name or user.get_full_name() or user.username
     except Exception:
@@ -82,11 +164,14 @@ def _safe_full_name(user):
 
 
 def _safe_initials(user):
+    if not user:
+        return 'SY'
     try:
         if getattr(user, 'initials', None):
             return user.initials
     except Exception:
         pass
+
     name = _safe_full_name(user).strip()
     if not name:
         return '?'
@@ -104,6 +189,7 @@ def _get_msg_file_url(msg):
             return msg.file.url
         except Exception:
             pass
+
     if getattr(msg, 'linked_file_id', None):
         try:
             lf = msg.linked_file
@@ -111,12 +197,14 @@ def _get_msg_file_url(msg):
                 return lf.file.url
         except Exception:
             pass
+
     return ''
 
 
 def _get_msg_file_name(msg):
-    if msg.file_name:
+    if getattr(msg, 'file_name', None):
         return msg.file_name
+
     if getattr(msg, 'linked_file_id', None):
         try:
             lf = msg.linked_file
@@ -124,12 +212,14 @@ def _get_msg_file_name(msg):
                 return lf.name
         except Exception:
             pass
+
     return ''
 
 
 def _get_msg_file_size(msg):
-    if msg.file_size:
+    if getattr(msg, 'file_size', None):
         return msg.file_size
+
     if getattr(msg, 'linked_file_id', None):
         try:
             lf = msg.linked_file
@@ -137,23 +227,39 @@ def _get_msg_file_size(msg):
                 return lf.file_size
         except Exception:
             pass
+
     return 0
 
 
 def _reaction_summary(reactions):
+    """
+    Convert stored reactions to {emoji: count}.
+    Stored data may be:
+    - {'👍': ['user1', 'user2']}
+    - {'👍': 2}
+    """
     out = {}
     for emoji, users in (reactions or {}).items():
         if isinstance(users, list):
             out[emoji] = len(users)
         elif isinstance(users, int):
             out[emoji] = users
+        else:
+            out[emoji] = 0
     return out
 
 
 def _toggle_reaction_on_message(message, user, emoji):
-    reactions   = message.reactions or {}
-    user_id     = str(user.id)
+    """
+    Toggle reaction membership for a user and return both raw and summary.
+    """
+    reactions = message.reactions or {}
+    user_id = str(user.id)
+
     emoji_users = reactions.get(emoji, [])
+    if not isinstance(emoji_users, list):
+        emoji_users = []
+
     if user_id in emoji_users:
         emoji_users.remove(user_id)
         if emoji_users:
@@ -163,57 +269,94 @@ def _toggle_reaction_on_message(message, user, emoji):
     else:
         emoji_users.append(user_id)
         reactions[emoji] = emoji_users
+
     message.reactions = reactions
     message.save(update_fields=['reactions'])
-    return reactions
+
+    return reactions, _reaction_summary(reactions)
 
 
-def _serialize_chat_message(msg):
-    file_url  = _get_msg_file_url(msg)
+def _serialize_poll_for_user(poll, user):
+    """
+    Full advanced poll serializer for chat template + JS.
+    """
+    total_votes = poll.votes.count()
+
+    selected_ids = set(
+        poll.votes.filter(user=user).values_list('option_id', flat=True)
+    ) if user and getattr(user, 'is_authenticated', False) else set()
+
+    options = []
+    for opt in poll.options.all():
+        count = opt.votes.count()
+        percent = round((count / total_votes) * 100, 1) if total_votes else 0
+        options.append({
+            'id': str(opt.id),
+            'text': opt.text,
+            'votes': count,
+            'percent': percent,
+            'is_selected': opt.id in selected_ids,
+        })
+
+    is_closed = False
+    try:
+        is_closed = bool(poll.is_effectively_closed)
+    except Exception:
+        is_closed = bool(getattr(poll, 'is_closed', False))
+
+    ends_at = getattr(poll, 'ends_at', None)
+
+    return {
+        'id': str(poll.id),
+        'question': poll.question,
+        'allow_multiple': getattr(poll, 'allow_multiple', False),
+        'is_anonymous': getattr(poll, 'is_anonymous', False),
+        'allow_vote_change': getattr(poll, 'allow_vote_change', True),
+        'is_closed': is_closed,
+        'ends_at': ends_at.isoformat() if ends_at else None,
+        'ends_at_display': timezone.localtime(ends_at).strftime('%b %d, %Y %H:%M') if ends_at else '',
+        'total_votes': total_votes,
+        'can_close': bool(
+            user and getattr(user, 'is_authenticated', False) and (
+                getattr(poll, 'created_by_id', None) == user.id or user.is_superuser
+            )
+        ),
+        'options': options,
+    }
+
+
+def _serialize_chat_message(msg, viewer=None):
+    """
+    Serialize any chat message for realtime and AJAX polling.
+    """
+    file_url = _get_msg_file_url(msg)
     file_name = _get_msg_file_name(msg)
     file_size = _get_msg_file_size(msg)
 
-    if not msg.file_size and getattr(msg, 'linked_file_id', None):
+    file_size_display = ''
+    if file_size:
         try:
-            lf = msg.linked_file
-            file_size_display = lf.size_display if lf else str(file_size)
+            if getattr(msg, 'linked_file_id', None) and getattr(msg, 'linked_file', None):
+                file_size_display = getattr(msg.linked_file, 'size_display', '') or str(file_size)
+            else:
+                file_size_display = str(file_size)
         except Exception:
             file_size_display = str(file_size)
-    else:
-        file_size_display = str(file_size) if file_size else ''
 
-    poll_data = None
-    if getattr(msg, 'message_type', '') == 'poll':
-        try:
-            poll = msg.poll
-            poll_data = {
-                'id': str(poll.id),
-                'question': poll.question,
-                'options': [
-                    {
-                        'id': str(opt.id),
-                        'text': opt.text,
-                        'votes': opt.votes.count(),
-                    }
-                    for opt in poll.options.all().prefetch_related('votes')
-                ],
-            }
-        except Exception:
-            poll_data = None
-
-    return {
-        'type':            'chat_message',
-        'message_id':      str(msg.id),
-        'room_id':         str(msg.room_id),
-        'sender_id':       str(msg.sender_id),
-        'sender_name':     _safe_full_name(msg.sender),
+    payload = {
+        'type': 'chat_message',
+        'message_id': str(msg.id),
+        'id': str(msg.id),
+        'room_id': str(msg.room_id),
+        'sender_id': str(msg.sender_id) if msg.sender_id else '',
+        'sender_name': _safe_full_name(msg.sender),
         'sender_initials': _safe_initials(msg.sender),
-        'message':         msg.content or '',
-        'content':         msg.content or '',
-        'message_type':    msg.message_type,
-        'timestamp':       timezone.localtime(msg.created_at).strftime('%H:%M'),
-        'created_at':      timezone.localtime(msg.created_at).isoformat(),
-        'reply_to_id':     str(msg.reply_to_id) if msg.reply_to_id else None,
+        'message': msg.content or '',
+        'content': msg.content or '',
+        'message_type': msg.message_type,
+        'timestamp': timezone.localtime(msg.created_at).strftime('%H:%M'),
+        'created_at': timezone.localtime(msg.created_at).isoformat(),
+        'reply_to_id': str(msg.reply_to_id) if msg.reply_to_id else None,
         'reply_to_sender': (
             _safe_full_name(msg.reply_to.sender)
             if msg.reply_to_id and msg.reply_to and msg.reply_to.sender else ''
@@ -222,43 +365,62 @@ def _serialize_chat_message(msg):
             msg.reply_to.content[:60]
             if msg.reply_to_id and msg.reply_to and msg.reply_to.content else ''
         ),
-        'file_url':   file_url,
-        'file_name':  file_name,
-        'file_size':  file_size_display,
-        'is_edited':  getattr(msg, 'is_edited', False),
-        'reactions':  _reaction_summary(getattr(msg, 'reactions', {})),
-        'poll':       poll_data,
+        'file_url': file_url,
+        'file_name': file_name,
+        'file_size': file_size_display,
+        'is_edited': getattr(msg, 'is_edited', False),
+        'reactions': _reaction_summary(getattr(msg, 'reactions', {})),
     }
 
+    if getattr(msg, 'poll_id', None) and getattr(msg, 'poll', None) and viewer is not None:
+        payload['poll'] = _serialize_poll_for_user(msg.poll, viewer)
 
-def _broadcast_chat_message(msg):
+    if msg.message_type == 'command':
+        payload['command_payload'] = getattr(msg, 'command_payload', {}) or {}
+
+    return payload
+
+
+def _broadcast_chat_message(msg, viewer=None):
+    """
+    Broadcast a new chat message to the room.
+    """
     try:
         channel_layer = get_channel_layer()
         if channel_layer is None:
             return
-        payload = _serialize_chat_message(msg)
+
+        payload = _serialize_chat_message(msg, viewer=viewer or msg.sender)
+
         async_to_sync(channel_layer.group_send)(
             _room_group_name(msg.room_id),
-            {'type': 'chat.message', 'payload': payload},
+            {
+                'type': 'chat.message',
+                'payload': payload,
+            },
         )
     except Exception:
         pass
 
 
 def _broadcast_reaction(room_id, message_id, summary):
+    """
+    Broadcast reaction summary update.
+    """
     try:
         channel_layer = get_channel_layer()
         if channel_layer is None:
             return
+
         async_to_sync(channel_layer.group_send)(
             _room_group_name(room_id),
             {
                 'type': 'chat.reaction',
                 'payload': {
-                    'type':       'chat_reaction',
-                    'room_id':    str(room_id),
+                    'type': 'chat_reaction',
+                    'room_id': str(room_id),
                     'message_id': str(message_id),
-                    'reactions':  summary,
+                    'reactions': summary,
                 },
             },
         )
@@ -267,18 +429,22 @@ def _broadcast_reaction(room_id, message_id, summary):
 
 
 def _broadcast_typing(room_id, sender):
+    """
+    Broadcast typing state.
+    """
     try:
         channel_layer = get_channel_layer()
         if channel_layer is None:
             return
+
         async_to_sync(channel_layer.group_send)(
             _room_group_name(room_id),
             {
                 'type': 'chat.typing',
                 'payload': {
-                    'type':        'typing',
-                    'room_id':     str(room_id),
-                    'sender_id':   str(sender.id),
+                    'type': 'typing',
+                    'room_id': str(room_id),
+                    'sender_id': str(sender.id),
                     'sender_name': _safe_full_name(sender),
                 },
             }
@@ -287,11 +453,40 @@ def _broadcast_typing(room_id, sender):
         pass
 
 
+def _broadcast_poll_update(poll, actor=None):
+    """
+    Broadcast a full advanced poll payload so the chat UI can redraw compactly.
+    """
+    try:
+        channel_layer = get_channel_layer()
+        if channel_layer is None:
+            return
+
+        actor = actor or poll.created_by or poll.message.sender
+
+        data = {
+            'type': 'poll_update',
+            'poll_id': str(poll.id),
+            'poll': _serialize_poll_for_user(poll, actor),
+        }
+
+        async_to_sync(channel_layer.group_send)(
+            _room_group_name(poll.message.room_id),
+            {
+                'type': 'chat.poll',
+                'payload': data,
+            }
+        )
+    except Exception:
+        pass
+
+
 def _combine_forwarded_text(source_msg, note=''):
     original_sender = _safe_full_name(source_msg.sender)
-    original_text   = (source_msg.content or '').strip()
-    note            = (note or '').strip()
-    header          = f"Forwarded from {original_sender}"
+    original_text = (source_msg.content or '').strip()
+    note = (note or '').strip()
+    header = f"Forwarded from {original_sender}"
+
     if original_text and note:
         return f"{note}\n\n{header}:\n{original_text}"
     if original_text:
@@ -302,13 +497,19 @@ def _combine_forwarded_text(source_msg, note=''):
 
 
 def _copy_chat_file_to_contentfile(msg):
-    src_name   = _get_msg_file_name(msg) or 'attachment'
-    mime_type  = 'application/octet-stream'
+    """
+    Copy a chat attachment or linked file into a ContentFile.
+    Returns: (src_name, content_file, byte_length, mime_type)
+    """
+    from django.core.files.base import ContentFile
+
+    src_name = _get_msg_file_name(msg) or 'attachment'
+    mime_type = 'application/octet-stream'
     file_bytes = b''
 
     if getattr(msg, 'linked_file_id', None) and getattr(msg, 'linked_file', None):
-        lf        = msg.linked_file
-        src_name  = lf.name or src_name
+        lf = msg.linked_file
+        src_name = lf.name or src_name
         mime_type = getattr(lf, 'file_type', None) or mime_type
         lf.file.open('rb')
         try:
@@ -318,6 +519,7 @@ def _copy_chat_file_to_contentfile(msg):
                 lf.file.close()
             except Exception:
                 pass
+
     elif getattr(msg, 'file', None):
         try:
             msg.file.open('rb')
@@ -330,67 +532,98 @@ def _copy_chat_file_to_contentfile(msg):
 
     if not file_bytes:
         return None, None, 0, mime_type
+
     return src_name, ContentFile(file_bytes), len(file_bytes), mime_type
 
 
-def _get_project_manager(project):
-    for attr in ['project_manager', 'manager', 'created_by', 'owner', 'team_lead']:
-        try:
-            value = getattr(project, attr, None)
-            if value:
-                return value
-        except Exception:
-            pass
-    return None
+def _parse_mentions_from_text(room, text):
+    """
+    Resolve @mentions against room members.
+    Matches against username, first_name, or last_name.
+    """
+    import re
+
+    if not text:
+        return []
+
+    tokens = re.findall(r'@([A-Za-z0-9._-]+)', text)
+    if not tokens:
+        return []
+
+    members = room.members.filter(
+        Q(username__in=tokens) |
+        Q(first_name__in=tokens) |
+        Q(last_name__in=tokens)
+    ).distinct()
+
+    return list(members)
 
 
-def _user_can_link_project_room(user, project):
+def _save_mentions(message):
+    """
+    Save mention rows for a message.
+    """
+    mentioned_users = _parse_mentions_from_text(message.room, message.content or '')
+    for user in mentioned_users:
+        ChatMessageMention.objects.get_or_create(message=message, user=user)
+
+
+def _tracking_permission(user, sheet):
+    """
+    Permission resolution for tracking sheets.
+    """
+    if not user or not getattr(user, 'is_authenticated', False):
+        return None
+
     if user.is_superuser:
-        return True
-    pm = _get_project_manager(project)
-    if pm and getattr(pm, 'id', None) == user.id:
-        return True
-    return False
+        return 'full'
+
+    if sheet.project and getattr(sheet.project, 'project_manager_id', None) == user.id:
+        return 'full'
+
+    direct = sheet.access_rows.filter(user=user).first()
+    if direct:
+        return direct.permission
+
+    try:
+        if sheet.project.team_members.filter(id=user.id).exists():
+            return 'input'
+    except Exception:
+        pass
+
+    return None
 
 
 def _get_project_chat_files_for_user(user, project, room=None):
     """
-    Returns project files visible to this user PLUS any files the room manager
-    has explicitly pinned to the room — granting access to all room members
-    regardless of their normal file-visibility permissions.
-
-    Each dict entry contains 'room_pinned': bool so the template can show
-    a ROOM badge and allow managers to unpin.
+    Returns project files visible to the user PLUS files explicitly pinned
+    to the room, even if they are not normally visible through standard file
+    visibility rules.
     """
     from apps.files.models import SharedFile
 
     profile = getattr(user, 'staffprofile', None)
-    unit    = profile.unit       if profile else None
-    dept    = profile.department if profile else None
+    unit = profile.unit if profile else None
+    dept = profile.department if profile else None
 
-    # Files the user can see under normal permissions
-    # NOTE: filter only by direct project FK on SharedFile — NOT folder__project
-    # because FileFolder does not have a project field.
     own_ids = set(
-        SharedFile.objects.filter(
-            Q(project=project)
-        ).filter(
-            Q(uploaded_by=user)
-            | Q(visibility='office')
-            | Q(visibility='unit',       unit=unit)
-            | Q(visibility='department', department=dept)
-            | Q(shared_with=user)
-            | Q(share_access__user=user)
-        ).filter(is_latest=True)
-        .values_list('id', flat=True)
+        SharedFile.objects.filter(project=project, is_latest=True).filter(
+            Q(uploaded_by=user) |
+            Q(visibility='office') |
+            Q(visibility='unit', unit=unit) |
+            Q(visibility='department', department=dept) |
+            Q(shared_with=user) |
+            Q(share_access__user=user) |
+            Q(project__project_manager=user) |
+            Q(project__team_members=user) |
+            Q(project__is_public=True)
+        ).distinct().values_list('id', flat=True)
     )
 
-    # Files pinned to this room — visible to ALL members regardless of permissions
     room_pinned_ids = set()
     if room:
         room_pinned_ids = set(
-            ChatRoomFile.objects.filter(room=room)
-            .values_list('file_id', flat=True)
+            ChatRoomFile.objects.filter(room=room).values_list('file_id', flat=True)
         )
 
     combined_ids = own_ids | room_pinned_ids
@@ -409,54 +642,58 @@ def _get_project_chat_files_for_user(user, project, room=None):
             file_url = f.file.url
         except Exception:
             continue
+
         files.append({
-            'id':          str(f.id),
-            'name':        f.name,
-            'url':         file_url,
-            'size':        getattr(f, 'size_display', '') or '',
-            'is_image':    getattr(f, 'is_image', False),
-            'icon_class':  getattr(f, 'icon_class', 'bi bi-file-earmark'),
-            'icon_color':  getattr(f, 'icon_color', '#6b7280'),
-            'folder':      f.folder.name if getattr(f, 'folder', None) else '',
-            'created_at':  f.created_at,
-            'room_pinned': f.id in room_pinned_ids,  # badge / unpin flag
+            'id': str(f.id),
+            'name': f.name,
+            'url': file_url,
+            'size': getattr(f, 'size_display', '') or '',
+            'is_image': getattr(f, 'is_image', False),
+            'icon_class': getattr(f, 'icon_class', 'bi bi-file-earmark'),
+            'icon_color': getattr(f, 'icon_color', '#6b7280'),
+            'folder': f.folder.name if getattr(f, 'folder', None) else '',
+            'created_at': f.created_at,
+            'room_pinned': f.id in room_pinned_ids,
         })
+
     return files
 
-def _broadcast_poll_update(poll):
-    channel_layer = get_channel_layer()
-
-    data = {
-        'type': 'poll_update',
-        'poll_id': str(poll.id),
-        'options': [
-            {
-                'id': str(opt.id),
-                'text': opt.text,
-                'votes': opt.vote_count
-            }
-            for opt in poll.options.all()
-        ]
-    }
-
-    async_to_sync(channel_layer.group_send)(
-        f'chat_{poll.message.room_id}',
-        {
-            'type': 'chat.poll',
-            'payload': data
-        }
-    )
-
-# ---------------------------------------------------------------------------
-# Shared context helper — project list for create-room modal
-# ---------------------------------------------------------------------------
 
 def _managed_projects_for_user(user):
+    """
+    Projects the user can manage from messaging.
+    """
+    if user.is_superuser:
+        return Project.objects.all().order_by('name')
+
     return Project.objects.filter(
         Q(project_manager=user) | Q(team_members=user)
-    ).distinct()
+    ).distinct().order_by('name')
 
 
+spell = SpellChecker()
+
+def _spellcheck_text(text):
+    words = text.split()
+    misspelled = spell.unknown(words)
+
+    suggestions = []
+
+    for word in misspelled:
+        suggestions.append({
+            'word': word,
+            'suggestions': list(spell.candidates(word))[:3]
+        })
+
+    corrected = " ".join(
+        spell.correction(w) if w in misspelled else w
+        for w in words
+    )
+
+    return {
+        'corrected': corrected,
+        'suggestions': suggestions
+    }
 # ---------------------------------------------------------------------------
 # Chat List
 # ---------------------------------------------------------------------------
@@ -767,8 +1004,7 @@ class ChatMessagesPollView(LoginRequiredMixin, View):
 
         qs = (
             room.messages.filter(is_deleted=False)
-            .select_related('sender', 'reply_to', 'reply_to__sender', 'linked_file', 'poll')
-            .prefetch_related('poll__options', 'poll__options__votes')
+            .select_related('sender', 'reply_to', 'reply_to__sender', 'linked_file')
             .order_by('created_at')
         )
 
@@ -831,11 +1067,13 @@ class ToggleReactionView(LoginRequiredMixin, View):
 class DeleteMessageView(LoginRequiredMixin, View):
     def post(self, request, message_id):
         msg = get_object_or_404(
-            ChatMessage, id=message_id, sender=request.user, is_deleted=False,
+            ChatMessage,
+            id=message_id,
+            sender=request.user,
+            is_deleted=False,
         )
         msg.is_deleted = True
-        msg.deleted_at = timezone.now()
-        msg.save(update_fields=['is_deleted', 'deleted_at'])
+        msg.save(update_fields=['is_deleted'])
         return JsonResponse({'ok': True})
 
 
@@ -1187,6 +1425,9 @@ class CreatePollView(LoginRequiredMixin, View):
         question = (request.POST.get('question') or '').strip()
         options = [o.strip() for o in request.POST.getlist('options[]') if o.strip()]
 
+        allow_multiple = request.POST.get('allow_multiple') == '1'
+        allow_vote_change = request.POST.get('allow_vote_change', '1') == '1'
+
         if not question:
             return JsonResponse({'ok': False, 'error': 'Question is required.'}, status=400)
 
@@ -1203,38 +1444,24 @@ class CreatePollView(LoginRequiredMixin, View):
         poll = ChatPoll.objects.create(
             message=msg,
             question=question,
+            allow_multiple=allow_multiple,
+            allow_vote_change=allow_vote_change,
+            created_by=request.user,
         )
 
-        created_options = []
         for opt in options:
-            created_options.append(ChatPollOption.objects.create(
-                poll=poll,
-                text=opt
-            ))
+            ChatPollOption.objects.create(poll=poll, text=opt)
 
         room.updated_at = timezone.now()
         room.save(update_fields=['updated_at'])
-        ChatRoomMember.objects.filter(room=room, user=request.user).update(last_read=timezone.now())
 
-        payload = _serialize_chat_message(msg)
-        payload['poll'] = {
-            'id': str(poll.id),
-            'question': poll.question,
-            'options': [
-                {'id': str(opt.id), 'text': opt.text, 'votes': 0}
-                for opt in created_options
-            ]
-        }
+        ChatRoomMember.objects.filter(room=room, user=request.user)\
+            .update(last_read=timezone.now())
 
-        try:
-            channel_layer = get_channel_layer()
-            if channel_layer is not None:
-                async_to_sync(channel_layer.group_send)(
-                    _room_group_name(room.id),
-                    {'type': 'chat.message', 'payload': payload},
-                )
-        except Exception:
-            pass
+        payload = _serialize_chat_message(msg, viewer=request.user)
+        payload['poll'] = _serialize_poll_for_user(poll, request.user)
+
+        _broadcast_chat_message(msg, viewer=request.user)
 
         return JsonResponse({'ok': True, 'payload': payload})
 
@@ -1246,47 +1473,373 @@ class VotePollView(LoginRequiredMixin, View):
             id=poll_id
         )
 
-        if not poll.message.room.members.filter(id=request.user.id).exists():
-            return JsonResponse({'ok': False, 'error': 'Unauthorized'}, status=403)
+        room = poll.message.room
+
+        if not room.members.filter(id=request.user.id).exists():
+            return JsonResponse({'ok': False, 'error': 'Not allowed'}, status=403)
+
+        if getattr(poll, 'is_closed', False):
+            return JsonResponse({'ok': False, 'error': 'Poll is closed'}, status=400)
 
         option_id = request.POST.get('option_id')
         option = get_object_or_404(ChatPollOption, id=option_id, poll=poll)
 
-        # Update the vote
-        ChatPollVote.objects.filter(poll=poll, user=request.user).delete()
-        ChatPollVote.objects.create(poll=poll, option=option, user=request.user)
+        user_votes = ChatPollVote.objects.filter(poll=poll, user=request.user)
 
-        # Calculate new stats for real-time refresh
-        total_votes = poll.votes.count()
-        options_data = []
-        for opt in poll.options.all():
-            v_count = opt.votes.count()
-            pct = (v_count / total_votes * 100) if total_votes > 0 else 0
-            options_data.append({
-                'id': str(opt.id),
-                'votes': v_count,
-                'percentage': round(pct, 1)
-            })
+        # 🔥 SINGLE CHOICE
+        if not getattr(poll, 'allow_multiple', False):
+            if user_votes.filter(option=option).exists():
+                if getattr(poll, 'allow_vote_change', True):
+                    user_votes.delete()
+                else:
+                    return JsonResponse({'ok': False, 'error': 'Already voted'}, status=400)
+            else:
+                user_votes.delete()
+                ChatPollVote.objects.create(
+                    poll=poll,
+                    option=option,
+                    user=request.user
+                )
 
-        payload = {
-            'type': 'poll_update',
+        # 🔥 MULTIPLE CHOICE
+        else:
+            existing = user_votes.filter(option=option).exists()
+
+            if existing:
+                if getattr(poll, 'allow_vote_change', True):
+                    user_votes.filter(option=option).delete()
+                else:
+                    return JsonResponse({'ok': False, 'error': 'Cannot change vote'}, status=400)
+            else:
+                ChatPollVote.objects.create(
+                    poll=poll,
+                    option=option,
+                    user=request.user
+                )
+
+        data = {
+            'ok': True,
             'poll_id': str(poll.id),
-            'total_votes': total_votes,
-            'options': options_data
+            'poll': _serialize_poll_for_user(poll, request.user),
         }
 
-        # Broadcast to the room via WebSocket
-        try:
-            channel_layer = get_channel_layer()
-            if channel_layer:
-                async_to_sync(channel_layer.group_send)(
-                    f"chat_{poll.message.room_id}",
-                    {
-                        'type': 'chat_poll',
-                        'payload': payload
-                    }
-                )
-        except Exception:
-            pass
+        _broadcast_poll_update(poll, actor=request.user)
 
-        return JsonResponse({'ok': True, 'payload': payload})
+        return JsonResponse(data)
+
+class ClosePollView(LoginRequiredMixin, View):
+    def post(self, request, poll_id):
+        poll = get_object_or_404(
+            ChatPoll.objects.select_related('message', 'message__room'),
+            id=poll_id
+        )
+
+        if not (poll.created_by_id == request.user.id or request.user.is_superuser):
+            return JsonResponse({'ok': False, 'error': 'Only creator can close poll'}, status=403)
+
+        poll.is_closed = True
+        poll.save(update_fields=['is_closed'])
+
+        data = {
+            'ok': True,
+            'poll_id': str(poll.id),
+            'poll': _serialize_poll_for_user(poll, request.user),
+        }
+
+        _broadcast_poll_update(poll, actor=request.user)
+
+        return JsonResponse(data)
+
+
+class PollStateView(LoginRequiredMixin, View):
+    def post(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        try:
+            body = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            body = {}
+
+        poll_ids = body.get('poll_ids') or []
+        polls = ChatPoll.objects.filter(
+            id__in=poll_ids,
+            message__room=room
+        ).prefetch_related('options', 'votes')
+
+        return JsonResponse({
+            'ok': True,
+            'polls': [_serialize_poll_for_user(p, request.user) for p in polls]
+        })
+
+
+class ChatRoomFileGrantAccessView(LoginRequiredMixin, View):
+    """
+    Grant file access rights to a specific room member from messaging.
+    Uses the existing files.FileShareAccess permission rows.
+    """
+    def post(self, request, room_id, file_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        if not _can_manage_room(request.user, room):
+            return JsonResponse({'ok': False, 'error': 'Only room managers can grant file rights.'}, status=403)
+
+        user_id = (request.POST.get('user_id') or '').strip()
+        permission = (request.POST.get('permission') or 'view').strip()
+
+        if permission not in ('view', 'edit', 'full'):
+            return JsonResponse({'ok': False, 'error': 'Invalid permission.'}, status=400)
+
+        target_user = get_object_or_404(User, id=user_id)
+        if not room.members.filter(id=target_user.id).exists():
+            return JsonResponse({'ok': False, 'error': 'User is not in this room.'}, status=400)
+
+        shared_file = get_object_or_404(SharedFile, id=file_id)
+
+        FileShareAccess.objects.update_or_create(
+            file=shared_file,
+            user=target_user,
+            defaults={
+                'permission': permission,
+                'shared_by': request.user,
+            }
+        )
+
+        sys_msg = ChatMessage.objects.create(
+            room=room,
+            sender=request.user,
+            message_type='system',
+            content=f'🔐 {_safe_full_name(request.user)} granted {permission} access to "{shared_file.name}" for {_safe_full_name(target_user)}.'
+        )
+        _broadcast_chat_message(sys_msg, viewer=request.user)
+
+        return JsonResponse({
+            'ok': True,
+            'file_id': str(shared_file.id),
+            'user_id': str(target_user.id),
+            'permission': permission,
+        })
+
+
+class ChatToolsPaletteView(LoginRequiredMixin, View):
+    """
+    Returns @-palette suggestions:
+    - room members
+    - quick tools
+    - project files
+    """
+    def get(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        q = (request.GET.get('q') or '').strip().lower()
+
+        member_qs = room.members.all()
+        if q:
+            member_qs = member_qs.filter(
+                Q(username__icontains=q) |
+                Q(first_name__icontains=q) |
+                Q(last_name__icontains=q)
+            )
+
+        members = [{
+            'type': 'member',
+            'id': str(u.id),
+            'label': _safe_full_name(u),
+            'username': getattr(u, 'username', ''),
+        } for u in member_qs[:8]]
+
+        tools = [
+            {'type': 'tool', 'key': 'task', 'label': 'Create Task'},
+            {'type': 'tool', 'key': 'poll', 'label': 'Create Poll'},
+            {'type': 'tool', 'key': 'file_access', 'label': 'Grant Project File Access'},
+            {'type': 'tool', 'key': 'tracker_create', 'label': 'Create Tracking Sheet'},
+            {'type': 'tool', 'key': 'tracker_row', 'label': 'Add Tracking Row'},
+            {'type': 'tool', 'key': 'tracker_access', 'label': 'Grant Tracking Sheet Access'},
+        ]
+        if q:
+            tools = [t for t in tools if q in t['label'].lower() or q in t['key']]
+
+        files_data = []
+        if room.project_id:
+            profile = getattr(request.user, 'staffprofile', None)
+            unit = profile.unit if profile else None
+            dept = profile.department if profile else None
+
+            file_qs = SharedFile.objects.filter(project=room.project, is_latest=True).filter(
+                Q(uploaded_by=request.user) |
+                Q(visibility='office') |
+                Q(visibility='unit', unit=unit) |
+                Q(visibility='department', department=dept) |
+                Q(shared_with=request.user) |
+                Q(share_access__user=request.user) |
+                Q(project__project_manager=request.user) |
+                Q(project__team_members=request.user) |
+                Q(project__is_public=True)
+            ).distinct().order_by('-created_at')
+
+            if q:
+                file_qs = file_qs.filter(name__icontains=q)
+
+            files_data = [{
+                'type': 'file',
+                'id': str(f.id),
+                'label': f.name,
+                'icon_class': getattr(f, 'icon_class', 'bi bi-file-earmark'),
+            } for f in file_qs[:8]]
+
+        return JsonResponse({
+            'ok': True,
+            'members': members,
+            'tools': tools[:8],
+            'files': files_data,
+        })
+
+
+class ChatCommandActionView(LoginRequiredMixin, View):
+    """
+    Handles actions from @ palette.
+    """
+    def post(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        action = (request.POST.get('action') or '').strip()
+
+        if action == 'create_task':
+            title = (request.POST.get('title') or '').strip()
+            assigned_to_id = (request.POST.get('assigned_to_id') or '').strip()
+            due_date = request.POST.get('due_date') or None
+            priority = (request.POST.get('priority') or 'medium').strip()
+
+            if not title or not assigned_to_id:
+                return JsonResponse({'ok': False, 'error': 'Task title and assignee are required.'}, status=400)
+
+            assigned_to = get_object_or_404(User, id=assigned_to_id)
+            task = Task.objects.create(
+                title=title,
+                description=(request.POST.get('description') or '').strip(),
+                assigned_to=assigned_to,
+                assigned_by=request.user,
+                priority=priority,
+                due_date=due_date,
+                project=room.project if room.project_id else None,
+            )
+
+            msg = ChatMessage.objects.create(
+                room=room,
+                sender=request.user,
+                message_type='command',
+                content=f'✅ Task created: {task.title}',
+                command_payload={
+                    'command_type': 'task_created',
+                    'task_id': str(task.id),
+                    'task_title': task.title,
+                    'assigned_to': _safe_full_name(assigned_to),
+                    'due_date': str(task.due_date) if task.due_date else '',
+                }
+            )
+            _broadcast_chat_message(msg, viewer=request.user)
+            return JsonResponse({'ok': True, 'message': _serialize_chat_message(msg, viewer=request.user)})
+
+        if action == 'create_tracker':
+            try:
+                project = _room_project_or_403(room)
+            except PermissionError as e:
+                return JsonResponse({'ok': False, 'error': str(e)}, status=400)
+
+            sheet, created = TrackingSheet.objects.get_or_create(
+                project=project,
+                defaults={
+                    'title': f'{project.name} Tracker',
+                    'created_by': request.user,
+                }
+            )
+            msg = ChatMessage.objects.create(
+                room=room,
+                sender=request.user,
+                message_type='command',
+                content=f'📊 Tracking sheet {"created" if created else "already exists"}: {sheet.title}',
+                command_payload={
+                    'command_type': 'tracking_sheet',
+                    'sheet_id': str(sheet.id),
+                    'sheet_title': sheet.title,
+                    'project_id': str(project.id),
+                }
+            )
+            _broadcast_chat_message(msg, viewer=request.user)
+            return JsonResponse({'ok': True, 'message': _serialize_chat_message(msg, viewer=request.user)})
+
+        if action == 'add_tracker_row':
+            try:
+                project = _room_project_or_403(room)
+            except PermissionError as e:
+                return JsonResponse({'ok': False, 'error': str(e)}, status=400)
+
+            sheet = get_object_or_404(TrackingSheet, project=project)
+            data = {}
+            for col in sheet.get_columns():
+                data[col['key']] = request.POST.get(f'data_{col["key"]}', '')
+
+            row = TrackingRow.objects.create(
+                sheet=sheet,
+                data_json=json.dumps(data),
+                order=sheet.rows.count(),
+                created_by=request.user,
+            )
+
+            msg = ChatMessage.objects.create(
+                room=room,
+                sender=request.user,
+                message_type='command',
+                content='📝 Tracking row added.',
+                command_payload={
+                    'command_type': 'tracking_row',
+                    'sheet_id': str(sheet.id),
+                    'row_id': str(row.id),
+                }
+            )
+            _broadcast_chat_message(msg, viewer=request.user)
+            return JsonResponse({'ok': True, 'message': _serialize_chat_message(msg, viewer=request.user)})
+
+        if action == 'grant_tracker_access':
+            try:
+                project = _room_project_or_403(room)
+            except PermissionError as e:
+                return JsonResponse({'ok': False, 'error': str(e)}, status=400)
+
+            if not _can_manage_room(request.user, room):
+                return JsonResponse({'ok': False, 'error': 'Only room managers can grant tracker access.'}, status=403)
+
+            sheet = get_object_or_404(TrackingSheet, project=project)
+            target_user = get_object_or_404(User, id=request.POST.get('user_id'))
+            permission = (request.POST.get('permission') or 'input').strip()
+
+            if permission not in ('view', 'input', 'edit', 'full'):
+                return JsonResponse({'ok': False, 'error': 'Invalid permission.'}, status=400)
+
+            TrackingSheetAccess.objects.update_or_create(
+                sheet=sheet,
+                user=target_user,
+                defaults={
+                    'permission': permission,
+                    'granted_by': request.user,
+                }
+            )
+
+            msg = ChatMessage.objects.create(
+                room=room,
+                sender=request.user,
+                message_type='system',
+                content=f'📊 {_safe_full_name(request.user)} granted {permission} tracker access to {_safe_full_name(target_user)}.'
+            )
+            _broadcast_chat_message(msg, viewer=request.user)
+            return JsonResponse({'ok': True})
+
+        return JsonResponse({'ok': False, 'error': 'Unknown action.'}, status=400)
+
+
+class SpellCheckView(LoginRequiredMixin, View):
+    def post(self, request, room_id):
+        get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        text = (request.POST.get('text') or '').strip()
+        result = _spellcheck_text(text)
+        return JsonResponse({
+            'ok': True,
+            'corrected': result.get('corrected', text),
+            'suggestions': result.get('suggestions', []),
+        })

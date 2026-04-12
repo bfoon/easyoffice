@@ -265,16 +265,25 @@ class TrackingSheet(models.Model):
         self.columns_json = json.dumps(cols)
 
 
-class TrackingRow(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    sheet = models.ForeignKey(TrackingSheet, on_delete=models.CASCADE, related_name='rows')
-    data_json = models.TextField(default='{}')
-    order = models.PositiveSmallIntegerField(default=0)
-    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='tracking_rows')
+class TrackingSheetAccess(models.Model):
+    class Permission(models.TextChoices):
+        VIEW = 'view', 'View'
+        INPUT = 'input', 'Input'
+        EDIT = 'edit', 'Edit'
+        FULL = 'full', 'Full'
+
+    sheet = models.ForeignKey(TrackingSheet, on_delete=models.CASCADE, related_name='access_rows')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='tracking_sheet_access')
+    permission = models.CharField(max_length=10, choices=Permission.choices, default=Permission.INPUT)
+    granted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='granted_tracking_access')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ['order', 'created_at']
+        unique_together = [('sheet', 'user')]
+        ordering = ['user__first_name', 'user__last_name']
+
+    def __str__(self):
+        return f'{self.sheet} -> {self.user} ({self.permission})'
 
     def get_data(self):
         try:
@@ -285,6 +294,29 @@ class TrackingRow(models.Model):
     def set_data(self, d):
         self.data_json = json.dumps(d)
 
+
+class TrackingRow(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sheet = models.ForeignKey(
+        TrackingSheet,
+        on_delete=models.CASCADE,
+        related_name='rows'
+    )
+    order = models.PositiveIntegerField(default=0)
+    data_json = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def get_data(self):
+        return self.data_json or {}
+
+    def __str__(self):
+        return f"{self.sheet.title} - Row {self.order}"
 
 # ─── Location Map ─────────────────────────────────────────────────────────────
 

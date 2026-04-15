@@ -24,8 +24,8 @@ class Command(BaseCommand):
             ('office_tagline', 'Your Virtual Office', 'string', 'Office Tagline', 'branding'),
             ('primary_color', '#1e3a5f', 'color', 'Primary Color', 'branding'),
             ('accent_color', '#2196f3', 'color', 'Accent Color', 'branding'),
-            ('currency', 'USD', 'string', 'Currency Code', 'finance'),
-            ('currency_symbol', '$', 'string', 'Currency Symbol', 'finance'),
+            ('currency', 'GMD', 'string', 'Currency Code', 'finance'),
+            ('currency_symbol', 'D', 'string', 'Currency Symbol', 'finance'),
             ('fiscal_year_start', '1', 'integer', 'Fiscal Year Start Month', 'finance'),
             ('appraisal_cycle', '12', 'integer', 'Appraisal Cycle (months)', 'hr'),
             ('working_hours_start', '08:00', 'string', 'Working Hours Start', 'general'),
@@ -89,15 +89,15 @@ class Command(BaseCommand):
             })
         self.stdout.write('  ✓ Leave types')
 
-    def _create_superuser(self):
-        if not User.objects.filter(email='admin@easyoffice.com').exists():
-            admin = User.objects.create_superuser(
-                username='admin',
-                email='admin@easyoffice.com',
-                password='Admin@123!',
-                first_name='Office',
-                last_name='Administrator',
-            )
-            self.stdout.write(f'  ✓ Admin user created: admin@easyoffice.com / Admin@123!')
-        else:
-            self.stdout.write('  ✓ Admin user already exists')
+    # def _create_superuser(self):
+    #     if not User.objects.filter(email='office.administrator@easysolutions.gm').exists():
+    #         admin = User.objects.create_superuser(
+    #             username='officeadmin',
+    #             email='office.administrator@easysolutions.gm',
+    #             password='Admin@123!',
+    #             first_name='Office',
+    #             last_name='Administrator',
+    #         )
+    #         self.stdout.write(f'  ✓ Admin user created: admin@easyoffice.com / Admin@123!')
+    #     else:
+    #         self.stdout.write('  ✓ Admin user already exists')

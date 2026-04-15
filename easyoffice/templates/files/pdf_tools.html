@@ -481,28 +481,53 @@
     <!-- Left: File list -->
     <div class="eo-card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <h3 class="eo-card-title" style="margin:0">Select & Order Files</h3>
+        <h3 class="eo-card-title" style="margin:0">Select &amp; Order Files</h3>
         <div style="display:flex;gap:6px">
           <button class="sel-ctrl-btn" onclick="mergeCheckAll(true)">All</button>
           <button class="sel-ctrl-btn" onclick="mergeCheckAll(false)">None</button>
         </div>
       </div>
-      <p style="font-size:13px;color:var(--eo-text-muted);margin-bottom:14px">
-        Check files to include. Drag <i class="bi bi-grip-vertical"></i> to set merge order.
+      <p style="font-size:13px;color:var(--eo-text-muted);margin-bottom:10px">
+        Check files to include. Drag <i class="bi bi-grip-vertical"></i> to set merge order. Selected files float to the top.
       </p>
+
+      <!-- Search box -->
+      <div style="position:relative;margin-bottom:12px">
+        <i class="bi bi-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:13px;pointer-events:none"></i>
+        <input type="text" id="mergeSearchInput" placeholder="Search PDFs by name or folder…"
+               style="width:100%;padding:8px 36px 8px 32px;border:1px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);font-size:13px;outline:none;box-sizing:border-box"
+               oninput="filterMergeList(this.value)">
+        <button id="mergeClearSearch" onclick="clearMergeSearch()"
+                style="display:none;position:absolute;right:8px;top:50%;transform:translateY(-50%);border:none;background:none;cursor:pointer;color:var(--eo-text-muted);font-size:14px;padding:2px 4px;line-height:1">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
+      <div id="mergeSearchCount" style="font-size:12px;color:var(--eo-text-muted);margin-bottom:8px;display:none"></div>
+
       <div class="merge-file-list" id="mergeFileList">
         {% for f in pdf_files %}
-        <div class="merge-item" data-id="{{ f.id }}" data-name="{{ f.name|escapejs }}" data-size="{{ f.file_size }}">
+        <div class="merge-item"
+             data-id="{{ f.id }}"
+             data-name="{{ f.name|escapejs }}"
+             data-size="{{ f.file_size }}"
+             data-folder="{{ f.folder.name|default:''|lower|escapejs }}"
+             data-search="{{ f.name|lower|escapejs }}">
           <i class="bi bi-grip-vertical merge-drag-icon"></i>
-          <input type="checkbox" class="merge-check" checked onchange="updateMergePreview()">
+          <input type="checkbox" class="merge-check" checked onchange="onMergeCheckChange(this)">
           <i class="bi bi-file-pdf-fill merge-file-ico"></i>
           <div class="merge-file-info">
             <div class="merge-file-name">{{ f.name }}</div>
-            <div class="merge-file-meta">{{ f.file_size|filesizeformat }}</div>
+            <div class="merge-file-meta">
+              {{ f.file_size|filesizeformat }}{% if f.folder %} · <i class="bi bi-folder2" style="font-size:10px"></i> {{ f.folder.name }}{% endif %}
+            </div>
           </div>
           <div class="merge-order-badge merge-ord-num">–</div>
         </div>
         {% endfor %}
+      </div>
+      <div id="mergeNoResults" style="display:none;text-align:center;padding:20px;color:var(--eo-text-muted);font-size:13px">
+        <i class="bi bi-search" style="font-size:24px;display:block;margin-bottom:6px;opacity:.3"></i>
+        No PDFs match your search.
       </div>
     </div>
 
@@ -863,13 +888,71 @@ if (mergeList) {
     ghostClass: 'sortable-ghost',
     chosenClass: 'sortable-chosen',
     handle: '.merge-drag-icon',
+    filter: '.merge-item[style*="display: none"], .merge-item[style*="display:none"]',
     onEnd: updateMergePreview,
   });
   updateMergePreview();
 }
 
+/* ── Search ── */
+function filterMergeList(query) {
+  query = (query || '').toLowerCase().trim();
+  const clearBtn = document.getElementById('mergeClearSearch');
+  const countEl  = document.getElementById('mergeSearchCount');
+  const noRes    = document.getElementById('mergeNoResults');
+
+  if (clearBtn) clearBtn.style.display = query ? '' : 'none';
+
+  const items = mergeList ? Array.from(mergeList.querySelectorAll('.merge-item')) : [];
+  let visible = 0;
+
+  items.forEach(function(item) {
+    const name   = (item.dataset.search  || '').toLowerCase();
+    const folder = (item.dataset.folder  || '').toLowerCase();
+    const match  = !query || name.includes(query) || folder.includes(query);
+    item.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+
+  if (countEl) {
+    if (query) {
+      countEl.textContent = visible + ' of ' + items.length + ' files match';
+      countEl.style.display = '';
+    } else {
+      countEl.style.display = 'none';
+    }
+  }
+
+  if (noRes) noRes.style.display = (query && visible === 0) ? '' : 'none';
+}
+
+function clearMergeSearch() {
+  const inp = document.getElementById('mergeSearchInput');
+  if (inp) { inp.value = ''; inp.focus(); }
+  filterMergeList('');
+}
+
+/* ── Check change: float checked items to top ── */
+function onMergeCheckChange(checkbox) {
+  floatCheckedToTop();
+  updateMergePreview();
+}
+
+function floatCheckedToTop() {
+  if (!mergeList) return;
+  const items    = Array.from(mergeList.querySelectorAll('.merge-item'));
+  const checked  = items.filter(it => it.querySelector('.merge-check').checked);
+  const unchecked = items.filter(it => !it.querySelector('.merge-check').checked);
+
+  // Re-append in order: checked first, then unchecked
+  checked.concat(unchecked).forEach(function(item) {
+    mergeList.appendChild(item);
+  });
+}
+
 function mergeCheckAll(state) {
   document.querySelectorAll('.merge-check').forEach(c => c.checked = state);
+  if (state) floatCheckedToTop();
   updateMergePreview();
 }
 
@@ -904,35 +987,40 @@ function updateMergePreview() {
     <div class="merge-preview-row">
       <div class="merge-preview-num">${i + 1}</div>
       <i class="bi bi-file-pdf-fill" style="color:#ef4444"></i>
-      <span style="flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${it.dataset.name}</span>
+      <span style="flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escMerge(it.dataset.name)}</span>
     </div>
   `).join('');
 }
 
+function escMerge(str) {
+  return String(str || '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 document.getElementById('mergeSendBtn')?.addEventListener('click', () => {
-  const items = Array.from(mergeList.querySelectorAll('.merge-item'));
+  const items   = Array.from(mergeList.querySelectorAll('.merge-item'));
   const checked = items.filter(it => it.querySelector('.merge-check').checked);
   if (checked.length < 2) {
     alert('Please select at least 2 PDF files to merge.');
     return;
   }
   const form = document.getElementById('mergeForm');
-  // Clear previous file_ids
   form.querySelectorAll('input[name="file_ids"]').forEach(i => i.remove());
   form.querySelector('input[name="output_name"]')?.remove();
 
   checked.forEach(it => {
-    const inp = document.createElement('input');
-    inp.type = 'hidden';
-    inp.name = 'file_ids';
-    inp.value = it.dataset.id;
+    const inp   = document.createElement('input');
+    inp.type    = 'hidden';
+    inp.name    = 'file_ids';
+    inp.value   = it.dataset.id;
     form.appendChild(inp);
   });
 
-  const outInp = document.createElement('input');
-  outInp.type = 'hidden';
-  outInp.name = 'output_name';
-  outInp.value = document.getElementById('mergeOutputName').value || 'merged.pdf';
+  const outInp   = document.createElement('input');
+  outInp.type    = 'hidden';
+  outInp.name    = 'output_name';
+  outInp.value   = document.getElementById('mergeOutputName').value || 'merged.pdf';
   form.appendChild(outInp);
   form.submit();
 });

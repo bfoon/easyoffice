@@ -2541,19 +2541,33 @@ function stopPollStatePolling(){
 
     if(pendingFile){
       isSending = true;
-      var form = byId('uploadForm');
-      var upload = byId('fileUploadInput');
-      var content = byId('fileContentInput');
-      var reply = byId('fileReplyTo');
-      if(!form || !upload || !content || !reply){ isSending = false; return; }
+      var fd = new FormData();
+      fd.append('csrfmiddlewaretoken', getCookie('csrftoken'));
+      fd.append('file', pendingFile);
+      fd.append('content', text);
+      if(replyToId) fd.append('reply_to', replyToId);
 
-      var dt = new DataTransfer();
-      dt.items.add(pendingFile);
-      upload.files = dt.files;
-      content.value = text;
-      reply.value = replyToId || '';
-      form.action = window.location.pathname;
-      form.submit();
+      fetch(window.location.pathname, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin',
+        body: fd
+      })
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d && d.message) appendMessage(d.message);
+        pollMessages();
+      })
+      .catch(function(){ pollMessages(); })
+      .finally(function(){
+        pendingFile = null;
+        clearSelectedFile();
+        chatInput.value = '';
+        chatInput.style.height = 'auto';
+        clearReply();
+        setSendEnabled();
+        isSending = false;
+      });
       return;
     }
 
@@ -2572,31 +2586,31 @@ function stopPollStatePolling(){
       clearReply();
       isSending = false;
     } else {
-      var form = document.createElement('form');
-      form.method = 'post';
-      form.action = window.location.pathname;
+      // WS unavailable — fall back to fetch (no page reload)
+      var fd2 = new FormData();
+      fd2.append('csrfmiddlewaretoken', getCookie('csrftoken'));
+      fd2.append('content', text);
+      if(replyToId) fd2.append('reply_to', replyToId);
 
-      [
-        ['csrfmiddlewaretoken', getCookie('csrftoken')],
-        ['content', text]
-      ].forEach(function(pair){
-        var i = document.createElement('input');
-        i.type = 'hidden';
-        i.name = pair[0];
-        i.value = pair[1];
-        form.appendChild(i);
+      fetch(window.location.pathname, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin',
+        body: fd2
+      })
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d && d.message) appendMessage(d.message);
+        pollMessages();
+      })
+      .catch(function(){ pollMessages(); })
+      .finally(function(){
+        chatInput.value = '';
+        chatInput.style.height = 'auto';
+        clearReply();
+        setSendEnabled();
+        isSending = false;
       });
-
-      if(replyToId){
-        var rt = document.createElement('input');
-        rt.type = 'hidden';
-        rt.name = 'reply_to';
-        rt.value = replyToId;
-        form.appendChild(rt);
-      }
-
-      document.body.appendChild(form);
-      form.submit();
     }
   }
 
@@ -3623,14 +3637,18 @@ if (spellcheckToggleBtn) {
       updatePresenceBadge(d.status, d.last_seen_display || '');
     })
     .catch(function(){
-      updatePresenceBadge('offline', '');
+      // Network error — don't flip to offline, just leave the current badge state.
     });
   }
 
   function startPresencePolling(){
     if(!IS_DIRECT || !DM_OTHER_USER_ID) return;
-    pollPresence();
-    presenceTimer = setInterval(pollPresence, 30000);
+    // Delay first poll by 1.5 s so the heartbeat POST lands on the server first.
+    // Subsequent polls run every 15 s.
+    setTimeout(function(){
+      pollPresence();
+      presenceTimer = setInterval(pollPresence, 15000);
+    }, 1500);
   }
 
   function stopPresencePolling(){
@@ -3654,7 +3672,7 @@ if (spellcheckToggleBtn) {
   function startHeartbeat(){
     stopHeartbeat();
     sendHeartbeat();                          // send immediately on page load
-    heartbeatTimer = setInterval(sendHeartbeat, 30000);  // then every 30 s
+    heartbeatTimer = setInterval(sendHeartbeat, 20000);
   }
 
   function stopHeartbeat(){
@@ -3666,8 +3684,10 @@ if (spellcheckToggleBtn) {
       stopPresencePolling();
       stopHeartbeat();
     } else {
+      // Re-fire immediately on tab focus so badge updates instantly
+      sendHeartbeat();
+      pollPresence();
       startPresencePolling();
-  startHeartbeat();
       startHeartbeat();
     }
   });

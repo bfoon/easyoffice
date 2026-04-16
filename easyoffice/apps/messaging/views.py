@@ -799,8 +799,11 @@ class ChatRoomView(LoginRequiredMixin, View):
 
     def post(self, request, room_id):
         room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
 
         if not _can_post_in_room(request.user, room):
+            if is_ajax:
+                return JsonResponse({'ok': False, 'error': 'This room is read-only.'}, status=403)
             django_messages.warning(request, 'This room is read-only.')
             return redirect('chat_room', room_id=room_id)
 
@@ -835,6 +838,11 @@ class ChatRoomView(LoginRequiredMixin, View):
             room.save(update_fields=['updated_at'])
             ChatRoomMember.objects.filter(room=room, user=request.user).update(last_read=timezone.now())
             _broadcast_chat_message(new_message)
+
+        # Fetch/AJAX callers get JSON back — no page reload
+        if is_ajax:
+            payload = _serialize_chat_message(new_message, viewer=request.user) if new_message else None
+            return JsonResponse({'ok': True, 'message': payload})
 
         return redirect('chat_room', room_id=room_id)
 
@@ -1871,96 +1879,109 @@ class SpellCheckView(LoginRequiredMixin, View):
 # ---------------------------------------------------------------------------
 # Presence
 # ---------------------------------------------------------------------------
+# Cache (Redis) is the source of truth — no DB migration required.
+# DB fields updated as best-effort for persistence across Redis restarts.
+# ---------------------------------------------------------------------------
+
+import logging as _logging
+_presence_log = _logging.getLogger(__name__)
+
+_PRESENCE_TTL     = 90   # cache key lifetime in seconds
+_ONLINE_THRESHOLD = 60   # online  if last heartbeat within this many seconds
+_IDLE_THRESHOLD   = 300  # idle    if last heartbeat within this many seconds
+
+
+def _presence_cache_key(user_id):
+    return f'presence:ls:{user_id}'
+
+
+def _set_presence_cache(user_id):
+    from django.core.cache import cache
+    cache.set(_presence_cache_key(user_id), timezone.now().isoformat(), timeout=_PRESENCE_TTL)
+
+
+def _get_presence_cache(user_id):
+    from django.core.cache import cache
+    import datetime
+    raw = cache.get(_presence_cache_key(user_id))
+    if not raw:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(raw)
+        return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+    except Exception:
+        return None
+
 
 def _format_last_seen(dt):
-    """Human-readable relative time for the presence badge."""
     if not dt:
         return ''
     delta = (timezone.now() - dt).total_seconds()
     if delta < 60:
         return 'just now'
     if delta < 3600:
-        mins = int(delta // 60)
-        return f'{mins} min ago'
+        return f'{int(delta // 60)} min ago'
     if delta < 86400:
-        hrs = int(delta // 3600)
-        return f'{hrs}h ago'
+        return f'{int(delta // 3600)}h ago'
     return timezone.localtime(dt).strftime('%b %d')
 
 
 class PresenceHeartbeatView(LoginRequiredMixin, View):
-    """
-    POST /messages/presence/heartbeat/
-
-    Called by the chat UI every 30 s while the tab is open and visible.
-    Stamps last_seen = now() on the current user so PresenceView can
-    report the correct online status to their conversation partners.
-
-    Add to urls.py:
-        path('messages/presence/heartbeat/', PresenceHeartbeatView.as_view(), name='presence_heartbeat'),
-    """
+    """POST /messages/presence/heartbeat/"""
 
     def post(self, request):
+        uid = request.user.pk
+        now = timezone.now()
+
+        # Always write to cache first — this is the reliable path
+        _set_presence_cache(uid)
+
+        # Best-effort DB write (fails silently if field doesn't exist)
         try:
-            request.user.last_seen = timezone.now()
+            request.user.last_seen = now
             request.user.save(update_fields=['last_seen'])
-        except Exception:
-            # Fallback: try StaffProfile if last_seen lives there instead
+        except Exception as e:
+            _presence_log.debug('User.last_seen not saved: %s', e)
             try:
-                profile = request.user.staffprofile
-                profile.last_seen = timezone.now()
-                profile.save(update_fields=['last_seen'])
-            except Exception:
-                pass
+                p = request.user.staffprofile
+                p.last_seen = now
+                p.save(update_fields=['last_seen'])
+            except Exception as e2:
+                _presence_log.debug('StaffProfile.last_seen not saved: %s', e2)
+
         return JsonResponse({'ok': True})
 
 
 class PresenceView(LoginRequiredMixin, View):
-    """
-    GET /messages/presence/<user_id>/
-
-    Returns the online status of a user for the DM presence badge.
-
-    Thresholds:
-      online  → last heartbeat < 60 s ago
-      idle    → last heartbeat 60 s – 5 min ago
-      offline → last heartbeat > 5 min ago or no record
-
-    Add to urls.py:
-        path('messages/presence/<int:user_id>/', PresenceView.as_view(), name='presence'),
-    """
+    """GET /messages/presence/<user_id>/"""
 
     def get(self, request, user_id):
-        try:
-            target = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return JsonResponse({'status': 'offline', 'last_seen_display': ''})
+        # 1. Cache (fast, accurate)
+        last_seen = _get_presence_cache(user_id)
 
-        # Try last_seen on User first, then on StaffProfile
-        last_seen = getattr(target, 'last_seen', None)
+        # 2. DB fallback (for after Redis restart)
         if last_seen is None:
             try:
-                last_seen = getattr(target.staffprofile, 'last_seen', None)
-            except Exception:
-                last_seen = None
+                target = User.objects.get(id=user_id)
+                last_seen = getattr(target, 'last_seen', None)
+                if last_seen is None:
+                    try:
+                        last_seen = getattr(target.staffprofile, 'last_seen', None)
+                    except Exception:
+                        pass
+            except User.DoesNotExist:
+                pass
 
         if not last_seen:
             return JsonResponse({'status': 'offline', 'last_seen_display': ''})
 
-        # Ensure timezone-aware for comparison
         if timezone.is_naive(last_seen):
             last_seen = timezone.make_aware(last_seen)
 
         delta = (timezone.now() - last_seen).total_seconds()
 
-        if delta < 60:
-            status = 'online'
-            last_seen_display = ''
-        elif delta < 300:
-            status = 'idle'
-            last_seen_display = _format_last_seen(last_seen)
-        else:
-            status = 'offline'
-            last_seen_display = _format_last_seen(last_seen)
-
-        return JsonResponse({'status': status, 'last_seen_display': last_seen_display})
+        if delta < _ONLINE_THRESHOLD:
+            return JsonResponse({'status': 'online',  'last_seen_display': ''})
+        if delta < _IDLE_THRESHOLD:
+            return JsonResponse({'status': 'idle',    'last_seen_display': _format_last_seen(last_seen)})
+        return     JsonResponse({'status': 'offline', 'last_seen_display': _format_last_seen(last_seen)})

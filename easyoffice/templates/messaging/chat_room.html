@@ -1862,6 +1862,7 @@ window.addEventListener('beforeunload', function(){
   stopReactionsPoll();
   stopPollStatePolling();
   stopPresencePolling();
+  stopHeartbeat();
   if(socket){
     try{ socket.close(); }catch(_){}
   }
@@ -3578,6 +3579,7 @@ if (spellcheckToggleBtn) {
 
   /* ── Presence (DM only) ───────────────────────────────────────────────── */
   var presenceTimer = null;
+  var heartbeatTimer = null;
 
   function updatePresenceBadge(status, lastSeen){
     var badge  = byId('dmPresenceBadge');
@@ -3635,11 +3637,38 @@ if (spellcheckToggleBtn) {
     if(presenceTimer){ clearInterval(presenceTimer); presenceTimer = null; }
   }
 
+  /* ── Presence heartbeat (tells the server THIS user is online) ──────────── */
+  function sendHeartbeat(){
+    fetch('/messages/presence/heartbeat/', {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': getCookie('csrftoken'),
+        'X-Requested-With': 'XMLHttpRequest',
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      credentials: 'same-origin',
+      body: ''
+    }).catch(function(){});   // fire-and-forget; errors are silent
+  }
+
+  function startHeartbeat(){
+    stopHeartbeat();
+    sendHeartbeat();                          // send immediately on page load
+    heartbeatTimer = setInterval(sendHeartbeat, 30000);  // then every 30 s
+  }
+
+  function stopHeartbeat(){
+    if(heartbeatTimer){ clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  }
+
   document.addEventListener('visibilitychange', function(){
     if(document.hidden){
       stopPresencePolling();
+      stopHeartbeat();
     } else {
       startPresencePolling();
+  startHeartbeat();
+      startHeartbeat();
     }
   });
 

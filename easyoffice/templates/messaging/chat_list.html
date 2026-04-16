@@ -245,7 +245,10 @@
 
       {% for item in rooms_meta %}
       {% if item.room.room_type == 'direct' %}
-      <a href="{% url 'chat_room' item.room.id %}" class="msg-room-item" data-name="{{ item.room.name|lower }}">
+      {% with dm_other=item.room.members.all|dictsort:"id" %}
+      <a href="{% url 'chat_room' item.room.id %}" class="msg-room-item"
+         data-name="{{ item.room.name|lower }}"
+         data-dm-user-id="{% for m in item.room.members.all %}{% if m.id != request.user.id %}{{ m.id }}{% endif %}{% endfor %}">
         <div class="msg-room-avatar direct">
           {% if item.room.avatar %}<img src="{{ item.room.avatar.url }}"/>
           {% else %}{{ item.room.name|slice:':2'|upper }}{% endif %}
@@ -268,6 +271,7 @@
         </div>
       </a>
       {% endif %}
+      {% endwith %}
       {% endfor %}
 
       <!-- Groups & Channels -->
@@ -472,7 +476,6 @@ document.addEventListener('keydown', function(e) {
 });
 
 // ── Project select toggle ────────────────────────────────────────────────────
-// ✅ Identical to chat_room.html — shows project dropdown only for type=project
 function toggleProjectSelect(type) {
   var wrapper = document.getElementById('projectSelectWrapper');
   var sel     = document.getElementById('projectSelect');
@@ -502,5 +505,86 @@ document.getElementById('dmSearch').addEventListener('input', function() {
     el.style.display = el.dataset.name.includes(q) ? '' : 'none';
   });
 });
+
+// ── Presence: heartbeat + sidebar dot polling ────────────────────────────────
+(function () {
+  'use strict';
+
+  function getCookie(n) {
+    var v = document.cookie.match('(^|;) ?' + n + '=([^;]*)(;|$)');
+    return v ? decodeURIComponent(v[2]) : null;
+  }
+
+  // ── Send own heartbeat so other users see us as online ──────────────────
+  function sendHeartbeat() {
+    fetch('/messages/presence/heartbeat/', {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': getCookie('csrftoken'),
+        'X-Requested-With': 'XMLHttpRequest',
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      credentials: 'same-origin',
+      body: ''
+    }).catch(function () {});
+  }
+
+  // ── Apply online dot to a sidebar DM item ───────────────────────────────
+  function setDot(userId, isOnline) {
+    document.querySelectorAll('.msg-room-item[data-dm-user-id="' + userId + '"]')
+      .forEach(function (item) {
+        var dot = item.querySelector('.msg-online-dot');
+        if (dot) dot.style.display = isOnline ? 'block' : 'none';
+      });
+  }
+
+  // ── Poll presence for every DM in the sidebar ───────────────────────────
+  function pollAllPresence() {
+    var ids = new Set();
+    document.querySelectorAll('.msg-room-item[data-dm-user-id]').forEach(function (el) {
+      var id = el.dataset.dmUserId;
+      if (id) ids.add(id);
+    });
+
+    ids.forEach(function (userId) {
+      fetch('/messages/presence/' + userId + '/', {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin'
+      })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d) return;
+        var online = (d.status === 'online' || d.status === 'available');
+        setDot(userId, online);
+      })
+      .catch(function () {});
+    });
+  }
+
+  // ── Start / stop on visibility change ───────────────────────────────────
+  var presenceTimer   = null;
+  var heartbeatTimer  = null;
+
+  function start() {
+    sendHeartbeat();
+    pollAllPresence();
+    heartbeatTimer = setInterval(sendHeartbeat,    30000);
+    presenceTimer  = setInterval(pollAllPresence,  30000);
+  }
+
+  function stop() {
+    clearInterval(heartbeatTimer); heartbeatTimer = null;
+    clearInterval(presenceTimer);  presenceTimer  = null;
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { stop(); } else { start(); }
+  });
+
+  window.addEventListener('beforeunload', stop);
+
+  // Kick off immediately
+  start();
+})();
 </script>
 {% endblock %}

@@ -13,6 +13,30 @@ from spellchecker import SpellChecker
 
 from django.core.files.base import ContentFile
 
+# ---------------------------------------------------------------------------
+# Encryption helpers (at-rest + transit)
+# ---------------------------------------------------------------------------
+# At-rest:  every ChatMessage.content is encrypted via EncryptedContentMixin
+#           (see models_mixin.py).  The post_init signal means all ORM-loaded
+#           instances already carry plain text by the time they reach this
+#           file.  The two places below that reconstruct content from raw DB
+#           values (reply previews, forwarded text) explicitly decrypt just
+#           in case those values were fetched without the signal firing.
+#
+# In-transit: enforce TLS at the infrastructure level (nginx / load-balancer).
+#             Add to settings.py:
+#
+#   SESSION_COOKIE_SECURE  = True
+#   CSRF_COOKIE_SECURE     = True
+#   SECURE_SSL_REDIRECT    = True          # redirect HTTP → HTTPS
+#   SECURE_HSTS_SECONDS    = 31536000
+#   SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+#   SECURE_HSTS_PRELOAD    = True
+#
+# Django Channels (WebSocket) traffic must be served over WSS (wss://).
+# ---------------------------------------------------------------------------
+from apps.messaging.encryption import decrypt_content
+
 from apps.messaging.models import (
     ChatRoom, ChatRoomMember, ChatMessage, ChatRoomFile,
     ChatPoll, ChatPollOption, ChatPollVote, ChatMessageMention,
@@ -362,7 +386,7 @@ def _serialize_chat_message(msg, viewer=None):
             if msg.reply_to_id and msg.reply_to and msg.reply_to.sender else ''
         ),
         'reply_to_content': (
-            msg.reply_to.content[:60]
+            decrypt_content(msg.reply_to.content)[:60]
             if msg.reply_to_id and msg.reply_to and msg.reply_to.content else ''
         ),
         'file_url': file_url,
@@ -483,7 +507,7 @@ def _broadcast_poll_update(poll, actor=None):
 
 def _combine_forwarded_text(source_msg, note=''):
     original_sender = _safe_full_name(source_msg.sender)
-    original_text = (source_msg.content or '').strip()
+    original_text = decrypt_content(source_msg.content or '').strip()
     note = (note or '').strip()
     header = f"Forwarded from {original_sender}"
 
@@ -1843,3 +1867,100 @@ class SpellCheckView(LoginRequiredMixin, View):
             'corrected': result.get('corrected', text),
             'suggestions': result.get('suggestions', []),
         })
+
+# ---------------------------------------------------------------------------
+# Presence
+# ---------------------------------------------------------------------------
+
+def _format_last_seen(dt):
+    """Human-readable relative time for the presence badge."""
+    if not dt:
+        return ''
+    delta = (timezone.now() - dt).total_seconds()
+    if delta < 60:
+        return 'just now'
+    if delta < 3600:
+        mins = int(delta // 60)
+        return f'{mins} min ago'
+    if delta < 86400:
+        hrs = int(delta // 3600)
+        return f'{hrs}h ago'
+    return timezone.localtime(dt).strftime('%b %d')
+
+
+class PresenceHeartbeatView(LoginRequiredMixin, View):
+    """
+    POST /messages/presence/heartbeat/
+
+    Called by the chat UI every 30 s while the tab is open and visible.
+    Stamps last_seen = now() on the current user so PresenceView can
+    report the correct online status to their conversation partners.
+
+    Add to urls.py:
+        path('messages/presence/heartbeat/', PresenceHeartbeatView.as_view(), name='presence_heartbeat'),
+    """
+
+    def post(self, request):
+        try:
+            request.user.last_seen = timezone.now()
+            request.user.save(update_fields=['last_seen'])
+        except Exception:
+            # Fallback: try StaffProfile if last_seen lives there instead
+            try:
+                profile = request.user.staffprofile
+                profile.last_seen = timezone.now()
+                profile.save(update_fields=['last_seen'])
+            except Exception:
+                pass
+        return JsonResponse({'ok': True})
+
+
+class PresenceView(LoginRequiredMixin, View):
+    """
+    GET /messages/presence/<user_id>/
+
+    Returns the online status of a user for the DM presence badge.
+
+    Thresholds:
+      online  → last heartbeat < 60 s ago
+      idle    → last heartbeat 60 s – 5 min ago
+      offline → last heartbeat > 5 min ago or no record
+
+    Add to urls.py:
+        path('messages/presence/<int:user_id>/', PresenceView.as_view(), name='presence'),
+    """
+
+    def get(self, request, user_id):
+        try:
+            target = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return JsonResponse({'status': 'offline', 'last_seen_display': ''})
+
+        # Try last_seen on User first, then on StaffProfile
+        last_seen = getattr(target, 'last_seen', None)
+        if last_seen is None:
+            try:
+                last_seen = getattr(target.staffprofile, 'last_seen', None)
+            except Exception:
+                last_seen = None
+
+        if not last_seen:
+            return JsonResponse({'status': 'offline', 'last_seen_display': ''})
+
+        # Ensure timezone-aware for comparison
+        if timezone.is_naive(last_seen):
+            last_seen = timezone.make_aware(last_seen)
+
+        delta = (timezone.now() - last_seen).total_seconds()
+
+        if delta < 60:
+            status = 'online'
+            last_seen_display = ''
+        elif delta < 300:
+            status = 'idle'
+            last_seen_display = _format_last_seen(last_seen)
+        else:
+            status = 'offline'
+            last_seen_display = _format_last_seen(last_seen)
+
+        return JsonResponse({'status': status, 'last_seen_display': last_seen_display})

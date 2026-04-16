@@ -92,4 +92,7 @@ urlpatterns = [
     path('<uuid:room_id>/spellcheck/',
          views.SpellCheckView.as_view(),
          name='chat_spellcheck'),
+
+    path('presence/heartbeat/', views.PresenceHeartbeatView.as_view(), name='presence_heartbeat'),
+    path('presence/<int:user_id>/', views.PresenceView.as_view(), name='presence'),
 ]

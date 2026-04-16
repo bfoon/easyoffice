@@ -202,6 +202,23 @@ SESSION_COOKIE_SECURE = config('SESSION_COOKIE_SECURE', default=False, cast=bool
 CSRF_COOKIE_SECURE = config('CSRF_COOKIE_SECURE', default=False, cast=bool)
 
 # =============================================================
+# HTTPS / HSTS  (set to True in production via env vars)
+# =============================================================
+SECURE_SSL_REDIRECT            = config('SECURE_SSL_REDIRECT', default=False, cast=bool)
+SECURE_HSTS_SECONDS            = config('SECURE_HSTS_SECONDS', default=0, cast=int)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = config('SECURE_HSTS_INCLUDE_SUBDOMAINS', default=False, cast=bool)
+SECURE_HSTS_PRELOAD            = config('SECURE_HSTS_PRELOAD', default=False, cast=bool)
+SECURE_PROXY_SSL_HEADER        = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# =============================================================
+# MESSAGING ENCRYPTION (at-rest, AES-256 via Fernet)
+# =============================================================
+# Generate a key once and store it as an environment variable:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Never commit the key value to source control.
+MESSAGING_ENCRYPTION_KEY = config('MESSAGING_ENCRYPTION_KEY', default='')
+
+# =============================================================
 # REST FRAMEWORK
 # =============================================================
 REST_FRAMEWORK = {

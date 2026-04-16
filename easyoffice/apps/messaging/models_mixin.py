@@ -1,30 +1,21 @@
 """
 apps/messaging/models_mixin.py
 ──────────────────────────────
-Drop this mixin into ChatMessage (and any other model that stores sensitive
-text) to get transparent at-rest encryption.
+Transparent at-rest encryption for ChatMessage.content (and any other model
+that stores sensitive text).
 
-Usage in models.py
-------------------
+Key design points
+-----------------
+1. save() encrypts content on its way to the DB but RESTORES the plaintext
+   on the in-memory instance afterwards. This is critical: serializers,
+   WebSocket broadcasts, and any code path that reads `instance.content`
+   immediately after save() must get plaintext, not ciphertext.
 
-    from apps.messaging.models_mixin import EncryptedContentMixin
+2. post_init signal decrypts content every time the ORM loads a row, so
+   reads work transparently everywhere.
 
-    class ChatMessage(EncryptedContentMixin, models.Model):
-        content = models.TextField(blank=True, default='')
-        # … rest of your fields …
-
-How it works
-------------
-Django's ``save()`` is intercepted to encrypt ``content`` before the row
-reaches the database.  A ``post_init`` signal transparently decrypts ``content``
-right after the ORM loads the row, so the rest of your application always sees
-plain text.
-
-Key rotation
-------------
-Run the management command (see migrate_encrypt_messages.py) to re-encrypt
-existing rows with a new key.  The ``enc:`` sentinel lets the command detect
-plain-text rows that still need encrypting.
+3. Plain-text rows (no ``enc:`` prefix) are passed through untouched —
+   enables rolling migration from plaintext to encrypted storage.
 """
 
 from django.db import models
@@ -40,8 +31,11 @@ class EncryptedContentMixin(models.Model):
 
     *   Plain-text rows written before encryption was enabled are decrypted
         gracefully (they have no ``enc:`` prefix so they pass through).
-    *   The mixin never double-encrypts: if ``content`` is already encrypted
+    *   Never double-encrypts: if ``content`` is already encrypted
         (starts with ``enc:``) ``save()`` skips re-encryption.
+    *   Never leaves ciphertext on the in-memory instance after save()
+        so serializers / WS broadcasts that read ``instance.content``
+        post-save see plaintext.
     """
 
     class Meta:
@@ -50,10 +44,20 @@ class EncryptedContentMixin(models.Model):
     # ── lifecycle ────────────────────────────────────────────────────────────
 
     def save(self, *args, **kwargs):
-        # Encrypt content before writing to the database.
+        # Remember the plaintext so we can restore it after the DB write.
+        original_plaintext = self.content
+
+        # Encrypt for the DB only if we actually have plaintext.
         if self.content and not is_encrypted(self.content):
             self.content = encrypt_content(self.content)
-        super().save(*args, **kwargs)
+
+        try:
+            super().save(*args, **kwargs)
+        finally:
+            # Restore plaintext on the in-memory instance so any code that
+            # reads ``instance.content`` after save() (serializers,
+            # WebSocket broadcasts, signals, etc.) sees the readable value.
+            self.content = original_plaintext
 
     def decrypt(self):
         """

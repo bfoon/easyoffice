@@ -63,6 +63,9 @@
    * Calls onOk(data) on {ok:true}, onError(msg) otherwise.
    */
   function post(url, formData, onOk, onError) {
+    // Delete any existing CSRF token from the FormData (e.g. from FormData(form))
+    // then re-append the current cookie value to avoid duplicates / stale tokens.
+    try { formData.delete('csrfmiddlewaretoken'); } catch (_) {}
     formData.append('csrfmiddlewaretoken', getCsrf());
     fetch(url, {
       method: 'POST',
@@ -128,45 +131,51 @@
   ═══════════════════════════════════════════════════════════════════════════ */
 
   function removeFileCard(fileId) {
-    [
-      '[data-file-id="' + fileId + '"]',
-      '#file-' + fileId,
-      '.file-card[data-id="' + fileId + '"]',
-      'tr[data-file-id="' + fileId + '"]',
-    ].forEach(function (sel) {
-      document.querySelectorAll(sel).forEach(function (el) { el.remove(); });
-    });
+    // Find the top-level card wrapper and remove it
+    var card = document.querySelector('[data-file-id="' + fileId + '"]');
+    if (card) { card.remove(); return; }
+    // list view row
+    var row = document.querySelector('tr[data-file-id="' + fileId + '"]');
+    if (row) { row.remove(); }
   }
 
   function removeFolderCard(folderId) {
-    [
-      '[data-folder-id="' + folderId + '"]',
-      '#folder-' + folderId,
-      '.folder-card[data-id="' + folderId + '"]',
-      'tr[data-folder-id="' + folderId + '"]',
-    ].forEach(function (sel) {
-      document.querySelectorAll(sel).forEach(function (el) { el.remove(); });
-    });
+    // grid card wrapper (has data-folder-id AND data-item-type=folder)
+    var card = document.querySelector('[data-folder-id="' + folderId + '"]');
+    if (card) { card.remove(); return; }
+    // list view row
+    var row = document.querySelector('tr[data-folder-id="' + folderId + '"]');
+    if (row) { row.remove(); }
   }
 
   function updateFileName(fileId, newName) {
-    [
-      '[data-file-id="' + fileId + '"] .file-name',
-      '[data-file-id="' + fileId + '"] .file-title',
-      '#file-' + fileId + ' .file-name',
-    ].forEach(function (sel) {
-      document.querySelectorAll(sel).forEach(function (el) { el.textContent = newName; });
-    });
+    // grid card
+    var card = document.querySelector('[data-file-id="' + fileId + '"]');
+    if (card) {
+      var nameEl = card.querySelector('.file-name, .fm-card-name');
+      if (nameEl) nameEl.textContent = newName;
+    }
+    // list row — first cell text
+    var row = document.querySelector('tr[data-file-id="' + fileId + '"]');
+    if (row) {
+      var nameEl = row.querySelector('.fm-list-name-text, td a div');
+      if (nameEl) nameEl.textContent = newName;
+    }
   }
 
   function updateFolderName(folderId, newName) {
-    [
-      '[data-folder-id="' + folderId + '"] .folder-name',
-      '[data-folder-id="' + folderId + '"] .folder-title',
-      '#folder-' + folderId + ' .folder-name',
-    ].forEach(function (sel) {
-      document.querySelectorAll(sel).forEach(function (el) { el.textContent = newName; });
-    });
+    // grid card
+    var card = document.querySelector('[data-folder-id="' + folderId + '"]');
+    if (card) {
+      var nameEl = card.querySelector('.folder-name, .fm-card-name');
+      if (nameEl) nameEl.textContent = newName;
+    }
+    // list row
+    var row = document.querySelector('tr[data-folder-id="' + folderId + '"]');
+    if (row) {
+      var nameEl = row.querySelector('td a div');
+      if (nameEl) nameEl.textContent = newName;
+    }
   }
 
   /**
@@ -184,21 +193,36 @@
     );
     if (!grid) { window.location.reload(); return; }
 
-    var sep = window.location.search ? '&' : '?';
-    fetch(window.location.pathname + window.location.search + sep + 'partial=1', {
+    // Build the partial URL — preserve existing query params, add partial=1
+    var qs   = window.location.search;
+    var sep  = qs ? '&' : '?';
+    var url  = window.location.pathname + qs + sep + 'partial=1';
+
+    fetch(url, {
       headers: { 'X-Requested-With': 'XMLHttpRequest' },
       credentials: 'same-origin',
     })
-      .then(function (r) { return r.ok ? r.text() : Promise.reject(); })
+      .then(function (r) {
+        // If server signals partial is unavailable, do a quiet reload
+        if (r.headers.get('X-Partial-Unavailable') === '1') {
+          window.location.reload(); return Promise.reject('unavailable');
+        }
+        return r.ok ? r.text() : Promise.reject('bad-status');
+      })
       .then(function (html) {
+        if (!html) { window.location.reload(); return; }
+        // If server returned full HTML page (no partial template), reload
         if (/^\s*<!DOCTYPE/i.test(html) || /^\s*<html/i.test(html)) {
           window.location.reload(); return;
         }
         grid.innerHTML = html;
+        // Re-attach drag-and-drop to newly rendered cards
+        attachDragHandlers();
         if (typeof window.initFileGrid === 'function') window.initFileGrid();
-        attachDragHandlers(); // re-attach drag to newly rendered cards
       })
-      .catch(function () { window.location.reload(); });
+      .catch(function (reason) {
+        if (reason !== 'unavailable') window.location.reload();
+      });
   }
 
   window.refreshFileGrid = refreshFileGrid;
@@ -250,8 +274,8 @@
   });
 
   // ── Delete file ─────────────────────────────────────────────────────────────
-  intercept(/\/files\/\d+\/delete\/?/, function (form) {
-    var m = form.action.match(/\/files\/(\d+)\/delete/);
+  intercept(/\/files\/[0-9a-f-]+\/delete\/?/, function (form) {
+    var m = form.action.match(/\/files\/([0-9a-f-]+)\/delete/);
     post(form.action, new FormData(),
       function (d) {
         toast(d.message || 'File deleted.', 'success');
@@ -264,7 +288,7 @@
   });
 
   // ── Share file ──────────────────────────────────────────────────────────────
-  intercept(/\/files\/\d+\/share\/?/, function (form) {
+  intercept(/\/files\/[0-9a-f-]+\/share\/?/, function (form) {
     var fd  = new FormData(form);
     var btn = form.querySelector('[type="submit"]');
     if (btn) btn.disabled = true;
@@ -297,8 +321,8 @@
   });
 
   // ── Delete folder ───────────────────────────────────────────────────────────
-  intercept(/\/files\/folder\/\d+\/delete\/?/, function (form) {
-    var m = form.action.match(/\/files\/folder\/(\d+)\/delete/);
+  intercept(/\/files\/folder\/[0-9a-f-]+\/delete\/?/, function (form) {
+    var m = form.action.match(/\/files\/folder\/([0-9a-f-]+)\/delete/);
     post(form.action, new FormData(),
       function (d) {
         toast(d.message || 'Folder deleted.', 'success');
@@ -311,7 +335,7 @@
   });
 
   // ── Share folder ────────────────────────────────────────────────────────────
-  intercept(/\/files\/folder\/\d+\/share\/?/, function (form) {
+  intercept(/\/files\/folder\/[0-9a-f-]+\/share\/?/, function (form) {
     var fd  = new FormData(form);
     var btn = form.querySelector('[type="submit"]');
     if (btn) btn.disabled = true;
@@ -329,8 +353,8 @@
   });
 
   // ── Rename file ─────────────────────────────────────────────────────────────
-  intercept(/\/files\/\d+\/rename\/?/, function (form) {
-    var m  = form.action.match(/\/files\/(\d+)\/rename/);
+  intercept(/\/files\/[0-9a-f-]+\/rename\/?/, function (form) {
+    var m  = form.action.match(/\/files\/([0-9a-f-]+)\/rename/);
     var fd = new FormData(form);
     post(form.action, fd,
       function (d) {
@@ -343,8 +367,8 @@
   });
 
   // ── Rename folder ───────────────────────────────────────────────────────────
-  intercept(/\/files\/folder\/\d+\/rename\/?/, function (form) {
-    var m  = form.action.match(/\/files\/folder\/(\d+)\/rename/);
+  intercept(/\/files\/folder\/[0-9a-f-]+\/rename\/?/, function (form) {
+    var m  = form.action.match(/\/files\/folder\/([0-9a-f-]+)\/rename/);
     var fd = new FormData(form);
     post(form.action, fd,
       function (d) {

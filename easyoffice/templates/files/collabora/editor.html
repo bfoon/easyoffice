@@ -1,0 +1,292 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Editing {{ file.name }} — EasyOffice{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'file_manager' %}">File Manager</a>
+  <span class="sep">›</span>
+  <span>Editing {{ file.name }}</span>
+{% endblock %}
+
+{% block content %}
+<style>
+  /* Full-viewport editor — the iframe needs room to breathe. */
+  .ce-wrap {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--eo-bg, #f5f7fa);
+    z-index: 10;
+  }
+  .ce-topbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 18px;
+    background: var(--eo-surface, #fff);
+    border-bottom: 1px solid var(--eo-border, #e5e7eb);
+    height: 52px;
+    flex-shrink: 0;
+  }
+  .ce-title {
+    font-weight: 700;
+    font-size: .95rem;
+    color: var(--eo-text, #111);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ce-perm-badge {
+    font-size: .7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    padding: 3px 9px;
+    border-radius: 12px;
+  }
+  .ce-perm-view { background: #fef3c7; color: #92400e; }
+  .ce-perm-edit { background: #dbeafe; color: #1e40af; }
+  .ce-perm-full { background: #dcfce7; color: #166534; }
+
+  .ce-presence {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ce-avatars {
+    display: flex;
+    align-items: center;
+  }
+  .ce-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--eo-accent, #4f46e5);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .7rem;
+    font-weight: 700;
+    border: 2px solid var(--eo-surface, #fff);
+    margin-left: -8px;
+    position: relative;
+    cursor: default;
+  }
+  .ce-avatar:first-child { margin-left: 0; }
+  .ce-avatar[data-perm="view"] { background: #f59e0b; }
+  .ce-avatar[data-perm="edit"] { background: #3b82f6; }
+  .ce-avatar[data-perm="full"] { background: #10b981; }
+
+  .ce-count {
+    font-size: .8rem;
+    color: var(--eo-text-muted, #666);
+  }
+
+  .ce-close {
+    padding: 6px 14px;
+    background: transparent;
+    border: 1px solid var(--eo-border, #e5e7eb);
+    border-radius: 6px;
+    color: var(--eo-text, #111);
+    font-size: .82rem;
+    cursor: pointer;
+  }
+  .ce-close:hover { background: var(--eo-bg, #f5f7fa); }
+
+  .ce-frame-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+  #collaboraFrame {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    display: block;
+  }
+  .ce-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: var(--eo-surface, #fff);
+    color: var(--eo-text-muted, #666);
+    font-size: .9rem;
+    z-index: 5;
+  }
+  .ce-loading.hidden { display: none; }
+  .ce-spinner {
+    width: 40px; height: 40px;
+    border: 3px solid var(--eo-border, #e5e7eb);
+    border-top-color: var(--eo-accent, #4f46e5);
+    border-radius: 50%;
+    animation: ce-spin 0.9s linear infinite;
+  }
+  @keyframes ce-spin { to { transform: rotate(360deg); } }
+
+  .ce-error {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: var(--eo-surface, #fff);
+    padding: 30px;
+    text-align: center;
+    z-index: 6;
+  }
+  .ce-error.visible { display: flex; }
+  .ce-error h3 { color: #dc2626; margin: 0; }
+</style>
+
+<div class="ce-wrap">
+  <div class="ce-topbar">
+    <i class="bi {{ file.icon_class }}" style="font-size:1.4rem;color:{{ file.icon_color }}"></i>
+    <div class="ce-title" title="{{ file.name }}">{{ file.name }}</div>
+
+    <span class="ce-perm-badge ce-perm-{{ permission }}">
+      {% if permission == 'view' %}Read-only
+      {% elif permission == 'edit' %}Can edit
+      {% else %}Full access{% endif %}
+    </span>
+
+    <div class="ce-presence" id="cePresence">
+      <div class="ce-avatars" id="ceAvatars">
+        <!-- Filled in by collabora_presence.js -->
+      </div>
+      <span class="ce-count" id="ceCount">1 editor</span>
+    </div>
+
+    <button class="ce-close" onclick="window.location.href='{% url 'file_manager' %}'">
+      <i class="bi bi-x-lg"></i> Close
+    </button>
+  </div>
+
+  <div class="ce-frame-wrap">
+    <div class="ce-loading" id="ceLoading">
+      <div class="ce-spinner"></div>
+      <div>Loading collaborative editor…</div>
+    </div>
+
+    <div class="ce-error" id="ceError">
+      <i class="bi bi-exclamation-triangle-fill" style="font-size:2.5rem;color:#dc2626"></i>
+      <h3>Editor failed to load</h3>
+      <p id="ceErrorMsg" style="color:var(--eo-text-muted);max-width:460px"></p>
+      <button class="ce-close" onclick="window.location.reload()">Try again</button>
+    </div>
+
+    {#
+      Collabora Online requires a POST to load the editor (tokens can be
+      longer than URL limits allow, and some WOPI-host tokens contain
+      characters that URL encoding handles poorly). We submit an invisible
+      form whose target is the iframe.
+    #}
+    <iframe name="collaboraFrame" id="collaboraFrame" allowfullscreen
+            allow="clipboard-read; clipboard-write"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals"></iframe>
+
+    <form id="ceLaunchForm"
+          action="{{ editor_url|escape }}"
+          method="post"
+          target="collaboraFrame"
+          style="display:none">
+      <input type="hidden" name="access_token"     value="{{ access_token }}"/>
+      <input type="hidden" name="access_token_ttl" value="{{ token_ttl_ms }}"/>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var SESSION_ID  = '{{ session.pk }}';
+  var FILE_ID     = '{{ file.pk }}';
+  var PING_URL    = '{% url "collabora_presence_ping" %}';
+  var END_URL     = '{% url "collabora_presence_end" %}';
+  var CSRF        = (document.cookie.match(/(^|;)\s*csrftoken=([^;]+)/) || [])[2] || '';
+
+  // ── Launch the editor form submission ────────────────────────────────────
+  // We do this after a paint so the loading spinner appears immediately.
+  window.requestAnimationFrame(function () {
+    try {
+      document.getElementById('ceLaunchForm').submit();
+    } catch (e) {
+      showError('Could not launch editor: ' + e.message);
+      return;
+    }
+
+    // Hide the spinner once the iframe reports it's loaded. Give up after
+    // 30 seconds and show an error — this usually means Collabora is
+    // unreachable or the WOPI endpoint rejected the token.
+    var frame = document.getElementById('collaboraFrame');
+    var hideTimer = setTimeout(function () {
+      showError('The editor is taking longer than usual to load. Check that the Collabora Online server is reachable.');
+    }, 30000);
+
+    frame.addEventListener('load', function () {
+      clearTimeout(hideTimer);
+      document.getElementById('ceLoading').classList.add('hidden');
+    });
+  });
+
+  function showError(msg) {
+    document.getElementById('ceLoading').classList.add('hidden');
+    document.getElementById('ceErrorMsg').textContent = msg;
+    document.getElementById('ceError').classList.add('visible');
+  }
+
+  // ── Presence: ping every 30s so the UI shows us as active ───────────────
+  function ping() {
+    fetch(PING_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF },
+      credentials: 'same-origin',
+      body: JSON.stringify({ session_id: SESSION_ID }),
+    }).catch(function () { /* silent — we'll retry */ });
+  }
+  ping();
+  var pingTimer = setInterval(ping, 30000);
+
+  // ── End the session cleanly on tab close ─────────────────────────────────
+  // `fetch` with keepalive:true survives page unload; sendBeacon is a
+  // nicer fallback if fetch-keepalive isn't supported.
+  window.addEventListener('beforeunload', function () {
+    clearInterval(pingTimer);
+    var body = JSON.stringify({ session_id: SESSION_ID });
+    try {
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(
+          END_URL,
+          new Blob([body], { type: 'application/json' })
+        );
+      } else {
+        fetch(END_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF },
+          credentials: 'same-origin',
+          body: body,
+          keepalive: true,
+        });
+      }
+    } catch (_) { /* best-effort */ }
+  });
+
+  // ── Presence avatars: subscribe over WebSocket ───────────────────────────
+  // We reuse the same widget as the file card.
+  window.CE_FILE_ID = FILE_ID;
+  window.CE_AVATARS_EL = document.getElementById('ceAvatars');
+  window.CE_COUNT_EL   = document.getElementById('ceCount');
+})();
+</script>
+
+<script src="{% static 'js/collabora_presence.js' %}"></script>
+{% endblock %}

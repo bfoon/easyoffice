@@ -14,6 +14,18 @@ Options
 --dry-run     Print statistics without writing anything to the database.
 
 The command is idempotent – running it multiple times is safe.
+
+IMPORTANT
+---------
+This command MUST bypass:
+  1. The post_init signal (which would auto-decrypt content on load).
+  2. The save() override in EncryptedContentMixin (which would re-encrypt).
+
+It does this by:
+  1. Reading raw DB values with .values_list("id", "content") — no model
+     instantiation, no post_init signal fires.
+  2. Writing with ChatMessage.objects.filter(pk=...).update(content=...) —
+     goes straight to SQL UPDATE, never calls save().
 """
 
 import logging
@@ -47,56 +59,72 @@ class Command(BaseCommand):
         batch_size = options["batch_size"]
         dry_run    = options["dry_run"]
 
-        total     = ChatMessage.objects.count()
-        processed = 0
-        skipped   = 0
-        errors    = 0
-
+        total = ChatMessage.objects.count()
         self.stdout.write(f"Total messages: {total}")
         if dry_run:
             self.stdout.write(self.style.WARNING("DRY RUN – no writes will occur."))
 
+        processed = 0
+        skipped   = 0
+        errors    = 0
+
+        # ───────────────────────────────────────────────────────────────
+        # Read RAW content via values_list — bypasses post_init signal.
+        # ───────────────────────────────────────────────────────────────
         qs = (
             ChatMessage.objects
-            .only("id", "content")
+            .values_list("id", "content")
             .iterator(chunk_size=batch_size)
         )
 
-        batch = []
-        for msg in qs:
-            raw = msg.content or ""
+        batch = []   # list of (id, new_encrypted_content) tuples
+
+        def flush(pending):
+            """Write a batch via .filter().update() — bypasses save() override."""
+            nonlocal errors
+            if not pending:
+                return 0
+            if dry_run:
+                return len(pending)
+            try:
+                with transaction.atomic():
+                    for row_id, new_content in pending:
+                        ChatMessage.objects.filter(pk=row_id).update(content=new_content)
+                return len(pending)
+            except Exception:
+                logger.exception("Bulk update failed for a batch")
+                errors += len(pending)
+                return 0
+
+        for row_id, raw in qs:
+            raw = raw or ""
             if not raw or is_encrypted(raw):
                 skipped += 1
                 continue
 
-            msg.content = encrypt_content(raw)
-            batch.append(msg)
+            try:
+                new_content = encrypt_content(raw)
+            except Exception:
+                logger.exception("Encryption failed for message %s", row_id)
+                errors += 1
+                continue
+
+            batch.append((row_id, new_content))
 
             if len(batch) >= batch_size:
-                if not dry_run:
-                    try:
-                        with transaction.atomic():
-                            ChatMessage.objects.bulk_update(batch, ["content"])
-                    except Exception:
-                        logger.exception("Bulk update failed for a batch")
-                        errors += len(batch)
-                processed += len(batch)
+                flushed = flush(batch)
+                processed += flushed
                 batch = []
                 self.stdout.write(f"  … encrypted {processed} so far")
 
         # final partial batch
         if batch:
-            if not dry_run:
-                try:
-                    with transaction.atomic():
-                        ChatMessage.objects.bulk_update(batch, ["content"])
-                except Exception:
-                    logger.exception("Bulk update failed for final batch")
-                    errors += len(batch)
-            processed += len(batch)
+            flushed = flush(batch)
+            processed += flushed
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"\nDone. encrypted={processed}, skipped(already enc)={skipped}, errors={errors}"
+                f"\nDone. encrypted={processed}, "
+                f"skipped(already enc or empty)={skipped}, errors={errors}"
             )
         )

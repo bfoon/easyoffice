@@ -1,0 +1,43 @@
+{#
+  apps/files/collabora/templates/files/collabora/_editor_button.html
+
+  Drop-in include for _file_grid.html. Shows:
+    - An "Edit" button for editable types (docx/xlsx/pptx) when the user
+      has at least 'view' permission. Collabora handles read-only mode
+      internally — you still want view-only users to be able to see the
+      live document.
+    - A small avatar stack showing who's currently editing this file.
+      Populated asynchronously via the presence API to avoid N+1 queries
+      on the file grid render.
+
+  Usage (in _file_grid.html, inside each file card's actions div):
+
+      {% include 'files/collabora/_editor_button.html' with file=file %}
+
+  Requires: `file` in context with .extension, .pk, .user_permission.
+#}
+{% with ext=file.extension %}
+  {% if ext == 'docx' or ext == 'xlsx' or ext == 'pptx' %}
+    {% if file.user_permission %}
+      <a href="{% url 'collabora_editor' file.pk %}"
+         class="fm-action-btn"
+         target="_blank"
+         rel="noopener"
+         title="Open in collaborative editor"
+         style="color:#2563eb">
+        <i class="bi bi-pencil-square"></i>
+      </a>
+      <span class="ce-card-presence"
+            data-file-id="{{ file.pk }}"
+            style="display:none"
+            title="People currently editing">
+        <span class="ce-card-avatars"></span>
+        <span class="ce-card-badge"
+              style="font-size:.7rem;font-weight:700;color:var(--eo-accent);margin-left:4px">
+          <i class="bi bi-people-fill"></i>
+          <span class="ce-card-count">0</span>
+        </span>
+      </span>
+    {% endif %}
+  {% endif %}
+{% endwith %}

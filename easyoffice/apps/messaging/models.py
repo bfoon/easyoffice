@@ -3,6 +3,7 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from apps.core.models import User
+from apps.messaging.models_mixin import EncryptedContentMixin, _connect_post_init
 
 
 class ChatRoom(models.Model):
@@ -59,7 +60,15 @@ class ChatRoomMember(models.Model):
         return f'{self.user} @ {self.room}'
 
 
-class ChatMessage(models.Model):
+class ChatMessage(EncryptedContentMixin, models.Model):
+    """
+    Chat message with transparent at-rest encryption of `content`.
+
+    * `save()` (via EncryptedContentMixin) encrypts `content` before write.
+    * `post_init` signal (connected at bottom of this module) decrypts
+      `content` automatically on every ORM load.
+    """
+
     class MessageType(models.TextChoices):
         TEXT = 'text', _('Text')
         FILE = 'file', _('File')
@@ -93,7 +102,7 @@ class ChatMessage(models.Model):
         ordering = ['created_at']
 
     def __str__(self):
-        return f'{self.sender} -> {self.room}: {self.content[:30]}'
+        return f'{self.sender} -> {self.room}: {(self.content or "")[:30]}'
 
     @property
     def effective_file_url(self):
@@ -212,3 +221,10 @@ class ChatPollVote(models.Model):
 
     def __str__(self):
         return f'{self.user} -> {self.option}'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Wire up transparent decryption on ORM load
+# MUST be at the bottom, AFTER ChatMessage is defined.
+# ─────────────────────────────────────────────────────────────────────────────
+_connect_post_init(ChatMessage)

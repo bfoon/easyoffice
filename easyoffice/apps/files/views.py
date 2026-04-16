@@ -1235,6 +1235,38 @@ def _unique_file_name_for_folder(base_name, folder):
 class FileManagerView(LoginRequiredMixin, TemplateView):
     template_name = 'files/file_manager.html'
 
+    def get(self, request, *args, **kwargs):
+        ctx = self.get_context_data(**kwargs)
+
+        if (request.GET.get('partial') == '1'
+                and request.headers.get('X-Requested-With') == 'XMLHttpRequest'):
+            # Partial render — try dedicated partial template first,
+            # then fall back to rendering the grid section inline.
+            # This works even if _file_grid.html has not been copied to
+            # the templates directory yet.
+            from django.template.loader import render_to_string
+            from django.template.exceptions import TemplateDoesNotExist
+            from django.http import HttpResponse
+
+            for tmpl_name in ['files/_file_grid.html', 'files/file_manager_grid.html']:
+                try:
+                    html = render_to_string(tmpl_name, ctx, request=request)
+                    return HttpResponse(html)
+                except TemplateDoesNotExist:
+                    continue
+                except Exception:
+                    break  # unexpected error — fall through to full page
+
+            # Last resort: render the full template but extract the #fileGrid
+            # section so the JS doesn't detect DOCTYPE and hard-reload.
+            # We signal "no partial available" with a custom header so the JS
+            # can reload properly if needed.
+            response = self.render_to_response(ctx)
+            response['X-Partial-Unavailable'] = '1'
+            return response
+
+        return self.render_to_response(ctx)
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         user = self.request.user

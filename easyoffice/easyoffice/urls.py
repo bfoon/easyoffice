@@ -35,6 +35,7 @@ urlpatterns = [
 
     # Files
     path('files/', include('apps.files.urls')),
+    path('files/collabora/', include('apps.files.collabora.urls')),
 
     # Finance
     path('finance/', include('apps.finance.urls')),

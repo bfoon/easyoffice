@@ -1,0 +1,463 @@
+{% load humanize %}
+
+      <!-- Active filter chip -->
+      {% if filter_mode or type_cat or q %}
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+        <span style="font-size:.75rem;color:var(--eo-text-muted)">Showing:</span>
+        {% if filter_mode %}
+        <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:var(--eo-accent)12;border:1px solid var(--eo-accent)30;border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-accent)">
+          {{ filter_mode|capfirst }}
+          <a href="{% url 'file_manager' %}{% if type_cat %}?type={{ type_cat }}{% endif %}" style="color:inherit;line-height:1;margin-left:2px">×</a>
+        </span>
+        {% endif %}
+        {% if type_cat %}
+        <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:var(--eo-accent)12;border:1px solid var(--eo-accent)30;border-radius:20px;font-size:.75px;font-weight:600;color:var(--eo-accent)">
+          {{ type_cat|capfirst }}
+          <a href="{% url 'file_manager' %}{% if filter_mode %}?filter={{ filter_mode }}{% endif %}" style="color:inherit;line-height:1;margin-left:2px">×</a>
+        </span>
+        {% endif %}
+        {% if q %}
+        <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:var(--eo-accent)12;border:1px solid var(--eo-accent)30;border-radius:20px;font-size:.75rem;font-weight:600;color:var(--eo-accent)">
+          "{{ q }}"
+          <a href="{% url 'file_manager' %}" style="color:inherit;line-height:1;margin-left:2px">×</a>
+        </span>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% if not files and not folders %}
+      <!-- ─── EMPTY STATE ─── -->
+      <div class="fm-empty">
+        <i class="bi bi-folder2-open" style="font-size:3rem;color:var(--eo-text-light);margin-bottom:14px;display:block"></i>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text);margin-bottom:6px">
+          {% if q %}No results for "{{ q }}"{% elif current_folder %}This folder is empty{% else %}No files yet{% endif %}
+        </div>
+        <p style="font-size:.85rem;color:var(--eo-text-muted);margin-bottom:20px;max-width:300px">
+          {% if q %}Try a different search term or browse by category.
+          {% else %}Upload your first file or create a folder to organise your documents.{% endif %}
+        </p>
+        {% if not q %}
+        <button class="eo-btn eo-btn-primary" onclick="openModal('uploadModal')">
+          <i class="bi bi-cloud-upload"></i> Upload a File
+        </button>
+        {% endif %}
+      </div>
+      {% else %}
+
+      <div class="fm-drop-root" id="rootDropZone" data-drop-folder-id="">
+        <div style="display:flex;align-items:center;gap:10px">
+          <i class="bi bi-hdd" style="font-size:1.1rem;color:var(--eo-accent)"></i>
+          <div>
+            <div style="font-weight:700;color:var(--eo-text);font-size:.86rem">Quick move to My Drive</div>
+            <div style="font-size:.74rem;color:var(--eo-text-muted)">Drag a file or folder here to move it to root</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── GRID VIEW ─── -->
+      <div id="viewGrid">
+
+        <!-- Folders row -->
+        {% if folders %}
+        {% with has_pinned=folders|dictsort:"is_pinned" %}
+        <div style="font-size:.75rem;font-weight:700;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Folders</div>
+        {% endwith %}
+        <div class="fm-grid" style="margin-bottom:20px">
+          {% for folder in folders %}
+          {% if forloop.first and folder.is_pinned %}
+          <div style="grid-column:1/-1" class="fm-pinned-label"><i class="bi bi-pin-angle-fill"></i> Pinned</div>
+          {% endif %}
+          {% if not folder.is_pinned and forloop.counter > 1 %}
+          {% with prev=folders|slice:forloop.counter0|last %}
+          {% if prev.is_pinned %}
+          <div style="grid-column:1/-1" class="fm-pinned-label" style="color:var(--eo-text-muted)"><i class="bi bi-files"></i> All Folders</div>
+          {% endif %}
+          {% endwith %}
+          {% endif %}
+          <div style="position:relative"
+             class="fm-draggable fm-drop-target"
+             draggable="true"
+             data-item-type="folder"
+             data-item-id="{{ folder.id }}"
+             data-folder-id="{{ folder.id }}"
+             data-drop-folder-id="{{ folder.id }}"
+             data-folder-name="{{ folder.name|escapejs }}">
+            <a href="?folder={{ folder.id }}" class="fm-folder-card" draggable="false" style="border-left:4px solid {{ folder.color }}">
+              <i class="bi bi-folder-fill fm-card-icon" style="color:{{ folder.color }}"></i>
+              <div class="fm-card-name folder-name">{{ folder.name|truncatechars:40 }}</div>
+              <div class="fm-card-meta">
+                <i class="bi bi-file2"></i>
+                {{ folder.file_count }} file{{ folder.file_count|pluralize }}
+                &nbsp;·&nbsp;
+                <span style="text-transform:capitalize">{{ folder.visibility }}</span>
+              </div>
+            </a>
+            <div class="fm-card-actions">
+              <!-- Pin button -->
+              <button class="fm-action-btn {% if folder.is_pinned %}shared-active{% endif %}"
+                      title="{% if folder.is_pinned %}Unpin{% else %}Pin to top{% endif %}"
+                      onclick="event.preventDefault();togglePin('folder','{{ folder.id }}',this)">
+                <i class="bi bi-pin-angle{% if folder.is_pinned %}-fill{% endif %}"></i>
+              </button>
+              {% if folder.user_permission == 'edit' or folder.user_permission == 'full' %}
+              <button class="fm-action-btn {% if folder.visibility != 'private' %}shared-active{% endif %}" title="Share" onclick="event.preventDefault();openShareModal(
+                    '{{ folder.id }}',
+                    '{{ folder.name|escapejs }}',
+                    '{{ folder.visibility }}',
+                    'folder',
+                    {{ folder.shared_user_ids|default:'[]' }},
+                    '{{ folder.unit_id|default:'' }}',
+                    '{{ folder.department_id|default:'' }}',
+                    {{ folder.share_access_data|default:'{}' }},
+                    '{{ folder.user_permission }}',
+                    {
+                      shareChildren: {{ folder.share_children|yesno:"true,false" }},
+                      inheritParentSharing: {{ folder.inherit_parent_sharing|yesno:"true,false" }}
+                    }
+                  )">
+                <i class="bi bi-share"></i>
+              </button>
+              {% endif %}
+              {% if folder.user_permission == 'edit' or folder.user_permission == 'full' %}
+              <button class="fm-action-btn" title="Rename"
+                      onclick="event.preventDefault();openRenameModal('folder','{{ folder.id }}','{{ folder.name|escapejs }}')">
+                <i class="bi bi-pencil"></i>
+              </button>
+              {% endif %}
+              {% if folder.user_permission == 'full' %}
+              <form method="post" action="{% url 'folder_delete' folder.id %}" style="display:inline"
+                    onsubmit="return confirm('Delete folder {{ folder.name|escapejs }}? Files inside will be moved to root.')">
+                {% csrf_token %}
+                <button class="fm-action-btn danger" type="submit" title="Delete folder">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- Files grid -->
+        {% if files %}
+        {% if folders %}<div style="font-size:.75rem;font-weight:700;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Files</div>{% endif %}
+        <div class="fm-grid">
+          {% for file in files %}
+          <div style="position:relative"
+             class="fm-draggable"
+             draggable="true"
+             data-item-type="file"
+             data-item-id="{{ file.id }}"
+             data-file-id="{{ file.id }}"
+             data-file-name="{{ file.name|escapejs }}">
+            <a href="{% url 'file_download' file.pk %}" class="fm-file-card" draggable="false" title="{{ file.name }}">
+              <span class="fm-vis-badge vis-{{ file.visibility }}">{{ file.get_visibility_display }}</span>
+              <i class="bi {{ file.icon_class }} fm-card-icon" style="color:{{ file.icon_color }};margin-top:18px"></i>
+              <div class="fm-card-name file-name">{{ file.name|truncatechars:40 }}</div>
+              <div class="fm-card-meta">
+                {{ file.size_display }}
+                {% if file.download_count %}· <i class="bi bi-download" style="font-size:.65rem"></i> {{ file.download_count }}{% endif %}
+              </div>
+              <div class="fm-card-meta" style="margin-top:2px">
+                {{ file.created_at|date:"N j, Y" }}
+              </div>
+            </a>
+            <div class="fm-card-actions">
+              {# Download — always visible to anyone who can see the file #}
+              <a href="{% url 'file_download' file.pk %}" class="fm-action-btn" title="Download">
+                <i class="bi bi-download"></i>
+              </a>
+              <!-- Pin button -->
+              <button class="fm-action-btn {% if file.is_pinned %}shared-active{% endif %}"
+                      title="{% if file.is_pinned %}Unpin{% else %}Pin to top{% endif %}"
+                      onclick="event.preventDefault();togglePin('file','{{ file.id }}',this)">
+                <i class="bi bi-pin-angle{% if file.is_pinned %}-fill{% endif %}"></i>
+              </button>
+              {% if file.user_permission == 'edit' or file.user_permission == 'full' %}
+              {# ── edit + full: share, move, history, convert, signature ── #}
+              <button class="fm-action-btn {% if file.visibility != 'private' %}shared-active{% endif %}" title="Share"
+                      onclick="event.preventDefault();openShareModal(
+                        '{{ file.id }}',
+                        '{{ file.name|escapejs }}',
+                        '{{ file.visibility }}',
+                        'file',
+                        {{ file.shared_user_ids|default:'[]' }},
+                        '{{ file.unit_id|default:'' }}',
+                        '{{ file.department_id|default:'' }}',
+                        {{ file.share_access_data|default:'{}' }},
+                        '{{ file.user_permission }}',
+                        {
+                          inheritFolderSharing: {{ file.inherit_folder_sharing|yesno:"true,false" }}
+                        }
+                      )">
+                <i class="bi bi-share"></i>
+              </button>
+              <button class="fm-action-btn" title="Move to folder"
+                      onclick="event.preventDefault();openMoveModal('{{ file.id }}','{{ file.name|escapejs }}')">
+                <i class="bi bi-folder-symlink"></i>
+              </button>
+              <a href="{% url 'file_history' file.pk %}" class="fm-action-btn" title="History">
+                <i class="bi bi-clock-history"></i>
+              </a>
+              {% if file.is_convertible %}
+              <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
+                <button class="fm-action-btn" type="submit" title="Convert to PDF" style="color:#ef4444">
+                  <i class="bi bi-file-earmark-pdf"></i>
+                </button>
+              </form>
+              {% endif %}
+              <a href="{% url 'create_signature_request' file.pk %}"
+                 class="fm-action-btn" title="Send for Signature" style="color:#8b5cf6">
+                <i class="bi bi-pen"></i>
+              </a>
+              {% endif %}
+              {% if file.user_permission == 'edit' or file.user_permission == 'full' %}
+              <button class="fm-action-btn" title="Rename"
+                      onclick="event.preventDefault();openRenameModal('file','{{ file.id }}','{{ file.name|escapejs }}')">
+                <i class="bi bi-pencil"></i>
+              </button>
+              {% endif %}
+              {% if file.user_permission == 'full' %}
+              {# ── full only: delete ── #}
+              <form method="post" action="{% url 'file_delete' file.pk %}" style="display:inline"
+                    onsubmit="return confirm('Delete {{ file.name|escapejs }}? This cannot be undone.')">
+                {% csrf_token %}
+                <button class="fm-action-btn danger" type="submit" title="Delete">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+      </div><!-- /viewGrid -->
+
+      <!-- ─── LIST VIEW ─── -->
+      <div id="viewList" style="display:none">
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--eo-border);border-radius:var(--eo-radius);background:var(--eo-surface)">
+          <table class="eo-table" style="margin:0;min-width:780px;white-space:nowrap">
+            <thead>
+              <tr>
+                <th style="padding-left:14px;min-width:200px;white-space:normal">
+                  <a href="?{% if sort == 'name' %}sort=-name{% else %}sort=name{% endif %}{% if q %}&q={{ q }}{% endif %}{% if filter_mode %}&filter={{ filter_mode }}{% endif %}{% if folder_id %}&folder={{ folder_id }}{% endif %}{% if type_cat %}&type={{ type_cat }}{% endif %}"
+                     class="fm-sort-th {% if sort == 'name' or sort == '-name' %}active{% endif %}">
+                    Name
+                    <i class="bi bi-arrow-{% if sort == 'name' %}up{% elif sort == '-name' %}down{% else %}down-up{% endif %} fm-sort-icon"></i>
+                  </a>
+                </th>
+                <th style="min-width:120px">
+                  <span class="fm-sort-th">Uploader</span>
+                </th>
+                <th style="min-width:100px">
+                  <span class="fm-sort-th">Folder</span>
+                </th>
+                <th style="min-width:80px">
+                  <a href="?{% if sort == '-file_size' %}sort=file_size{% else %}sort=-file_size{% endif %}{% if q %}&q={{ q }}{% endif %}{% if filter_mode %}&filter={{ filter_mode }}{% endif %}{% if folder_id %}&folder={{ folder_id }}{% endif %}{% if type_cat %}&type={{ type_cat }}{% endif %}"
+                     class="fm-sort-th {% if sort == 'file_size' or sort == '-file_size' %}active{% endif %}">
+                    Size
+                    <i class="bi bi-arrow-{% if sort == 'file_size' %}up{% elif sort == '-file_size' %}down{% else %}down-up{% endif %} fm-sort-icon"></i>
+                  </a>
+                </th>
+                <th style="min-width:100px">
+                  <span class="fm-sort-th">Visibility</span>
+                </th>
+                <th style="min-width:110px">
+                  <a href="?{% if sort == '-created_at' %}sort=created_at{% else %}sort=-created_at{% endif %}{% if q %}&q={{ q }}{% endif %}{% if filter_mode %}&filter={{ filter_mode }}{% endif %}{% if folder_id %}&folder={{ folder_id }}{% endif %}{% if type_cat %}&type={{ type_cat }}{% endif %}"
+                     class="fm-sort-th {% if sort == 'created_at' or sort == '-created_at' %}active{% endif %}">
+                    Uploaded
+                    <i class="bi bi-arrow-{% if sort == 'created_at' %}up{% elif sort == '-created_at' %}down{% else %}down-up{% endif %} fm-sort-icon"></i>
+                  </a>
+                </th>
+                <th style="min-width:90px">
+                  <a href="?{% if sort == '-download_count' %}sort=download_count{% else %}sort=-download_count{% endif %}{% if q %}&q={{ q }}{% endif %}{% if filter_mode %}&filter={{ filter_mode }}{% endif %}{% if folder_id %}&folder={{ folder_id }}{% endif %}{% if type_cat %}&type={{ type_cat }}{% endif %}"
+                     class="fm-sort-th {% if sort == 'download_count' or sort == '-download_count' %}active{% endif %}">
+                    Downloads
+                    <i class="bi bi-arrow-{% if sort == 'download_count' %}up{% elif sort == '-download_count' %}down{% else %}down-up{% endif %} fm-sort-icon"></i>
+                  </a>
+                </th>
+                <th style="min-width:220px"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for folder in folders %}
+              <tr data-folder-id="{{ folder.id }}">
+                <td>
+                  <a href="?folder={{ folder.id }}" style="display:flex;align-items:center;gap:10px;text-decoration:none">
+                    <i class="bi bi-folder-fill" style="font-size:1.2rem;color:{{ folder.color }};flex-shrink:0"></i>
+                    <div>
+                      <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">{{ folder.name|truncatechars:40 }}</div>
+                      <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ folder.file_count }} file{{ folder.file_count|pluralize }}</div>
+                    </div>
+                  </a>
+                </td>
+                <td style="font-size:.82rem;color:var(--eo-text-muted)">{{ folder.owner.full_name }}</td>
+                <td style="font-size:.82rem;color:var(--eo-text-muted)">—</td>
+                <td>—</td>
+                <td>
+                  <span class="fm-vis-badge vis-{{ folder.visibility }}">{{ folder.get_visibility_display }}</span>
+                </td>
+                <td style="font-size:.8rem;color:var(--eo-text-muted)">{{ folder.created_at|date:"N j, Y" }}</td>
+                <td>—</td>
+                <td>
+                  <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon {% if folder.is_pinned %}shared-active-list{% endif %}"
+                          title="{% if folder.is_pinned %}Unpin{% else %}Pin to top{% endif %}"
+                          onclick="togglePin('folder','{{ folder.id }}',this)">
+                    <i class="bi bi-pin-angle{% if folder.is_pinned %}-fill{% endif %}"></i>
+                  </button>
+                  {% if folder.user_permission == 'edit' or folder.user_permission == 'full' %}
+                  <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon {% if folder.visibility != 'private' %}shared-active-list{% endif %}" title="Share"
+                          onclick="openShareModal(
+                          '{{ folder.id }}',
+                          '{{ folder.name|escapejs }}',
+                          '{{ folder.visibility }}',
+                          'folder',
+                          {{ folder.shared_user_ids|default:'[]' }},
+                          '{{ folder.unit_id|default:'' }}',
+                          '{{ folder.department_id|default:'' }}',
+                          {{ folder.share_access_data|default:'{}' }},
+                          '{{ folder.user_permission }}',
+                          {
+                            shareChildren: {{ folder.share_children|yesno:"true,false" }},
+                            inheritParentSharing: {{ folder.inherit_parent_sharing|yesno:"true,false" }}
+                          }
+                        )">
+                    <i class="bi bi-share"></i>
+                  </button>
+                  {% endif %}
+                  {% if folder.user_permission == 'edit' or folder.user_permission == 'full' %}
+                  <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Rename"
+                          onclick="openRenameModal('folder','{{ folder.id }}','{{ folder.name|escapejs }}')">
+                    <i class="bi bi-pencil"></i>
+                  </button>
+                  {% endif %}
+                  {% if folder.user_permission == 'full' %}
+                  <form method="post" action="{% url 'folder_delete' folder.id %}" style="display:inline"
+                        onsubmit="return confirm('Delete folder?')">
+                    {% csrf_token %}
+                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" type="submit" title="Delete"
+                            style="color:var(--eo-danger);border-color:var(--eo-danger)">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </form>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+
+              {% for file in files %}
+              <tr data-file-id="{{ file.id }}">
+                <td>
+                  <a href="{% url 'file_download' file.pk %}" style="display:flex;align-items:center;gap:10px;text-decoration:none">
+                    <i class="bi {{ file.icon_class }}" style="font-size:1.3rem;color:{{ file.icon_color }};flex-shrink:0"></i>
+                    <div>
+                      <div style="font-weight:600;font-size:.88rem;color:var(--eo-text)">{{ file.name|truncatechars:40 }}</div>
+                      {% if file.description %}
+                      <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ file.description|truncatechars:40 }}</div>
+                      {% endif %}
+                      {% if file.tag_list %}
+                      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:2px">
+                        {% for tag in file.tag_list %}
+                        <span style="padding:1px 6px;background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:4px;font-size:.65rem;color:var(--eo-text-muted)">{{ tag }}</span>
+                        {% endfor %}
+                      </div>
+                      {% endif %}
+                    </div>
+                  </a>
+                </td>
+                <td>
+                  <a href="{% url 'staff_detail' file.uploaded_by.pk %}" style="font-size:.82rem;color:var(--eo-text-muted);text-decoration:none;font-weight:600">
+                    {{ file.uploaded_by.full_name }}
+                  </a>
+                </td>
+                <td style="font-size:.8rem;color:var(--eo-text-muted)">
+                  {% if file.folder %}<a href="?folder={{ file.folder.id }}" style="color:var(--eo-text-muted)">{{ file.folder.name }}</a>{% else %}—{% endif %}
+                </td>
+                <td style="font-size:.82rem;color:var(--eo-text-muted);white-space:nowrap">{{ file.size_display }}</td>
+                <td>
+                  <span class="fm-vis-badge vis-{{ file.visibility }}">{{ file.get_visibility_display }}</span>
+                </td>
+                <td style="font-size:.8rem;color:var(--eo-text-muted);white-space:nowrap">{{ file.created_at|date:"N j, Y" }}</td>
+                <td style="font-size:.82rem;color:var(--eo-text-muted);text-align:center">{{ file.download_count }}</td>
+                <td>
+                  <div style="display:flex;gap:5px;justify-content:flex-end">
+                    {# Pin #}
+                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon {% if file.is_pinned %}shared-active-list{% endif %}"
+                            title="{% if file.is_pinned %}Unpin{% else %}Pin to top{% endif %}"
+                            onclick="togglePin('file','{{ file.id }}',this)">
+                      <i class="bi bi-pin-angle{% if file.is_pinned %}-fill{% endif %}"></i>
+                    </button>
+                    {% if file.user_permission == 'edit' or file.user_permission == 'full' %}
+                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Rename"
+                            onclick="openRenameModal('file','{{ file.id }}','{{ file.name|escapejs }}')">
+                      <i class="bi bi-pencil"></i>
+                    </button>
+                    {% endif %}
+                    {# Preview — always #}
+                    <button class="fm-action-btn" title="Preview"
+                           onclick="event.preventDefault(); openPreviewModal('{{ file.id }}', '{{ file.name|escapejs }}', '{{ file.extension|default:'' }}')">
+                      <i class="bi bi-eye"></i>
+                    </button>
+                    {# Download — always #}
+                    <a href="{% url 'file_download' file.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Download">
+                      <i class="bi bi-download"></i>
+                    </a>
+                    {% if file.user_permission == 'edit' or file.user_permission == 'full' %}
+                    {# ── edit + full ── #}
+                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon {% if file.visibility != 'private' %}shared-active-list{% endif %}" title="Share"
+                            onclick="openShareModal('{{ file.id }}','{{ file.name|escapejs }}','{{ file.visibility }}','file',{{ file.shared_user_ids|default:'[]' }},'','',{{ file.share_access_data|default:'{}' }},'{{ file.user_permission }}')">
+                      <i class="bi bi-share"></i>
+                    </button>
+                    <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="Move to folder"
+                            onclick="openMoveModal('{{ file.id }}','{{ file.name|escapejs }}')">
+                      <i class="bi bi-folder-symlink"></i>
+                    </button>
+                    <a href="{% url 'file_history' file.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" title="History">
+                      <i class="bi bi-clock-history"></i>
+                    </a>
+                    {% if file.is_convertible %}
+                    <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="display:inline">
+                      {% csrf_token %}
+                      <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
+                      <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" type="submit"
+                              style="color:#ef4444;border-color:#ef444430" title="Convert to PDF">
+                        <i class="bi bi-file-earmark-pdf"></i>
+                      </button>
+                    </form>
+                    {% endif %}
+                    <a href="{% url 'create_signature_request' file.pk %}"
+                       class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon"
+                       style="color:#8b5cf6;border-color:#8b5cf630" title="Send for Signature">
+                      <i class="bi bi-pen"></i>
+                    </a>
+                    {% endif %}
+                    {% if file.user_permission == 'full' %}
+                    {# ── full only: delete ── #}
+                    <form method="post" action="{% url 'file_delete' file.pk %}" style="display:inline"
+                          onsubmit="return confirm('Delete {{ file.name|escapejs }}?')">
+                      {% csrf_token %}
+                      <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" type="submit"
+                              style="color:var(--eo-danger);border-color:var(--eo-danger)" title="Delete">
+                        <i class="bi bi-trash"></i>
+                      </button>
+                    </form>
+                    {% endif %}
+                  </div>
+                </td>
+              </tr>
+              {% empty %}
+              {% if not folders %}
+              <tr><td colspan="8" style="text-align:center;padding:32px;color:var(--eo-text-muted)">No files found</td></tr>
+              {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div><!-- /viewList -->
+
+      {% endif %}

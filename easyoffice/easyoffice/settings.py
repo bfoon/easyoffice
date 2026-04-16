@@ -51,6 +51,7 @@ LOCAL_APPS = [
     'apps.dashboard',
     'apps.reports',
     'apps.meetings',
+    'apps.files.collabora',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -217,6 +218,40 @@ SECURE_PROXY_SSL_HEADER        = ('HTTP_X_FORWARDED_PROTO', 'https')
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 # Never commit the key value to source control.
 MESSAGING_ENCRYPTION_KEY = config('MESSAGING_ENCRYPTION_KEY', default='')
+
+# =============================================================
+# COLLABORA ONLINE (collaborative Word/Excel/PowerPoint editor)
+# =============================================================
+# Base URL of the Collabora Online server, reachable by the BROWSER.
+# e.g. https://cool.easyoffice.example.org  (no trailing slash)
+# Must be HTTPS in production — Collabora refuses to load over plain HTTP.
+COLLABORA_SERVER_URL = config('COLLABORA_SERVER_URL', default='')
+
+# URL where Django is reachable FROM the Collabora container.
+# - If Collabora reaches Django over the public internet: leave blank and
+#   the current request's scheme+host will be used (this works for most
+#   single-domain deployments).
+# - If Collabora runs on the same Docker network and can reach Django via
+#   an internal DNS name, set it here to skip a public round-trip:
+#   e.g. 'http://web:8000'  (where 'web' is the Django service name).
+COLLABORA_WOPI_HOST = config('COLLABORA_WOPI_HOST', default='')
+
+# Path to the Collabora editor entry point. Default works for the standard
+# collabora/code Docker image. Override only if your Collabora deployment
+# uses a non-standard entry path.
+COLLABORA_EDITOR_PATH = config('COLLABORA_EDITOR_PATH', default='/browser/dist/cool.html')
+
+# WOPI token lifetime in seconds. 10 hours is generous enough for long
+# editing stints; tokens are narrowly scoped (one file, one user, one
+# permission level) so a long TTL is safe.
+COLLABORA_TOKEN_TTL_SECONDS = config('COLLABORA_TOKEN_TTL_SECONDS', default=36000, cast=int)
+
+# Dedicated HMAC secret for WOPI tokens. Optional — falls back to
+# SECRET_KEY if unset. Setting a dedicated secret lets you rotate it
+# (invalidating all outstanding editor sessions) without logging
+# everyone out of the rest of the site.
+# Generate with:  python -c "import secrets; print(secrets.token_urlsafe(48))"
+COLLABORA_JWT_SECRET = config('COLLABORA_JWT_SECRET', default='')
 
 # =============================================================
 # REST FRAMEWORK

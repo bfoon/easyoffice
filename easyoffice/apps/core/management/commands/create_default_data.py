@@ -89,15 +89,16 @@ class Command(BaseCommand):
             })
         self.stdout.write('  ✓ Leave types')
 
-    # def _create_superuser(self):
-    #     if not User.objects.filter(email='office.administrator@easysolutions.gm').exists():
-    #         admin = User.objects.create_superuser(
-    #             username='officeadmin',
-    #             email='office.administrator@easysolutions.gm',
-    #             password='Admin@123!',
-    #             first_name='Office',
-    #             last_name='Administrator',
-    #         )
-    #         self.stdout.write(f'  ✓ Admin user created: admin@easyoffice.com / Admin@123!')
-    #     else:
-    #         self.stdout.write('  ✓ Admin user already exists')
+    def _create_superuser(self):
+        pass
+        # if not User.objects.filter(email='office.administrator@easysolutions.gm').exists():
+        #     admin = User.objects.create_superuser(
+        #         username='officeadmin',
+        #         email='office.administrator@easysolutions.gm',
+        #         password='Admin@123!',
+        #         first_name='Office',
+        #         last_name='Administrator',
+        #     )
+        #     self.stdout.write(f'  ✓ Admin user created: admin@easyoffice.com / Admin@123!')
+        # else:
+        #     self.stdout.write('  ✓ Admin user already exists')

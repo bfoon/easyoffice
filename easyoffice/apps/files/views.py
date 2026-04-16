@@ -39,6 +39,11 @@ from apps.files.models import (
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _is_ajax(request):
+    """True when the request was sent via fetch() with X-Requested-With header."""
+    return request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+
 def _get_client_ip(request):
     x_forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
     if x_forwarded:
@@ -1456,6 +1461,17 @@ class FileUploadView(LoginRequiredMixin, View):
 
         messages.success(request, f'"{sf.name}" uploaded successfully.')
 
+        if _is_ajax(request):
+            return JsonResponse({
+                'ok': True,
+                'message': f'"{sf.name}" uploaded successfully.',
+                'file': {
+                    'id': str(sf.pk),
+                    'name': sf.name,
+                    'folder_id': str(sf.folder_id) if sf.folder_id else '',
+                },
+            })
+
         next_url = request.POST.get('next', '')
         if next_url and next_url.startswith('/'):
             return redirect(next_url)
@@ -1807,6 +1823,8 @@ class FileDeleteView(LoginRequiredMixin, View):
         f = get_object_or_404(SharedFile, pk=pk)
 
         if not _can_delete_file(request.user, f):
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'Permission denied.'}, status=403)
             messages.error(request, 'You do not have permission to delete this file.')
             return redirect('file_manager')
 
@@ -1840,6 +1858,10 @@ class FileDeleteView(LoginRequiredMixin, View):
         f.delete()
 
         messages.success(request, f'"{name}" moved to recycle bin.')
+
+        if _is_ajax(request):
+            return JsonResponse({'ok': True, 'message': f'"{name}" moved to recycle bin.', 'file_id': str(pk)})
+
         return redirect(f'/files/?folder={folder_id}' if folder_id else 'file_manager')
 
 class FileShareView(LoginRequiredMixin, View):
@@ -1849,6 +1871,8 @@ class FileShareView(LoginRequiredMixin, View):
     def post(self, request, pk):
         f = get_object_or_404(SharedFile, pk=pk)
         if not _can_edit_file(request.user, f):
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'Permission denied.'}, status=403)
             messages.error(request, 'You do not have permission to change sharing on this file.')
             return redirect('file_manager')
 
@@ -1985,6 +2009,14 @@ class FileShareView(LoginRequiredMixin, View):
                     pass
 
         next_url = request.POST.get('next', '')
+
+        if _is_ajax(request):
+            return JsonResponse({
+                'ok': True,
+                'message': f'Sharing updated for "{f.name}".' if f.visibility != 'private' else f'Sharing stopped for "{f.name}".',
+                'visibility': f.visibility,
+            })
+
         return redirect(next_url if next_url.startswith('/') else 'file_manager')
 
 
@@ -1992,6 +2024,8 @@ class FolderCreateView(LoginRequiredMixin, View):
     def post(self, request):
         name = request.POST.get('name', '').strip()
         if not name:
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'Folder name required.'}, status=400)
             messages.error(request, 'Folder name required.')
             return redirect('file_manager')
         parent_id = request.POST.get('parent_id')
@@ -1999,12 +2033,20 @@ class FolderCreateView(LoginRequiredMixin, View):
         if parent_id:
             try: parent = FileFolder.objects.get(id=parent_id, owner=request.user)
             except FileFolder.DoesNotExist: pass
-        FileFolder.objects.create(
+        folder = FileFolder.objects.create(
             name=name, owner=request.user, parent=parent,
             visibility=request.POST.get('visibility', 'private'),
             color=request.POST.get('color', '#f59e0b'),
         )
         messages.success(request, f'Folder "{name}" created.')
+
+        if _is_ajax(request):
+            return JsonResponse({
+                'ok': True,
+                'message': f'Folder "{name}" created.',
+                'folder': {'id': str(folder.pk), 'name': folder.name},
+            })
+
         next_url = request.POST.get('next', '')
         return redirect(next_url if next_url.startswith('/') else 'file_manager')
 
@@ -2063,6 +2105,8 @@ class FolderDeleteView(LoginRequiredMixin, View):
         folder = get_object_or_404(FileFolder, pk=pk)
 
         if not _can_delete_folder(request.user, folder):
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'Permission denied.'}, status=403)
             messages.error(request, 'You do not have permission to delete this folder.')
             return redirect('file_manager')
 
@@ -2081,12 +2125,18 @@ class FolderDeleteView(LoginRequiredMixin, View):
         folder.delete()
 
         messages.success(request, f'Folder "{name}" moved to recycle bin.')
+
+        if _is_ajax(request):
+            return JsonResponse({'ok': True, 'message': f'Folder "{name}" moved to recycle bin.', 'folder_id': str(pk)})
+
         return redirect(f'/files/?folder={parent_id}' if parent_id else 'file_manager')
 
 class FolderShareView(LoginRequiredMixin, View):
     def post(self, request, pk):
         folder = get_object_or_404(FileFolder, pk=pk)
         if not _can_edit_folder(request.user, folder):
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'Permission denied.'}, status=403)
             messages.error(request, 'You do not have permission to change sharing on this folder.')
             return redirect('file_manager')
 
@@ -2269,6 +2319,14 @@ class FolderShareView(LoginRequiredMixin, View):
                         pass
 
         next_url = request.POST.get('next', '')
+
+        if _is_ajax(request):
+            return JsonResponse({
+                'ok': True,
+                'message': f'Sharing updated for "{folder.name}".' if folder.visibility != 'private' else f'Sharing stopped for "{folder.name}".',
+                'visibility': folder.visibility,
+            })
+
         return redirect(next_url if next_url.startswith('/') else 'file_manager')
 
 class RecycleBinView(LoginRequiredMixin, TemplateView):
@@ -4766,16 +4824,22 @@ class FileRenameView(LoginRequiredMixin, View):
         f = get_object_or_404(SharedFile, pk=pk)
 
         if not _can_edit_file(request.user, f):
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'Permission denied.'}, status=403)
             messages.error(request, 'You do not have permission to rename this file.')
             return redirect('file_manager')
 
         new_name = (request.POST.get('name') or '').strip()
         if not new_name:
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'File name cannot be empty.'}, status=400)
             messages.error(request, 'File name cannot be empty.')
             return redirect(request.POST.get('next') or 'file_manager')
 
         old_name = f.name
         if new_name == old_name:
+            if _is_ajax(request):
+                return JsonResponse({'ok': True, 'message': 'Name unchanged.', 'name': new_name})
             messages.info(request, 'File name was not changed.')
             return redirect(request.POST.get('next') or 'file_manager')
 
@@ -4792,6 +4856,8 @@ class FileRenameView(LoginRequiredMixin, View):
             is_latest=True
         ).exclude(pk=f.pk)
         if qs.exists():
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': f'A file named "{new_name}" already exists here.'}, status=400)
             messages.error(request, f'A file named "{new_name}" already exists in this location.')
             return redirect(request.POST.get('next') or 'file_manager')
 
@@ -4806,6 +4872,10 @@ class FileRenameView(LoginRequiredMixin, View):
         )
 
         messages.success(request, f'File renamed to "{new_name}".')
+
+        if _is_ajax(request):
+            return JsonResponse({'ok': True, 'message': f'File renamed to "{new_name}".', 'name': new_name, 'file_id': str(pk)})
+
         next_url = request.POST.get('next', '')
         return redirect(next_url if next_url.startswith('/') else 'file_manager')
 
@@ -4815,16 +4885,22 @@ class FolderRenameView(LoginRequiredMixin, View):
         folder = get_object_or_404(FileFolder, pk=pk)
 
         if not _can_edit_folder(request.user, folder):
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'Permission denied.'}, status=403)
             messages.error(request, 'You do not have permission to rename this folder.')
             return redirect('file_manager')
 
         new_name = (request.POST.get('name') or '').strip()
         if not new_name:
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'Folder name cannot be empty.'}, status=400)
             messages.error(request, 'Folder name cannot be empty.')
             return redirect(request.POST.get('next') or 'file_manager')
 
         old_name = folder.name
         if new_name == old_name:
+            if _is_ajax(request):
+                return JsonResponse({'ok': True, 'message': 'Name unchanged.', 'name': new_name})
             messages.info(request, 'Folder name was not changed.')
             return redirect(request.POST.get('next') or 'file_manager')
 
@@ -4835,6 +4911,8 @@ class FolderRenameView(LoginRequiredMixin, View):
         ).exclude(pk=folder.pk).exists()
 
         if exists:
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': f'A folder named "{new_name}" already exists here.'}, status=400)
             messages.error(request, f'A folder named "{new_name}" already exists here.')
             return redirect(request.POST.get('next') or 'file_manager')
 
@@ -4842,5 +4920,9 @@ class FolderRenameView(LoginRequiredMixin, View):
         folder.save(update_fields=['name'])
 
         messages.success(request, f'Folder renamed to "{new_name}".')
+
+        if _is_ajax(request):
+            return JsonResponse({'ok': True, 'message': f'Folder renamed to "{new_name}".', 'name': new_name, 'folder_id': str(pk)})
+
         next_url = request.POST.get('next', '')
         return redirect(next_url if next_url.startswith('/') else 'file_manager')

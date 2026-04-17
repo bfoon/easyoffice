@@ -193,6 +193,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
         ).update(last_read=timezone.now())
 
         # -------------------------
+        # NOTIFY OFFLINE MEMBERS
+        # -------------------------
+        try:
+            from apps.messaging.views import _notify_offline_members
+            _notify_offline_members(room, user, msg)
+        except Exception:
+            pass
+
+        # -------------------------
         # RETURN FULL SERIALIZED PAYLOAD
         # -------------------------
         return _serialize_chat_message(msg, viewer=user)

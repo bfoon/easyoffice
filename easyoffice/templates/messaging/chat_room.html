@@ -48,6 +48,13 @@
 .presence-idle .presence-dot{background:#f59e0b !important;}
 .presence-offline{background:#f1f5f9 !important;color:#64748b !important;border-color:#e2e8f0 !important;}
 .presence-offline .presence-dot{background:#94a3b8 !important;}
+.status-opt{
+  display:flex;align-items:center;gap:9px;width:100%;border:none;background:transparent;
+  padding:7px 14px;font-size:.83rem;color:var(--eo-text);cursor:pointer;text-align:left;
+  transition:background .1s;
+}
+.status-opt:hover{background:var(--eo-bg);}
+.status-opt.active{font-weight:700;color:var(--eo-accent);}
 .chat-messages{flex:1;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:0;scroll-behavior:smooth;}
 .chat-date-sep{display:flex;align-items:center;gap:10px;margin:16px 0 10px;color:var(--eo-text-muted);font-size:.73rem;font-weight:600;}
 .chat-date-sep::before,.chat-date-sep::after{content:'';flex:1;height:1px;background:var(--eo-border);}
@@ -751,9 +758,9 @@
           {% for m in members %}{% if m.id != request.user.id %}
           <div style="font-weight:700;font-size:.95rem;color:var(--eo-text);display:flex;align-items:center;gap:8px">
             {{ m.full_name }}
-            <span id="dmPresenceBadge" style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;background:#d1fae5;color:#065f46;border:1px solid #a7f3d0">
-              <span id="dmPresenceDot" style="width:7px;height:7px;border-radius:50%;background:#10b981;flex-shrink:0;transition:background .3s"></span>
-              <span id="dmPresenceLabel">Available</span>
+            <span id="dmPresenceBadge" style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0">
+              <span id="dmPresenceDot" style="width:7px;height:7px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
+              <span id="dmPresenceLabel">…</span>
             </span>
           </div>
           <div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:2px">
@@ -780,6 +787,40 @@
         <div style="color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ room.pinned_message.content|truncatechars:45 }}</div>
       </div>
       {% endif %}
+
+      <!-- Your own status picker -->
+      <div style="position:relative">
+        <button class="eo-btn eo-btn-secondary eo-btn-sm" id="myStatusBtn" title="Set your status"
+                onclick="toggleStatusPicker()" style="gap:5px;display:inline-flex;align-items:center">
+          <span id="myStatusDot" style="width:8px;height:8px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
+          <span id="myStatusLabel" style="font-size:.75rem">Status</span>
+          <i class="bi bi-chevron-down" style="font-size:.6rem;opacity:.6"></i>
+        </button>
+        <div id="statusPickerMenu" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:190px;z-index:200;padding:4px 0">
+          <div style="padding:6px 12px 4px;font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted)">Your status</div>
+          <button onclick="setMyStatus('available')" class="status-opt" data-status="available">
+            <span style="width:8px;height:8px;border-radius:50%;background:#10b981;flex-shrink:0"></span>
+            Available
+          </button>
+          <button onclick="setMyStatus('busy')" class="status-opt" data-status="busy">
+            <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0"></span>
+            Busy
+          </button>
+          <button onclick="setMyStatus('dnd')" class="status-opt" data-status="dnd">
+            <span style="width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0"></span>
+            Do Not Disturb
+          </button>
+          <button onclick="setMyStatus('away')" class="status-opt" data-status="away">
+            <span style="width:8px;height:8px;border-radius:50%;background:#94a3b8;flex-shrink:0"></span>
+            Away
+          </button>
+          <div style="border-top:1px solid var(--eo-border);margin:4px 0"></div>
+          <button onclick="setMyStatus('auto')" class="status-opt" data-status="auto">
+            <span style="width:8px;height:8px;border-radius:50%;background:#e2e8f0;border:1px solid #94a3b8;flex-shrink:0"></span>
+            Auto (based on activity)
+          </button>
+        </div>
+      </div>
 
       <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" id="toggleMembers" title="Toggle members">
         <i class="bi bi-people"></i>
@@ -1633,6 +1674,19 @@
   var IS_DIRECT = {% if room.room_type == 'direct' %}true{% else %}false{% endif %};
   var DM_OTHER_USER_ID = '{% if room.room_type == "direct" %}{% for m in members %}{% if m.id != request.user.id %}{{ m.id }}{% endif %}{% endfor %}{% endif %}';
   var READONLY = {{ room.is_readonly|yesno:"true,false" }};
+
+  /* Status system */
+  var MY_STATUS = localStorage.getItem('eo_chat_status') || 'auto';
+  var STATUS_META = {
+    available: { dot:'#10b981', label:'Available',       bg:'#d1fae5', color:'#065f46', border:'#a7f3d0' },
+    busy:      { dot:'#f59e0b', label:'Busy',            bg:'#fef3c7', color:'#92400e', border:'#fde68a' },
+    dnd:       { dot:'#ef4444', label:'Do Not Disturb',  bg:'#fee2e2', color:'#991b1b', border:'#fecaca' },
+    away:      { dot:'#94a3b8', label:'Away',            bg:'#f1f5f9', color:'#64748b', border:'#e2e8f0' },
+    auto:      { dot:'#94a3b8', label:'Auto',            bg:'#f1f5f9', color:'#64748b', border:'#e2e8f0' },
+    online:    { dot:'#10b981', label:'Available',       bg:'#d1fae5', color:'#065f46', border:'#a7f3d0' },
+    offline:   { dot:'#94a3b8', label:'Offline',        bg:'#f1f5f9', color:'#64748b', border:'#e2e8f0' },
+    idle:      { dot:'#f59e0b', label:'Idle',            bg:'#fef3c7', color:'#92400e', border:'#fde68a' },
+  };
 
   var socket = null;
   var reconnectDelay = 1000;
@@ -3659,40 +3713,33 @@ if (spellcheckToggleBtn) {
 }
 
   /* ── Presence (DM only) ───────────────────────────────────────────────── */
-  var presenceTimer = null;
+  var presenceTimer  = null;
   var heartbeatTimer = null;
 
+  /* ── Apply a status/meta object to the OTHER person's badge ── */
   function updatePresenceBadge(status, lastSeen){
     var badge  = byId('dmPresenceBadge');
     var dot    = byId('dmPresenceDot');
     var label  = byId('dmPresenceLabel');
     var lsText = byId('dmLastSeenText');
-    if(!badge || !dot || !label) return;
+    if(!badge) return;
 
-    badge.classList.remove('presence-available','presence-idle','presence-offline');
-    dot.classList.remove('presence-dot');
+    var st  = (status || 'offline').toLowerCase();
+    var m   = STATUS_META[st] || STATUS_META.offline;
 
-    var st = (status || 'offline').toLowerCase();
+    badge.style.cssText = 'display:inline-flex;align-items:center;gap:5px;padding:2px 8px;'
+      + 'border-radius:999px;font-size:.65rem;font-weight:700;'
+      + 'background:' + m.bg + ';color:' + m.color + ';border:1px solid ' + m.border;
 
-    if(st === 'available' || st === 'online'){
-      badge.classList.add('presence-available');
-      badge.style.cssText = 'display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;background:#d1fae5;color:#065f46;border:1px solid #a7f3d0';
-      dot.style.background  = '#10b981';
-      label.textContent     = 'Available';
-      if(lsText) lsText.textContent = '';
-    } else if(st === 'idle' || st === 'away'){
-      badge.style.cssText = 'display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;background:#fef3c7;color:#92400e;border:1px solid #fde68a';
-      dot.style.background  = '#f59e0b';
-      label.textContent     = 'Idle';
-      if(lsText && lastSeen) lsText.textContent = '· last seen ' + lastSeen;
-    } else {
-      badge.style.cssText = 'display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0';
-      dot.style.background  = '#94a3b8';
-      label.textContent     = 'Offline';
-      if(lsText && lastSeen) lsText.textContent = '· last seen ' + lastSeen;
+    if(dot)   dot.style.background = m.dot;
+    if(label) label.textContent    = m.label;
+    if(lsText){
+      lsText.textContent = (lastSeen && st !== 'available' && st !== 'online')
+        ? ('· last seen ' + lastSeen) : '';
     }
   }
 
+  /* ── Poll the OTHER user's presence ── */
   function pollPresence(){
     if(!IS_DIRECT || !DM_OTHER_USER_ID) return;
     fetch('/messages/presence/' + DM_OTHER_USER_ID + '/', {
@@ -3704,26 +3751,25 @@ if (spellcheckToggleBtn) {
       updatePresenceBadge(d.status, d.last_seen_display || '');
     })
     .catch(function(){
-      // Network error — don't flip to offline, just leave the current badge state.
+      /* Network error — do NOT flip to offline; keep last known state */
     });
   }
 
   function startPresencePolling(){
     if(!IS_DIRECT || !DM_OTHER_USER_ID) return;
-    // Delay first poll by 1.5 s so the heartbeat POST lands on the server first.
-    // Subsequent polls run every 15 s.
-    setTimeout(function(){
-      pollPresence();
-      presenceTimer = setInterval(pollPresence, 15000);
-    }, 1500);
+    stopPresencePolling();
+    /* Fire immediately — no artificial 1.5 s delay */
+    pollPresence();
+    presenceTimer = setInterval(pollPresence, 12000);  /* every 12 s */
   }
 
   function stopPresencePolling(){
     if(presenceTimer){ clearInterval(presenceTimer); presenceTimer = null; }
   }
 
-  /* ── Presence heartbeat (tells the server THIS user is online) ──────────── */
+  /* ── Send THIS user's heartbeat + manual status to the server ── */
   function sendHeartbeat(){
+    var statusToSend = MY_STATUS === 'auto' ? 'auto' : MY_STATUS;
     fetch('/messages/presence/heartbeat/', {
       method: 'POST',
       headers: {
@@ -3732,13 +3778,13 @@ if (spellcheckToggleBtn) {
         'Content-Type': 'application/x-www-form-urlencoded'
       },
       credentials: 'same-origin',
-      body: ''
-    }).catch(function(){});   // fire-and-forget; errors are silent
+      body: 'manual_status=' + encodeURIComponent(statusToSend)
+    }).catch(function(){});
   }
 
   function startHeartbeat(){
     stopHeartbeat();
-    sendHeartbeat();                          // send immediately on page load
+    sendHeartbeat();
     heartbeatTimer = setInterval(sendHeartbeat, 20000);
   }
 
@@ -3746,16 +3792,58 @@ if (spellcheckToggleBtn) {
     if(heartbeatTimer){ clearInterval(heartbeatTimer); heartbeatTimer = null; }
   }
 
+  /* ── MY STATUS PICKER ── */
+  window.toggleStatusPicker = function(){
+    var menu = byId('statusPickerMenu');
+    if(!menu) return;
+    var open = menu.style.display === 'none' || !menu.style.display;
+    menu.style.display = open ? 'block' : 'none';
+    /* Mark active option */
+    menu.querySelectorAll('.status-opt').forEach(function(btn){
+      btn.classList.toggle('active', btn.dataset.status === MY_STATUS);
+    });
+    /* Close on outside click */
+    if(open){
+      setTimeout(function(){
+        document.addEventListener('click', function _close(e){
+          if(!menu.contains(e.target) && e.target !== byId('myStatusBtn')){
+            menu.style.display = 'none';
+            document.removeEventListener('click', _close);
+          }
+        });
+      }, 10);
+    }
+  };
+
+  window.setMyStatus = function(status){
+    MY_STATUS = status;
+    localStorage.setItem('eo_chat_status', status);
+    byId('statusPickerMenu').style.display = 'none';
+    _applyMyStatusDot(status);
+    sendHeartbeat();   /* immediately push new status to server */
+  };
+
+  function _applyMyStatusDot(status){
+    var dot   = byId('myStatusDot');
+    var label = byId('myStatusLabel');
+    var m     = STATUS_META[status] || STATUS_META.auto;
+    if(dot)   dot.style.background  = m.dot;
+    if(label) label.textContent     = m.label === 'Auto' ? 'Auto' : m.label;
+  }
+
+  /* Apply saved status on load */
+  _applyMyStatusDot(MY_STATUS);
+
+  /* ── Visibility change — pause/resume gracefully ── */
   document.addEventListener('visibilitychange', function(){
     if(document.hidden){
       stopPresencePolling();
       stopHeartbeat();
     } else {
-      // Re-fire immediately on tab focus so badge updates instantly
       sendHeartbeat();
+      startHeartbeat();
       pollPresence();
       startPresencePolling();
-      startHeartbeat();
     }
   });
 

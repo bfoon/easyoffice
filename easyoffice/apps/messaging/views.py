@@ -427,6 +427,47 @@ def _broadcast_chat_message(msg, viewer=None):
         pass
 
 
+def _broadcast_presence_update(user_id):
+    """
+    Push the user's current effective status to all their DM rooms via WS.
+    This means the other person's badge updates instantly on heartbeat.
+    """
+    try:
+        channel_layer = get_channel_layer()
+        if channel_layer is None:
+            return
+
+        status = _user_effective_status(user_id)
+        last_seen = _get_presence_cache(user_id)
+        last_seen_display = _format_last_seen(last_seen) if last_seen else ''
+
+        # Only push to direct message rooms
+        rooms = ChatRoom.objects.filter(
+            members__id=user_id,
+            room_type='direct',
+            is_archived=False,
+        ).values_list('id', flat=True)
+
+        for room_id in rooms:
+            try:
+                async_to_sync(channel_layer.group_send)(
+                    _room_group_name(room_id),
+                    {
+                        'type': 'chat.typing',   # reuse existing event channel
+                        'payload': {
+                            'type': 'presence_update',
+                            'user_id': str(user_id),
+                            'status': status,
+                            'last_seen_display': last_seen_display,
+                        },
+                    },
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _broadcast_reaction(room_id, message_id, summary):
     """
     Broadcast reaction summary update.
@@ -838,6 +879,8 @@ class ChatRoomView(LoginRequiredMixin, View):
             room.save(update_fields=['updated_at'])
             ChatRoomMember.objects.filter(room=room, user=request.user).update(last_read=timezone.now())
             _broadcast_chat_message(new_message)
+            # Notify offline/away members via email
+            _notify_offline_members(room, request.user, new_message)
 
         # Fetch/AJAX callers get JSON back — no page reload
         if is_ajax:
@@ -2016,13 +2059,56 @@ _ONLINE_THRESHOLD = 60   # online  if last heartbeat within this many seconds
 _IDLE_THRESHOLD   = 300  # idle    if last heartbeat within this many seconds
 
 
+def _notify_offline_members(room, sender, message):
+    """
+    After a message is sent, email any room members who are not currently online.
+    Runs in a background thread so it never slows down the HTTP response.
+    """
+    import threading
+
+    def _do_notify():
+        try:
+            # Get all room members except the sender
+            members = room.members.exclude(id=sender.id).select_related('staffprofile')
+            for recipient in members:
+                try:
+                    _send_offline_message_notification(
+                        recipient=recipient,
+                        sender=sender,
+                        room=room,
+                        message_content=message.content or '',
+                    )
+                except Exception:
+                    _presence_log.exception('Notification failed for user %s', recipient.pk)
+        except Exception:
+            _presence_log.exception('_notify_offline_members failed')
+
+    t = threading.Thread(target=_do_notify, daemon=True)
+    t.start()
+
+
 def _presence_cache_key(user_id):
     return f'presence:ls:{user_id}'
+
+
+def _manual_status_cache_key(user_id):
+    return f'presence:manual:{user_id}'
 
 
 def _set_presence_cache(user_id):
     from django.core.cache import cache
     cache.set(_presence_cache_key(user_id), timezone.now().isoformat(), timeout=_PRESENCE_TTL)
+
+
+def _set_manual_status_cache(user_id, status):
+    """Store manual status with a long TTL (7 days) — persists across sessions."""
+    from django.core.cache import cache
+    cache.set(_manual_status_cache_key(user_id), status, timeout=7 * 86400)
+
+
+def _get_manual_status_cache(user_id):
+    from django.core.cache import cache
+    return cache.get(_manual_status_cache_key(user_id))
 
 
 def _get_presence_cache(user_id):
@@ -2036,6 +2122,131 @@ def _get_presence_cache(user_id):
         return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
     except Exception:
         return None
+
+
+def _user_is_online(user_id):
+    """Returns True if the user has a recent heartbeat (within ONLINE_THRESHOLD)."""
+    last_seen = _get_presence_cache(user_id)
+    if not last_seen:
+        return False
+    if timezone.is_naive(last_seen):
+        last_seen = timezone.make_aware(last_seen)
+    delta = (timezone.now() - last_seen).total_seconds()
+    return delta < _ONLINE_THRESHOLD
+
+
+def _user_effective_status(user_id):
+    """
+    Returns the effective status string for a user.
+    Respects manual overrides; falls back to activity-based detection.
+    """
+    last_seen = _get_presence_cache(user_id)
+    if not last_seen:
+        return 'offline'
+    if timezone.is_naive(last_seen):
+        last_seen = timezone.make_aware(last_seen)
+    delta = (timezone.now() - last_seen).total_seconds()
+
+    if delta >= _IDLE_THRESHOLD:
+        return 'offline'
+
+    manual = _get_manual_status_cache(user_id)
+    if manual and manual != 'auto':
+        return manual
+
+    return 'online' if delta < _ONLINE_THRESHOLD else 'idle'
+
+
+def _send_offline_message_notification(recipient, sender, room, message_content):
+    """
+    Send an email notification to a recipient who is offline/away/busy/dnd
+    when they receive a new message.
+
+    Respects DND — DND users do NOT get emails.
+    Only sends once per sender per room per 10-minute window to avoid spam.
+    """
+    from django.core.cache import cache
+    from django.core.mail import EmailMessage
+    from django.conf import settings
+
+    status = _user_effective_status(recipient.pk)
+
+    # Don't email if they're online or if DND
+    if status in ('online', 'available'):
+        return
+    if status == 'dnd':
+        return
+
+    # Rate-limit: max 1 email per sender+room per 10 min per recipient
+    rate_key = f'msg_notif:{recipient.pk}:{room.id}:{sender.pk}'
+    if cache.get(rate_key):
+        return
+    cache.set(rate_key, True, timeout=600)
+
+    recipient_email = getattr(recipient, 'email', None)
+    if not recipient_email:
+        return
+
+    org_name = getattr(settings, 'ORGANISATION_NAME',
+                       getattr(settings, 'OFFICE_NAME', 'EasyOffice'))
+    from_email = getattr(settings, 'DEFAULT_FROM_EMAIL',
+                         f'noreply@{org_name.lower().replace(" ", "")}.org')
+
+    sender_name = _safe_full_name(sender)
+    room_name   = room.name or 'a chat'
+    preview     = (message_content or '').strip()[:120]
+    if len(message_content or '') > 120:
+        preview += '…'
+
+    status_label = {
+        'offline': 'while you were offline',
+        'idle':    'while you were away',
+        'away':    'while you were away',
+        'busy':    'while you were busy',
+    }.get(status, 'while you were away')
+
+    chat_url = getattr(settings, 'SITE_URL', '').rstrip('/') + f'/messages/{room.id}/'
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif;">
+<div style="max-width:560px;margin:28px auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08)">
+  <div style="background:linear-gradient(135deg,#1e3a5f,#6366f1);padding:30px 36px;text-align:center">
+    <div style="font-size:2rem;margin-bottom:8px">💬</div>
+    <h1 style="margin:0;font-size:18px;color:#fff;font-weight:700">New message {status_label}</h1>
+    <p style="margin:4px 0 0;font-size:13px;color:rgba(255,255,255,.75)">{org_name}</p>
+  </div>
+  <div style="padding:28px 36px">
+    <p style="font-size:15px;color:#1e293b;line-height:1.6;margin:0 0 18px">
+      <strong>{sender_name}</strong> sent you a message in <strong>{room_name}</strong>:
+    </p>
+    <div style="background:#f8fafc;border-left:4px solid #6366f1;border-radius:0 8px 8px 0;padding:14px 18px;font-size:14px;color:#334155;line-height:1.6;font-style:italic;margin-bottom:24px">
+      {preview if preview else '(file or media attachment)'}
+    </div>
+    <div style="text-align:center">
+      <a href="{chat_url}" style="display:inline-block;background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;padding:12px 32px;border-radius:10px;text-decoration:none;font-weight:700;font-size:14px">
+        Open Chat
+      </a>
+    </div>
+  </div>
+  <div style="background:#f8fafc;padding:16px 36px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;text-align:center">
+    {org_name} · You received this because you were not available. <br>
+    To stop these notifications, set your status to Do Not Disturb.
+  </div>
+</div>
+</body></html>"""
+
+    try:
+        msg = EmailMessage(
+            subject=f'New message from {sender_name} in {room_name} | {org_name}',
+            body=html,
+            from_email=from_email,
+            to=[recipient_email],
+        )
+        msg.content_subtype = 'html'
+        msg.send()
+    except Exception:
+        _presence_log.exception('Failed to send offline message notification to %s', recipient_email)
 
 
 def _format_last_seen(dt):
@@ -2052,16 +2263,27 @@ def _format_last_seen(dt):
 
 
 class PresenceHeartbeatView(LoginRequiredMixin, View):
-    """POST /messages/presence/heartbeat/"""
+    """POST /messages/presence/heartbeat/
+    Body: manual_status=available|busy|dnd|away|auto
+    """
 
     def post(self, request):
         uid = request.user.pk
         now = timezone.now()
 
-        # Always write to cache first — this is the reliable path
+        # Store manual status in cache (separate key, no TTL — persists until changed)
+        manual_status = (request.POST.get('manual_status') or '').strip().lower()
+        _VALID_MANUAL = {'available', 'busy', 'dnd', 'away', 'auto'}
+        if manual_status in _VALID_MANUAL:
+            _set_manual_status_cache(uid, manual_status)
+
+        # Always write heartbeat timestamp to cache
         _set_presence_cache(uid)
 
-        # Best-effort DB write (fails silently if field doesn't exist)
+        # Broadcast presence update to all DM rooms this user is part of
+        _broadcast_presence_update(uid)
+
+        # Best-effort DB write
         try:
             request.user.last_seen = now
             request.user.save(update_fields=['last_seen'])
@@ -2105,8 +2327,18 @@ class PresenceView(LoginRequiredMixin, View):
 
         delta = (timezone.now() - last_seen).total_seconds()
 
+        # Check manual status override
+        manual = _get_manual_status_cache(user_id)
+
+        if delta >= _IDLE_THRESHOLD:
+            # Heartbeat too old — definitely offline regardless of manual status
+            return JsonResponse({'status': 'offline', 'last_seen_display': _format_last_seen(last_seen)})
+
+        if manual and manual != 'auto':
+            # User has explicitly set a status and is still active
+            return JsonResponse({'status': manual, 'last_seen_display': _format_last_seen(last_seen) if manual != 'available' else ''})
+
+        # Auto mode — derive from activity recency
         if delta < _ONLINE_THRESHOLD:
-            return JsonResponse({'status': 'online',  'last_seen_display': ''})
-        if delta < _IDLE_THRESHOLD:
-            return JsonResponse({'status': 'idle',    'last_seen_display': _format_last_seen(last_seen)})
-        return     JsonResponse({'status': 'offline', 'last_seen_display': _format_last_seen(last_seen)})
+            return JsonResponse({'status': 'online', 'last_seen_display': ''})
+        return JsonResponse({'status': 'idle', 'last_seen_display': _format_last_seen(last_seen)})

@@ -7,7 +7,7 @@ from django.http import FileResponse, Http404, JsonResponse, HttpResponse
 from django.contrib import messages
 from django.utils import timezone
 from datetime import timedelta
-from django.db.models import Q, Sum
+from django.db.models import Q, Sum, OuterRef, Exists
 from django.db import transaction
 from django.utils.text import slugify
 from django.core.mail import send_mail
@@ -1349,6 +1349,11 @@ class FileManagerView(LoginRequiredMixin, TemplateView):
         # This lets the template show/hide buttons based on 'view'/'edit'/'full'
         # without needing custom template filters.
         _OFFICE_EDITABLE = {'docx', 'xlsx', 'pptx'}
+
+        # ── Note badge annotations (has_my_note / has_shared_note) ───────────
+        # Must be applied BEFORE list() so the Exists subqueries are evaluated
+        # in the same SQL query and the template variables are populated.
+        files = _annotate_note_badges(files, user)
 
         file_list = list(files)
         for f in file_list:
@@ -5091,7 +5096,7 @@ def _get_shared_notes_for(user, file_obj):
             'author': n.author.full_name,
             'body': n.body,
             'updated_at': n.updated_at.isoformat(),
-            'is_typing': bool(getattr(n, 'typing_at', None) and n.typing_at >= cutoff),
+            'is_typing': bool(n.typing_at and n.typing_at >= cutoff),
         })
     return result
 
@@ -5205,9 +5210,9 @@ class FileNoteShareView(LoginRequiredMixin, View):
 
 class FileNoteTypingView(LoginRequiredMixin, View):
     """
-    POST /<pk>/note/typing/
-    Stamps typing_at on the author's note without touching updated_at.
-    Fire-and-forget — returns 204 No Content.
+    POST /files/<pk>/note/typing/
+    Updates typing_at timestamp on the author's note.
+    Returns 204 No Content — callers should fire-and-forget.
     """
 
     def post(self, request, pk):
@@ -5215,13 +5220,81 @@ class FileNoteTypingView(LoginRequiredMixin, View):
         if not _file_permission_for(request.user, f):
             return JsonResponse({'error': 'Permission denied'}, status=403)
 
-        # get_or_create so we never fail if no note exists yet
-        note, created = FileNote.objects.get_or_create(
+        FileNote.objects.update_or_create(
             file=f, author=request.user,
-            defaults={'body': '', 'typing_at': timezone.now()}
+            defaults={'typing_at': timezone.now()}
         )
-        if not created:
-            # Use update() to skip auto_now on updated_at entirely
-            FileNote.objects.filter(pk=note.pk).update(typing_at=timezone.now())
-
         return HttpResponse(status=204)
+
+class FileNoteBulkStatusView(LoginRequiredMixin, View):
+    """
+    GET /files/note/bulk-status/?ids=uuid1,uuid2,...
+    Returns badge states for a list of file IDs in one query.
+    Called once on page load so badges are correct after a refresh.
+    """
+
+    def get(self, request):
+        raw = request.GET.get('ids', '')
+        if not raw:
+            return JsonResponse({'statuses': {}})
+
+        # Parse and deduplicate IDs — ignore anything that isn't a valid UUID
+        import re
+        UUID_RE = re.compile(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+            re.IGNORECASE
+        )
+        ids = [i.strip() for i in raw.split(',') if UUID_RE.match(i.strip())]
+        if not ids:
+            return JsonResponse({'statuses': {}})
+
+        user    = request.user
+        profile = getattr(user, 'staffprofile', None)
+        unit    = profile.unit       if profile else None
+        dept    = profile.department if profile else None
+
+        # Files the user can actually see (security check)
+        visible_ids = set(
+            str(i) for i in
+            _visible_files_qs(user)
+            .filter(id__in=ids)
+            .values_list('id', flat=True)
+        )
+
+        # Own non-empty notes
+        my_note_ids = set(
+            str(i) for i in
+            FileNote.objects
+            .filter(file_id__in=visible_ids, author=user)
+            .exclude(body='')
+            .values_list('file_id', flat=True)
+        )
+
+        # Shared notes from others
+        share_q = Q(scope='office') | Q(scope='person', shared_with_user=user)
+        if unit:
+            share_q |= Q(scope='unit', unit=unit)
+        if dept:
+            share_q |= Q(scope='department', department=dept)
+
+        shared_note_ids = set(
+            str(i) for i in
+            FileNoteShare.objects
+            .filter(share_q, note__file_id__in=visible_ids)
+            .exclude(note__author=user)
+            .exclude(note__body='')
+            .values_list('note__file_id', flat=True)
+            .distinct()
+        )
+
+        statuses = {}
+        for fid in visible_ids:
+            has_mine   = fid in my_note_ids
+            has_shared = fid in shared_note_ids
+            if has_mine or has_shared:
+                statuses[fid] = {
+                    'has_my_note':     has_mine,
+                    'has_shared_note': has_shared,
+                }
+
+        return JsonResponse({'statuses': statuses})

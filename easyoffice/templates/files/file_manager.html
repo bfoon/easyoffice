@@ -2268,7 +2268,8 @@
      data-note-url="{% url 'file_note' pk='00000000-0000-0000-0000-000000000000' %}"
      data-note-share-url="{% url 'file_note_share' pk='00000000-0000-0000-0000-000000000000' %}"
      data-note-share-detail-url="{% url 'file_note_share_detail' pk='00000000-0000-0000-0000-000000000000' share_id='11111111-1111-1111-1111-111111111111' %}"
-     data-note-typing-url="{% url 'file_note_typing' pk='00000000-0000-0000-0000-000000000000' %}">
+     data-note-typing-url="{% url 'file_note_typing' pk='00000000-0000-0000-0000-000000000000' %}"
+     data-note-bulk-url="{% url 'file_note_bulk_status' %}">
   <div id="fnCard">
 
     <!-- Header -->
@@ -2449,6 +2450,7 @@
   var _shareTpl    = overlay.dataset.noteShareUrl       || '';
   var _shareDetTpl = overlay.dataset.noteShareDetailUrl || '';
   var _typingTpl   = overlay.dataset.noteTypingUrl      || '';
+  var _bulkUrl     = overlay.dataset.noteBulkUrl        || '';
 
   function noteUrl(id)      { return _noteTpl .replace('00000000-0000-0000-0000-000000000000', id); }
   function noteShareUrl(id) { return _shareTpl.replace('00000000-0000-0000-0000-000000000000', id); }
@@ -2823,6 +2825,92 @@
     }
     if (typeof _orig === 'function') _orig();
   };
+})();
+
+/* ════════════════════════════════════════════════════════════════════════
+   PAGE-LEVEL BADGE INIT & BACKGROUND POLLING
+   Runs on every page load. Fetches badge states for ALL file buttons on
+   the page in one request, then keeps polling every 15 s so shared-note
+   alerts appear live even when the note modal is closed.
+   ════════════════════════════════════════════════════════════════════════ */
+(function () {
+  var ol       = document.getElementById('fnOverlay');
+  var bulkUrl  = ol ? (ol.dataset.noteBulkUrl || '') : '';
+  if (!bulkUrl) return;
+
+  function csrfToken() {
+    var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  /* Apply a status object {has_my_note, has_shared_note} to all buttons for a file */
+  function applyStatus(fileId, st) {
+    document.querySelectorAll('.fn-btn[data-file-id="' + fileId + '"]').forEach(function(btn) {
+      var svg = btn.querySelector('svg');
+
+      /* Own note badge */
+      if (st.has_my_note) {
+        btn.classList.add('fn-has-note');
+        btn.style.background  = '#fef08a';
+        btn.style.borderColor = '#ca8a04';
+        if (svg) svg.setAttribute('fill', '#ca8a04');
+      } else {
+        btn.classList.remove('fn-has-note');
+        btn.style.background  = '';
+        btn.style.borderColor = '';
+        if (svg) svg.setAttribute('fill', 'none');
+      }
+
+      /* Shared note badge */
+      if (st.has_shared_note) {
+        btn.classList.add('fn-has-shared-note');
+        btn.title = 'Note (+ shared note from colleague)';
+      } else {
+        btn.classList.remove('fn-has-shared-note');
+        btn.title = st.has_my_note ? 'My note' : 'My note';
+      }
+    });
+  }
+
+  function runBulkCheck() {
+    /* Collect every distinct file ID currently rendered on the page */
+    var seen = {};
+    var ids  = [];
+    document.querySelectorAll('.fn-btn[data-file-id]').forEach(function(btn) {
+      var id = btn.dataset.fileId;
+      if (id && !seen[id]) { seen[id] = true; ids.push(id); }
+    });
+    if (!ids.length) return;
+
+    fetch(bulkUrl + '?ids=' + ids.join(','), {
+      headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken() }
+    })
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(data) {
+      if (!data || !data.statuses) return;
+
+      /* Apply statuses returned from server */
+      Object.keys(data.statuses).forEach(function(fid) {
+        applyStatus(fid, data.statuses[fid]);
+      });
+
+      /* For any file NOT in the response the note is empty — clear badges */
+      ids.forEach(function(fid) {
+        if (!data.statuses[fid]) {
+          applyStatus(fid, { has_my_note: false, has_shared_note: false });
+        }
+      });
+    })
+    .catch(function() {});
+  }
+
+  /* Run immediately on page load */
+  document.addEventListener('DOMContentLoaded', runBulkCheck);
+
+  /* Also poll every 15 s in the background so shared-note alerts appear
+     live on the file list without needing to open the note modal */
+  setInterval(runBulkCheck, 15000);
+
 })();
 </script>
 {% endblock %}

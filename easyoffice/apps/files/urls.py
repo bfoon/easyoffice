@@ -71,6 +71,9 @@ urlpatterns = [
 
     path('<uuid:pk>/note/typing/', views.FileNoteTypingView.as_view(), name='file_note_typing'),
 
+    # Bulk badge status — called once on page load to restore badges after refresh
+    path('note/bulk-status/', views.FileNoteBulkStatusView.as_view(), name='file_note_bulk_status'),
+
     # ── Collaborative editor (Collabora Online / WOPI) ────────────────────────
     path('collabora/', include('apps.files.collabora.urls')),
 ]

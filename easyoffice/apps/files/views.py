@@ -1345,6 +1345,8 @@ class FileManagerView(LoginRequiredMixin, TemplateView):
         # ── Annotate each file/folder with the requesting user's permission ──
         # This lets the template show/hide buttons based on 'view'/'edit'/'full'
         # without needing custom template filters.
+        _OFFICE_EDITABLE = {'docx', 'xlsx', 'pptx'}
+
         file_list = list(files)
         for f in file_list:
             f.user_permission = _file_permission_for(user, f)
@@ -1354,6 +1356,10 @@ class FileManagerView(LoginRequiredMixin, TemplateView):
                 for sa in f.share_access.select_related('user').all()
             }
             f.shared_user_ids = list(f.share_access_data.keys())
+            # Flag for collaborative editor button
+            f.is_office_editable = (
+                getattr(f, 'extension', None) or ''
+            ).lower().strip('.') in _OFFICE_EDITABLE
 
         folder_list = list(folders)
         for folder in folder_list:

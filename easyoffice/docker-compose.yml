@@ -45,6 +45,9 @@ services:
              python manage.py collectstatic --noinput &&
              python manage.py create_default_data &&
              gunicorn easyoffice.wsgi:application --bind 0.0.0.0:8000 --workers 4 --threads 2 --timeout 120"
+    environment:
+      - COLLABORA_SERVER_URL=http://collabora:9980
+      - COLLABORA_WOPI_HOST=http://web:8000
     volumes:
       - .:/app
       - media_data:/app/media
@@ -104,6 +107,25 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
       - media_data:/app/media
       - static_data:/app/staticfiles
+    depends_on:
+      - web
+
+  collabora:
+    image: collabora/code:latest
+    container_name: easyoffice_collabora
+    restart: unless-stopped
+    ports:
+      - "9980:9980"
+    environment:
+      # Allow WOPI requests from the Django web container.
+      # In production replace with your actual domain.
+      - aliasgroup1=http://web:8000
+      - DONT_GEN_SSL_CERT=YES
+      - extra_params=--o:ssl.enable=false --o:ssl.termination=false
+      - username=admin
+      - password=${COLLABORA_ADMIN_PASSWORD:-changeme}
+    cap_add:
+      - MKNOD
     depends_on:
       - web
 

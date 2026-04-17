@@ -69,9 +69,9 @@ def _authenticate(request, file_id):
         return None
 
     try:
-        user = User.objects.get(pk=payload['uid'])
+        user = User.objects.get(pk=payload['uid'])   # pk accepts str/int/uuid
         file = SharedFile.objects.get(pk=payload['fid'])
-    except (User.DoesNotExist, SharedFile.DoesNotExist):
+    except (User.DoesNotExist, SharedFile.DoesNotExist, Exception):
         return None
 
     session = None
@@ -207,8 +207,13 @@ class FileContentsView(View):
         file.file.save(file.name, ContentFile(data), save=False)
         file.file_size = len(data)
         file.file_hash = sha
-        file.version = (file.version or 1) + 1
-        file.save(update_fields=['file', 'file_size', 'file_hash', 'version', 'updated_at'])
+
+        update_fields = ['file', 'file_size', 'file_hash', 'updated_at']
+        if hasattr(file, 'version'):
+            file.version = (file.version or 1) + 1
+            update_fields.append('version')
+
+        file.save(update_fields=update_fields)
 
         FileHistory.objects.create(
             file=file,

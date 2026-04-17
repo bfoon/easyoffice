@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, include
 from apps.files import views
 
 urlpatterns = [
@@ -56,4 +56,7 @@ urlpatterns = [
     path('pin/',                           views.PinToggleView.as_view(),            name='pin_toggle'),
     path('public/<uuid:token>/',           views.FilePublicDownloadView.as_view(),   name='file_public_download'),
     path('signatures/view/<uuid:token>/',  views.SignatureViewOnlyView.as_view(),    name='signature_view_only'),
+
+    # ── Collaborative editor (Collabora Online / WOPI) ────────────────────────
+    path('collabora/', include('apps.files.collabora.urls')),
 ]

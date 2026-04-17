@@ -58,7 +58,7 @@ def issue_token(user, file, permission, session_id):
         A URL-safe string suitable for use as WOPI `access_token`.
     """
     payload = {
-        'uid':  user.pk,
+        'uid':  str(user.pk),
         'fid':  str(file.pk),
         'perm': permission,
         'sid':  str(session_id),

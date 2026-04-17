@@ -57,6 +57,20 @@ urlpatterns = [
     path('public/<uuid:token>/',           views.FilePublicDownloadView.as_view(),   name='file_public_download'),
     path('signatures/view/<uuid:token>/',  views.SignatureViewOnlyView.as_view(),    name='signature_view_only'),
 
+    # Note read/write
+    path('<uuid:pk>/note/', views.FileNoteView.as_view(), name='file_note'),
+
+    # Note sharing — list & add
+    path('<uuid:pk>/note/share/', views.FileNoteShareView.as_view(), name='file_note_share'),
+
+    # Note sharing — revoke all (called when file stop-sharing fires)
+    path('<uuid:pk>/note/share/revoke_all/', views.FileNoteShareView.as_view(), name='file_note_share_revoke_all'),
+
+    # Note sharing — delete a single share
+    path('<uuid:pk>/note/share/<uuid:share_id>/', views.FileNoteShareView.as_view(), name='file_note_share_detail'),
+
+    path('<uuid:pk>/note/typing/', views.FileNoteTypingView.as_view(), name='file_note_typing'),
+
     # ── Collaborative editor (Collabora Online / WOPI) ────────────────────────
     path('collabora/', include('apps.files.collabora.urls')),
 ]

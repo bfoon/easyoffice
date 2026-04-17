@@ -1,10 +1,12 @@
 import os, subprocess, tempfile, hashlib
+import json
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import TemplateView, View
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import FileResponse, Http404, JsonResponse, HttpResponse
 from django.contrib import messages
 from django.utils import timezone
+from datetime import timedelta
 from django.db.models import Q, Sum
 from django.db import transaction
 from django.utils.text import slugify
@@ -32,6 +34,7 @@ from apps.files.models import (
     FilePinnedItem,
     SignatureCC,
     FilePublicToken,
+    FileNote, FileNoteShare,
 )
 
 
@@ -4964,3 +4967,261 @@ class FolderRenameView(LoginRequiredMixin, View):
 
         next_url = request.POST.get('next', '')
         return redirect(next_url if next_url.startswith('/') else 'file_manager')
+
+
+def _annotate_note_badges(files_qs, user):
+    """
+    Annotate a SharedFile queryset with two boolean fields:
+
+    has_my_note      — True when THIS user has written a non-empty note on the file
+    has_shared_note  — True when ANOTHER user has shared their note with this user
+                       (via person / unit / department / office scope)
+    """
+    profile = getattr(user, 'staffprofile', None)
+    unit = profile.unit if profile else None
+    dept = profile.department if profile else None
+
+    # ── has_my_note ──────────────────────────────────────────────────────────
+    # A note exists, was written by this user, and has non-empty body.
+    my_note_qs = FileNote.objects.filter(
+        file=OuterRef('pk'),
+        author=user,
+    ).exclude(body='')
+
+    # ── has_shared_note ───────────────────────────────────────────────────────
+    # A FileNoteShare exists for a note on this file, shared with this user
+    # (by someone else), and that note has non-empty body.
+    share_q = Q(scope='office') | Q(scope='person', shared_with_user=user)
+    if unit:
+        share_q |= Q(scope='unit', unit=unit)
+    if dept:
+        share_q |= Q(scope='department', department=dept)
+
+    shared_note_qs = FileNoteShare.objects.filter(
+        share_q,
+        note__file=OuterRef('pk'),
+    ).exclude(
+        note__author=user  # don't count own note shared back to self
+    ).exclude(
+        note__body=''  # ignore empty notes
+    )
+
+    return files_qs.annotate(
+        has_my_note=Exists(my_note_qs),
+        has_shared_note=Exists(shared_note_qs),
+    )
+
+class FileNoteView(LoginRequiredMixin, View):
+    """
+    GET  /files/<pk>/note/   → own note body + notes others have shared with me
+    POST /files/<pk>/note/   → upsert own note body
+    """
+
+    def get(self, request, pk):
+        f = get_object_or_404(SharedFile, pk=pk)
+        if not _file_permission_for(request.user, f):
+            return JsonResponse({'error': 'Permission denied'}, status=403)
+
+        note = FileNote.objects.filter(file=f, author=request.user).first()
+        shared = _get_shared_notes_for(request.user, f)
+
+        return JsonResponse({
+            'body': note.body if note else '',
+            'updated_at': note.updated_at.isoformat() if note else None,
+            'shared_notes': shared,
+        })
+
+    def post(self, request, pk):
+        f = get_object_or_404(SharedFile, pk=pk)
+        if not _file_permission_for(request.user, f):
+            return JsonResponse({'error': 'Permission denied'}, status=403)
+
+        body = request.POST.get('body', '')
+        note, _ = FileNote.objects.update_or_create(
+            file=f, author=request.user,
+            defaults={'body': body},
+        )
+        return JsonResponse({
+            'ok': True,
+            'body': note.body,
+            'updated_at': note.updated_at.isoformat(),
+        })
+
+
+TYPING_WINDOW_SECONDS = 5  # consider "typing" if ping received within last 5 s
+
+
+def _get_shared_notes_for(user, file_obj):
+    """
+    Return notes that OTHER users have explicitly shared with `user` on this file.
+    Each entry now includes `is_typing` — True if the author pinged within 5 s.
+    """
+    profile = getattr(user, 'staffprofile', None)
+    unit = profile.unit if profile else None
+    dept = profile.department if profile else None
+
+    q = Q(scope='office') | Q(scope='person', shared_with_user=user)
+    if unit:
+        q |= Q(scope='unit', unit=unit)
+    if dept:
+        q |= Q(scope='department', department=dept)
+
+    shares = (
+        FileNoteShare.objects
+        .filter(note__file=file_obj)
+        .exclude(note__author=user)
+        .filter(q)
+        .select_related('note__author')
+        .order_by('note__author_id', '-note__updated_at')
+        .distinct()
+    )
+
+    now = timezone.now()
+    cutoff = now - timedelta(seconds=TYPING_WINDOW_SECONDS)
+
+    result = []
+    seen = set()
+    for share in shares:
+        nid = share.note_id
+        if nid in seen:
+            continue
+        seen.add(nid)
+        n = share.note
+        result.append({
+            'author': n.author.full_name,
+            'body': n.body,
+            'updated_at': n.updated_at.isoformat(),
+            'is_typing': bool(getattr(n, 'typing_at', None) and n.typing_at >= cutoff),
+        })
+    return result
+
+
+class FileNoteShareView(LoginRequiredMixin, View):
+    """
+    GET    /<pk>/note/share/             → list shares for my note on this file
+    POST   /<pk>/note/share/             → add share(s)
+    DELETE /<pk>/note/share/<share_id>/  → revoke one share
+    POST   /<pk>/note/share/revoke_all/  → wipe all shares (stop-sharing hook)
+    """
+
+    def _get_note(self, request, pk):
+        """Return (note, error_response). Creates note if it doesn't exist yet."""
+        f = get_object_or_404(SharedFile, pk=pk)
+        if not _file_permission_for(request.user, f):
+            return None, JsonResponse({'error': 'Permission denied'}, status=403)
+        note, _ = FileNote.objects.get_or_create(
+            file=f, author=request.user,
+            defaults={'body': ''}
+        )
+        return note, None
+
+    def get(self, request, pk, share_id=None):
+        note, err = self._get_note(request, pk)
+        if err:
+            return err
+        shares = note.shares.select_related('shared_with_user', 'unit', 'department')
+        data = [{
+            'id': str(s.id),
+            'scope': s.scope,
+            'scope_display': s.scope_display,
+            'label': s.label,
+        } for s in shares]
+        return JsonResponse({'shares': data})
+
+    def post(self, request, pk, share_id=None):
+        # Sub-action: revoke_all — path ends in /revoke_all/
+        if request.path.rstrip('/').endswith('revoke_all'):
+            return self._revoke_all(request, pk)
+
+        note, err = self._get_note(request, pk)
+        if err:
+            return err
+
+        try:
+            payload = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+        scope = payload.get('scope', '')
+
+        if scope == 'office':
+            FileNoteShare.objects.get_or_create(
+                note=note, scope='office',
+                defaults={'shared_with_user': None, 'unit': None, 'department': None}
+            )
+
+        elif scope == 'unit':
+            from apps.organization.models import Unit
+            unit = get_object_or_404(Unit, pk=payload.get('unit_id'))
+            FileNoteShare.objects.get_or_create(
+                note=note, scope='unit', unit=unit,
+                defaults={'shared_with_user': None, 'department': None}
+            )
+
+        elif scope in ('dept', 'department'):
+            from apps.organization.models import Department
+            dept = get_object_or_404(Department, pk=payload.get('dept_id'))
+            FileNoteShare.objects.get_or_create(
+                note=note, scope='department', department=dept,
+                defaults={'shared_with_user': None, 'unit': None}
+            )
+
+        elif scope == 'person':
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            for uid in payload.get('user_ids', []):
+                try:
+                    target = User.objects.get(pk=uid)
+                    FileNoteShare.objects.get_or_create(
+                        note=note, scope='person', shared_with_user=target,
+                        defaults={'unit': None, 'department': None}
+                    )
+                except User.DoesNotExist:
+                    pass
+        else:
+            return JsonResponse({'error': 'Invalid scope: ' + scope}, status=400)
+
+        return JsonResponse({'ok': True})
+
+    def delete(self, request, pk, share_id=None):
+        note, err = self._get_note(request, pk)
+        if err:
+            return err
+        if not share_id:
+            return JsonResponse({'error': 'share_id required'}, status=400)
+        share = get_object_or_404(FileNoteShare, pk=share_id, note=note)
+        share.delete()
+        return JsonResponse({'ok': True})
+
+    def _revoke_all(self, request, pk):
+        f = get_object_or_404(SharedFile, pk=pk)
+        if not _file_permission_for(request.user, f):
+            return JsonResponse({'error': 'Permission denied'}, status=403)
+        FileNoteShare.objects.filter(
+            note__file=f, note__author=request.user
+        ).delete()
+        return JsonResponse({'ok': True})
+
+
+class FileNoteTypingView(LoginRequiredMixin, View):
+    """
+    POST /<pk>/note/typing/
+    Stamps typing_at on the author's note without touching updated_at.
+    Fire-and-forget — returns 204 No Content.
+    """
+
+    def post(self, request, pk):
+        f = get_object_or_404(SharedFile, pk=pk)
+        if not _file_permission_for(request.user, f):
+            return JsonResponse({'error': 'Permission denied'}, status=403)
+
+        # get_or_create so we never fail if no note exists yet
+        note, created = FileNote.objects.get_or_create(
+            file=f, author=request.user,
+            defaults={'body': '', 'typing_at': timezone.now()}
+        )
+        if not created:
+            # Use update() to skip auto_now on updated_at entirely
+            FileNote.objects.filter(pk=note.pk).update(typing_at=timezone.now())
+
+        return HttpResponse(status=204)

@@ -3,6 +3,7 @@ from django.db import models
 from django.utils import timezone
 from apps.core.models import User
 from apps.projects.models import Project
+from django.conf import settings
 
 # ── Folder ──────────────────────────────────────────────────────────────────
 
@@ -652,3 +653,99 @@ class FilePublicToken(models.Model):
     def public_url(self):
         from django.urls import reverse
         return reverse('file_public_download', kwargs={'token': self.token})
+
+
+class FileNote(models.Model):
+    """
+    A personal sticky note a user can attach to any file.
+    One note per user per file — auto-saves, never deleted unless user clears it.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    file = models.ForeignKey(
+        'SharedFile', on_delete=models.CASCADE,
+        related_name='notes'
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='file_notes'
+    )
+    body       = models.TextField(blank=True, default='')
+    typing_at  = models.DateTimeField(null=True, blank=True)   # last keystroke ping
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('file', 'author')  # one note per user per file
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f'Note by {self.author} on {self.file.name!r}'
+
+
+class FileNoteShare(models.Model):
+    """
+    Records who can see a FileNote.
+    scope choices:
+        person     — shared with a specific user
+        unit       — shared with everyone in a unit
+        department — shared with everyone in a department
+        office     — shared with the whole office
+    When the underlying file sharing is revoked (stop-sharing), call
+    FileNoteShare.objects.filter(note__file=file, note__author=user).delete()
+    """
+    SCOPE_PERSON = 'person'
+    SCOPE_UNIT = 'unit'
+    SCOPE_DEPARTMENT = 'department'
+    SCOPE_OFFICE = 'office'
+    SCOPE_CHOICES = [
+        (SCOPE_PERSON, 'Specific person'),
+        (SCOPE_UNIT, 'Unit'),
+        (SCOPE_DEPARTMENT, 'Department'),
+        (SCOPE_OFFICE, 'Office'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    note = models.ForeignKey('FileNote', on_delete=models.CASCADE, related_name='shares')
+    scope = models.CharField(max_length=20, choices=SCOPE_CHOICES)
+
+    # Only one of the following is set depending on scope
+    shared_with_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.CASCADE, related_name='received_note_shares'
+    )
+    unit = models.ForeignKey(
+        'organization.Unit', null=True, blank=True, on_delete=models.CASCADE
+    )
+    department = models.ForeignKey(
+        'organization.Department', null=True, blank=True, on_delete=models.CASCADE
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'NoteShare({self.scope}) for {self.note}'
+
+    @property
+    def label(self):
+        """Human-readable label for the frontend."""
+        if self.scope == self.SCOPE_PERSON and self.shared_with_user:
+            return self.shared_with_user.full_name
+        if self.scope == self.SCOPE_UNIT and self.unit:
+            return self.unit.name
+        if self.scope == self.SCOPE_DEPARTMENT and self.department:
+            return self.department.name
+        if self.scope == self.SCOPE_OFFICE:
+            return 'Everyone in the office'
+        return '—'
+
+    @property
+    def scope_display(self):
+        return {
+            self.SCOPE_PERSON: 'Specific person',
+            self.SCOPE_UNIT: 'Unit',
+            self.SCOPE_DEPARTMENT: 'Department',
+            self.SCOPE_OFFICE: 'Office-wide',
+        }.get(self.scope, self.scope)

@@ -118,6 +118,9 @@
 .msg-action-btn:hover{color:var(--eo-accent);background:var(--eo-bg);}
 
 /* Input area */
+.msg-edit-wrap{display:flex;gap:6px;align-items:flex-end;margin-top:6px;max-width:100%;}
+.msg-edit-input{flex:1;resize:none;border:1.5px solid var(--eo-accent);border-radius:10px;background:var(--eo-bg);color:var(--eo-text);font-size:.88rem;padding:7px 11px;outline:none;min-height:38px;max-height:120px;font-family:inherit;line-height:1.5;}
+.msg-edit-hint{font-size:.68rem;color:var(--eo-text-muted);margin-top:2px;}
 .chat-input-area{border-top:1px solid var(--eo-border);padding:12px 16px;background:var(--eo-surface);flex-shrink:0;}
 .reply-preview{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:var(--eo-bg);border-left:3px solid var(--eo-accent);border-radius:0 6px 6px 0;margin-bottom:8px;font-size:.8rem;color:var(--eo-text-muted);gap:12px;}
 .input-row{display:flex;align-items:flex-end;gap:8px;background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:12px;padding:6px 8px;transition:border-color .15s;}
@@ -1055,6 +1058,12 @@
                   {% endif %}
                   <button class="msg-action-btn" title="React" onclick="toggleReactionPicker(this,'{{ msg.id }}')">😊</button>
                   {% if msg.sender == request.user %}
+                    {% if msg.message_type == 'text' or msg.message_type == '' %}
+                    <button class="msg-action-btn" title="Edit message"
+                            onclick="startEdit('{{ msg.id }}', '{{ msg.content|escapejs }}', {{ msg.created_at|date:'U' }})">
+                      <i class="bi bi-pencil"></i>
+                    </button>
+                    {% endif %}
                     <button class="msg-action-btn" title="Delete" onclick="if(confirm('Delete this message?')) deleteMsg('{{ msg.id }}')"><i class="bi bi-trash"></i></button>
                   {% endif %}
                 </div>
@@ -1173,6 +1182,12 @@
                   {% endif %}
                   <button class="msg-action-btn" title="React" onclick="toggleReactionPicker(this,'{{ msg.id }}')">😊</button>
                   {% if msg.sender == request.user %}
+                    {% if msg.message_type == 'text' or msg.message_type == '' %}
+                    <button class="msg-action-btn" title="Edit message"
+                            onclick="startEdit('{{ msg.id }}', '{{ msg.content|escapejs }}', {{ msg.created_at|date:'U' }})">
+                      <i class="bi bi-pencil"></i>
+                    </button>
+                    {% endif %}
                     <button class="msg-action-btn" title="Delete" onclick="if(confirm('Delete this message?')) deleteMsg('{{ msg.id }}')"><i class="bi bi-trash"></i></button>
                   {% endif %}
                 </div>
@@ -1629,6 +1644,8 @@
   var lastSeenId = null;
   var pollTimer = null;
   var reactPollTimer = null;
+  var editsPollTimer = null;
+  var _lastEditsPollTs = new Date().toISOString();
   var fpSearchTimeout = null;
   var spellcheckEnabled = true;
   var spellCheckTimer = null;
@@ -1842,18 +1859,49 @@
     }
   }
 
+  /* ── Edits poll — HTTP fallback for receivers who miss the WS broadcast ── */
+  function pollEdits(){
+    fetch('/messages/' + ROOM_ID + '/edits-poll/?since=' + encodeURIComponent(_lastEditsPollTs), {
+      headers: {'X-Requested-With': 'XMLHttpRequest'},
+      credentials: 'same-origin'
+    })
+    .then(function(r){ if(!r.ok) throw new Error(); return r.json(); })
+    .then(function(d){
+      if(!d.ok || !d.edits || !d.edits.length) return;
+      d.edits.forEach(function(e){
+        applyMessageEdit(e.message_id, e.content);
+        // Advance the cursor so we don't re-process the same edits
+        if(e.edited_at > _lastEditsPollTs) _lastEditsPollTs = e.edited_at;
+      });
+    })
+    .catch(function(){});
+  }
+
+  function startEditsPoll(){
+    stopEditsPoll();
+    pollEdits();
+    editsPollTimer = setInterval(pollEdits, 3000);
+  }
+
+  function stopEditsPoll(){
+    if(editsPollTimer){ clearInterval(editsPollTimer); editsPollTimer = null; }
+  }
+
   document.addEventListener('visibilitychange', function(){
   if(document.hidden){
     stopPolling();
     stopReactionsPoll();
     stopPollStatePolling();
+    stopEditsPoll();
   } else {
     pollMessages();
     pollReactions();
     pollPollStates();
+    pollEdits();
     startPolling();
     startReactionsPoll();
     startPollStatePolling();
+    startEditsPoll();
   }
 });
 
@@ -1863,6 +1911,7 @@ window.addEventListener('beforeunload', function(){
   stopPollStatePolling();
   stopPresencePolling();
   stopHeartbeat();
+  stopEditsPoll();
   if(socket){
     try{ socket.close(); }catch(_){}
   }
@@ -2180,6 +2229,12 @@ window.addEventListener('beforeunload', function(){
         if(IS_DIRECT && String(d.user_id) === String(DM_OTHER_USER_ID)){
           updatePresenceBadge(d.status, d.last_seen_display || '');
         }
+        return;
+      }
+
+      if(d.type === 'message_edited'){
+        var editedId = String(d.message_id || d.id || '');
+        if(editedId) applyMessageEdit(editedId, d.message || d.content || '');
         return;
       }
 
@@ -2769,6 +2824,18 @@ function stopPollStatePolling(){
       actions.appendChild(reactBtn);
 
       if(isOwn){
+        if(mtype === 'text' || mtype === ''){
+          (function(id, ts){
+            var editBtn = document.createElement('button');
+            editBtn.className = 'msg-action-btn';
+            editBtn.title = 'Edit message';
+            editBtn.innerHTML = '<i class="bi bi-pencil"></i>';
+            editBtn.addEventListener('click', function(){
+              startEdit(id, text, ts);
+            });
+            actions.appendChild(editBtn);
+          })(mid, data.created_at ? Math.floor(new Date(data.created_at).getTime()/1000) : Math.floor(Date.now()/1000));
+        }
         var delBtn = document.createElement('button');
         delBtn.className = 'msg-action-btn';
         delBtn.title = 'Delete';
@@ -3692,6 +3759,144 @@ if (spellcheckToggleBtn) {
     }
   });
 
+  /* ── Inline message edit ─────────────────────────────────────────────── */
+  var EDIT_WINDOW_MS = 3600 * 1000;
+  var _activeEditId  = null;
+
+  window.startEdit = function(msgId, currentText, createdTs) {
+    var ageMs = Date.now() - (Number(createdTs) * 1000);
+    if(ageMs > EDIT_WINDOW_MS){
+      alert('You can no longer edit this message — the 1-hour window has passed.');
+      return;
+    }
+    var ownMsgs = Array.from(document.querySelectorAll('#chatMessages .chat-msg.own'));
+    if(!ownMsgs.length || ownMsgs[ownMsgs.length - 1].id !== 'msg-' + msgId){
+      alert('You can only edit your last message.');
+      return;
+    }
+    cancelEdit();
+    _activeEditId = msgId;
+    var msgEl = byId('msg-' + msgId);
+    if(!msgEl) return;
+    var bubble = msgEl.querySelector('.bubble.bubble-out');
+    if(!bubble) return;
+    // Use the most recently stored text (covers already-edited messages)
+    currentText = bubble.dataset.editedText || currentText;
+    bubble.style.display = 'none';
+    var wrap = document.createElement('div');
+    wrap.className = 'msg-edit-wrap';
+    wrap.id = 'edit-wrap-' + msgId;
+    var ta = document.createElement('textarea');
+    ta.className = 'msg-edit-input';
+    ta.value = currentText;
+    ta.rows = 1;
+    ta.addEventListener('input', function(){ ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,120)+'px'; });
+    ta.addEventListener('keydown', function(e){
+      if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); commitEdit(msgId); }
+      if(e.key==='Escape'){ cancelEdit(); }
+    });
+    var saveBtn = document.createElement('button');
+    saveBtn.className = 'eo-btn eo-btn-primary eo-btn-sm';
+    saveBtn.innerHTML = '<i class="bi bi-check2"></i>';
+    saveBtn.title = 'Save (Enter)';
+    saveBtn.addEventListener('click', function(){ commitEdit(msgId); });
+    var cancelBtn = document.createElement('button');
+    cancelBtn.className = 'eo-btn eo-btn-secondary eo-btn-sm';
+    cancelBtn.innerHTML = '<i class="bi bi-x-lg"></i>';
+    cancelBtn.title = 'Cancel (Esc)';
+    cancelBtn.addEventListener('click', function(){ cancelEdit(); });
+    wrap.appendChild(ta); wrap.appendChild(saveBtn); wrap.appendChild(cancelBtn);
+    var hint = document.createElement('div');
+    hint.className = 'msg-edit-hint';
+    hint.textContent = 'Enter to save · Esc to cancel';
+    var body = bubble.parentElement;
+    body.insertBefore(wrap, bubble.nextSibling);
+    body.insertBefore(hint, wrap.nextSibling);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    ta.dispatchEvent(new Event('input'));
+  };
+
+  window.cancelEdit = function() {
+    if(!_activeEditId) return;
+    var msgEl = byId('msg-' + _activeEditId);
+    if(msgEl){
+      var bubble = msgEl.querySelector('.bubble.bubble-out');
+      if(bubble) bubble.style.display = '';
+    }
+    var wrap = byId('edit-wrap-' + _activeEditId);
+    if(wrap){
+      var hint = wrap.nextSibling;
+      if(hint && hint.className === 'msg-edit-hint') hint.remove();
+      wrap.remove();
+    }
+    _activeEditId = null;
+  };
+
+  window.commitEdit = function(msgId) {
+    var wrap = byId('edit-wrap-' + msgId);
+    if(!wrap) return;
+    var ta = wrap.querySelector('.msg-edit-input');
+    if(!ta) return;
+    var newText = ta.value.trim();
+    if(!newText){ alert('Message cannot be empty.'); return; }
+    var saveBtn = wrap.querySelector('.eo-btn-primary');
+    if(saveBtn) saveBtn.disabled = true;
+    var fd = new FormData();
+    fd.append('content', newText);
+    fd.append('csrfmiddlewaretoken', getCookie('csrftoken'));
+    fetch('/messages/api/edit/' + msgId + '/', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'same-origin',
+      body: fd,
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d.ok){
+        // Apply the text update FIRST (while bubble is still hidden),
+        // then cancelEdit() restores display:'' to reveal the updated text.
+        var updated = d.message ? (d.message.message || d.message.content || newText) : newText;
+        applyMessageEdit(msgId, updated);
+        cancelEdit();
+      } else {
+        alert(d.error || 'Could not edit message.');
+        if(saveBtn) saveBtn.disabled = false;
+      }
+    })
+    .catch(function(){
+      alert('Network error — could not save edit.');
+      if(saveBtn) saveBtn.disabled = false;
+    });
+  };
+
+  function applyMessageEdit(msgId, newText){
+    var msgEl = byId('msg-' + msgId);
+    if(!msgEl) return;
+
+    // Update bubble text — works whether display:none or visible
+    // querySelector finds elements regardless of their display state
+    var bubble = msgEl.querySelector('.bubble.bubble-out, .bubble.bubble-in');
+    if(bubble) {
+      bubble.textContent = newText;
+      // Store updated text on the element so startEdit picks up the new value
+      bubble.dataset.editedText = newText;
+    }
+
+    // Add or refresh the "(edited)" label in the sender line
+    var sender = msgEl.querySelector('.chat-sender');
+    if(sender){
+      var existing = sender.querySelector('.edited-label');
+      if(!existing){
+        var label = document.createElement('span');
+        label.className = 'edited-label';
+        label.style.cssText = 'font-size:.65rem;color:var(--eo-text-muted);font-weight:400;margin-left:4px';
+        label.textContent = '(edited)';
+        sender.appendChild(label);
+      }
+    }
+  }
+
   bootstrapExistingMessages();
   setSendEnabled();
   connectWS();
@@ -3699,6 +3904,7 @@ if (spellcheckToggleBtn) {
   startReactionsPoll();
   startPollStatePolling();
   startPresencePolling();
+  startEditsPoll();
   /* Animate server-rendered poll bars on page load */
   animatePollBars(byId('chatMessages'));
   /* Hard scroll to bottom on load — bypass arrow logic */

@@ -1076,6 +1076,54 @@ class ChatReactionsPollView(LoginRequiredMixin, View):
 
 
 # ---------------------------------------------------------------------------
+# Edits poll  (HTTP fallback for receivers who miss the WS broadcast)
+# ---------------------------------------------------------------------------
+
+class ChatEditsPollView(LoginRequiredMixin, View):
+    """
+    GET /messages/<room_id>/edits-poll/?since=<iso-timestamp>
+
+    Returns all edited messages in the room whose edited_at is after
+    the given timestamp.  The JS polls this every 3 s alongside the
+    reactions poll so receivers who are on the HTTP fallback (no WS)
+    still see edits applied without a manual refresh.
+    """
+    def get(self, request, room_id):
+        from datetime import datetime
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        since_str = request.GET.get('since', '').strip()
+        since_dt  = None
+        if since_str:
+            try:
+                since_dt = datetime.fromisoformat(since_str)
+                if timezone.is_naive(since_dt):
+                    since_dt = timezone.make_aware(since_dt)
+            except Exception:
+                since_dt = None
+
+        qs = room.messages.filter(
+            is_deleted=False,
+            is_edited=True,
+        ).exclude(edited_at__isnull=True)
+
+        if since_dt:
+            qs = qs.filter(edited_at__gt=since_dt)
+
+        qs = qs.select_related('sender').order_by('edited_at')[:50]
+
+        data = []
+        for msg in qs:
+            data.append({
+                'message_id': str(msg.id),
+                'content':    msg.content or '',
+                'edited_at':  timezone.localtime(msg.edited_at).isoformat(),
+            })
+
+        return JsonResponse({'ok': True, 'edits': data})
+
+
+# ---------------------------------------------------------------------------
 # Toggle Reaction
 # ---------------------------------------------------------------------------
 
@@ -1107,6 +1155,83 @@ class DeleteMessageView(LoginRequiredMixin, View):
         msg.is_deleted = True
         msg.save(update_fields=['is_deleted'])
         return JsonResponse({'ok': True})
+
+
+# ---------------------------------------------------------------------------
+# Edit Message  (own last message only, within 1 hour of sending)
+# ---------------------------------------------------------------------------
+
+class EditMessageView(LoginRequiredMixin, View):
+    """
+    POST /messages/api/edit/<message_id>/
+
+    Allows a user to edit the content of their own last message in a room,
+    provided it was sent within the past hour.
+
+    Rules enforced:
+      1. Sender must be request.user.
+      2. Message must not be deleted.
+      3. Message must be the most-recent non-deleted message from the user
+         in that room (i.e. their last message).
+      4. Message must have been created within the last 3600 seconds (1 hour).
+      5. Only text-type messages can be edited (not files/images/polls).
+    """
+
+    EDIT_WINDOW_SECONDS = 3600  # 1 hour
+
+    def post(self, request, message_id):
+        msg = get_object_or_404(
+            ChatMessage,
+            id=message_id,
+            sender=request.user,
+            is_deleted=False,
+        )
+
+        # ── Rule 5: only plain text messages ──────────────────────────────────
+        if msg.message_type not in ('text', ''):
+            return JsonResponse({'ok': False, 'error': 'Only text messages can be edited.'}, status=400)
+
+        # ── Rule 4: within the 1-hour edit window ────────────────────────────
+        age = (timezone.now() - msg.created_at).total_seconds()
+        if age > self.EDIT_WINDOW_SECONDS:
+            return JsonResponse({'ok': False, 'error': 'Edit window has expired (1 hour).'}, status=403)
+
+        # ── Rule 3: must be the user's last message in this room ─────────────
+        last_msg = (
+            ChatMessage.objects
+            .filter(room=msg.room, sender=request.user, is_deleted=False)
+            .order_by('-created_at')
+            .first()
+        )
+        if not last_msg or str(last_msg.id) != str(msg.id):
+            return JsonResponse({'ok': False, 'error': 'You can only edit your last message.'}, status=403)
+
+        # ── Apply the edit ────────────────────────────────────────────────────
+        new_content = (request.POST.get('content') or '').strip()
+        if not new_content:
+            return JsonResponse({'ok': False, 'error': 'Message cannot be empty.'}, status=400)
+
+        msg.content   = new_content
+        msg.is_edited = True
+        msg.edited_at = timezone.now()
+        msg.save(update_fields=['content', 'is_edited', 'edited_at'])
+
+        # Broadcast the edit so all connected clients update in real-time
+        payload = _serialize_chat_message(msg, viewer=request.user)
+        payload['type'] = 'message_edited'
+
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                from asgiref.sync import async_to_sync
+                async_to_sync(channel_layer.group_send)(
+                    _room_group_name(msg.room_id),
+                    {'type': 'chat.edit', 'payload': payload},
+                )
+        except Exception:
+            pass
+
+        return JsonResponse({'ok': True, 'message': payload})
 
 
 # ---------------------------------------------------------------------------

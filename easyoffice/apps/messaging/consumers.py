@@ -112,6 +112,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def chat_poll(self, event):
         await self.send(text_data=json.dumps(event['payload']))
 
+    async def chat_edit(self, event):
+        await self.send(text_data=json.dumps(event['payload']))
+
     # --------------------------------------------------
     # DB HELPERS
     # --------------------------------------------------

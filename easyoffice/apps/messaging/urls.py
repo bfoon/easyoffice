@@ -15,6 +15,7 @@ urlpatterns = [
     # ─────────────────────────────────────────────
     path('<uuid:room_id>/messages/poll/',   views.ChatMessagesPollView.as_view(),  name='chat_messages_poll'),
     path('<uuid:room_id>/reactions-poll/',  views.ChatReactionsPollView.as_view(), name='chat_reactions_poll'),
+    path('<uuid:room_id>/edits-poll/',      views.ChatEditsPollView.as_view(),     name='chat_edits_poll'),
 
     # 🔥 NEW → POLL STATE AUTO REFRESH
     path('<uuid:room_id>/polls/state/',     views.PollStateView.as_view(), name='chat_poll_state'),
@@ -48,6 +49,7 @@ urlpatterns = [
     # MESSAGE MANAGEMENT
     # ─────────────────────────────────────────────
     path('api/delete/<uuid:message_id>/', views.DeleteMessageView.as_view(), name='delete_chat_message'),
+    path('api/edit/<uuid:message_id>/',   views.EditMessageView.as_view(),   name='edit_chat_message'),
 
     # ─────────────────────────────────────────────
     # FILES (CHAT + PROJECT)

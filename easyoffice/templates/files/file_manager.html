@@ -1611,6 +1611,10 @@
           </button>
           <button type="button" onclick="closeModal('uploadModal')" class="eo-btn eo-btn-secondary">Cancel</button>
         </div>
+        <!-- Upload progress -->
+        <div style="display:none;margin-top:10px;height:4px;background:var(--eo-border);border-radius:4px;overflow:hidden">
+          <div id="fmUploadProgress" style="height:100%;width:0;background:var(--eo-accent);transition:width .15s;border-radius:4px"></div>
+        </div>
       </form>
     </div>
   </div>
@@ -2807,26 +2811,6 @@
 
 })();
 
-/* ── Stop-sharing hook: auto-revoke all note shares ── */
-(function() {
-  var _orig = window.stopSharingNow;
-  window.stopSharingNow = function() {
-    var shareForm = document.getElementById('shareForm');
-    var fileId = shareForm ? shareForm.dataset.currentFileId : null;
-    if (fileId) {
-      var ol  = document.getElementById('fnOverlay');
-      var tpl = ol ? (ol.dataset.noteShareUrl || '') : '';
-      var url = tpl.replace('00000000-0000-0000-0000-000000000000', fileId) + 'revoke_all/';
-      var m   = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
-      fetch(url, {
-        method: 'POST',
-        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': m ? decodeURIComponent(m[1]) : '' },
-      }).catch(function(){});
-    }
-    if (typeof _orig === 'function') _orig();
-  };
-})();
-
 /* ════════════════════════════════════════════════════════════════════════
    PAGE-LEVEL BADGE INIT & BACKGROUND POLLING
    Runs on every page load. Fetches badge states for ALL file buttons on
@@ -2873,7 +2857,6 @@
   }
 
   function runBulkCheck() {
-    /* Collect every distinct file ID currently rendered on the page */
     var seen = {};
     var ids  = [];
     document.querySelectorAll('.fn-btn[data-file-id]').forEach(function(btn) {
@@ -2903,6 +2886,9 @@
     })
     .catch(function() {});
   }
+
+  /* Expose globally so refreshGrid (defined earlier) can call it after a grid swap */
+  window.runBulkCheck = runBulkCheck;
 
   /* Run immediately on page load */
   document.addEventListener('DOMContentLoaded', runBulkCheck);

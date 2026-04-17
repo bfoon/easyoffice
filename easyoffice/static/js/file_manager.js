@@ -219,6 +219,11 @@
         // Re-attach drag-and-drop to newly rendered cards
         attachDragHandlers();
         if (typeof window.initFileGrid === 'function') window.initFileGrid();
+        // Re-run note badge checks on newly rendered buttons
+        if (typeof window.runBulkCheck === 'function') window.runBulkCheck();
+        // Restore current view (grid/list) preference
+        var savedView = localStorage.getItem('eo_fm_view') || 'grid';
+        setView(savedView);
       })
       .catch(function (reason) {
         if (reason !== 'unavailable') window.location.reload();
@@ -226,6 +231,68 @@
   }
 
   window.refreshFileGrid = refreshFileGrid;
+
+  /* ── Intercept sort & search GET forms ─────────────────────────────────── */
+  document.addEventListener('DOMContentLoaded', function () {
+
+    /* Sort select — submit the form but swap the grid instead of full reload */
+    var sortForm = document.getElementById('sortForm');
+    if (sortForm) {
+      sortForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var params = new URLSearchParams(new FormData(sortForm));
+        // Merge with existing params (folder, filter, type, q)
+        var existing = new URLSearchParams(window.location.search);
+        params.forEach(function (v, k) { existing.set(k, v); });
+        var newUrl = window.location.pathname + '?' + existing.toString();
+        history.pushState(null, '', newUrl);
+        refreshFileGrid();
+      });
+    }
+
+    /* Search form */
+    var searchForm = document.querySelector('.fm-search');
+    if (searchForm) {
+      searchForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var q = searchForm.querySelector('input[name="q"]');
+        var existing = new URLSearchParams(window.location.search);
+        if (q && q.value.trim()) { existing.set('q', q.value.trim()); }
+        else { existing.delete('q'); }
+        var newUrl = window.location.pathname + '?' + existing.toString();
+        history.pushState(null, '', newUrl);
+        refreshFileGrid();
+      });
+      /* Live search: 400ms debounce */
+      var qInput = searchForm.querySelector('input[name="q"]');
+      if (qInput) {
+        var _st = null;
+        qInput.addEventListener('input', function () {
+          clearTimeout(_st);
+          _st = setTimeout(function () {
+            searchForm.dispatchEvent(new Event('submit', { bubbles: true }));
+          }, 400);
+        });
+      }
+    }
+
+    /* Sidebar filter/folder links — intercept ?-prefixed hrefs */
+    document.querySelectorAll('.fm-nav-item, .fm-folder-nav-item').forEach(function (a) {
+      var href = a.getAttribute('href');
+      if (!href || !href.startsWith('?')) return;
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        history.pushState(null, '', window.location.pathname + href);
+        refreshFileGrid();
+      });
+    });
+
+    /* Browser back/forward */
+    window.addEventListener('popstate', function () {
+      refreshFileGrid();
+    });
+
+  });
 
   /* ═══════════════════════════════════════════════════════════════════════════
      SECTION 4 — FORM SUBMIT INTERCEPTOR
@@ -962,5 +1029,30 @@
     }
     closeModal('previewModal');
   };
+
+  /* ── Stop-sharing: also revoke all note shares for that file ─────────── */
+  /* Wraps the stopSharingNow() defined earlier in this file. */
+  (function () {
+    var _origStop = window.stopSharingNow;
+    window.stopSharingNow = function () {
+      /* Call the original UI reset first */
+      if (typeof _origStop === 'function') _origStop();
+
+      /* Then silently wipe note shares */
+      var shareForm = byId('shareForm');
+      var fileId = shareForm ? shareForm.dataset.currentFileId : null;
+      if (!fileId) return;
+
+      var ol  = document.getElementById('fnOverlay');
+      var tpl = ol ? (ol.dataset.noteShareUrl || '') : '';
+      if (!tpl) return;
+      var url = tpl.replace('00000000-0000-0000-0000-000000000000', fileId) + 'revoke_all/';
+      fetch(url, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': getCsrf() },
+        credentials: 'same-origin',
+      }).catch(function () {});
+    };
+  })();
 
 })(); // ← end of IIFE

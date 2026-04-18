@@ -3216,38 +3216,98 @@ class SavedSignaturesView(LoginRequiredMixin, View):
 
     def post(self, request):
         from apps.files.models import SavedSignature
-        action = request.POST.get('action')
+
+        action = (request.POST.get('action') or '').strip()
+
+        def _json_ok(message, extra=None):
+            payload = {'status': 'ok', 'message': message}
+            if extra:
+                payload.update(extra)
+            return JsonResponse(payload)
+
+        def _json_err(message, status=400):
+            return JsonResponse({'status': 'error', 'message': message}, status=status)
+
+        wants_json = (
+            request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+            or request.headers.get('Accept', '').lower().find('application/json') >= 0
+        )
 
         if action == 'save':
-            sig_type = request.POST.get('sig_type', 'draw')
+            sig_type = request.POST.get('sig_type', 'draw').strip()
+            sig_name = request.POST.get('name', 'My Signature').strip() or 'My Signature'
+            is_default = str(request.POST.get('is_default', '')).lower() in ('1', 'true', 'yes', 'on')
+
             sig = SavedSignature(
                 user=request.user,
-                name=request.POST.get('name', 'My Signature').strip() or 'My Signature',
+                name=sig_name,
                 sig_type=sig_type,
-                is_default='is_default' in request.POST,
+                is_default=is_default,
             )
+
             if sig_type == 'draw':
-                sig.data = request.POST.get('data', '')
+                sig.data = request.POST.get('data', '').strip()
+                if not sig.data:
+                    return _json_err('No drawn signature data provided.') if wants_json else redirect('saved_signatures')
+
             elif sig_type == 'type':
                 sig.data = request.POST.get('data', '').strip()
-            elif sig_type == 'upload' and 'image' in request.FILES:
+                if not sig.data:
+                    return _json_err('No typed signature data provided.') if wants_json else redirect('saved_signatures')
+
+            elif sig_type == 'upload':
+                if 'image' not in request.FILES:
+                    return _json_err('No uploaded signature image provided.') if wants_json else redirect('saved_signatures')
                 sig.image = request.FILES['image']
+
+            else:
+                return _json_err('Invalid signature type.') if wants_json else redirect('saved_signatures')
+
             sig.save()
-            messages.success(request, f'Signature "{sig.name}" saved.')
+
+            message = f'Signature "{sig.name}" saved.'
+            if wants_json:
+                payload = {
+                    'id': str(sig.id),
+                    'name': sig.name,
+                    'type': sig.sig_type,
+                    'is_default': sig.is_default,
+                    'data': sig.data if sig.sig_type in ('draw', 'type') else request.build_absolute_uri(sig.image.url),
+                }
+                return _json_ok(message, payload)
+
+            messages.success(request, message)
+            return redirect('saved_signatures')
 
         elif action == 'delete':
             sig_id = request.POST.get('sig_id')
-            get_object_or_404(SavedSignature, id=sig_id, user=request.user).delete()
+            sig = get_object_or_404(SavedSignature, id=sig_id, user=request.user)
+            sig.delete()
+
+            if wants_json:
+                return _json_ok('Signature deleted.', {'sig_id': sig_id})
+
             messages.success(request, 'Signature deleted.')
+            return redirect('saved_signatures')
 
         elif action == 'set_default':
             sig_id = request.POST.get('sig_id')
             sig = get_object_or_404(SavedSignature, id=sig_id, user=request.user)
             sig.is_default = True
             sig.save()
-            messages.success(request, f'"{sig.name}" set as default.')
 
+            if wants_json:
+                return _json_ok(f'"{sig.name}" set as default.', {'sig_id': str(sig.id)})
+
+            messages.success(request, f'"{sig.name}" set as default.')
+            return redirect('saved_signatures')
+
+        if wants_json:
+            return _json_err('Invalid action.')
+
+        messages.error(request, 'Invalid action.')
         return redirect('saved_signatures')
+
 
 
 class SignDocumentPreviewView(View):
@@ -3309,32 +3369,39 @@ class SavedSignatureAPIView(LoginRequiredMixin, View):
     """Return user's saved signatures as JSON for the signing page."""
     def get(self, request):
         from apps.files.models import SavedSignature
+
         sigs = []
         for s in SavedSignature.objects.filter(user=request.user):
             entry = {
-                'id':         str(s.id),
-                'name':       s.name,
-                'type':       s.sig_type,
+                'id': str(s.id),
+                'name': s.name,
+                'type': s.sig_type,
                 'is_default': s.is_default,
             }
+
             if s.sig_type == 'draw':
                 entry['data'] = s.data
+
             elif s.sig_type == 'type':
-                # Parse stored "font:Dancing Script|John Doe" format,
-                # or fall back gracefully for sigs saved before this format.
                 raw = s.data or ''
                 if raw.startswith('font:') and '|' in raw:
-                    parts        = raw.split('|', 1)
-                    entry['font'] = parts[0][5:]   # strip leading "font:"
-                    entry['text'] = parts[1]
+                    font_part, text_part = raw.split('|', 1)
+                    entry['font'] = font_part[5:]
+                    entry['text'] = text_part
                 else:
                     entry['font'] = 'Dancing Script'
                     entry['text'] = raw
-                entry['data'] = raw   # keep raw for backward compat
+                entry['data'] = raw
+
             elif s.image:
                 entry['data'] = request.build_absolute_uri(s.image.url)
+            else:
+                entry['data'] = s.data or ''
+
             sigs.append(entry)
+
         return JsonResponse({'signatures': sigs})
+
 
 class FileMoveView(LoginRequiredMixin, View):
     def post(self, request, pk):
@@ -3741,7 +3808,7 @@ class PDFMergeImagesView(LoginRequiredMixin, View):
 class QuickSignView(LoginRequiredMixin, View):
     """
     Lets a user sign any of their PDF files directly — no signature request
-    flow, no other signers, no emails.  The signed copy is saved alongside
+    flow, no other signers, no emails. The signed copy is saved alongside
     the original as a new SharedFile.
     """
     template_name = 'files/quick_sign.html'
@@ -3749,18 +3816,17 @@ class QuickSignView(LoginRequiredMixin, View):
     def _build_file_tree(self, user):
         """
         Returns a structure for the file picker:
-          - root_pdfs:   PDF files not in any folder
-          - folders:     list of { folder, pdfs }  (only folders that contain PDFs)
+          - root_pdfs: PDF files not in any folder
+          - folders: list of { folder, pdfs } (only folders that contain PDFs)
         """
         all_pdfs = [
             f for f in _editable_files_qs(user)
-                                              .select_related('folder')
-                                              .order_by('name')
+            .select_related('folder')
+            .order_by('name')
             if getattr(f, 'is_pdf', False)
         ]
         root_pdfs = [f for f in all_pdfs if f.folder_id is None]
 
-        # Group the rest by folder
         from collections import defaultdict
         by_folder = defaultdict(list)
         for f in all_pdfs:
@@ -3768,17 +3834,17 @@ class QuickSignView(LoginRequiredMixin, View):
                 by_folder[f.folder_id].append(f)
 
         folders = []
-        for folder in _visible_folders_qs(user).filter(
-            pk__in=by_folder.keys()
-        ).order_by('name'):
+        for folder in _visible_folders_qs(user).filter(pk__in=by_folder.keys()).order_by('name'):
             folders.append({
                 'folder': folder,
-                'pdfs':   by_folder[folder.pk],
+                'pdfs': by_folder[folder.pk],
             })
 
         return root_pdfs, folders
 
     def get(self, request, pk=None):
+        from apps.files.models import SavedSignature
+
         selected = None
         if pk:
             selected = get_object_or_404(SharedFile, pk=pk)
@@ -3790,22 +3856,27 @@ class QuickSignView(LoginRequiredMixin, View):
                 return redirect('quick_sign')
 
         root_pdfs, folders = self._build_file_tree(request.user)
+
         return render(request, self.template_name, {
             'root_pdfs': root_pdfs,
-            'folders':   folders,
-            'selected':  selected,
+            'folders': folders,
+            'selected': selected,
+            'default_saved_signature': SavedSignature.objects.filter(
+                user=request.user,
+                is_default=True
+            ).first(),
         })
 
     def post(self, request, pk=None):
-        file_id   = request.POST.get('file_id') or (str(pk) if pk else None)
-        sig_data  = request.POST.get('signature_data', '').strip()
-        sig_type  = request.POST.get('signature_type', 'draw')
-        sig_page  = int(request.POST.get('sig_page', 1))
-        sig_x     = float(request.POST.get('sig_x', 10))
-        sig_y     = float(request.POST.get('sig_y', 80))
-        sig_w     = float(request.POST.get('sig_w', 35))
-        sig_h     = float(request.POST.get('sig_h', 12))
-        output_name = request.POST.get('output_name', '').strip()
+        file_id = request.POST.get('file_id') or (str(pk) if pk else None)
+        sig_data = (request.POST.get('signature_data') or '').strip()
+        sig_type = (request.POST.get('signature_type') or 'draw').strip()
+        sig_page = int(request.POST.get('sig_page', 1))
+        sig_x = float(request.POST.get('sig_x', 10))
+        sig_y = float(request.POST.get('sig_y', 80))
+        sig_w = float(request.POST.get('sig_w', 35))
+        sig_h = float(request.POST.get('sig_h', 12))
+        output_name = (request.POST.get('output_name') or '').strip()
 
         if not file_id or not sig_data:
             messages.error(request, 'Please select a file and provide your signature.')
@@ -3820,40 +3891,6 @@ class QuickSignView(LoginRequiredMixin, View):
             return redirect('quick_sign')
 
         try:
-            # ── Build a minimal SignatureField-like object for _embed helper ──
-            from dataclasses import dataclass
-            from datetime import datetime as _dt
-
-            @dataclass
-            class _FakeField:
-                field_type:  str
-                value:       str
-                page:        int
-                x_pct:       float
-                y_pct:       float
-                width_pct:   float
-                height_pct:  float
-                signer:      object
-                filled_at:   object
-
-            @dataclass
-            class _FakeSigner:
-                name: str
-
-            fake_signer = _FakeSigner(name=request.user.full_name)
-            fake_field  = _FakeField(
-                field_type = 'signature',
-                value      = sig_data,
-                page       = sig_page,
-                x_pct      = sig_x,
-                y_pct      = sig_y,
-                width_pct  = sig_w,
-                height_pct = sig_h,
-                signer     = fake_signer,
-                filled_at  = timezone.now(),
-            )
-
-            # ── Embed the signature directly using the reportlab helper ──────
             try:
                 from reportlab.pdfgen import canvas as rl_canvas
                 from reportlab.lib.utils import ImageReader
@@ -3862,149 +3899,164 @@ class QuickSignView(LoginRequiredMixin, View):
                 return redirect('quick_sign')
 
             import base64
-            from collections import defaultdict
+            from datetime import datetime as _dt
 
             pdf_bytes = pdf.file.open('rb').read()
             reader = PdfReader(BytesIO(pdf_bytes))
             writer = PdfWriter()
 
-            # Colour constants (same as _embed_signatures_in_pdf)
-            DS_BLUE       = (0.098, 0.376, 0.875)
-            DS_BLUE_LIGHT = (0.918, 0.937, 0.992)
-            DS_INK        = (0.063, 0.271, 0.773)
-            DS_LABEL      = (0.373, 0.420, 0.510)
-            DS_CHECK      = (0.063, 0.271, 0.773)
-            STRIP_H       = 18.0
+            DS_BLUE = (0.098, 0.376, 0.875)
+            DS_INK = (0.063, 0.271, 0.773)
+            DS_LABEL = (0.373, 0.420, 0.510)
+            STRIP_H = 18.0
 
-            from datetime import datetime as _dt2
-            signed_at = _dt2.now().strftime('%d %b %Y %H:%M UTC')
+            signed_at = _dt.now().strftime('%d %b %Y %H:%M UTC')
 
             for page_idx in range(len(reader.pages)):
-                page    = reader.pages[page_idx]
-                page_w  = float(page.mediabox.width)
-                page_h  = float(page.mediabox.height)
+                page = reader.pages[page_idx]
+                page_w = float(page.mediabox.width)
+                page_h = float(page.mediabox.height)
                 page_num = page_idx + 1
 
                 overlay = BytesIO()
                 c = rl_canvas.Canvas(overlay, pagesize=(page_w, page_h))
 
-                # ── Header strip (all pages) ──────────────────────────────
+                # Header strip
                 hdr_y = page_h - STRIP_H
                 c.setFillColorRGB(0.937, 0.953, 1.0)
                 c.rect(0, hdr_y, page_w, STRIP_H, stroke=0, fill=1)
                 c.setStrokeColorRGB(*DS_BLUE)
                 c.setLineWidth(0.8)
                 c.line(0, hdr_y, page_w, hdr_y)
+
                 c.setFont('Helvetica-Bold', 6.5)
                 c.setFillColorRGB(*DS_BLUE)
                 c.drawString(5, hdr_y + STRIP_H * 0.28, '\u26BF EasyOffice')
+
                 c.setFont('Helvetica', 6.0)
                 c.setFillColorRGB(*DS_LABEL)
                 c.drawString(52, hdr_y + STRIP_H * 0.28, f'\u00B7  {pdf.name}')
-                c.drawRightString(page_w - 5, hdr_y + STRIP_H * 0.28,
-                                  f'Page {page_num} / {len(reader.pages)}')
+                c.drawRightString(page_w - 5, hdr_y + STRIP_H * 0.28, f'Page {page_num} / {len(reader.pages)}')
 
-                # ── Footer strip (all pages) ──────────────────────────────
+                # Footer strip
                 c.setFillColorRGB(0.937, 0.953, 1.0)
                 c.rect(0, 0, page_w, STRIP_H, stroke=0, fill=1)
+                c.setStrokeColorRGB(*DS_BLUE)
                 c.setLineWidth(0.8)
                 c.line(0, STRIP_H, page_w, STRIP_H)
+
                 c.setFont('Helvetica-Bold', 5.5)
                 c.setFillColorRGB(*DS_BLUE)
                 c.drawString(5, STRIP_H * 0.28, 'Signed by:')
+
                 c.setFont('Helvetica', 5.5)
                 c.setFillColorRGB(0.2, 0.2, 0.2)
                 c.drawString(38, STRIP_H * 0.28, request.user.full_name)
-                c.drawRightString(page_w - 5, STRIP_H * 0.28,
-                                  f'Electronically signed \u00B7 {signed_at}')
+                c.drawRightString(page_w - 5, STRIP_H * 0.28, f'Electronically signed \u00B7 {signed_at}')
 
-                # ── Signature field (only on selected page) ───────────────
+                # Signature only on selected page
                 if page_num == sig_page:
-                    fx = (sig_x  / 100.0) * page_w
-                    fw = (sig_w  / 100.0) * page_w
-                    fh = (sig_h  / 100.0) * page_h
+                    fx = (sig_x / 100.0) * page_w
+                    fw = (sig_w / 100.0) * page_w
+                    fh = (sig_h / 100.0) * page_h
                     fy = page_h * (1.0 - (sig_y + sig_h) / 100.0)
 
                     label_h = max(9.0, min(fh * 0.24, 16.0)) if fh >= 20 else 0.0
                     sig_h_area = fh - label_h
                     sig_y_area = fy + label_h
 
-                    # Background + border
-                    c.setFillColorRGB(*DS_BLUE_LIGHT)
-                    c.setStrokeColorRGB(*DS_BLUE)
-                    c.setLineWidth(0.6)
-                    c.roundRect(fx, fy, fw, fh, radius=2, stroke=1, fill=1)
-                    if label_h:
-                        c.setLineWidth(1.0)
-                        c.line(fx + 2, fy + label_h, fx + fw - 2, fy + label_h)
+                    # NO BLUE BACKGROUND
+                    # NO FILLED RECTANGLE
+                    # NO BORDER BOX
 
-                    # Drawn / uploaded
+                    # Drawn / uploaded signature
                     if sig_data.startswith('data:image'):
                         try:
                             _, b64 = sig_data.split(',', 1)
                             raw = base64.b64decode(b64)
-                            img = Image.open(BytesIO(raw)).convert('RGBA')
-                            bg  = Image.new('RGBA', img.size, (255, 255, 255, 255))
-                            bg.paste(img, mask=img)
-                            bg  = bg.convert('RGB')
-                            ib  = BytesIO(); bg.save(ib, format='PNG'); ib.seek(0)
-                            pad = 5
-                            c.drawImage(ImageReader(ib),
-                                        fx + pad, sig_y_area + pad,
-                                        width=fw - pad*2, height=sig_h_area - pad*2,
-                                        preserveAspectRatio=True, anchor='c', mask='auto')
+
+                            img_stream = BytesIO(raw)
+                            pad = 2
+
+                            c.drawImage(
+                                ImageReader(img_stream),
+                                fx + pad,
+                                sig_y_area + pad,
+                                width=max(10, fw - pad * 2),
+                                height=max(10, sig_h_area - pad * 2),
+                                preserveAspectRatio=True,
+                                anchor='c',
+                                mask='auto'
+                            )
                         except Exception:
                             pass
 
-                    # Typed signature — render via PIL for cursive font
+                    # Typed signature
                     elif sig_type == 'type':
                         display_text = sig_data
-                        font_hint    = 'Dancing Script'
+                        font_hint = 'Dancing Script'
+
                         if sig_data.startswith('font:') and '|' in sig_data:
-                            parts        = sig_data.split('|', 1)
-                            font_hint    = parts[0][5:]
+                            parts = sig_data.split('|', 1)
+                            font_hint = parts[0][5:]
                             display_text = parts[1]
+
                         img_buf = None
                         try:
-                            img_buf = _typed_sig_to_image(display_text, fw, sig_h_area, font_name=font_hint)
+                            img_buf = _typed_sig_to_image(
+                                display_text,
+                                max(10, fw - 4),
+                                max(10, sig_h_area - 4),
+                                font_name=font_hint
+                            )
                         except Exception:
                             pass
+
                         if img_buf:
-                            pad = 4
-                            c.drawImage(ImageReader(img_buf),
-                                        fx + pad, sig_y_area + pad,
-                                        width=fw - pad*2, height=sig_h_area - pad*2,
-                                        preserveAspectRatio=True, anchor='c', mask='auto')
+                            pad = 2
+                            c.drawImage(
+                                ImageReader(img_buf),
+                                fx + pad,
+                                sig_y_area + pad,
+                                width=max(10, fw - pad * 2),
+                                height=max(10, sig_h_area - pad * 2),
+                                preserveAspectRatio=True,
+                                anchor='c',
+                                mask='auto'
+                            )
                         else:
                             fs = max(8.0, min(sig_h_area * 0.62, 30.0))
                             c.setFont('Helvetica-BoldOblique', fs)
                             c.setFillColorRGB(*DS_INK)
                             c.drawString(fx + 6, sig_y_area + (sig_h_area - fs) * 0.4, display_text)
 
-                    # Label strip
-                    if label_h:
-                        lf = max(5.5, min(label_h * 0.50, 7.5))
-                        my = fy + (label_h - lf) * 0.45
-                        c.setFont('Helvetica-Bold', lf)
-                        c.setFillColorRGB(*DS_CHECK)
-                        c.drawString(fx + 3, my, '\u2713')
-                        c.setFont('Helvetica', lf)
-                        c.setFillColorRGB(*DS_LABEL)
-                        c.saveState()
-                        p = c.beginPath(); p.rect(fx + 3, fy, fw * 0.62, label_h)
-                        c.clipPath(p, stroke=0, fill=0)
-                        c.drawString(fx + 3 + lf, my, f' {request.user.full_name[:24]}')
-                        c.restoreState()
-                        c.setFont('Helvetica', lf)
-                        c.setFillColorRGB(*DS_LABEL)
-                        c.drawRightString(fx + fw - 4, my, signed_at[:11])
+                    # Optional label text only, without background box
+                    # if label_h:
+                    #     lf = max(5.5, min(label_h * 0.50, 7.5))
+                    #     my = fy + (label_h - lf) * 0.45
+                    #
+                    #     c.setFont('Helvetica-Bold', lf)
+                    #     c.setFillColorRGB(*DS_INK)
+                    #     # c.drawString(fx + 3, my, '\u2713')
+                    #
+                    #     c.setFont('Helvetica', lf)
+                    #     c.setFillColorRGB(*DS_LABEL)
+                    #     c.saveState()
+                    #     p = c.beginPath()
+                    #     # p.rect(fx + 3, fy, fw * 0.62, label_h)
+                    #     c.clipPath(p, stroke=0, fill=0)
+                    #     c.drawString(fx + 3 + lf, my, f' {request.user.full_name[:24]}')
+                    #     c.restoreState()
+                    #
+                    #     c.setFont('Helvetica', lf)
+                    #     c.setFillColorRGB(*DS_LABEL)
+                    #     # c.drawRightString(fx + fw - 4, my, signed_at[:11])
 
                 c.save()
                 overlay.seek(0)
                 page.merge_page(PdfReader(overlay).pages[0])
                 writer.add_page(page)
 
-            # ── Save signed copy ─────────────────────────────────────────
             out = BytesIO()
             writer.write(out)
             signed_bytes = out.getvalue()
@@ -4015,23 +4067,25 @@ class QuickSignView(LoginRequiredMixin, View):
                 signed_name += '.pdf'
 
             signed_file = SharedFile.objects.create(
-                name        = signed_name,
-                uploaded_by = request.user,
-                folder      = pdf.folder,
-                visibility  = pdf.visibility,
-                description = f'Quick-signed copy of "{pdf.name}" by {request.user.full_name}',
-                tags        = pdf.tags,
-                file_size   = len(signed_bytes),
-                file_type   = 'application/pdf',
+                name=signed_name,
+                uploaded_by=request.user,
+                folder=pdf.folder,
+                visibility=pdf.visibility,
+                unit=pdf.unit,
+                department=pdf.department,
+                description=f'Quick-signed copy of "{pdf.name}" by {request.user.full_name}',
+                tags=pdf.tags,
+                file_size=len(signed_bytes),
+                file_type='application/pdf',
             )
             signed_file.file.save(signed_name, ContentFile(signed_bytes), save=True)
+
             try:
                 signed_file.file_hash = signed_file.compute_hash()
                 signed_file.save(update_fields=['file_hash'])
             except Exception:
                 pass
 
-            from django.http import HttpResponse
             file_manager_url = '/files/'
             html = f"""<!DOCTYPE html>
 <html>
@@ -4061,7 +4115,7 @@ class QuickSignView(LoginRequiredMixin, View):
     }}
     @keyframes pop {{
       from {{ opacity:0; transform:scale(.88) translateY(16px); }}
-      to   {{ opacity:1; transform:scale(1)   translateY(0);    }}
+      to   {{ opacity:1; transform:scale(1) translateY(0); }}
     }}
     .check-circle {{
       width: 80px; height: 80px;
@@ -4131,7 +4185,6 @@ class QuickSignView(LoginRequiredMixin, View):
         except Exception as e:
             messages.error(request, f'Signing failed: {e}')
             return redirect('quick_sign')
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NOTE EDITOR → PDF

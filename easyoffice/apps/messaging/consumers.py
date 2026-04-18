@@ -67,6 +67,45 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         # -------------------------
+        # 🆕 VOICE-CALL SIGNALING
+        # -------------------------
+        # WebRTC needs to exchange SDP offers/answers and ICE candidates
+        # between the two peers. We relay these blobs as-is through the
+        # room group — the server never inspects or stores them, and the
+        # actual audio stream is peer-to-peer (not through the server).
+        #
+        # Supported signaling types (all 1-on-1):
+        #   call_offer      { sdp }
+        #   call_answer     { sdp }
+        #   ice_candidate   { candidate }
+        #   call_hangup     {}
+        #   call_decline    {}
+        #   call_cancel     {}          (caller aborts before answer)
+        if msg_type in (
+            'call_offer', 'call_answer', 'ice_candidate',
+            'call_hangup', 'call_decline', 'call_cancel',
+        ):
+            # Must be a DM room — enforce 1-on-1 scope.
+            is_direct = await self.room_is_direct()
+            if not is_direct:
+                return
+
+            payload = dict(data)
+            payload['sender_id']   = str(user.id)
+            payload['sender_name'] = self._safe_full_name(user)
+            payload['room_id']     = str(self.room_id)
+
+            await self.channel_layer.group_send(
+                self.room_group,
+                {
+                    'type': 'chat.signal',   # dedicated handler below
+                    'payload': payload,
+                    'sender_channel': self.channel_name,
+                }
+            )
+            return
+
+        # -------------------------
         # ONLY HANDLE TEXT HERE
         # (polls handled via views)
         # -------------------------
@@ -115,6 +154,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def chat_edit(self, event):
         await self.send(text_data=json.dumps(event['payload']))
 
+    # 🆕 Signal relay — skip echoing back to the sender.
+    async def chat_signal(self, event):
+        if event.get('sender_channel') == self.channel_name:
+            return
+        await self.send(text_data=json.dumps(event['payload']))
+
     # --------------------------------------------------
     # DB HELPERS
     # --------------------------------------------------
@@ -125,6 +170,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return ChatRoom.objects.filter(
             id=self.room_id,
             members=self.user
+        ).exists()
+
+    @database_sync_to_async
+    def room_is_direct(self):
+        from apps.messaging.models import ChatRoom
+        return ChatRoom.objects.filter(
+            id=self.room_id,
+            room_type='direct',
         ).exists()
 
     @database_sync_to_async
@@ -140,17 +193,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not room:
             return None
 
-        # ❌ Prevent sending in readonly rooms
         if room.is_readonly:
             return None
 
-        # ❌ Must be member
         if not room.members.filter(id=user.id).exists():
             return None
 
-        # -------------------------
-        # REPLY
-        # -------------------------
         reply_obj = None
         if reply_to_id:
             try:
@@ -162,9 +210,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
             except ChatMessage.DoesNotExist:
                 reply_obj = None
 
-        # -------------------------
-        # CREATE MESSAGE
-        # -------------------------
         msg = ChatMessage.objects.create(
             room=room,
             sender=user,
@@ -173,17 +218,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
             reply_to=reply_obj,
         )
 
-        # -------------------------
-        # SAVE MENTIONS (@user)
-        # -------------------------
         try:
             _save_mentions(msg)
         except Exception:
             pass
 
-        # -------------------------
-        # UPDATE ROOM
-        # -------------------------
         room.updated_at = timezone.now()
         room.save(update_fields=['updated_at'])
 
@@ -192,18 +231,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             user=user
         ).update(last_read=timezone.now())
 
-        # -------------------------
-        # NOTIFY OFFLINE MEMBERS
-        # -------------------------
         try:
             from apps.messaging.views import _notify_offline_members
             _notify_offline_members(room, user, msg)
         except Exception:
             pass
 
-        # -------------------------
-        # RETURN FULL SERIALIZED PAYLOAD
-        # -------------------------
         return _serialize_chat_message(msg, viewer=user)
 
     # --------------------------------------------------

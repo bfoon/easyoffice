@@ -758,6 +758,12 @@
           {% for m in members %}{% if m.id != request.user.id %}
           <div style="font-weight:700;font-size:.95rem;color:var(--eo-text);display:flex;align-items:center;gap:8px">
             {{ m.full_name }}
+               <button id="btnStartCall" onclick="callStart()" title="Voice call"
+           class="eo-btn eo-btn-secondary eo-btn-sm"
+           style="gap:5px;display:inline-flex;align-items:center">
+           <i class="bi bi-telephone-fill"></i>
+           <span style="font-size:.75rem">Call</span>
+         </button>
             <span id="dmPresenceBadge" style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0">
               <span id="dmPresenceDot" style="width:7px;height:7px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
               <span id="dmPresenceLabel">…</span>
@@ -1660,6 +1666,89 @@
   <input type="hidden" name="content" id="fileContentInput"/>
   <input type="file" name="file" id="fileUploadInput"/>
 </form>
+
+
+{% if room.room_type == 'direct' %}
+<style>
+  .call-modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:10000;display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px);}
+  .call-modal{background:var(--eo-surface);border-radius:16px;padding:28px 26px;box-shadow:0 20px 60px rgba(0,0,0,.3);min-width:320px;max-width:380px;text-align:center;}
+  .call-avatar{width:84px;height:84px;border-radius:50%;margin:0 auto 14px;background:#6366f1;color:#fff;font-size:1.9rem;font-weight:700;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+  .call-avatar img{width:100%;height:100%;object-fit:cover;}
+  .call-name{font-size:1.15rem;font-weight:700;color:var(--eo-text);margin-bottom:4px;}
+  .call-state{font-size:.82rem;color:var(--eo-text-muted);margin-bottom:20px;}
+  .call-ring-pulse{animation:callPulse 1.4s ease-in-out infinite;}
+  @keyframes callPulse{0%,100%{box-shadow:0 0 0 0 rgba(99,102,241,.6);}50%{box-shadow:0 0 0 14px rgba(99,102,241,0);}}
+  .call-btn-row{display:flex;gap:12px;justify-content:center;}
+  .call-btn{border:none;border-radius:999px;width:54px;height:54px;font-size:1.1rem;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;color:#fff;transition:transform .15s, filter .15s;}
+  .call-btn:hover{transform:translateY(-1px);filter:brightness(1.08);}
+  .call-btn.accept{background:#10b981;}
+  .call-btn.decline,.call-btn.hangup{background:#ef4444;}
+  .call-btn.mute{background:#64748b;}
+  .call-btn.mute.active{background:#f59e0b;}
+
+  /* In-call floating panel */
+  .call-bar{position:fixed;bottom:18px;right:18px;z-index:9999;display:none;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:14px;padding:10px 14px;box-shadow:0 8px 24px rgba(0,0,0,.15);align-items:center;gap:12px;min-width:240px;}
+  .call-bar-avatar{width:34px;height:34px;border-radius:50%;background:#6366f1;color:#fff;font-size:.78rem;font-weight:700;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;}
+  .call-bar-avatar img{width:100%;height:100%;object-fit:cover;}
+  .call-bar-meta{flex:1;min-width:0;}
+  .call-bar-name{font-size:.85rem;font-weight:700;color:var(--eo-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .call-bar-timer{font-size:.72rem;color:var(--eo-success);font-variant-numeric:tabular-nums;}
+  .call-bar-btn{border:none;border-radius:50%;width:32px;height:32px;cursor:pointer;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.85rem;}
+  .call-bar-btn.mute{background:#64748b;}
+  .call-bar-btn.mute.active{background:#f59e0b;}
+  .call-bar-btn.hangup{background:#ef4444;}
+</style>
+
+{# Incoming call modal (shown to callee) #}
+<div class="call-modal-backdrop" id="incomingCallModal">
+  <div class="call-modal">
+    <div class="call-avatar call-ring-pulse" id="incomingCallAvatar">?</div>
+    <div class="call-name" id="incomingCallName">Someone</div>
+    <div class="call-state">Incoming voice call…</div>
+    <div class="call-btn-row">
+      <button class="call-btn decline" onclick="callDecline()" title="Decline">
+        <i class="bi bi-telephone-x-fill"></i>
+      </button>
+      <button class="call-btn accept" onclick="callAccept()" title="Accept">
+        <i class="bi bi-telephone-fill"></i>
+      </button>
+    </div>
+  </div>
+</div>
+
+{# Outgoing/ringing modal (shown to caller before answer) #}
+<div class="call-modal-backdrop" id="outgoingCallModal">
+  <div class="call-modal">
+    <div class="call-avatar call-ring-pulse" id="outgoingCallAvatar">?</div>
+    <div class="call-name" id="outgoingCallName">Calling…</div>
+    <div class="call-state" id="outgoingCallState">Ringing…</div>
+    <div class="call-btn-row">
+      <button class="call-btn hangup" onclick="callCancel()" title="Cancel">
+        <i class="bi bi-telephone-x-fill"></i>
+      </button>
+    </div>
+  </div>
+</div>
+
+{# In-call mini bar (shown after connect) #}
+<div class="call-bar" id="callBar">
+  <div class="call-bar-avatar" id="callBarAvatar">?</div>
+  <div class="call-bar-meta">
+    <div class="call-bar-name" id="callBarName">In call</div>
+    <div class="call-bar-timer" id="callBarTimer">00:00</div>
+  </div>
+  <button class="call-bar-btn mute" id="callBarMute" onclick="callToggleMute()" title="Mute">
+    <i class="bi bi-mic-fill"></i>
+  </button>
+  <button class="call-bar-btn hangup" onclick="callHangup()" title="Hang up">
+    <i class="bi bi-telephone-x-fill"></i>
+  </button>
+</div>
+
+{# Remote audio — autoplay, no controls, NOT a MediaRecorder target #}
+<audio id="remoteCallAudio" autoplay playsinline style="display:none"></audio>
+
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}
@@ -2283,6 +2372,14 @@ window.addEventListener('beforeunload', function(){
         if(IS_DIRECT && String(d.user_id) === String(DM_OTHER_USER_ID)){
           updatePresenceBadge(d.status, d.last_seen_display || '');
         }
+        return;
+      }
+
+      /* 🆕 Voice-call signaling — delegate to call module (defined later in this IIFE) */
+      if(d.type === 'call_ring' || d.type === 'call_offer' || d.type === 'call_answer'
+         || d.type === 'ice_candidate' || d.type === 'call_hangup'
+         || d.type === 'call_decline' || d.type === 'call_cancel'){
+        if(typeof handleCallSignal === 'function'){ handleCallSignal(d); }
         return;
       }
 
@@ -3997,6 +4094,359 @@ if (spellcheckToggleBtn) {
   animatePollBars(byId('chatMessages'));
   /* Hard scroll to bottom on load — bypass arrow logic */
   (function(){ var m = byId('chatMessages'); if(m) m.scrollTop = m.scrollHeight; })();
+  /* ═══════════════════════════════════════════════════════════════════════
+     VOICE CALL MODULE (1-on-1, WebRTC, not recorded)
+     Lives INSIDE the main IIFE so it can access socket, ROOM_ID, USER_ID,
+     IS_DIRECT, DM_OTHER_USER_ID, byId, getCookie.
+     ═══════════════════════════════════════════════════════════════════════ */
+  var CALL_ICE_SERVERS = [
+    { urls: 'stun:stun.l.google.com:19302' }
+    // Add TURN here if needed, e.g.:
+    // { urls: 'turn:turn.example.com:3478', username: 'u', credential: 'p' }
+  ];
+
+  var callPC           = null;
+  var callLocalStream  = null;
+  var callState        = 'idle';    // idle | outgoing | incoming | active
+  var callIsMuted      = false;
+  var callTimer        = null;
+  var callStartedAt    = 0;
+  var callPeerId       = null;
+  var callPeerName     = '';
+  var _pendingOffer    = null;
+  var _pendingRemoteIce = [];
+
+  function callSignal(obj){
+    if(!socket || socket.readyState !== WebSocket.OPEN){
+      alert('Connection lost. Please refresh.');
+      return false;
+    }
+    socket.send(JSON.stringify(obj));
+    return true;
+  }
+
+  function callFmtDuration(sec){
+    sec = Math.max(0, sec|0);
+    var m = (sec/60)|0, s = sec%60;
+    return (m<10?'0':'')+m + ':' + (s<10?'0':'')+s;
+  }
+
+  function callShowModal(id){ var el = byId(id); if(el) el.style.display = 'flex'; }
+  function callHideModal(id){ var el = byId(id); if(el) el.style.display = 'none'; }
+  function callSetBar(show){ var bar = byId('callBar'); if(bar) bar.style.display = show ? 'flex' : 'none'; }
+
+  function callResetUI(){
+    callHideModal('incomingCallModal');
+    callHideModal('outgoingCallModal');
+    callSetBar(false);
+    if(callTimer){ clearInterval(callTimer); callTimer = null; }
+    var t = byId('callBarTimer'); if(t) t.textContent = '00:00';
+  }
+
+  function callTeardown(){
+    try { if(callPC){ callPC.ontrack = null; callPC.onicecandidate = null; callPC.close(); } } catch(_){}
+    callPC = null;
+    if(callLocalStream){
+      try { callLocalStream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){}
+      callLocalStream = null;
+    }
+    var audio = byId('remoteCallAudio');
+    if(audio){ try { audio.srcObject = null; } catch(_){} }
+
+    callState         = 'idle';
+    callIsMuted       = false;
+    callPeerId        = null;
+    callPeerName      = '';
+    _pendingOffer     = null;
+    _pendingRemoteIce = [];
+    callResetUI();
+
+    // Clear any server-side ring record for this room.
+    fetch('/messages/call/clear/' + ROOM_ID + '/', {
+      method: 'POST',
+      headers: { 'X-CSRFToken': getCookie('csrftoken'), 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'same-origin'
+    }).catch(function(){});
+  }
+
+  function callBuildPC(){
+    var pc = new RTCPeerConnection({ iceServers: CALL_ICE_SERVERS });
+
+    pc.onicecandidate = function(ev){
+      if(ev.candidate){
+        callSignal({ type: 'ice_candidate', candidate: ev.candidate });
+      }
+    };
+
+    pc.ontrack = function(ev){
+      var audio = byId('remoteCallAudio');
+      if(audio && ev.streams && ev.streams[0]){
+        audio.srcObject = ev.streams[0];
+      }
+    };
+
+    pc.onconnectionstatechange = function(){
+      if(pc.connectionState === 'connected' && callState !== 'active'){
+        callState = 'active';
+        callHideModal('incomingCallModal');
+        callHideModal('outgoingCallModal');
+        callSetBar(true);
+        var nameEl = byId('callBarName'); if(nameEl) nameEl.textContent = callPeerName || 'In call';
+        callStartedAt = Date.now();
+        callTimer = setInterval(function(){
+          var sec = ((Date.now() - callStartedAt)/1000)|0;
+          var t = byId('callBarTimer'); if(t) t.textContent = callFmtDuration(sec);
+        }, 1000);
+      }
+      if(pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed'){
+        if(callState === 'active'){ callTeardown(); }
+      }
+    };
+
+    return pc;
+  }
+
+  function callGetMic(){
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      alert('This browser does not support voice calls.');
+      return Promise.resolve(null);
+    }
+    return navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      .catch(function(){
+        alert('Microphone access is required for voice calls.');
+        return null;
+      });
+  }
+
+  /* ── CALLER ─────────────────────────────────────────────────────────── */
+  window.callStart = function(){
+    if(!IS_DIRECT || !DM_OTHER_USER_ID){
+      alert('Voice calls are only available in direct messages.');
+      return;
+    }
+    if(callState !== 'idle'){ return; }
+
+    // 1. Ring via HTTP (stashes Redis record + broadcasts WS call_ring).
+    fetch('/messages/call/ring/' + ROOM_ID + '/', {
+      method: 'POST',
+      headers: { 'X-CSRFToken': getCookie('csrftoken'), 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'same-origin'
+    })
+    .then(function(r){
+      return r.json().then(function(d){ return { ok: r.ok, data: d }; });
+    })
+    .then(function(resp){
+      if(!resp.ok || !resp.data || !resp.data.ok){
+        alert((resp.data && resp.data.error) || 'Could not start call.');
+        return null;
+      }
+
+      callState  = 'outgoing';
+      callPeerId = DM_OTHER_USER_ID;
+
+      // Grab the DM contact's display name from the header
+      var nameNode = document.querySelector('.chat-header > div > div');
+      callPeerName = (nameNode ? nameNode.textContent : '').trim().split('\n')[0] || 'Contact';
+
+      var oName = byId('outgoingCallName');   if(oName) oName.textContent   = callPeerName;
+      var oState= byId('outgoingCallState');  if(oState) oState.textContent = 'Ringing…';
+      var oAv   = byId('outgoingCallAvatar'); if(oAv)   oAv.textContent    = (callPeerName.charAt(0) || '?').toUpperCase();
+      callShowModal('outgoingCallModal');
+
+      return callGetMic();
+    })
+    .then(function(stream){
+      if(!stream){ callTeardown(); return; }
+      callLocalStream = stream;
+      callPC = callBuildPC();
+      callLocalStream.getTracks().forEach(function(t){ callPC.addTrack(t, callLocalStream); });
+
+      return callPC.createOffer({ offerToReceiveAudio: true })
+        .then(function(offer){ return callPC.setLocalDescription(offer).then(function(){ return offer; }); })
+        .then(function(){
+          callSignal({ type: 'call_offer', sdp: callPC.localDescription });
+        });
+    })
+    .catch(function(err){
+      console.error('callStart failed:', err);
+      alert('Could not start call.');
+      callTeardown();
+    });
+  };
+
+  window.callCancel = function(){
+    if(callState === 'idle') return;
+    callSignal({ type: 'call_cancel' });
+    callTeardown();
+  };
+
+  /* ── CALLEE ─────────────────────────────────────────────────────────── */
+  function callShowIncoming(fromId, fromName){
+    callPeerId   = fromId;
+    callPeerName = fromName || 'Contact';
+    var nEl = byId('incomingCallName');   if(nEl) nEl.textContent   = callPeerName;
+    var aEl = byId('incomingCallAvatar'); if(aEl) aEl.textContent   = (callPeerName.charAt(0) || '?').toUpperCase();
+    callShowModal('incomingCallModal');
+  }
+
+  window.callAccept = function(){
+    if(callState !== 'incoming' || !_pendingOffer){
+      callHideModal('incomingCallModal');
+      return;
+    }
+    callGetMic().then(function(stream){
+      if(!stream){
+        callSignal({ type: 'call_decline' });
+        callTeardown();
+        return;
+      }
+      callLocalStream = stream;
+      callPC = callBuildPC();
+      callLocalStream.getTracks().forEach(function(t){ callPC.addTrack(t, callLocalStream); });
+
+      return callPC.setRemoteDescription(new RTCSessionDescription(_pendingOffer))
+        .then(function(){
+          // Flush any ICE queued before setRemoteDescription
+          var p = Promise.resolve();
+          _pendingRemoteIce.forEach(function(c){
+            p = p.then(function(){
+              return callPC.addIceCandidate(new RTCIceCandidate(c)).catch(function(){});
+            });
+          });
+          _pendingRemoteIce = [];
+          return p;
+        })
+        .then(function(){ return callPC.createAnswer(); })
+        .then(function(answer){ return callPC.setLocalDescription(answer); })
+        .then(function(){
+          callSignal({ type: 'call_answer', sdp: callPC.localDescription });
+          _pendingOffer = null;
+          callHideModal('incomingCallModal');
+          // Clear ring on server
+          fetch('/messages/call/clear/' + ROOM_ID + '/', {
+            method: 'POST',
+            headers: { 'X-CSRFToken': getCookie('csrftoken'), 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin'
+          }).catch(function(){});
+        });
+    })
+    .catch(function(err){
+      console.error('callAccept failed:', err);
+      alert('Could not accept call.');
+      callTeardown();
+    });
+  };
+
+  window.callDecline = function(){
+    callSignal({ type: 'call_decline' });
+    callTeardown();
+  };
+
+  /* ── Shared ─────────────────────────────────────────────────────────── */
+  window.callHangup = function(){
+    if(callState === 'idle') return;
+    callSignal({ type: 'call_hangup' });
+    callTeardown();
+  };
+
+  window.callToggleMute = function(){
+    if(!callLocalStream) return;
+    callIsMuted = !callIsMuted;
+    callLocalStream.getAudioTracks().forEach(function(t){ t.enabled = !callIsMuted; });
+    var btn = byId('callBarMute');
+    if(btn){
+      btn.classList.toggle('active', callIsMuted);
+      btn.innerHTML = callIsMuted
+        ? '<i class="bi bi-mic-mute-fill"></i>'
+        : '<i class="bi bi-mic-fill"></i>';
+    }
+  };
+
+  /* ── Signal dispatcher (called from socket.onmessage above) ─────────── */
+  function handleCallSignal(d){
+    if(String(d.sender_id || '') === String(USER_ID)) return;   // ignore own echoes
+
+    if(d.type === 'call_ring'){
+      if(callState !== 'idle') return;
+      callState = 'incoming';
+      callShowIncoming(d.caller_id, d.caller_name);
+      return;
+    }
+
+    if(d.type === 'call_offer'){
+      if(callState === 'idle'){
+        callState = 'incoming';
+        _pendingOffer = d.sdp;
+        callShowIncoming(d.sender_id, d.sender_name);
+      } else if(callState === 'incoming'){
+        _pendingOffer = d.sdp;
+      }
+      // if callState === 'outgoing' (simultaneous call), ignore peer's offer
+      return;
+    }
+
+    if(d.type === 'call_answer'){
+      if(!callPC) return;
+      callPC.setRemoteDescription(new RTCSessionDescription(d.sdp))
+        .then(function(){
+          var p = Promise.resolve();
+          _pendingRemoteIce.forEach(function(c){
+            p = p.then(function(){
+              return callPC.addIceCandidate(new RTCIceCandidate(c)).catch(function(){});
+            });
+          });
+          _pendingRemoteIce = [];
+          return p;
+        })
+        .catch(function(err){ console.error('setRemoteDescription(answer) failed:', err); });
+      return;
+    }
+
+    if(d.type === 'ice_candidate'){
+      if(!d.candidate) return;
+      if(callPC && callPC.remoteDescription && callPC.remoteDescription.type){
+        callPC.addIceCandidate(new RTCIceCandidate(d.candidate)).catch(function(){});
+      } else {
+        _pendingRemoteIce.push(d.candidate);
+      }
+      return;
+    }
+
+    if(d.type === 'call_hangup' || d.type === 'call_decline' || d.type === 'call_cancel'){
+      callTeardown();
+      return;
+    }
+  }
+  // Expose for the onmessage branch above
+  window.__handleCallSignal = handleCallSignal;
+
+  /* ── Cross-page incoming-call poll ──────────────────────────────────── */
+  setInterval(function(){
+    if(callState !== 'idle') return;
+    fetch('/messages/call/incoming/', {
+      headers:{'X-Requested-With':'XMLHttpRequest'},
+      credentials:'same-origin'
+    })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if(!d || !d.ok || !d.ring) return;
+      if(String(d.ring.room_id) === String(ROOM_ID)){
+        if(callState === 'idle'){
+          callState = 'incoming';
+          callShowIncoming(d.ring.caller_id, d.ring.caller_name);
+        }
+      } else {
+        window.location.href = '/messages/' + d.ring.room_id + '/';
+      }
+    }).catch(function(){});
+  }, 4000);
+
+  window.addEventListener('beforeunload', function(){
+    if(callState !== 'idle'){
+      try { callSignal({ type: 'call_hangup' }); } catch(_){}
+    }
+  });
+
 })();
 </script>
 {% endblock %}

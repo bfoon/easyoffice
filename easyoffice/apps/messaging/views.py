@@ -759,6 +759,25 @@ def _spellcheck_text(text):
         'corrected': corrected,
         'suggestions': suggestions
     }
+
+
+def _annotate_is_online(user_qs_or_list):
+    """
+    Stamp a fresh `is_online` attribute on each user by reading the same
+    Redis presence cache the heartbeat writes to. One attribute per user,
+    no DB hit, no N+1.
+
+    Use this anywhere you render a list of users and need `staff.is_online`
+    to reflect actual browser presence (not just `is_authenticated`, which
+    stays True forever after login).
+    """
+    users = list(user_qs_or_list)  # materialise once
+    for u in users:
+        try:
+            u.is_online = _user_is_online(u.pk)
+        except Exception:
+            u.is_online = False
+    return users
 # ---------------------------------------------------------------------------
 # Chat List
 # ---------------------------------------------------------------------------
@@ -768,14 +787,19 @@ class ChatListView(LoginRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx['rooms_meta']      = _sidebar_rooms(self.request.user)
-        ctx['all_staff']       = (
+        ctx['rooms_meta'] = _sidebar_rooms(self.request.user)
+
+        # 🩹 FIX: annotate is_online from Redis presence cache so the
+        # template's `{% if staff.is_online %}` reflects real presence.
+        staff_qs = (
             User.objects.filter(status='active', is_active=True)
             .exclude(id=self.request.user.id)
             .select_related('staffprofile', 'staffprofile__position', 'staffprofile__department')
             .order_by('first_name')
         )
-        ctx['room_types']       = ChatRoom.RoomType.choices
+        ctx['all_staff'] = _annotate_is_online(staff_qs)
+
+        ctx['room_types'] = ChatRoom.RoomType.choices
         ctx['managed_projects'] = _managed_projects_for_user(self.request.user)
         return ctx
 
@@ -825,7 +849,7 @@ class ChatRoomView(LoginRequiredMixin, View):
             'chat_messages':    chat_messages,
             'members':          members,
             'rooms_meta':       _sidebar_rooms(request.user),
-            'all_staff': (
+            'all_staff': _annotate_is_online(
                 User.objects.filter(status='active', is_active=True)
                 .exclude(id__in=existing_member_ids)
                 .order_by('first_name')
@@ -2342,3 +2366,110 @@ class PresenceView(LoginRequiredMixin, View):
         if delta < _ONLINE_THRESHOLD:
             return JsonResponse({'status': 'online', 'last_seen_display': ''})
         return JsonResponse({'status': 'idle', 'last_seen_display': _format_last_seen(last_seen)})
+
+import json as _json
+
+_CALL_RING_TTL = 35  # seconds a ring stays "incoming" before auto-clearing
+
+
+def _call_ring_key(callee_user_id):
+    return f'call:ring:{callee_user_id}'
+
+
+class CallRingView(LoginRequiredMixin, View):
+    """
+    POST /messages/call/ring/<room_id>/
+    Caller presses the "Call" button in a DM. We look up the other member,
+    stash a ring record in Redis, and ALSO push a websocket event on the
+    room group so if the callee already has the room open they get the
+    incoming-call modal instantly (no poll latency).
+
+    Body: (nothing needed; room_id identifies the DM)
+    """
+
+    def post(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        if room.room_type != 'direct':
+            return JsonResponse({'ok': False, 'error': 'Only 1-on-1 calls are supported.'}, status=400)
+
+        # Find the OTHER member of the DM
+        other = room.members.exclude(id=request.user.id).first()
+        if not other:
+            return JsonResponse({'ok': False, 'error': 'No one to call.'}, status=400)
+
+        # Refuse to ring if callee is not online (available/online/idle are OK;
+        # offline / dnd are not). Tweak as you prefer.
+        callee_status = _user_effective_status(other.pk)
+        if callee_status in ('offline',):
+            return JsonResponse({'ok': False, 'error': f'{_safe_full_name(other)} is offline.'}, status=409)
+        if callee_status == 'dnd':
+            return JsonResponse({'ok': False, 'error': f'{_safe_full_name(other)} is on Do Not Disturb.'}, status=409)
+
+        from django.core.cache import cache
+        ring = {
+            'room_id': str(room.id),
+            'caller_id': str(request.user.id),
+            'caller_name': _safe_full_name(request.user),
+            'caller_avatar': (request.user.avatar.url if getattr(request.user, 'avatar', None) else ''),
+            'started_at': timezone.now().isoformat(),
+        }
+        cache.set(_call_ring_key(other.pk), _json.dumps(ring), timeout=_CALL_RING_TTL)
+
+        # Also push over the existing room WS — instant for in-room callees.
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    _room_group_name(room.id),
+                    {
+                        'type': 'chat.typing',  # reuse generic relay event
+                        'payload': {
+                            'type': 'call_ring',
+                            **ring,
+                        },
+                    },
+                )
+        except Exception:
+            pass
+
+        return JsonResponse({'ok': True, 'callee_id': str(other.id)})
+
+
+class CallIncomingView(LoginRequiredMixin, View):
+    """
+    GET /messages/call/incoming/
+    Lightweight poll for the current user. Returns the active ring record
+    (if any) or {ok: true, ring: null}.
+    """
+
+    def get(self, request):
+        from django.core.cache import cache
+        raw = cache.get(_call_ring_key(request.user.pk))
+        if not raw:
+            return JsonResponse({'ok': True, 'ring': None})
+        try:
+            data = _json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            data = None
+        return JsonResponse({'ok': True, 'ring': data})
+
+
+class CallClearView(LoginRequiredMixin, View):
+    """
+    POST /messages/call/clear/<room_id>/
+    Clears any ring record for the OTHER member of this DM.
+    Called by both sides when the call is accepted / declined / ended.
+    """
+
+    def post(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        other = room.members.exclude(id=request.user.id).first()
+        if not other:
+            return JsonResponse({'ok': True})
+
+        from django.core.cache import cache
+        cache.delete(_call_ring_key(other.pk))
+        # Also clear a ring pointed at self (e.g. caller cancelling their own ring)
+        cache.delete(_call_ring_key(request.user.pk))
+        return JsonResponse({'ok': True})

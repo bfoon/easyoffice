@@ -80,13 +80,10 @@ urlpatterns = [
     # ─────────────────────────────────────────────
     # 🔥 @ COMMAND SYSTEM
     # ─────────────────────────────────────────────
-
-    # Fetch suggestions (users, tools, files)
     path('<uuid:room_id>/tools/palette/',
          views.ChatToolsPaletteView.as_view(),
          name='chat_tools_palette'),
 
-    # Execute command (@task, @tracker, etc.)
     path('<uuid:room_id>/tools/action/',
          views.ChatCommandActionView.as_view(),
          name='chat_command_action'),
@@ -95,6 +92,24 @@ urlpatterns = [
          views.SpellCheckView.as_view(),
          name='chat_spellcheck'),
 
-    path('presence/heartbeat/', views.PresenceHeartbeatView.as_view(), name='presence_heartbeat'),
-    path('presence/<int:user_id>/', views.PresenceView.as_view(), name='presence'),
+    # ─────────────────────────────────────────────
+    # PRESENCE
+    # ─────────────────────────────────────────────
+    # 🩹 FIX: user_id is a UUID across the whole app, not an int.
+    # The old <int:user_id> converter never matched, so the frontend's
+    # GET /messages/presence/<uuid>/ was silently 404-ing every 12s.
+    path('presence/heartbeat/',        views.PresenceHeartbeatView.as_view(), name='presence_heartbeat'),
+    path('presence/<uuid:user_id>/',   views.PresenceView.as_view(),          name='presence'),
+
+    # ─────────────────────────────────────────────
+    # 🆕 VOICE CALL (1-on-1, WebRTC, NOT recorded)
+    # ─────────────────────────────────────────────
+    # Cross-page "ring" — lets the callee get notified even if their chat
+    # room tab for this DM isn't currently open. Stored in Redis with a
+    # short TTL; the callee's browser polls /call/incoming/ every few
+    # seconds. All actual audio is WebRTC peer-to-peer; the server only
+    # brokers tiny SDP/ICE signalling blobs via the existing WebSocket.
+    path('call/ring/<uuid:room_id>/',   views.CallRingView.as_view(),     name='call_ring'),
+    path('call/incoming/',              views.CallIncomingView.as_view(), name='call_incoming'),
+    path('call/clear/<uuid:room_id>/',  views.CallClearView.as_view(),    name='call_clear'),
 ]

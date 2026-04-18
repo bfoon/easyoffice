@@ -18,6 +18,8 @@ urlpatterns = [
     path('<uuid:pk>/delete/',         views.InvoiceDeleteView.as_view(),     name='invoice_delete'),
     path('<uuid:pk>/void/',           views.InvoiceVoidView.as_view(),       name='invoice_void'),
     path('<uuid:pk>/duplicate/',      views.InvoiceDuplicateView.as_view(),  name='invoice_duplicate'),
+    path('<uuid:pk>/convert/',        views.InvoiceConvertView.as_view(),    name='invoice_convert'),
+    path('convertible-sources/',     views.ConvertibleSourcesListView.as_view(), name='invoice_convertible_sources'),
 
     path('<uuid:pk>/metadata/',       views.InvoiceMetadataSaveView.as_view(), name='invoice_metadata'),
     path('<uuid:pk>/items/',          views.InvoiceItemsSaveView.as_view(),    name='invoice_items'),

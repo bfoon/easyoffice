@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Convert to {{ target_type_display }} · EasyOffice{% endblock %}
+
+{% block extra_css %}
+<style>
+  .cv-shell { max-width: 900px; margin: 0 auto; padding: 24px; }
+  .cv-head { margin-bottom: 20px; }
+  .cv-title { font-size: 22px; font-weight: 700; color:#0f172a; margin:0; }
+  .cv-sub { color:#64748b; font-size: 13px; margin-top: 4px; }
+
+  .cv-flow {
+    display: flex; align-items: center; gap: 16px; padding: 18px;
+    background: linear-gradient(135deg, #f0f9ff, #ede9fe);
+    border: 1px solid #bae6fd; border-radius: 12px; margin-bottom: 20px;
+  }
+  .cv-node {
+    background: #fff; border-radius: 10px; padding: 14px 18px;
+    border: 1px solid #e2e8f0; flex: 1; min-width: 0;
+  }
+  .cv-node.source { border-color: #cbd5e1; }
+  .cv-node.target { border-color: #0ea5e9; box-shadow: 0 0 0 3px rgba(14,165,233,0.12); }
+  .cv-node .type-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.05em; color:#64748b; margin-bottom: 4px;
+  }
+  .cv-node .num { font-size: 16px; font-weight: 700; color:#0f172a; font-family: monospace; }
+  .cv-node .meta { font-size: 12px; color:#64748b; margin-top: 2px; }
+  .cv-arrow { color: #0ea5e9; font-size: 26px; flex-shrink: 0; }
+
+  .cv-card {
+    background:#fff; border:1px solid #e2e8f0; border-radius: 12px;
+    padding: 20px; margin-bottom: 16px;
+  }
+  .cv-label { font-size: 11px; font-weight:600; color:#475569; text-transform:uppercase;
+               letter-spacing: 0.04em; margin-bottom: 10px; }
+
+  .pick-tabs { display:flex; gap: 6px; margin-bottom: 12px; }
+  .pick-tab {
+    padding: 8px 14px; border-radius: 8px; border:1px solid #e2e8f0;
+    background:#fff; font-weight:600; font-size: 13px; cursor:pointer; color:#64748b;
+  }
+  .pick-tab.active { background:#0ea5e9; color:#fff; border-color:#0ea5e9; }
+
+  .lh-current {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; background: #f0f9ff; border: 1px solid #bae6fd;
+    border-radius: 8px; margin-bottom: 10px;
+  }
+  .lh-current .current-label {
+    background: #0ea5e9; color:#fff; font-size: 10px; font-weight: 700;
+    padding: 2px 7px; border-radius: 999px; text-transform: uppercase;
+  }
+
+  .lh-search { width:100%; padding: 8px 12px; border:1px solid #e2e8f0;
+    border-radius: 8px; font-size: 13px; margin-bottom: 10px; }
+
+  .lh-list {
+    max-height: 320px; overflow-y: auto; border:1px solid #e2e8f0;
+    border-radius: 8px; background:#f8fafc;
+  }
+  .lh-item {
+    display:flex; align-items:center; gap:12px; padding: 10px 14px;
+    cursor:pointer; border-bottom:1px solid #e2e8f0; background:#fff;
+  }
+  .lh-item:last-child { border-bottom: 0; }
+  .lh-item:hover { background:#f1f5f9; }
+  .lh-item.selected { background:#e0f2fe; }
+  .lh-item .pdf-icon { font-size: 26px; color:#ef4444; }
+  .lh-item .meta { flex:1; min-width: 0;}
+  .lh-item .n { font-weight: 600; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .lh-item .s { font-size: 12px; color:#64748b; }
+
+  .actions { display:flex; gap:10px; justify-content: flex-end; }
+  .btn-inv {
+    display:inline-flex; align-items:center; gap:6px; padding: 10px 18px; border-radius: 8px;
+    font-size: 13px; font-weight:600; text-decoration:none; cursor:pointer;
+    border:1px solid transparent; font-family: inherit;
+  }
+  .btn-inv.primary { background:#0ea5e9; color:#fff;}
+  .btn-inv.primary:hover { background:#0284c7; }
+  .btn-inv.ghost { background:#fff; color:#0f172a; border-color:#e2e8f0;}
+
+  .warning-box {
+    background: #fef3c7; border: 1px solid #fde68a; border-radius: 8px;
+    padding: 10px 14px; font-size: 12.5px; color: #78350f; margin-bottom: 16px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="cv-shell">
+  <div class="cv-head">
+    <h1 class="cv-title">Convert to {{ target_type_display }}</h1>
+    <div class="cv-sub">All details will be copied to a new editable draft.</div>
+  </div>
+
+  <div class="cv-flow">
+    <div class="cv-node source">
+      <div class="type-label">{{ source.get_doc_type_display }}</div>
+      <div class="num">{{ source.number }}</div>
+      <div class="meta">{{ source.client_name|default:"No client" }} · {{ source.currency }} {{ source.total|floatformat:2 }}</div>
+    </div>
+    <i class="bi bi-arrow-right-circle-fill cv-arrow"></i>
+    <div class="cv-node target">
+      <div class="type-label">New {{ target_type_display }}</div>
+      <div class="num" style="color:#0ea5e9;">(draft)</div>
+      <div class="meta">Pre-filled from {{ source.number }}</div>
+    </div>
+  </div>
+
+  <div class="warning-box">
+    <i class="bi bi-lock-fill"></i>
+    <strong>{{ source.number }} will be locked</strong> after conversion — it won't be editable or voidable. This preserves the audit trail.
+  </div>
+
+  <form method="post" id="convert-form">
+    {% csrf_token %}
+
+    <div class="cv-card">
+      <div class="cv-label">Letterhead</div>
+      <div style="font-size: 12.5px; color:#64748b; margin-bottom: 10px;">
+        Keep the same letterhead, or pick a different one for the new {{ target_type_display|lower }}.
+      </div>
+
+      <div class="lh-current" id="current-letterhead-row">
+        <i class="bi bi-file-earmark-pdf" style="font-size: 22px; color: #ef4444;"></i>
+        <div style="flex: 1;">
+          <div style="font-weight: 600; color: #0f172a;">{{ source.letterhead.name }}</div>
+          <div style="font-size: 11.5px; color: #64748b;">Same letterhead as {{ source.number }}</div>
+        </div>
+        <span class="current-label">Default</span>
+      </div>
+
+      <div class="pick-tabs">
+        <button type="button" class="pick-tab active" data-action="keep">
+          <i class="bi bi-check-circle"></i> Use Same Letterhead
+        </button>
+        <button type="button" class="pick-tab" data-action="change">
+          <i class="bi bi-arrow-repeat"></i> Pick a Different One
+        </button>
+      </div>
+
+      <div id="lh-picker" style="display:none;">
+        <input type="text" class="lh-search" id="lh-search" placeholder="Search PDFs by name…">
+        <div class="lh-list" id="lh-list">
+          {% for pdf in pdfs %}
+          <div class="lh-item {% if pdf.id == source.letterhead_id %}selected{% endif %}" data-id="{{ pdf.id }}">
+            <i class="bi bi-file-earmark-pdf pdf-icon"></i>
+            <div class="meta">
+              <div class="n">{{ pdf.name }}</div>
+              <div class="s">{{ pdf.size_display }} · {{ pdf.created_at|date:"d M Y" }}</div>
+            </div>
+            <i class="bi bi-check-circle-fill" style="color:#0ea5e9; font-size:20px; {% if pdf.id != source.letterhead_id %}display:none;{% endif %}"></i>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <input type="hidden" name="letterhead_id" id="letterhead_id" value="">
+
+    <div class="actions">
+      <a href="{% url 'invoice_detail' source.pk %}" class="btn-inv ghost">Cancel</a>
+      <button type="submit" class="btn-inv primary">
+        <i class="bi bi-arrow-right"></i> Convert & Edit Draft
+      </button>
+    </div>
+  </form>
+</div>
+
+<script>
+(function(){
+  const tabs = document.querySelectorAll('.pick-tab');
+  const picker = document.getElementById('lh-picker');
+  const currentRow = document.getElementById('current-letterhead-row');
+  const lhIdInput = document.getElementById('letterhead_id');
+
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    if (t.dataset.action === 'keep') {
+      picker.style.display = 'none';
+      currentRow.style.display = '';
+      lhIdInput.value = '';  // Blank = server keeps source's letterhead
+    } else {
+      picker.style.display = '';
+      currentRow.style.display = 'none';
+    }
+  }));
+
+  const lhList = document.getElementById('lh-list');
+  lhList.addEventListener('click', (e) => {
+    const item = e.target.closest('.lh-item');
+    if (!item) return;
+    lhList.querySelectorAll('.lh-item').forEach(x => {
+      x.classList.remove('selected');
+      x.querySelector('.bi-check-circle-fill').style.display = 'none';
+    });
+    item.classList.add('selected');
+    item.querySelector('.bi-check-circle-fill').style.display = '';
+    lhIdInput.value = item.dataset.id;
+  });
+
+  // Search
+  const search = document.getElementById('lh-search');
+  let searchTimer = null;
+  search.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(async () => {
+      const q = encodeURIComponent(search.value.trim());
+      const res = await fetch(`{% url 'invoice_letterheads' %}?q=${q}`);
+      const data = await res.json();
+      lhList.innerHTML = '';
+      if (!data.pdfs.length) {
+        lhList.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;">No matches.</div>';
+        return;
+      }
+      data.pdfs.forEach(p => {
+        const div = document.createElement('div');
+        div.className = 'lh-item';
+        div.dataset.id = p.id;
+        div.innerHTML = `
+          <i class="bi bi-file-earmark-pdf pdf-icon"></i>
+          <div class="meta"><div class="n"></div><div class="s"></div></div>
+          <i class="bi bi-check-circle-fill" style="color:#0ea5e9; font-size:20px; display:none;"></i>`;
+        div.querySelector('.n').textContent = p.name;
+        div.querySelector('.s').textContent = `${p.size_display} · ${p.created_at}`;
+        lhList.appendChild(div);
+      });
+    }, 220);
+  });
+})();
+</script>
+{% endblock %}

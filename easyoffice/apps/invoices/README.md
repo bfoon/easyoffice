@@ -93,6 +93,78 @@ files app. CEO, Sales, HR and Admin groups have full access.
 
 ---
 
+## Document conversion (Proforma → Invoice → Delivery Note)
+
+The module supports a one-to-one conversion chain that preserves the audit
+trail across the sales pipeline:
+
+```
+Proforma PRO-2026-0005  ──converts to──>  Invoice INV-2026-0042  ──converts to──>  Delivery Note DN-2026-0011
+  (locked)                                   (locked)                                  (active)
+```
+
+### What gets copied
+
+When you convert a finalized document, everything is carried to the new draft:
+letterhead, layout (for visual consistency across the chain), template link,
+client info, ship-to address, currency, tax rate, discount, payment terms,
+bank details, notes, and all line items.
+
+What gets reset: the number (fresh one allocated on finalize), status (becomes
+draft), invoice date (today), due date (blank), and PO reference (blank —
+usually different per stage).
+
+### Locking source documents
+
+Once a document has been converted:
+
+- **It cannot be edited, voided, duplicated, or deleted** — these buttons
+  disappear from its detail page.
+- Server-side guards in every editing view (metadata, items, layout, delete,
+  void) return `403` if anyone tries to force changes.
+- The detail page shows a prominent yellow banner: *"This Proforma has been
+  converted to Invoice INV-2026-0042"* with a link to the child.
+- Dashboard shows a small lock icon next to the number for locked sources,
+  and an up-arrow icon for child documents.
+
+### Two conversion entry points
+
+1. **From the source document's detail page** — a blue "Convert to Invoice"
+   or "Convert to Delivery Note" button appears next to other actions when
+   the document is finalized and not yet converted.
+2. **From the New Invoice page** — a third tab, "Create from Existing",
+   lists all finalized Proformas (convertible to invoices) and finalized
+   Invoices (convertible to delivery notes) that haven't been converted yet.
+
+### The conversion flow
+
+1. Click Convert → lands on a confirmation page showing the source
+   document, the target type, and a warning that the source will be locked.
+2. Choose whether to keep the same letterhead (default) or pick a different
+   one from the files app.
+3. Click "Convert & Edit Draft" → a new draft is created pre-filled with
+   all the source's data, and you land in the builder to tweak anything
+   before finalizing.
+4. The source document is now locked. Finalize the new draft normally —
+   it gets its own fresh number (e.g. `INV-2026-0042`).
+5. Send the finalized invoice for signature, convert it again to a delivery
+   note later, and so on.
+
+### Design notes
+
+- **One-to-one enforcement:** `converted_from` is a `OneToOneField` at the
+  database level. Django prevents two invoices from pointing at the same
+  proforma, eliminating race conditions at the schema level.
+- **Layout inheritance:** the child gets the same `layout_json` as the
+  source, so visually the three documents in a chain will look identical.
+  The user can still drag blocks on the new draft (unless the shared
+  template locks layout).
+- **Deleting a source:** If somehow a source document gets deleted (admin
+  override), `converted_from` is `SET_NULL` — the child keeps its data and
+  simply shows no "converted from" banner anymore.
+
+---
+
 ## Files delivered
 
 ```

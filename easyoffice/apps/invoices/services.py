@@ -238,3 +238,88 @@ def apply_template_update_to_invoices(template: InvoiceTemplate):
         ])
         count += 1
     return count
+
+
+# ── Conversion chain (Proforma → Invoice → Delivery Note) ────────────────────
+
+NEXT_DOC_TYPE = {
+    DocType.PROFORMA:      DocType.INVOICE,
+    DocType.INVOICE:       DocType.DELIVERY_NOTE,
+    DocType.DELIVERY_NOTE: None,
+}
+
+
+@transaction.atomic
+def convert_invoice(source: InvoiceDocument, actor, new_letterhead=None) -> InvoiceDocument:
+    """
+    Convert a finalized Proforma → Invoice, or Invoice → Delivery Note.
+
+    The child draft inherits:
+        - Letterhead (or the user-provided replacement via `new_letterhead`)
+        - Layout (positions)
+        - Template link (so lock flags are inherited)
+        - Client info, ship-to, currency, tax, discount, payment terms
+        - Bank details, notes
+        - All line items
+
+    The child starts fresh on:
+        - Number, sequence, year, status (draft, no number until finalize)
+        - Dates (invoice_date = today, due_date blank)
+        - PO reference (blank — usually a new one for each stage)
+
+    Raises ValueError if source is not convertible.
+    """
+    # Re-fetch with lock to prevent two simultaneous conversions
+    source = InvoiceDocument.objects.select_for_update().get(pk=source.pk)
+
+    if source.status != InvoiceDocument.Status.FINALIZED:
+        raise ValueError('Only finalized documents can be converted.')
+    if source.is_converted_source:
+        raise ValueError('This document has already been converted.')
+    target_type = NEXT_DOC_TYPE.get(source.doc_type)
+    if target_type is None:
+        raise ValueError(f'{source.get_doc_type_display()} cannot be converted further.')
+
+    letterhead = new_letterhead or source.letterhead
+
+    child = InvoiceDocument.objects.create(
+        doc_type=target_type,
+        letterhead=letterhead,
+        layout_json=source.layout_json or {},
+        template=source.template,      # inherit locks from the same template
+        status=InvoiceDocument.Status.DRAFT,
+
+        client_name=source.client_name,
+        client_address=source.client_address,
+        client_email=source.client_email,
+        ship_to_address=source.ship_to_address,
+        po_reference='',                # fresh PO per stage
+
+        invoice_date=timezone.localdate(),
+        due_date=None,
+        payment_terms=source.payment_terms,
+
+        currency=source.currency,
+        tax_rate=source.tax_rate,
+        discount_amount=source.discount_amount,
+
+        bank_details=source.bank_details,
+        notes=source.notes,
+
+        created_by=actor,
+        converted_from=source,
+    )
+
+    # Copy all line items
+    from .models import InvoiceLineItem as _LI
+    for li in source.items.all().order_by('position', 'id'):
+        _LI.objects.create(
+            invoice=child,
+            position=li.position,
+            description=li.description,
+            quantity=li.quantity,
+            unit_price=li.unit_price,
+        )
+
+    child.recalculate_totals(save=True)
+    return child

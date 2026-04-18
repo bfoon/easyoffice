@@ -153,6 +153,14 @@ class InvoiceDocument(models.Model):
         'InvoiceTemplate', on_delete=models.SET_NULL, null=True, blank=True,
         related_name='invoices_using',
     )
+    # Conversion chain: Proforma → Invoice → Delivery Note (one-to-one).
+    # OneToOneField at the DB level prevents two docs from pointing at the
+    # same source. SET_NULL on source delete — the child keeps its data.
+    converted_from  = models.OneToOneField(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='converted_to',
+        help_text='The document that was converted to create this one (e.g. Proforma → Invoice).',
+    )
     created_at      = models.DateTimeField(auto_now_add=True)
     updated_at      = models.DateTimeField(auto_now=True)
 
@@ -188,6 +196,48 @@ class InvoiceDocument(models.Model):
     def is_doc_type_locked(self):
         """True if this invoice was made from a template that locks doc type."""
         return bool(self.template and self.template.doc_type)
+
+    # ── Conversion chain helpers ────────────────────────────────────────────
+    @property
+    def is_converted_source(self):
+        """True if this doc has been converted into another (child exists)."""
+        # `converted_to` is the reverse accessor of the OneToOneField. When no
+        # child exists, accessing it raises DoesNotExist.
+        try:
+            return self.converted_to is not None
+        except InvoiceDocument.DoesNotExist:
+            return False
+
+    @property
+    def converted_child(self):
+        """Return the child doc (if any), or None without raising."""
+        try:
+            return self.converted_to
+        except InvoiceDocument.DoesNotExist:
+            return None
+
+    @property
+    def next_doc_type(self):
+        """The doc type this one can be converted to, or None if terminal."""
+        return {
+            DocType.PROFORMA:      DocType.INVOICE,
+            DocType.INVOICE:       DocType.DELIVERY_NOTE,
+            DocType.DELIVERY_NOTE: None,
+        }.get(self.doc_type)
+
+    @property
+    def can_convert(self):
+        """True if this doc can be converted to a next-stage doc right now."""
+        return (
+            self.is_finalized
+            and not self.is_converted_source
+            and self.next_doc_type is not None
+        )
+
+    @property
+    def is_locked_by_conversion(self):
+        """True if this doc can no longer be edited/voided because it was converted."""
+        return self.is_converted_source
 
     @property
     def title_text(self):

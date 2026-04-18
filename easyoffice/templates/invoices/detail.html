@@ -71,33 +71,86 @@
     </div>
     <div style="display:flex; gap: 8px; flex-wrap: wrap;">
       <a href="{% url 'invoice_dashboard' %}" class="btn-inv ghost"><i class="bi bi-arrow-left"></i> Dashboard</a>
+
       {% if invoice.generated_pdf %}
         <a href="{% url 'file_download' invoice.generated_pdf.pk %}" class="btn-inv primary">
           <i class="bi bi-download"></i> Download PDF
         </a>
-        {% if invoice.is_finalized %}
+        {% if invoice.is_finalized and not invoice.is_locked_by_conversion %}
           <a href="{% url 'create_signature_request' invoice.generated_pdf.pk %}" class="btn-inv ghost"
              style="color:#7c3aed; border-color:#ddd6fe;">
             <i class="bi bi-send-plus-fill"></i> Send for Signature
           </a>
         {% endif %}
       {% endif %}
-      <form method="post" action="{% url 'invoice_duplicate' invoice.pk %}" style="display:inline;">
-        {% csrf_token %}
-        <button type="submit" class="btn-inv ghost"><i class="bi bi-copy"></i> Duplicate</button>
-      </form>
-      {% if invoice.is_finalized %}
-        <form method="post" action="{% url 'invoice_void' invoice.pk %}" style="display:inline;"
-              onsubmit="return confirm('Void this invoice? The number stays reserved.');">
+
+      {% if invoice.can_convert %}
+        <a href="{% url 'invoice_convert' invoice.pk %}" class="btn-inv ghost"
+           style="color:#0ea5e9; border-color:#bae6fd; background:#f0f9ff;">
+          <i class="bi bi-arrow-right-circle-fill"></i>
+          {% if invoice.next_doc_type == 'invoice' %}Convert to Invoice
+          {% elif invoice.next_doc_type == 'delivery_note' %}Convert to Delivery Note
+          {% endif %}
+        </a>
+      {% endif %}
+
+      {% if not invoice.is_locked_by_conversion %}
+        <form method="post" action="{% url 'invoice_duplicate' invoice.pk %}" style="display:inline;">
           {% csrf_token %}
-          <input type="hidden" name="reason" value="Voided from detail view">
-          <button type="submit" class="btn-inv danger"><i class="bi bi-ban"></i> Void</button>
+          <button type="submit" class="btn-inv ghost"><i class="bi bi-copy"></i> Duplicate</button>
         </form>
-      {% elif invoice.is_draft %}
-        <a href="{% url 'invoice_edit' invoice.pk %}" class="btn-inv primary"><i class="bi bi-pencil"></i> Continue Editing</a>
+        {% if invoice.is_finalized %}
+          <form method="post" action="{% url 'invoice_void' invoice.pk %}" style="display:inline;"
+                onsubmit="return confirm('Void this invoice? The number stays reserved.');">
+            {% csrf_token %}
+            <input type="hidden" name="reason" value="Voided from detail view">
+            <button type="submit" class="btn-inv danger"><i class="bi bi-ban"></i> Void</button>
+          </form>
+        {% elif invoice.is_draft %}
+          <a href="{% url 'invoice_edit' invoice.pk %}" class="btn-inv primary"><i class="bi bi-pencil"></i> Continue Editing</a>
+        {% endif %}
       {% endif %}
     </div>
   </div>
+
+  {% if invoice.is_locked_by_conversion %}
+    {% with child=invoice.converted_child %}
+    <div style="background: linear-gradient(135deg, #fef3c7, #fde68a); border: 1px solid #f59e0b; border-radius: 12px; padding: 14px 18px; margin-bottom: 16px; display: flex; align-items: center; gap: 14px;">
+      <i class="bi bi-lock-fill" style="font-size: 24px; color: #92400e;"></i>
+      <div style="flex: 1;">
+        <div style="font-weight: 700; color: #78350f; font-size: 14px;">
+          This {{ invoice.get_doc_type_display }} has been converted to {{ child.get_doc_type_display }} {{ child.number|default:"(draft)" }}
+        </div>
+        <div style="font-size: 12.5px; color: #92400e; margin-top: 2px;">
+          {{ invoice.number }} is now read-only to preserve the audit trail.
+        </div>
+      </div>
+      {% if child.is_draft %}
+        <a href="{% url 'invoice_edit' child.pk %}" class="btn-inv ghost" style="background:#fff;">
+          <i class="bi bi-pencil"></i> Edit {{ child.get_doc_type_display }} Draft
+        </a>
+      {% else %}
+        <a href="{% url 'invoice_detail' child.pk %}" class="btn-inv ghost" style="background:#fff;">
+          <i class="bi bi-arrow-right"></i> View {{ child.number }}
+        </a>
+      {% endif %}
+    </div>
+    {% endwith %}
+  {% endif %}
+
+  {% if invoice.converted_from %}
+    <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 12px; padding: 12px 18px; margin-bottom: 16px; display: flex; align-items: center; gap: 14px; font-size: 13px;">
+      <i class="bi bi-arrow-up-circle" style="font-size: 20px; color: #0284c7;"></i>
+      <div style="flex: 1; color: #0c4a6e;">
+        Converted from {{ invoice.converted_from.get_doc_type_display }}
+        <strong>{{ invoice.converted_from.number }}</strong>
+        on {{ invoice.created_at|date:"d M Y" }}.
+      </div>
+      <a href="{% url 'invoice_detail' invoice.converted_from.pk %}" class="btn-inv ghost" style="padding: 5px 10px; font-size: 12px;">
+        <i class="bi bi-eye"></i> View Source
+      </a>
+    </div>
+  {% endif %}
 
   <div class="dt-body">
     <div class="pdf-frame">

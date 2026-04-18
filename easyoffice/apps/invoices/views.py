@@ -48,7 +48,7 @@ from .forms import InvoiceMetadataForm, TemplateForm
 from .services import (
     finalize_invoice, build_preview_pdf, void_invoice,
     save_invoice_as_template, create_invoice_from_template,
-    apply_template_update_to_invoices,
+    apply_template_update_to_invoices, convert_invoice,
 )
 
 
@@ -236,6 +236,9 @@ class InvoiceMetadataSaveView(InvoiceAccessMixin, View):
         invoice = get_object_or_404(InvoiceDocument, pk=pk)
         if invoice.is_finalized:
             return JsonResponse({'ok': False, 'error': 'Invoice is finalized.'}, status=400)
+        if invoice.is_locked_by_conversion:
+            return JsonResponse({'ok': False,
+                'error': 'This document has been converted and is read-only.'}, status=403)
 
         # If invoice is locked to a specific doc type by its template, force it
         # back to the template's value regardless of what the client submitted.
@@ -269,6 +272,9 @@ class InvoiceItemsSaveView(InvoiceAccessMixin, View):
         invoice = get_object_or_404(InvoiceDocument, pk=pk)
         if invoice.is_finalized:
             return JsonResponse({'ok': False, 'error': 'Invoice is finalized.'}, status=400)
+        if invoice.is_locked_by_conversion:
+            return JsonResponse({'ok': False,
+                'error': 'This document has been converted and is read-only.'}, status=403)
         try:
             payload = json.loads(request.body.decode('utf-8'))
         except Exception:
@@ -325,6 +331,9 @@ class InvoiceLayoutSaveView(InvoiceAccessMixin, View):
         invoice = get_object_or_404(InvoiceDocument, pk=pk)
         if invoice.is_finalized:
             return JsonResponse({'ok': False, 'error': 'Invoice is finalized.'}, status=400)
+        if invoice.is_locked_by_conversion:
+            return JsonResponse({'ok': False,
+                'error': 'This document has been converted and is read-only.'}, status=403)
         if invoice.is_layout_locked:
             return JsonResponse({
                 'ok': False,
@@ -431,6 +440,9 @@ class InvoiceDeleteView(InvoiceAccessMixin, View):
         if invoice.is_finalized:
             messages.error(request, 'Finalized invoices cannot be deleted — use Void instead.')
             return redirect('invoice_detail', pk=invoice.pk)
+        if invoice.is_locked_by_conversion:
+            messages.error(request, 'This document has been converted and is read-only.')
+            return redirect('invoice_detail', pk=invoice.pk)
         invoice.delete()
         messages.success(request, 'Draft deleted.')
         return redirect('invoice_dashboard')
@@ -442,6 +454,9 @@ class InvoiceDeleteView(InvoiceAccessMixin, View):
 class InvoiceVoidView(InvoiceAccessMixin, View):
     def post(self, request, pk):
         invoice = get_object_or_404(InvoiceDocument, pk=pk)
+        if invoice.is_locked_by_conversion:
+            messages.error(request, 'This document has been converted to a newer document and cannot be voided.')
+            return redirect('invoice_detail', pk=invoice.pk)
         reason = request.POST.get('reason', '')
         try:
             void_invoice(invoice, request.user, reason)
@@ -609,3 +624,94 @@ class TemplateDeleteView(InvoiceAccessMixin, View):
         tmpl.delete()
         messages.success(request, f'Template "{name}" deleted. Existing invoices keep their data.')
         return redirect('template_list')
+
+
+# ── Conversion (Proforma → Invoice → Delivery Note) ──────────────────────────
+
+class InvoiceConvertView(InvoiceAccessMixin, View):
+    """
+    GET renders a letterhead-picker modal page (user must confirm or swap
+    the letterhead before conversion).
+    POST performs the conversion and redirects to the new draft's builder.
+    """
+    template_name = 'invoices/convert.html'
+
+    def get(self, request, pk):
+        source = get_object_or_404(InvoiceDocument, pk=pk)
+        if not source.can_convert:
+            messages.error(request, 'This document cannot be converted.')
+            return redirect('invoice_detail', pk=source.pk)
+
+        pdfs = _user_accessible_pdfs(request.user).order_by('-created_at')[:80]
+        return render(request, self.template_name, {
+            'source': source,
+            'target_type_display': dict(DocType.choices).get(source.next_doc_type, ''),
+            'target_type': source.next_doc_type,
+            'pdfs': pdfs,
+        })
+
+    def post(self, request, pk):
+        source = get_object_or_404(InvoiceDocument, pk=pk)
+        letterhead_id = request.POST.get('letterhead_id') or ''
+        new_letterhead = None
+        if letterhead_id:
+            try:
+                new_letterhead = _user_accessible_pdfs(request.user).get(pk=letterhead_id)
+            except SharedFile.DoesNotExist:
+                messages.error(request, 'Selected letterhead is not accessible.')
+                return redirect('invoice_convert', pk=source.pk)
+
+        try:
+            child = convert_invoice(source, request.user, new_letterhead=new_letterhead)
+        except ValueError as e:
+            messages.error(request, str(e))
+            return redirect('invoice_detail', pk=source.pk)
+
+        messages.success(request,
+            f'Draft {child.get_doc_type_display()} created from {source.number}. '
+            f'Review and edit before finalizing.')
+        return redirect('invoice_edit', pk=child.pk)
+
+
+class ConvertibleSourcesListView(InvoiceAccessMixin, View):
+    """
+    JSON endpoint returning finalized proformas/invoices that haven't been
+    converted yet — powers the "Create from Existing" tab on New Invoice.
+    Optional ?target_type= filter ('invoice' or 'delivery_note') narrows to
+    sources that convert to that type.
+    """
+    def get(self, request):
+        target = request.GET.get('target_type', '')
+        # Only return sources that are:
+        #  - finalized
+        #  - not already converted (converted_to reverse lookup is empty)
+        qs = InvoiceDocument.objects.filter(
+            status=InvoiceDocument.Status.FINALIZED,
+            converted_to__isnull=True,
+        )
+        if target == DocType.INVOICE:
+            qs = qs.filter(doc_type=DocType.PROFORMA)
+        elif target == DocType.DELIVERY_NOTE:
+            qs = qs.filter(doc_type=DocType.INVOICE)
+        else:
+            # Default: show everything that CAN be converted (not delivery notes)
+            qs = qs.exclude(doc_type=DocType.DELIVERY_NOTE)
+
+        qs = qs.select_related('created_by')[:100]
+        return JsonResponse({
+            'sources': [
+                {
+                    'id': str(d.id),
+                    'number': d.number,
+                    'doc_type': d.doc_type,
+                    'doc_type_display': d.get_doc_type_display(),
+                    'next_type_display': dict(DocType.choices).get(d.next_doc_type, ''),
+                    'client_name': d.client_name or '—',
+                    'total': str(d.total),
+                    'currency': d.currency,
+                    'invoice_date': d.invoice_date.strftime('%d %b %Y') if d.invoice_date else '',
+                    'finalized_at': d.finalized_at.strftime('%d %b %Y') if d.finalized_at else '',
+                }
+                for d in qs
+            ],
+        })

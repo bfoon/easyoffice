@@ -151,6 +151,9 @@
     <button type="button" class="mode-tab" data-mode="fresh">
       <i class="bi bi-file-earmark-plus"></i> Start Fresh
     </button>
+    <button type="button" class="mode-tab" data-mode="convert">
+      <i class="bi bi-arrow-right-circle"></i> Create from Existing
+    </button>
   </div>
 
   <!-- ── Template mode ───────────────────────────────────────────────── -->
@@ -324,6 +327,35 @@
       </div>
     </form>
   </div>
+
+  <!-- ── Create from Existing mode ───────────────────────────────────── -->
+  <div id="mode-convert" style="display:none;">
+    <div class="nw-card">
+      <div class="nw-label">Convert a Finalized Document</div>
+      <div class="nw-sub">
+        Pick a finalized Proforma to convert to an Invoice, or a finalized Invoice to convert to a Delivery Note.
+        All details will be copied to a new editable draft.
+      </div>
+
+      <div style="display:flex; gap: 6px; margin-bottom: 12px;">
+        <button type="button" class="pick-tab active" data-conv-filter="">
+          <i class="bi bi-list"></i> All Convertible
+        </button>
+        <button type="button" class="pick-tab" data-conv-filter="invoice">
+          <i class="bi bi-file-earmark-text"></i> Proformas → Invoices
+        </button>
+        <button type="button" class="pick-tab" data-conv-filter="delivery_note">
+          <i class="bi bi-truck"></i> Invoices → Delivery Notes
+        </button>
+      </div>
+
+      <div id="convert-list" class="lh-list" style="max-height: 460px;">
+        <div style="padding: 24px; text-align:center; color:#64748b;">
+          <i class="bi bi-hourglass" style="font-size: 20px;"></i> Loading…
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -335,6 +367,10 @@
     const mode = t.dataset.mode;
     document.getElementById('mode-template').style.display = (mode === 'template') ? '' : 'none';
     document.getElementById('mode-fresh').style.display    = (mode === 'fresh')    ? '' : 'none';
+    if (document.getElementById('mode-convert')) {
+      document.getElementById('mode-convert').style.display = (mode === 'convert') ? '' : 'none';
+      if (mode === 'convert' && !window._convertLoaded) { loadConvertibles(''); window._convertLoaded = true; }
+    }
   }));
 
   // Doc type cards
@@ -448,6 +484,70 @@
       st.innerHTML = '<span style="color:#dc2626">Upload failed: ' + err.message + '</span>';
     }
   }
+
+  // ── Convert mode — fetch + render convertible sources ────────────────
+  async function loadConvertibles(targetType) {
+    const list = document.getElementById('convert-list');
+    list.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;"><i class="bi bi-hourglass"></i> Loading…</div>';
+    try {
+      const url = `{% url 'invoice_convertible_sources' %}` + (targetType ? `?target_type=${encodeURIComponent(targetType)}` : '');
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!data.sources || !data.sources.length) {
+        list.innerHTML = `
+          <div style="padding: 30px; text-align:center; color:#64748b;">
+            <i class="bi bi-inbox" style="font-size: 30px; color:#cbd5e1; display:block; margin-bottom: 8px;"></i>
+            <strong>No convertible documents found.</strong>
+            <div style="font-size: 12.5px; margin-top: 4px;">
+              Finalized Proformas and Invoices (not already converted) will appear here.
+            </div>
+          </div>`;
+        return;
+      }
+      list.innerHTML = '';
+      data.sources.forEach(s => {
+        const row = document.createElement('div');
+        row.className = 'lh-item';
+        row.style.cssText = 'padding: 14px; flex-direction: column; align-items: stretch; gap: 8px;';
+        const arrow = s.doc_type === 'proforma' ? 'Invoice'
+                     : s.doc_type === 'invoice' ? 'Delivery Note' : '';
+        row.innerHTML = `
+          <div style="display:flex; align-items:center; gap:12px;">
+            <div style="width:38px; height:38px; border-radius:8px; background: linear-gradient(135deg,#0ea5e9,#0284c7); color:#fff; display:flex; align-items:center; justify-content:center; font-size:15px;">
+              <i class="bi bi-file-earmark-text"></i>
+            </div>
+            <div style="flex:1; min-width:0;">
+              <div style="font-weight:700; color:#0f172a; font-family:monospace;">${s.number}</div>
+              <div style="font-size:11.5px; color:#64748b;">
+                ${s.doc_type_display} · ${s.client_name} · Finalized ${s.finalized_at}
+              </div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-weight:600; color:#0f172a; font-variant-numeric: tabular-nums;">${s.currency} ${parseFloat(s.total).toFixed(2)}</div>
+              <div style="font-size:11px; color:#0ea5e9; font-weight:600;">→ ${arrow}</div>
+            </div>
+          </div>
+          <form method="get" action="/invoices/${s.id}/convert/" style="margin:0;">
+            <button type="submit" class="btn-inv primary" style="width:100%; justify-content:center; padding: 8px;">
+              <i class="bi bi-arrow-right-circle-fill"></i> Convert to ${arrow}
+            </button>
+          </form>`;
+        list.appendChild(row);
+      });
+    } catch(e) {
+      console.error(e);
+      list.innerHTML = '<div style="padding:24px;text-align:center;color:#dc2626;">Failed to load: ' + e.message + '</div>';
+    }
+  }
+
+  // Filter tab wiring inside convert mode
+  document.querySelectorAll('[data-conv-filter]').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('[data-conv-filter]').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      loadConvertibles(t.dataset.convFilter || '');
+    });
+  });
 })();
 </script>
 {% endblock %}

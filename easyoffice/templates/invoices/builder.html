@@ -1,0 +1,859 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Editing {{ invoice.preview_number }} · EasyOffice{% endblock %}
+
+{% block extra_css %}
+<style>
+  .bld-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 18px; padding: 18px; max-width: 1600px; margin: 0 auto; }
+  @media (max-width: 1100px) { .bld-wrap { grid-template-columns: 1fr; } }
+
+  .bld-header {
+    grid-column: 1 / -1;
+    display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap: 10px;
+    background:#fff; border:1px solid #e2e8f0; border-radius: 12px; padding: 12px 16px;
+  }
+  .bld-header .t { font-size: 16px; font-weight: 700; color:#0f172a; }
+  .bld-header .s { color:#64748b; font-size: 12.5px; margin-top: 2px;}
+
+  /* Canvas */
+  .canvas-frame {
+    background:#fff; border:1px solid #e2e8f0; border-radius: 12px; padding: 10px;
+    height: calc(100vh - 160px); overflow: auto; position: relative;
+  }
+  .canvas-stage {
+    position: relative; margin: 0 auto;
+    background: #f1f5f9;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+  #pdf-canvas { display: block; margin: 0 auto; }
+
+  .ov-block {
+    position: absolute;
+    min-width: 60px; min-height: 24px;
+    border: 1.5px dashed transparent;
+    border-radius: 6px; padding: 4px 6px;
+    cursor: move; user-select: none;
+    background: rgba(255,255,255,0.72);
+    backdrop-filter: blur(2px);
+    transition: border-color .1s, background .1s;
+    font-size: 11px; color: #0f172a;
+    line-height: 1.3;
+  }
+  .ov-block:hover { border-color: #0ea5e9; background: rgba(224,242,254,0.85); }
+  .ov-block.dragging { border-color:#0ea5e9 !important; border-style: solid !important; opacity: 0.85;}
+  /* When layout is locked — no drag cursor, subtler hover */
+  body.layout-locked .ov-block { cursor: default; }
+  body.layout-locked .ov-block:hover {
+    border-color: #cbd5e1; background: rgba(248,250,252,0.9);
+  }
+  body.layout-locked .ov-block .ov-label { display: none; }
+  .ov-block .ov-label {
+    position: absolute; top: -18px; left: 0;
+    font-size: 10px; font-weight: 600; color:#0ea5e9;
+    background: #fff; padding: 1px 6px; border-radius: 4px;
+    border: 1px solid #bae6fd; text-transform: uppercase; letter-spacing: 0.03em;
+    pointer-events: none;
+    opacity: 0;
+  }
+  .ov-block:hover .ov-label, .ov-block.dragging .ov-label { opacity: 1; }
+
+  .ov-title-text   { font-size: 16px; font-weight: 700; text-align: center; color:#0f172a;}
+  .ov-num-text     { font-family: monospace; font-weight: 600; color: #0284c7; }
+  .ov-section-lbl  { font-size: 9px; font-weight: 700; color:#0ea5e9; text-transform: uppercase; margin-bottom: 2px;}
+  .ov-body         { font-size: 10.5px; white-space: pre-wrap;}
+
+  /* Side panel */
+  .side-panel {
+    background:#fff; border:1px solid #e2e8f0; border-radius: 12px;
+    display:flex; flex-direction: column; max-height: calc(100vh - 160px);
+  }
+  .sp-tabs { display:flex; border-bottom: 1px solid #e2e8f0; }
+  .sp-tab {
+    flex: 1; padding: 10px; text-align:center; cursor:pointer;
+    font-size: 12px; font-weight: 600; color:#64748b; background:#fff; border: none;
+    border-bottom: 2px solid transparent;
+  }
+  .sp-tab.active { color: #0ea5e9; border-bottom-color: #0ea5e9; }
+  .sp-body { padding: 14px; overflow-y: auto; flex: 1; }
+
+  .fld { margin-bottom: 12px; }
+  .fld label { display:block; font-size: 11px; font-weight: 600; color:#475569;
+               text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;}
+  .fld input, .fld select, .fld textarea {
+    width: 100%; padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 6px;
+    font-size: 13px; background:#fff; font-family: inherit;
+  }
+  .fld input:focus, .fld select:focus, .fld textarea:focus {
+    outline: none; border-color: #0ea5e9; box-shadow: 0 0 0 3px rgba(14,165,233,0.15);
+  }
+
+  /* Items table */
+  .items-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .items-table th { background:#f8fafc; padding: 7px 6px; font-size: 10.5px;
+                    text-transform:uppercase; color:#64748b; letter-spacing: 0.04em;
+                    text-align: left; border-bottom: 1px solid #e2e8f0;}
+  .items-table td { padding: 4px 4px; border-bottom: 1px solid #f1f5f9; }
+  .items-table input {
+    width: 100%; padding: 5px 6px; border: 1px solid transparent;
+    border-radius: 4px; background: transparent; font-size: 12.5px;
+  }
+  .items-table input:focus { border-color: #0ea5e9; background:#fff; outline: none;}
+  .items-table input.num { text-align: right; font-variant-numeric: tabular-nums;}
+  .items-table td.total { font-weight: 600; text-align: right; color:#0f172a; font-variant-numeric: tabular-nums;}
+  .items-table .rm-btn { background:transparent; border:0; color:#94a3b8; cursor:pointer; font-size: 14px; }
+  .items-table .rm-btn:hover { color: #dc2626; }
+
+  .add-item-btn { margin-top: 8px; width:100%; padding: 8px;
+                  border: 1px dashed #cbd5e1; border-radius: 6px;
+                  background:#fff; color:#475569; cursor:pointer; font-size: 12.5px; }
+  .add-item-btn:hover { border-color:#0ea5e9; color: #0ea5e9; }
+
+  /* Totals panel */
+  .tot-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px;}
+  .tot-row .lbl { color:#64748b; }
+  .tot-row .val { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .tot-grand { border-top: 2px solid #0ea5e9; margin-top: 6px; padding-top: 8px; }
+  .tot-grand .lbl { color:#0f172a; font-weight: 700; font-size: 14px;}
+  .tot-grand .val { color:#0ea5e9; font-size: 16px; font-weight: 700; }
+
+  /* Action bar */
+  .bld-actions {
+    grid-column: 1 / -1;
+    display:flex; justify-content:flex-end; gap: 10px; flex-wrap: wrap;
+    background:#fff; border:1px solid #e2e8f0; border-radius: 12px; padding: 10px 16px;
+  }
+  .btn-inv {
+    display:inline-flex; align-items:center; gap:6px; padding: 9px 16px; border-radius: 8px;
+    font-size: 13px; font-weight:600; text-decoration:none; cursor:pointer; border:1px solid transparent;
+  }
+  .btn-inv.primary { background:#0ea5e9; color:#fff;}
+  .btn-inv.primary:hover { background:#0284c7; }
+  .btn-inv.ghost { background:#fff; color:#0f172a; border-color:#e2e8f0;}
+  .btn-inv.ghost:hover { background:#f8fafc; }
+  .btn-inv.danger { background:#fff; color:#dc2626; border-color:#fecaca;}
+  .btn-inv.danger:hover { background:#fef2f2; }
+
+  .save-indicator {
+    font-size: 12px; color:#64748b; margin-right: auto; display:flex; align-items:center; gap:6px;
+  }
+  .save-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background:#cbd5e1; }
+  .save-indicator.saving .dot { background:#f59e0b; animation: pulse 1s infinite; }
+  .save-indicator.saved  .dot { background:#16a34a; }
+  @keyframes pulse { 50% { opacity: 0.5; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<input type="hidden" id="csrf" value="{{ csrf_token }}">
+
+<div class="bld-wrap">
+
+  <div class="bld-header">
+    <div>
+      <div class="t">
+        {% if invoice.is_doc_type_locked %}
+          <span style="font-size: 16px; font-weight: 700; padding: 5px 10px; background: #f1f5f9; border-radius: 6px; color: #0f172a;">
+            <i class="bi bi-lock-fill" style="color: #f59e0b;"></i> {{ invoice.get_doc_type_display }}
+          </span>
+        {% else %}
+          <select id="doc-type-select" style="font-size: 16px; font-weight: 700; border: 1px solid #e2e8f0; border-radius: 6px; padding: 4px 8px;">
+            {% for val, label in doc_type_choices %}
+              <option value="{{ val }}" {% if invoice.doc_type == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        {% endif %}
+        <span style="color:#64748b; font-weight: 500;">·</span>
+        <span id="preview-number" style="font-family: monospace; color: #0284c7;">{{ invoice.preview_number }}</span>
+      </div>
+      <div class="s">
+        {% if invoice.is_layout_locked %}
+          <i class="bi bi-lock-fill" style="color:#f59e0b;"></i>
+          This invoice uses template <strong>"{{ invoice.template.name }}"</strong> with locked layout. Fill in your data below — positions cannot be changed.
+        {% else %}
+          Drag any block on the preview to reposition it. All changes auto-save.
+        {% endif %}
+      </div>
+    </div>
+    <div style="display:flex; gap: 8px;">
+      <a href="{% url 'invoice_dashboard' %}" class="btn-inv ghost">
+        <i class="bi bi-arrow-left"></i> Back
+      </a>
+      {% if not invoice.is_layout_locked %}
+        <button type="button" class="btn-inv ghost" id="reset-layout-btn">
+          <i class="bi bi-arrow-counterclockwise"></i> Reset Layout
+        </button>
+        <button type="button" class="btn-inv ghost" id="save-template-btn"
+                style="color:#7c3aed; border-color:#ddd6fe;">
+          <i class="bi bi-bookmark-plus"></i> Save as Template…
+        </button>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Canvas -->
+  <div class="canvas-frame">
+    <div class="canvas-stage" id="canvas-stage">
+      <canvas id="pdf-canvas"></canvas>
+
+      <!-- Overlay blocks — positions are set by JS from layout_json / defaults -->
+      <div class="ov-block" data-key="title">
+        <span class="ov-label">Title</span>
+        <div class="ov-title-text" id="ov-title">INVOICE</div>
+      </div>
+
+      <div class="ov-block" data-key="number_block">
+        <span class="ov-label">Number / Date</span>
+        <div class="ov-num-text" id="ov-number">{{ invoice.preview_number }}</div>
+        <div id="ov-date" style="font-size: 10.5px; color:#475569;">Date: {{ invoice.invoice_date|date:"d M Y" }}</div>
+      </div>
+
+      <div class="ov-block" data-key="bill_to" style="min-width:160px;">
+        <span class="ov-label">Bill To</span>
+        <div class="ov-section-lbl">BILL TO</div>
+        <div class="ov-body" id="ov-bill-to">{{ invoice.client_name|default:"(no client)" }}</div>
+      </div>
+
+      <div class="ov-block" data-key="ship_to" style="min-width:160px;">
+        <span class="ov-label">Ship To</span>
+        <div class="ov-section-lbl">SHIP TO</div>
+        <div class="ov-body" id="ov-ship-to">{{ invoice.ship_to_address|default:"(same as bill to)" }}</div>
+      </div>
+
+      <div class="ov-block" data-key="items_table" style="min-width:280px;">
+        <span class="ov-label">Items Table</span>
+        <div style="background:#0ea5e9;color:#fff;padding:4px 6px;font-size:10px;font-weight:700;">
+          DESCRIPTION · QTY · PRICE · TOTAL
+        </div>
+        <div style="padding: 4px 6px; font-size: 10px; color:#64748b;">
+          <span id="ov-items-count">0</span> line item(s)
+        </div>
+      </div>
+
+      <div class="ov-block" data-key="totals" style="min-width:140px;">
+        <span class="ov-label">Totals</span>
+        <div style="font-size: 10.5px; color:#475569;">Subtotal: <span id="ov-sub">0.00</span></div>
+        <div style="font-size: 10.5px; color:#475569;">Tax: <span id="ov-tax">0.00</span></div>
+        <div style="background:#0ea5e9; color:#fff; padding: 3px 6px; margin-top:3px; font-weight:700; font-size: 11px;">
+          TOTAL: <span id="ov-total">0.00</span>
+        </div>
+      </div>
+
+      <div class="ov-block" data-key="bank_details" style="min-width:140px;">
+        <span class="ov-label">Bank</span>
+        <div class="ov-section-lbl">PAYMENT DETAILS</div>
+        <div class="ov-body" id="ov-bank" style="font-size: 10px;">{{ invoice.bank_details|default:"(no bank info)" }}</div>
+      </div>
+
+      <div class="ov-block" data-key="notes" style="min-width:200px;">
+        <span class="ov-label">Notes</span>
+        <div class="ov-section-lbl">NOTES</div>
+        <div class="ov-body" id="ov-notes" style="font-style: italic; font-size: 10px;">{{ invoice.notes|default:"(no notes)" }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Side panel -->
+  <div class="side-panel">
+    <div class="sp-tabs">
+      <button class="sp-tab active" data-tab="details">Details</button>
+      <button class="sp-tab" data-tab="items">Line Items</button>
+      <button class="sp-tab" data-tab="totals">Totals</button>
+    </div>
+    <div class="sp-body" id="sp-details">
+
+      <div class="fld">
+        <label>Client Name</label>
+        <input type="text" name="client_name" value="{{ invoice.client_name }}">
+      </div>
+      <div class="fld">
+        <label>Client Email</label>
+        <input type="email" name="client_email" value="{{ invoice.client_email }}">
+      </div>
+      <div class="fld">
+        <label>Client Address (Bill To)</label>
+        <textarea name="client_address" rows="3">{{ invoice.client_address }}</textarea>
+      </div>
+      <div class="fld">
+        <label>Ship To Address <span style="color:#94a3b8; font-weight:400; text-transform: none;">(blank = same)</span></label>
+        <textarea name="ship_to_address" rows="2">{{ invoice.ship_to_address }}</textarea>
+      </div>
+      <div class="fld">
+        <label>PO Reference</label>
+        <input type="text" name="po_reference" value="{{ invoice.po_reference }}">
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div class="fld">
+          <label>Invoice Date</label>
+          <input type="date" name="invoice_date" value="{{ invoice.invoice_date|date:'Y-m-d' }}">
+        </div>
+        <div class="fld">
+          <label>Due Date</label>
+          <input type="date" name="due_date" value="{{ invoice.due_date|date:'Y-m-d'|default:'' }}">
+        </div>
+      </div>
+
+      <div class="fld">
+        <label>Payment Terms</label>
+        <input type="text" name="payment_terms" value="{{ invoice.payment_terms }}">
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+        <div class="fld">
+          <label>Currency</label>
+          <input type="text" name="currency" value="{{ invoice.currency }}" maxlength="3">
+        </div>
+        <div class="fld">
+          <label>Tax %</label>
+          <input type="number" name="tax_rate" step="0.01" min="0" value="{{ invoice.tax_rate }}">
+        </div>
+        <div class="fld">
+          <label>Discount</label>
+          <input type="number" name="discount_amount" step="0.01" min="0" value="{{ invoice.discount_amount }}">
+        </div>
+      </div>
+
+      <div class="fld">
+        <label>Bank / Payment Details</label>
+        <textarea name="bank_details" rows="4">{{ invoice.bank_details }}</textarea>
+      </div>
+
+      <div class="fld">
+        <label>Notes</label>
+        <textarea name="notes" rows="2">{{ invoice.notes }}</textarea>
+      </div>
+    </div>
+
+    <div class="sp-body" id="sp-items" style="display:none;">
+      <table class="items-table" id="items-table">
+        <thead>
+          <tr>
+            <th style="width:50%">Description</th>
+            <th style="width:15%; text-align:right">Qty</th>
+            <th style="width:20%; text-align:right">Unit Price</th>
+            <th style="width:12%; text-align:right">Total</th>
+            <th style="width:30px"></th>
+          </tr>
+        </thead>
+        <tbody id="items-tbody">
+          {% for item in items %}
+          <tr>
+            <td><input type="text" class="desc" value="{{ item.description }}"></td>
+            <td><input type="number" class="num qty" step="0.01" value="{{ item.quantity }}"></td>
+            <td><input type="number" class="num price" step="0.01" value="{{ item.unit_price }}"></td>
+            <td class="total">0.00</td>
+            <td><button class="rm-btn" title="Remove"><i class="bi bi-x-circle"></i></button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <button type="button" class="add-item-btn" id="add-item-btn">
+        <i class="bi bi-plus-circle"></i> Add line item
+      </button>
+    </div>
+
+    <div class="sp-body" id="sp-totals" style="display:none;">
+      <div class="tot-row"><span class="lbl">Subtotal</span><span class="val" id="sum-sub">0.00</span></div>
+      <div class="tot-row"><span class="lbl">Tax (<span id="sum-tax-rate">0</span>%)</span><span class="val" id="sum-tax">0.00</span></div>
+      <div class="tot-row"><span class="lbl">Discount</span><span class="val" id="sum-discount">0.00</span></div>
+      <div class="tot-row tot-grand"><span class="lbl">TOTAL</span><span class="val" id="sum-total">0.00</span></div>
+      <div style="margin-top: 14px; font-size: 12px; color:#64748b;">
+        Totals recompute automatically from line items and tax rate.
+      </div>
+    </div>
+  </div>
+
+  <div class="bld-actions">
+    <div class="save-indicator" id="save-indicator">
+      <span class="dot"></span><span class="txt">All changes saved</span>
+    </div>
+    <a href="{% url 'invoice_preview_pdf' invoice.pk %}" target="_blank" class="btn-inv ghost">
+      <i class="bi bi-eye"></i> Preview PDF
+    </a>
+    <form method="post" action="{% url 'invoice_delete' invoice.pk %}" style="display:inline;"
+          onsubmit="return confirm('Delete this draft permanently?');">
+      {% csrf_token %}
+      <button type="submit" class="btn-inv danger">
+        <i class="bi bi-trash"></i> Delete Draft
+      </button>
+    </form>
+    <button type="button" class="btn-inv primary" id="finalize-btn">
+      <i class="bi bi-check-circle-fill"></i> Finalize & Save PDF
+    </button>
+  </div>
+</div>
+
+<!-- Save as Template Modal -->
+<div id="save-tmpl-modal" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:9999; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:12px; padding:22px 24px; width:min(480px, 94vw); max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom: 14px;">
+      <div style="width:40px; height:40px; border-radius:10px; background:linear-gradient(135deg,#8b5cf6,#6d28d9); color:#fff; display:flex; align-items:center; justify-content:center; font-size:20px;">
+        <i class="bi bi-bookmark-plus-fill"></i>
+      </div>
+      <div>
+        <div style="font-size: 17px; font-weight: 700; color:#0f172a;">Save as Template</div>
+        <div style="font-size: 12.5px; color:#64748b;">Reuse this invoice's layout and defaults for future invoices.</div>
+      </div>
+    </div>
+
+    <div style="font-size: 12px; color:#64748b; background:#f8fafc; border-left: 3px solid #0ea5e9; padding: 8px 12px; border-radius: 6px; margin-bottom: 16px;">
+      <strong style="color: #0f172a;">What gets saved:</strong> Letterhead · Layout · Currency · Tax rate · Payment terms · Bank details · Notes.<br>
+      <strong style="color: #0f172a;">What gets cleared:</strong> Client info · Line items · Dates.
+    </div>
+
+    <div style="margin-bottom: 12px;">
+      <label style="display:block; font-size:11px; font-weight:600; color:#475569; text-transform:uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Template Name *</label>
+      <input id="tmpl-name" type="text" placeholder="e.g. Sales Invoice — GMD"
+             style="width:100%; padding:8px 10px; border:1px solid #e2e8f0; border-radius:6px; font-size:13.5px;">
+    </div>
+
+    <div style="margin-bottom: 12px;">
+      <label style="display:block; font-size:11px; font-weight:600; color:#475569; text-transform:uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Description (optional)</label>
+      <input id="tmpl-description" type="text" placeholder="Short note to help you identify this template later"
+             style="width:100%; padding:8px 10px; border:1px solid #e2e8f0; border-radius:6px; font-size:13.5px;">
+    </div>
+
+    <div style="margin-bottom: 14px;">
+      <label style="display:block; font-size:11px; font-weight:600; color:#475569; text-transform:uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">Visibility</label>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+        <label style="display:flex; align-items:center; gap:6px; padding:8px; border:1px solid #e2e8f0; border-radius:6px; cursor:pointer; font-size:13px;">
+          <input type="radio" name="tmpl_visibility" value="personal" checked> Personal (only me)
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; padding:8px; border:1px solid #e2e8f0; border-radius:6px; cursor:pointer; font-size:13px;">
+          <input type="radio" name="tmpl_visibility" value="shared"> Shared (team)
+        </label>
+      </div>
+    </div>
+
+    <div style="margin-bottom: 12px;">
+      <label style="display:flex; align-items:center; gap:8px; padding:10px 12px; background:#fef3c7; border:1px solid #fde68a; border-radius:6px; cursor:pointer;">
+        <input id="tmpl-lock-layout" type="checkbox">
+        <span>
+          <strong style="font-size: 13px; color:#78350f;">
+            <i class="bi bi-lock-fill"></i> Lock layout for template users
+          </strong>
+          <div style="font-size: 11.5px; color:#92400e; margin-top: 2px;">Users cannot drag blocks — they can only fill in client info and line items.</div>
+        </span>
+      </label>
+    </div>
+
+    <div style="margin-bottom: 16px;">
+      <label style="display:block; font-size:11px; font-weight:600; color:#475569; text-transform:uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Lock Document Type? (optional)</label>
+      <select id="tmpl-lock-type" style="width:100%; padding:8px 10px; border:1px solid #e2e8f0; border-radius:6px; font-size:13px;">
+        <option value="">Don't lock — user can switch</option>
+        <option value="invoice">Lock to: Invoice</option>
+        <option value="proforma">Lock to: Proforma Invoice</option>
+        <option value="delivery_note">Lock to: Delivery Note</option>
+      </select>
+    </div>
+
+    <div id="tmpl-error" style="color:#dc2626; font-size:12.5px; margin-bottom: 8px; min-height:16px;"></div>
+
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button type="button" id="tmpl-cancel" class="btn-inv ghost">Cancel</button>
+      <button type="button" id="tmpl-save" class="btn-inv primary" style="background:#8b5cf6; border-color:#8b5cf6;">
+        <i class="bi bi-bookmark-check-fill"></i> Save Template
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Save success toast -->
+<div id="tmpl-toast" style="display:none; position:fixed; bottom:30px; right:30px; background:#16a34a; color:#fff; padding:14px 20px; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,0.25); font-weight:600; font-size:14px; z-index:10000;">
+  Template saved.
+</div>
+
+<!-- PDF.js for rendering the letterhead preview -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+(function(){
+  const INVOICE_ID = '{{ invoice.pk }}';
+  const LETTERHEAD_URL = '{% url "file_preview" invoice.letterhead.pk %}';
+  const URL_METADATA  = '{% url "invoice_metadata" invoice.pk %}';
+  const URL_ITEMS     = '{% url "invoice_items" invoice.pk %}';
+  const URL_LAYOUT    = '{% url "invoice_layout" invoice.pk %}';
+  const URL_FINALIZE  = '{% url "invoice_finalize" invoice.pk %}';
+  const URL_SAVE_TMPL = '{% url "template_create_from_invoice" invoice.pk %}';
+  const DETAIL_URL    = '{% url "invoice_detail" invoice.pk %}';
+  const LAYOUT_LOCKED = {% if invoice.is_layout_locked %}true{% else %}false{% endif %};
+  const DOC_TYPE_LOCKED = {% if invoice.is_doc_type_locked %}true{% else %}false{% endif %};
+  const CSRF = document.querySelector('[name=csrfmiddlewaretoken]')?.value ||
+               document.getElementById('csrf')?.value || '{{ csrf_token }}';
+
+  if (LAYOUT_LOCKED) document.body.classList.add('layout-locked');
+
+  const LAYOUT = {{ layout_json|safe }};
+  const DEFAULT_LAYOUT = {
+    title:         {x_pct: 50.0, y_pct: 18.0, w_pct: 50.0},
+    number_block:  {x_pct: 65.0, y_pct: 23.0, w_pct: 30.0},
+    bill_to:       {x_pct:  7.0, y_pct: 28.0, w_pct: 40.0},
+    ship_to:       {x_pct: 52.0, y_pct: 28.0, w_pct: 40.0},
+    items_table:   {x_pct:  7.0, y_pct: 48.0, w_pct: 86.0},
+    totals:        {x_pct: 62.0, y_pct: 74.0, w_pct: 31.0},
+    bank_details:  {x_pct:  7.0, y_pct: 74.0, w_pct: 45.0},
+    notes:         {x_pct:  7.0, y_pct: 88.0, w_pct: 86.0},
+  };
+
+  let currentLayout = JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
+  for (const k in LAYOUT) {
+    if (currentLayout[k] && typeof LAYOUT[k] === 'object') {
+      Object.assign(currentLayout[k], LAYOUT[k]);
+    }
+  }
+
+  const DOC_TITLE = {
+    invoice: 'INVOICE',
+    proforma: 'PROFORMA INVOICE',
+    delivery_note: 'DELIVERY NOTE',
+  };
+
+  const stage = document.getElementById('canvas-stage');
+  const canvas = document.getElementById('pdf-canvas');
+  const ctx = canvas.getContext('2d');
+
+  let stageWidth = 0;
+  let stageHeight = 0;
+
+  // ── Render letterhead with PDF.js ──────────────────────────────────────
+  async function renderLetterhead() {
+    const maxWidth = document.querySelector('.canvas-frame').clientWidth - 30;
+    try {
+      const pdf = await pdfjsLib.getDocument(LETTERHEAD_URL).promise;
+      const page = await pdf.getPage(1);
+      const vp = page.getViewport({ scale: 1 });
+      const scale = Math.min(1.5, maxWidth / vp.width);
+      const viewport = page.getViewport({ scale });
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      stageWidth = viewport.width;
+      stageHeight = viewport.height;
+      stage.style.width  = viewport.width + 'px';
+      stage.style.height = viewport.height + 'px';
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      applyLayoutToOverlays();
+    } catch(e) {
+      console.error('PDF render failed', e);
+      stage.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626">Failed to load letterhead preview.</div>';
+    }
+  }
+
+  // ── Position overlays from layout ──────────────────────────────────────
+  function applyLayoutToOverlays() {
+    document.querySelectorAll('.ov-block').forEach(el => {
+      const key = el.dataset.key;
+      const pos = currentLayout[key];
+      if (!pos) return;
+      const left = (pos.x_pct / 100) * stageWidth;
+      const top  = (pos.y_pct / 100) * stageHeight;
+      el.style.left = left + 'px';
+      el.style.top  = top + 'px';
+      if (pos.w_pct) el.style.width = ((pos.w_pct/100) * stageWidth) + 'px';
+    });
+  }
+
+  // ── Dragging overlays ──────────────────────────────────────────────────
+  let dragging = null;
+  let dragStart = {x: 0, y: 0, offX: 0, offY: 0};
+
+  document.querySelectorAll('.ov-block').forEach(el => {
+    el.addEventListener('mousedown', (e) => {
+      if (LAYOUT_LOCKED) return;                      // locked templates — no drag
+      if (e.target.tagName === 'INPUT') return;
+      dragging = el;
+      el.classList.add('dragging');
+      const rect = el.getBoundingClientRect();
+      dragStart = {
+        x: e.clientX, y: e.clientY,
+        offX: e.clientX - rect.left, offY: e.clientY - rect.top,
+      };
+      e.preventDefault();
+    });
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const stageRect = stage.getBoundingClientRect();
+    let x = e.clientX - stageRect.left - dragStart.offX;
+    let y = e.clientY - stageRect.top  - dragStart.offY;
+    x = Math.max(0, Math.min(stageWidth - 10, x));
+    y = Math.max(0, Math.min(stageHeight - 10, y));
+    dragging.style.left = x + 'px';
+    dragging.style.top  = y + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    const key = dragging.dataset.key;
+    const x = parseFloat(dragging.style.left) || 0;
+    const y = parseFloat(dragging.style.top)  || 0;
+    currentLayout[key] = currentLayout[key] || {};
+    currentLayout[key].x_pct = (x / stageWidth) * 100;
+    currentLayout[key].y_pct = (y / stageHeight) * 100;
+    dragging.classList.remove('dragging');
+    dragging = null;
+    debouncedSaveLayout();
+  });
+
+  const resetBtn = document.getElementById('reset-layout-btn');
+  if (resetBtn) resetBtn.addEventListener('click', () => {
+    if (!confirm('Reset all block positions to default?')) return;
+    currentLayout = JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
+    applyLayoutToOverlays();
+    saveLayout();
+  });
+
+  // ── Save helpers ───────────────────────────────────────────────────────
+  const ind = document.getElementById('save-indicator');
+  function setSaving(){ ind.className = 'save-indicator saving';  ind.querySelector('.txt').textContent = 'Saving…'; }
+  function setSaved() { ind.className = 'save-indicator saved';   ind.querySelector('.txt').textContent = 'Saved'; }
+  function setError() { ind.className = 'save-indicator';         ind.querySelector('.txt').textContent = 'Save failed'; }
+
+  function debounce(fn, ms) {
+    let t; return function(...a){ clearTimeout(t); t = setTimeout(() => fn.apply(this, a), ms); };
+  }
+
+  async function saveLayout() {
+    setSaving();
+    try {
+      const res = await fetch(URL_LAYOUT, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json', 'X-CSRFToken': CSRF},
+        body: JSON.stringify(currentLayout),
+      });
+      if (!res.ok) throw new Error('Layout save failed');
+      setSaved();
+    } catch(e) { console.error(e); setError(); }
+  }
+  const debouncedSaveLayout = debounce(saveLayout, 350);
+
+  async function saveMetadata() {
+    setSaving();
+    const fd = new FormData();
+    const dtSelect = document.getElementById('doc-type-select');
+    const currentDocType = dtSelect ? dtSelect.value : '{{ invoice.doc_type }}';
+    fd.append('doc_type', currentDocType);
+    document.querySelectorAll('#sp-details input, #sp-details textarea, #sp-details select').forEach(inp => {
+      if (inp.name) fd.append(inp.name, inp.value);
+    });
+    try {
+      const res = await fetch(URL_METADATA, {
+        method: 'POST', body: fd,
+        headers: {'X-CSRFToken': CSRF},
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(JSON.stringify(data.errors || data.error));
+      document.getElementById('preview-number').textContent = data.preview_number;
+      document.getElementById('ov-number').textContent = data.preview_number;
+      document.getElementById('ov-title').textContent =
+        DOC_TITLE[currentDocType] || 'INVOICE';
+      updateOverlayTexts();
+      refreshTotals(data);
+      setSaved();
+    } catch(e) { console.error(e); setError(); }
+  }
+  const debouncedSaveMetadata = debounce(saveMetadata, 500);
+
+  async function saveItems() {
+    setSaving();
+    const rows = document.querySelectorAll('#items-tbody tr');
+    const items = [];
+    rows.forEach(r => {
+      const desc  = r.querySelector('.desc').value;
+      const qty   = r.querySelector('.qty').value;
+      const price = r.querySelector('.price').value;
+      items.push({description: desc, quantity: qty, unit_price: price});
+    });
+    try {
+      const res = await fetch(URL_ITEMS, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json', 'X-CSRFToken': CSRF},
+        body: JSON.stringify({items}),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Items save failed');
+      refreshTotals(data);
+      setSaved();
+    } catch(e) { console.error(e); setError(); }
+  }
+  const debouncedSaveItems = debounce(saveItems, 400);
+
+  function refreshTotals(data) {
+    const currency = document.querySelector('[name=currency]').value || 'GMD';
+    const taxRate  = document.querySelector('[name=tax_rate]').value || '0';
+    const discount = document.querySelector('[name=discount_amount]').value || '0';
+    document.getElementById('sum-sub').textContent      = currency + ' ' + parseFloat(data.subtotal||0).toFixed(2);
+    document.getElementById('sum-tax').textContent      = currency + ' ' + parseFloat(data.tax_amount||0).toFixed(2);
+    document.getElementById('sum-tax-rate').textContent = taxRate;
+    document.getElementById('sum-discount').textContent = currency + ' ' + parseFloat(discount).toFixed(2);
+    document.getElementById('sum-total').textContent    = currency + ' ' + parseFloat(data.total||0).toFixed(2);
+    document.getElementById('ov-sub').textContent   = parseFloat(data.subtotal||0).toFixed(2);
+    document.getElementById('ov-tax').textContent   = parseFloat(data.tax_amount||0).toFixed(2);
+    document.getElementById('ov-total').textContent = parseFloat(data.total||0).toFixed(2);
+    updateLineTotals();
+  }
+
+  function updateLineTotals() {
+    let count = 0;
+    document.querySelectorAll('#items-tbody tr').forEach(r => {
+      const q = parseFloat(r.querySelector('.qty').value) || 0;
+      const p = parseFloat(r.querySelector('.price').value) || 0;
+      const lt = (q * p);
+      r.querySelector('.total').textContent = lt.toFixed(2);
+      if (r.querySelector('.desc').value.trim() || q || p) count++;
+    });
+    document.getElementById('ov-items-count').textContent = count;
+  }
+
+  function updateOverlayTexts() {
+    const get = (n) => (document.querySelector(`[name=${n}]`)?.value || '').trim();
+    const cname = get('client_name'), caddr = get('client_address'), cemail = get('client_email');
+    const bill = [cname, caddr, cemail].filter(Boolean).join('\n') || '(no client)';
+    document.getElementById('ov-bill-to').textContent = bill;
+    document.getElementById('ov-ship-to').textContent = get('ship_to_address') || '(same as bill to)';
+    document.getElementById('ov-bank').textContent    = get('bank_details') || '(no bank info)';
+    document.getElementById('ov-notes').textContent   = get('notes') || '(no notes)';
+    const d = get('invoice_date');
+    if (d) document.getElementById('ov-date').textContent = 'Date: ' + d;
+  }
+
+  // ── Tabs ───────────────────────────────────────────────────────────────
+  document.querySelectorAll('.sp-tab').forEach(t => t.addEventListener('click', () => {
+    document.querySelectorAll('.sp-tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    ['details','items','totals'].forEach(k => {
+      document.getElementById('sp-'+k).style.display = (k === t.dataset.tab) ? '' : 'none';
+    });
+  }));
+
+  // ── Field listeners ────────────────────────────────────────────────────
+  document.querySelectorAll('#sp-details input, #sp-details textarea, #sp-details select').forEach(el => {
+    el.addEventListener('input',  () => { updateOverlayTexts(); debouncedSaveMetadata(); });
+    el.addEventListener('change', debouncedSaveMetadata);
+  });
+  const dtSelectEl = document.getElementById('doc-type-select');
+  if (dtSelectEl) {
+    dtSelectEl.addEventListener('change', () => {
+      document.getElementById('ov-title').textContent =
+        DOC_TITLE[dtSelectEl.value] || 'INVOICE';
+      saveMetadata();
+    });
+  }
+
+  // ── Save as Template modal ─────────────────────────────────────────────
+  const saveTmplBtn = document.getElementById('save-template-btn');
+  if (saveTmplBtn) {
+    saveTmplBtn.addEventListener('click', () => {
+      document.getElementById('save-tmpl-modal').style.display = 'flex';
+      document.getElementById('tmpl-name').focus();
+    });
+  }
+  const tmplModal = document.getElementById('save-tmpl-modal');
+  if (tmplModal) {
+    tmplModal.addEventListener('click', (e) => {
+      if (e.target === tmplModal) tmplModal.style.display = 'none';
+    });
+    document.getElementById('tmpl-cancel').addEventListener('click', () => {
+      tmplModal.style.display = 'none';
+    });
+    document.getElementById('tmpl-save').addEventListener('click', async () => {
+      const name = document.getElementById('tmpl-name').value.trim();
+      if (!name) {
+        document.getElementById('tmpl-error').textContent = 'Name is required.';
+        return;
+      }
+      // Force-save any pending layout/metadata edits so the template captures current state
+      await saveMetadata();
+      await saveLayout();
+
+      const fd = new FormData();
+      fd.append('name', name);
+      fd.append('description', document.getElementById('tmpl-description').value);
+      fd.append('visibility', document.querySelector('[name=tmpl_visibility]:checked').value);
+      if (document.getElementById('tmpl-lock-layout').checked) fd.append('locked_layout', 'on');
+      fd.append('doc_type', document.getElementById('tmpl-lock-type').value);
+
+      const btn = document.getElementById('tmpl-save');
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        const res = await fetch(URL_SAVE_TMPL, {
+          method: 'POST', body: fd, headers: {'X-CSRFToken': CSRF},
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Save failed');
+        tmplModal.style.display = 'none';
+        // Success toast
+        const toast = document.getElementById('tmpl-toast');
+        toast.textContent = data.message || 'Template saved';
+        toast.style.display = 'block';
+        setTimeout(() => { toast.style.display = 'none'; }, 3500);
+        // Reset form
+        document.getElementById('tmpl-name').value = '';
+        document.getElementById('tmpl-description').value = '';
+        document.getElementById('tmpl-error').textContent = '';
+      } catch (err) {
+        document.getElementById('tmpl-error').textContent = 'Error: ' + err.message;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-bookmark-check-fill"></i> Save Template';
+      }
+    });
+  }
+
+  // Item row wiring
+  function wireRow(row) {
+    row.querySelectorAll('input').forEach(inp => {
+      inp.addEventListener('input', () => { updateLineTotals(); debouncedSaveItems(); });
+    });
+    row.querySelector('.rm-btn').addEventListener('click', () => {
+      row.remove();
+      updateLineTotals();
+      saveItems();
+    });
+  }
+  document.querySelectorAll('#items-tbody tr').forEach(wireRow);
+
+  document.getElementById('add-item-btn').addEventListener('click', () => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="text" class="desc" placeholder="Item description"></td>
+      <td><input type="number" class="num qty" step="0.01" value="1"></td>
+      <td><input type="number" class="num price" step="0.01" value="0.00"></td>
+      <td class="total">0.00</td>
+      <td><button class="rm-btn" title="Remove"><i class="bi bi-x-circle"></i></button></td>`;
+    document.getElementById('items-tbody').appendChild(tr);
+    wireRow(tr);
+    tr.querySelector('.desc').focus();
+  });
+
+  // ── Finalize ───────────────────────────────────────────────────────────
+  document.getElementById('finalize-btn').addEventListener('click', async () => {
+    if (!confirm('Finalize this document? A PDF will be saved to the Invoices folder and the invoice will be locked. The number will be permanently assigned.')) return;
+    // Force-save any pending edits first
+    await saveItems();
+    await saveMetadata();
+    const res = await fetch(URL_FINALIZE, {
+      method: 'POST',
+      headers: {'X-CSRFToken': CSRF},
+    });
+    const data = await res.json();
+    if (data.ok) {
+      window.location.href = data.redirect || DETAIL_URL;
+    } else {
+      alert('Could not finalize: ' + (data.error || 'unknown error'));
+    }
+  });
+
+  // ── Init ───────────────────────────────────────────────────────────────
+  renderLetterhead().then(() => {
+    updateOverlayTexts();
+    updateLineTotals();
+    // Initial totals load
+    saveItems();
+  });
+  window.addEventListener('resize', debounce(renderLetterhead, 300));
+})();
+</script>
+{% endblock %}

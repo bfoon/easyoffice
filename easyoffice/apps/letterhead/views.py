@@ -155,7 +155,7 @@ class LetterheadUpdateView(LoginRequiredMixin, View):
         FIELDS = [
             'name', 'company_name', 'tagline', 'address', 'contact_info',
             'template_key', 'color_primary', 'color_secondary',
-            'font_header', 'font_body',
+            'font_header', 'font_body', 'body_html',
         ]
         updated = []
         for field in FIELDS:

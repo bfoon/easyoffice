@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ invoice.number|default:"Invoice" }} · EasyOffice{% endblock %}
+
+{% block extra_css %}
+<style>
+  .dt-shell { max-width: 1300px; margin: 0 auto; padding: 20px; }
+  .dt-head {
+    display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 12px;
+    background:#fff; border:1px solid #e2e8f0; border-radius: 12px; padding: 14px 18px; margin-bottom: 18px;
+  }
+  .dt-head .t { font-size: 20px; font-weight: 700; color:#0f172a; }
+  .dt-head .s { color:#64748b; font-size: 13px; margin-top: 2px;}
+  .dt-body { display:grid; grid-template-columns: minmax(0,1fr) 320px; gap: 18px;}
+  @media (max-width: 900px) { .dt-body { grid-template-columns: 1fr; } }
+
+  .pdf-frame {
+    background:#fff; border:1px solid #e2e8f0; border-radius: 12px; padding: 8px;
+    height: calc(100vh - 180px); overflow: hidden;
+  }
+  .pdf-frame iframe { width: 100%; height: 100%; border: 0; border-radius: 8px; }
+
+  .side { background:#fff; border:1px solid #e2e8f0; border-radius: 12px; padding: 18px; }
+  .side h4 { margin: 0 0 10px; font-size: 14px; color:#0f172a; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; }
+  .side .row { display:flex; justify-content:space-between; padding: 4px 0; font-size: 13px;}
+  .side .row .l { color:#64748b; }
+  .side .row .v { color:#0f172a; font-weight: 500; text-align: right; }
+
+  .badge-pill { display:inline-block; padding: 4px 11px; border-radius: 999px; font-size: 11.5px; font-weight:700; text-transform:uppercase; letter-spacing: 0.03em;}
+  .badge-finalized { background:#dcfce7; color:#166534; }
+  .badge-draft     { background:#fef3c7; color:#92400e; }
+  .badge-voided    { background:#fee2e2; color:#991b1b; }
+
+  .btn-inv {
+    display:inline-flex; align-items:center; gap:6px; padding: 8px 14px; border-radius: 8px;
+    font-size: 13px; font-weight:600; text-decoration:none; cursor:pointer; border:1px solid transparent;
+  }
+  .btn-inv.primary { background:#0ea5e9; color:#fff;}
+  .btn-inv.primary:hover { background:#0284c7;}
+  .btn-inv.ghost { background:#fff; color:#0f172a; border-color:#e2e8f0;}
+  .btn-inv.ghost:hover { background:#f8fafc; }
+  .btn-inv.danger { background:#fff; color:#dc2626; border-color:#fecaca;}
+  .btn-inv.danger:hover { background:#fef2f2; }
+
+  .item-list { font-size: 12.5px; }
+  .item-list .it { display:flex; justify-content:space-between; padding: 5px 0; border-bottom: 1px solid #f1f5f9; }
+  .item-list .it:last-child { border-bottom: 0; }
+  .item-list .desc { flex: 1; color: #0f172a; }
+  .item-list .qp { color:#64748b; margin-right: 8px; font-size: 11px; }
+  .item-list .tot { font-weight:600; color: #0f172a; font-variant-numeric: tabular-nums; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dt-shell">
+
+  <div class="dt-head">
+    <div>
+      <div class="t">
+        {{ invoice.number|default:invoice.preview_number }}
+        &nbsp;·&nbsp;
+        <span style="color:#64748b; font-weight: 500;">{{ invoice.get_doc_type_display }}</span>
+      </div>
+      <div class="s">
+        {% if invoice.status == 'finalized' %}<span class="badge-pill badge-finalized">Finalized</span>{% endif %}
+        {% if invoice.status == 'draft' %}<span class="badge-pill badge-draft">Draft</span>{% endif %}
+        {% if invoice.status == 'voided' %}<span class="badge-pill badge-voided">Voided</span>{% endif %}
+        · {{ invoice.client_name|default:"No client" }} · {{ invoice.invoice_date|date:"d M Y" }}
+      </div>
+    </div>
+    <div style="display:flex; gap: 8px; flex-wrap: wrap;">
+      <a href="{% url 'invoice_dashboard' %}" class="btn-inv ghost"><i class="bi bi-arrow-left"></i> Dashboard</a>
+      {% if invoice.generated_pdf %}
+        <a href="{% url 'file_download' invoice.generated_pdf.pk %}" class="btn-inv primary">
+          <i class="bi bi-download"></i> Download PDF
+        </a>
+        {% if invoice.is_finalized %}
+          <a href="{% url 'create_signature_request' invoice.generated_pdf.pk %}" class="btn-inv ghost"
+             style="color:#7c3aed; border-color:#ddd6fe;">
+            <i class="bi bi-send-plus-fill"></i> Send for Signature
+          </a>
+        {% endif %}
+      {% endif %}
+      <form method="post" action="{% url 'invoice_duplicate' invoice.pk %}" style="display:inline;">
+        {% csrf_token %}
+        <button type="submit" class="btn-inv ghost"><i class="bi bi-copy"></i> Duplicate</button>
+      </form>
+      {% if invoice.is_finalized %}
+        <form method="post" action="{% url 'invoice_void' invoice.pk %}" style="display:inline;"
+              onsubmit="return confirm('Void this invoice? The number stays reserved.');">
+          {% csrf_token %}
+          <input type="hidden" name="reason" value="Voided from detail view">
+          <button type="submit" class="btn-inv danger"><i class="bi bi-ban"></i> Void</button>
+        </form>
+      {% elif invoice.is_draft %}
+        <a href="{% url 'invoice_edit' invoice.pk %}" class="btn-inv primary"><i class="bi bi-pencil"></i> Continue Editing</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="dt-body">
+    <div class="pdf-frame">
+      <iframe src="{% url 'invoice_preview_pdf' invoice.pk %}#toolbar=1"></iframe>
+    </div>
+
+    <div>
+      <div class="side" style="margin-bottom: 14px;">
+        <h4>Summary</h4>
+        <div class="row"><span class="l">Number</span><span class="v">{{ invoice.number|default:"—" }}</span></div>
+        <div class="row"><span class="l">Type</span><span class="v">{{ invoice.get_doc_type_display }}</span></div>
+        <div class="row"><span class="l">Date</span><span class="v">{{ invoice.invoice_date|date:"d M Y" }}</span></div>
+        {% if invoice.due_date %}<div class="row"><span class="l">Due</span><span class="v">{{ invoice.due_date|date:"d M Y" }}</span></div>{% endif %}
+        {% if invoice.po_reference %}<div class="row"><span class="l">PO Ref</span><span class="v">{{ invoice.po_reference }}</span></div>{% endif %}
+        <div class="row"><span class="l">Payment Terms</span><span class="v">{{ invoice.payment_terms|default:"—" }}</span></div>
+        <div class="row"><span class="l">Created by</span><span class="v">{{ invoice.created_by.full_name|default:invoice.created_by.username }}</span></div>
+        <div class="row"><span class="l">Created</span><span class="v">{{ invoice.created_at|date:"d M Y, H:i" }}</span></div>
+        {% if invoice.finalized_at %}<div class="row"><span class="l">Finalized</span><span class="v">{{ invoice.finalized_at|date:"d M Y, H:i" }}</span></div>{% endif %}
+      </div>
+
+      <div class="side" style="margin-bottom: 14px;">
+        <h4>Client</h4>
+        <div style="font-weight:600; color:#0f172a; margin-bottom: 4px;">{{ invoice.client_name|default:"—" }}</div>
+        <div style="font-size: 12.5px; color:#475569; white-space: pre-line;">{{ invoice.client_address }}</div>
+        {% if invoice.client_email %}
+          <div style="font-size: 12.5px; margin-top: 4px;"><a href="mailto:{{ invoice.client_email }}">{{ invoice.client_email }}</a></div>
+        {% endif %}
+      </div>
+
+      <div class="side" style="margin-bottom: 14px;">
+        <h4>Items ({{ items|length }})</h4>
+        <div class="item-list">
+          {% for it in items %}
+          <div class="it">
+            <div class="desc">
+              {{ it.description }}
+              <span class="qp">· {{ it.quantity }} × {{ it.unit_price|floatformat:2 }}</span>
+            </div>
+            <div class="tot">{{ it.line_total|floatformat:2 }}</div>
+          </div>
+          {% empty %}
+          <div style="color:#94a3b8; font-size: 12px;">No items.</div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="side">
+        <h4>Totals</h4>
+        <div class="row"><span class="l">Subtotal</span><span class="v">{{ invoice.currency }} {{ invoice.subtotal|floatformat:2 }}</span></div>
+        <div class="row"><span class="l">Tax ({{ invoice.tax_rate }}%)</span><span class="v">{{ invoice.currency }} {{ invoice.tax_amount|floatformat:2 }}</span></div>
+        {% if invoice.discount_amount %}
+          <div class="row"><span class="l">Discount</span><span class="v">- {{ invoice.currency }} {{ invoice.discount_amount|floatformat:2 }}</span></div>
+        {% endif %}
+        <div class="row" style="border-top: 2px solid #0ea5e9; margin-top: 8px; padding-top: 8px;">
+          <span class="l" style="color:#0f172a; font-weight:700;">TOTAL</span>
+          <span class="v" style="color:#0ea5e9; font-size: 16px; font-weight:700;">
+            {{ invoice.currency }} {{ invoice.total|floatformat:2 }}
+          </span>
+        </div>
+      </div>
+
+      {% if invoice.generated_pdf and invoice.generated_pdf.signature_requests.all %}
+      <div class="side" style="margin-top: 14px;">
+        <h4>Signatures</h4>
+        {% for sr in invoice.generated_pdf.signature_requests.all %}
+          <a href="{% url 'signature_request_detail' sr.pk %}"
+             style="display:block; text-decoration: none; color: inherit;
+                    border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px;
+                    margin-bottom: 8px; background:#fafbff;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 4px;">
+              <span style="font-weight:600; font-size:13px; color:#0f172a;">{{ sr.title }}</span>
+              <span class="badge-pill"
+                    style="background:
+                      {% if sr.status == 'completed' %}#dcfce7; color:#166534
+                      {% elif sr.status == 'declined' or sr.status == 'cancelled' or sr.status == 'expired' %}#fee2e2; color:#991b1b
+                      {% elif sr.status == 'sent' or sr.status == 'partial' %}#dbeafe; color:#1e40af
+                      {% else %}#fef3c7; color:#92400e{% endif %};">
+                {{ sr.get_status_display }}
+              </span>
+            </div>
+            <div style="font-size: 11.5px; color:#64748b;">
+              {{ sr.signers.count }} signer{{ sr.signers.count|pluralize }} ·
+              {{ sr.progress_pct }}% complete ·
+              Sent {{ sr.created_at|date:"d M Y" }}
+            </div>
+            {% if sr.signers.all %}
+            <div style="margin-top: 6px; font-size: 11.5px; color:#475569;">
+              {% for s in sr.signers.all|slice:":3" %}
+                {% if s.status == 'signed' %}
+                  <span style="color:#16a34a;"><i class="bi bi-check-circle-fill"></i></span>
+                {% else %}
+                  <span style="color:#94a3b8;"><i class="bi bi-circle"></i></span>
+                {% endif %}
+                {{ s.name }}{% if not forloop.last %}, {% endif %}
+              {% endfor %}
+              {% if sr.signers.count > 3 %}
+                <span style="color:#94a3b8;">+{{ sr.signers.count|add:"-3" }} more</span>
+              {% endif %}
+            </div>
+            {% endif %}
+          </a>
+        {% endfor %}
+        <a href="{% url 'create_signature_request' invoice.generated_pdf.pk %}"
+           style="display:block; text-align: center; padding: 8px;
+                  border: 1px dashed #c4b5fd; border-radius: 8px;
+                  color: #7c3aed; font-size: 12.5px; text-decoration: none;
+                  font-weight: 600; margin-top: 6px;">
+          <i class="bi bi-plus-circle"></i> Send another signature request
+        </a>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

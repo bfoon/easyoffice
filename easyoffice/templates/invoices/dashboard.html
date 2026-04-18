@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Invoices · EasyOffice{% endblock %}
+
+{% block extra_css %}
+<style>
+  .inv-shell { max-width: 1400px; margin: 0 auto; padding: 24px; }
+  .inv-header {
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom: 24px; flex-wrap: wrap; gap: 12px;
+  }
+  .inv-title { font-size: 22px; font-weight: 700; color: var(--eo-text, #0f172a); margin:0;}
+  .inv-sub  { color: var(--eo-text-muted, #64748b); font-size: 13px; margin-top: 2px;}
+
+  .inv-stats {
+    display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px; margin-bottom: 22px;
+  }
+  .inv-stat {
+    background: var(--eo-surface, #fff);
+    border: 1px solid var(--eo-border, #e2e8f0);
+    border-radius: 12px; padding: 16px 18px;
+    display:flex; align-items:center; gap:14px;
+  }
+  .inv-stat .icon {
+    width: 44px; height: 44px; border-radius: 10px;
+    display:flex; align-items:center; justify-content:center;
+    font-size: 22px;
+  }
+  .inv-stat .value { font-size: 22px; font-weight: 700; color: var(--eo-text, #0f172a); line-height:1; }
+  .inv-stat .label { font-size: 12px; color: var(--eo-text-muted, #64748b); margin-top: 4px; }
+
+  .inv-toolbar {
+    display:flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    margin-bottom: 14px;
+    background: var(--eo-surface, #fff);
+    border: 1px solid var(--eo-border, #e2e8f0);
+    border-radius: 10px; padding: 10px 12px;
+  }
+  .inv-toolbar select, .inv-toolbar input[type=text] {
+    padding: 7px 10px; border: 1px solid var(--eo-border, #e2e8f0);
+    border-radius: 8px; font-size: 13px; background: #fff;
+  }
+  .inv-toolbar input[type=text] { min-width: 220px; }
+
+  .inv-table-wrap {
+    background: var(--eo-surface, #fff);
+    border: 1px solid var(--eo-border, #e2e8f0);
+    border-radius: 12px; overflow: hidden;
+  }
+  .inv-table { width: 100%; border-collapse: collapse; }
+  .inv-table th {
+    text-align: left; font-size: 11px; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--eo-text-muted, #64748b);
+    padding: 12px 14px; background: #f8fafc; border-bottom: 1px solid var(--eo-border, #e2e8f0);
+  }
+  .inv-table td {
+    padding: 12px 14px; font-size: 13.5px; color: var(--eo-text, #0f172a);
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .inv-table tr:last-child td { border-bottom: 0; }
+  .inv-table tr:hover td { background: #fafbff; }
+
+  .badge-pill {
+    display:inline-block; padding: 3px 9px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .badge-draft     { background:#fef3c7; color:#92400e; }
+  .badge-finalized { background:#dcfce7; color:#166534; }
+  .badge-voided    { background:#fee2e2; color:#991b1b; text-decoration: line-through; }
+
+  .btn-inv {
+    display:inline-flex; align-items:center; gap:6px;
+    padding: 8px 14px; border-radius: 8px; font-size: 13px;
+    font-weight: 600; text-decoration: none; cursor: pointer;
+    border: 1px solid transparent; transition: all .15s;
+  }
+  .btn-inv.primary { background: #0ea5e9; color:#fff; }
+  .btn-inv.primary:hover { background: #0284c7; }
+  .btn-inv.ghost { background:#fff; color: var(--eo-text, #0f172a); border-color: var(--eo-border, #e2e8f0); }
+  .btn-inv.ghost:hover { background: #f8fafc; }
+
+  .empty-state {
+    padding: 60px 30px; text-align: center; color: var(--eo-text-muted, #64748b);
+  }
+  .empty-state i { font-size: 42px; color: #cbd5e1; }
+  .empty-state h3 { margin: 12px 0 6px; font-size: 16px; color: var(--eo-text, #0f172a); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="inv-shell">
+
+  <div class="inv-header">
+    <div>
+      <h1 class="inv-title">Invoice Generator</h1>
+      <div class="inv-sub">All invoices, proformas and delivery notes for {{ year }}.</div>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <a href="{% url 'file_manager' %}" class="btn-inv ghost">
+        <i class="bi bi-folder2"></i> Back to Files
+      </a>
+      <a href="{% url 'template_list' %}" class="btn-inv ghost">
+        <i class="bi bi-collection"></i> Templates
+      </a>
+      <a href="{% url 'invoice_new' %}" class="btn-inv primary">
+        <i class="bi bi-plus-lg"></i> New Invoice
+      </a>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="inv-stats">
+    <div class="inv-stat">
+      <div class="icon" style="background:#e0f2fe;color:#0284c7;"><i class="bi bi-receipt"></i></div>
+      <div>
+        <div class="value">{{ total_count }}</div>
+        <div class="label">Finalized in {{ year }}</div>
+      </div>
+    </div>
+    <div class="inv-stat">
+      <div class="icon" style="background:#dcfce7;color:#15803d;"><i class="bi bi-cash-stack"></i></div>
+      <div>
+        <div class="value">{{ total_value|floatformat:2 }}</div>
+        <div class="label">Total value ({{ year }})</div>
+      </div>
+    </div>
+    {% for key, info in by_type.items %}
+    <div class="inv-stat">
+      <div class="icon" style="background:#ede9fe;color:#6d28d9;"><i class="bi bi-file-earmark-text"></i></div>
+      <div>
+        <div class="value">{{ info.count }}</div>
+        <div class="label">{{ info.label }} ({{ info.prefix }})</div>
+      </div>
+    </div>
+    {% endfor %}
+    <div class="inv-stat">
+      <div class="icon" style="background:#fef3c7;color:#b45309;"><i class="bi bi-pencil-square"></i></div>
+      <div>
+        <div class="value">{{ draft_count }}</div>
+        <div class="label">Drafts</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Filters -->
+  <form method="get" class="inv-toolbar">
+    <select name="doc_type">
+      <option value="">All Types</option>
+      {% for val, label in doc_type_choices %}
+        <option value="{{ val }}" {% if doc_filter == val %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <select name="status">
+      <option value="">All Statuses</option>
+      {% for val, label in status_choices %}
+        <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <input type="text" name="q" placeholder="Search number, client, PO…" value="{{ search }}">
+    <button type="submit" class="btn-inv ghost"><i class="bi bi-funnel"></i> Filter</button>
+    {% if doc_filter or status_filter or search %}
+      <a href="{% url 'invoice_dashboard' %}" class="btn-inv ghost"><i class="bi bi-x-lg"></i> Clear</a>
+    {% endif %}
+  </form>
+
+  <!-- Table -->
+  <div class="inv-table-wrap">
+    {% if invoices %}
+    <table class="inv-table">
+      <thead>
+        <tr>
+          <th>Number</th><th>Type</th><th>Client</th><th>Date</th>
+          <th style="text-align:right">Total</th><th>Status</th><th>Signature</th><th>Created by</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for inv in invoices %}
+        <tr>
+          <td style="font-weight:600">
+            {% if inv.number %}{{ inv.number }}{% else %}<span style="color:#94a3b8">{{ inv.preview_number }}</span>{% endif %}
+          </td>
+          <td>{{ inv.get_doc_type_display }}</td>
+          <td>{{ inv.client_name|default:"—" }}</td>
+          <td>{{ inv.invoice_date|date:"d M Y" }}</td>
+          <td style="text-align:right; font-variant-numeric: tabular-nums">
+            {{ inv.currency }} {{ inv.total|floatformat:2 }}
+          </td>
+          <td>
+            {% if inv.status == 'draft' %}
+              <span class="badge-pill badge-draft">Draft</span>
+            {% elif inv.status == 'finalized' %}
+              <span class="badge-pill badge-finalized">Finalized</span>
+            {% else %}
+              <span class="badge-pill badge-voided">Voided</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if inv.generated_pdf %}
+              {% with srs=inv.generated_pdf.signature_requests.all %}
+                {% if srs %}
+                  {% with latest=srs|first %}
+                    <span class="badge-pill"
+                          style="background:
+                            {% if latest.status == 'completed' %}#dcfce7; color:#166534
+                            {% elif latest.status == 'declined' or latest.status == 'cancelled' or latest.status == 'expired' %}#fee2e2; color:#991b1b
+                            {% elif latest.status == 'sent' or latest.status == 'partial' %}#dbeafe; color:#1e40af
+                            {% else %}#fef3c7; color:#92400e{% endif %};">
+                      <i class="bi bi-pen"></i> {{ latest.get_status_display }}
+                    </span>
+                  {% endwith %}
+                {% else %}
+                  <span style="color:#cbd5e1; font-size: 11px;">—</span>
+                {% endif %}
+              {% endwith %}
+            {% else %}
+              <span style="color:#cbd5e1; font-size: 11px;">—</span>
+            {% endif %}
+          </td>
+          <td style="color:#64748b">{{ inv.created_by.full_name|default:inv.created_by.username }}</td>
+          <td style="text-align:right; white-space:nowrap">
+            {% if inv.is_draft %}
+              <a href="{% url 'invoice_edit' inv.pk %}" class="btn-inv ghost" style="padding:5px 10px">
+                <i class="bi bi-pencil"></i> Edit
+              </a>
+            {% else %}
+              <a href="{% url 'invoice_detail' inv.pk %}" class="btn-inv ghost" style="padding:5px 10px">
+                <i class="bi bi-eye"></i> View
+              </a>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="empty-state">
+        <i class="bi bi-receipt"></i>
+        <h3>No invoices yet</h3>
+        <p>Create your first invoice, proforma or delivery note.</p>
+        <a href="{% url 'invoice_new' %}" class="btn-inv primary" style="margin-top:10px">
+          <i class="bi bi-plus-lg"></i> New Invoice
+        </a>
+      </div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

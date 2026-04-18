@@ -61,10 +61,42 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
   transition:box-shadow .2s}
 .page:hover{box-shadow:0 8px 50px rgba(13,27,42,.22)}
 .page-body{flex:1;padding:20px 30px;font-size:11px;color:#444;line-height:1.9;
-  outline:none;min-height:200px}
+  outline:none;min-height:200px;position:relative}
 .page-body:focus{outline:2px solid var(--primary-l);outline-offset:-2px}
 .page-body p{margin-bottom:11px}
 .placeholder-text{color:#b0bec5!important;font-style:italic}
+
+/* ── Move Mode: free-form Canva-style positioning ───────── */
+.page-body.move-mode{
+  background-image: linear-gradient(rgba(26,127,94,0.04) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(26,127,94,0.04) 1px, transparent 1px);
+  background-size: 20px 20px;
+  cursor: default;
+}
+.page-body.move-mode .dg-el{
+  cursor: grab;
+  transition: box-shadow .15s, outline .15s;
+}
+.page-body.move-mode .dg-el:hover{
+  outline: 2px dashed var(--primary);
+  outline-offset: 2px;
+}
+.page-body.move-mode .dg-el.mm-selected{
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  box-shadow: 0 4px 16px rgba(26,127,94,.2);
+}
+.page-body.move-mode .dg-el:active{cursor: grabbing}
+/* Resize handle in move mode */
+.mm-resize{
+  position:absolute;right:-5px;bottom:-5px;width:12px;height:12px;
+  background:var(--primary);border:2px solid #fff;border-radius:3px;
+  cursor:nwse-resize;display:none;z-index:10;
+}
+.page-body.move-mode .dg-el.mm-selected .mm-resize{display:block}
+/* "Move mode ON" toolbar button state */
+.tb-btn.on{background:var(--primary)!important;color:#fff!important;border-color:var(--primary)!important}
+#tb-move.on{background:var(--primary)!important;color:#fff!important}
 
 /* ── Buttons ────────────────────────────────────────────── */
 .btn{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;
@@ -775,6 +807,8 @@ function buildToolbar(){
     <button class="tb-btn" onclick="insertTable()" title="Insert table"><i class="bi bi-table"></i></button>
     <button class="tb-btn pri" onclick="openIconPicker()" title="Insert icon" style="background:var(--primary-l);border-color:var(--primary);color:var(--primary)"><i class="bi bi-emoji-smile"></i></button>
     <div class="ct-sep"></div>
+    <button class="tb-btn" id="tb-move" onclick="toggleMoveMode()" title="Move mode — drag elements freely around the page (Canva-style)"><i class="bi bi-arrows-move"></i> <span style="font-size:10px">Move</span></button>
+    <div class="ct-sep"></div>
     <button class="tb-btn" onclick="deleteSelectedElement()" title="Delete selected element" style="color:var(--danger)"><i class="bi bi-trash3"></i></button>
     <button class="btn xs" onclick="clearBody()" title="Clear all body text" style="margin-left:2px"><i class="bi bi-file-earmark-x"></i> Clear</button>
   </div>`;
@@ -900,8 +934,23 @@ function renderPreview(t){
     ftr=`<div style="border-top:3px double ${p};padding:9px;text-align:center;font-size:9px;color:#aaa;letter-spacing:.03em">${esc(t.contact_info||'')}</div>`;
   }
 
-  // Preserve existing body if page already rendered
-  const existingBody=document.getElementById('page-body')?.innerHTML||defaultBodyHtml();
+  // Body content persistence. Priority:
+  //   1. Existing DOM body (if already rendered) — keep the live edits
+  //   2. Server-saved t.body_html — authoritative store, syncs across devices
+  //   3. localStorage fallback — in case server-side is unavailable
+  //   4. Default placeholder
+  const LS_KEY = 'lh_body_' + (t.id||'_new');
+  let existingBody = document.getElementById('page-body')?.innerHTML;
+  if(!existingBody || existingBody.trim()===''){
+    if(t.body_html && t.body_html.trim()){
+      existingBody = t.body_html;
+    } else {
+      try{
+        const saved = localStorage.getItem(LS_KEY);
+        existingBody = saved || defaultBodyHtml();
+      } catch(e){ existingBody = defaultBodyHtml(); }
+    }
+  }
 
   canvas.innerHTML=buildToolbar()+`
     <div class="page" id="page" style="font-family:${fb},Arial,sans-serif">
@@ -913,12 +962,38 @@ function renderPreview(t){
       ${ftr}
     </div>`;
 
-  // Attach toolbar state updater
-  document.getElementById('page-body').addEventListener('keyup',updateToolbarState);
-  document.getElementById('page-body').addEventListener('mouseup',updateToolbarState);
-  document.getElementById('page-body').addEventListener('selectionchange',updateToolbarState);
+  // Attach toolbar state updater + body autosave
+  const pb = document.getElementById('page-body');
+  pb.addEventListener('keyup',updateToolbarState);
+  pb.addEventListener('mouseup',updateToolbarState);
+  pb.addEventListener('selectionchange',updateToolbarState);
+  // Autosave body content to localStorage as user types / drags
+  pb.addEventListener('input',  ()=>_debouncedSaveBody(t.id));
+  pb.addEventListener('blur',   ()=>_saveBodyNow(t.id));
+  // Also save after drag/drop/move changes the DOM
+  if(!pb._autosaveObserver){
+    pb._autosaveObserver = new MutationObserver(()=>_debouncedSaveBody(t.id));
+    pb._autosaveObserver.observe(pb, {childList:true, subtree:true, attributes:true, characterData:true});
+  }
   // Init draggables on existing elements
   setTimeout(initDraggables,50);
+}
+
+/* ─── Body content persistence ──────────────────────────── */
+let _saveBodyTimer = null;
+function _debouncedSaveBody(templateId){
+  clearTimeout(_saveBodyTimer);
+  _saveBodyTimer = setTimeout(()=>_saveBodyNow(templateId), 400);
+}
+function _saveBodyNow(templateId){
+  const pb = document.getElementById('page-body');
+  if(!pb) return;
+  try{
+    const html = pb.innerHTML;
+    // Don't save the info-banner that appears in move mode
+    const clean = html.replace(/<div[^>]*class=["']mm-info["'][^>]*>.*?<\/div>/gi, '');
+    localStorage.setItem('lh_body_' + (templateId||'_new'), clean);
+  } catch(e){ /* quota exceeded or SSR — ignore */ }
 }
 
 function _hex_to_rgb_css(hex){
@@ -956,6 +1031,13 @@ function gather(){
     template_key:(document.querySelector('.scard.on')||{}).dataset?.k||'classic',
     logo_url:currentData.logo_url||null,
     is_active:currentData.is_active||false,
+    // Body content — sent to server so it persists and can be included in exports.
+    // Strips the transient move-mode info banner if present.
+    body_html:(()=>{
+      const pb=document.getElementById('page-body');
+      if(!pb) return currentData.body_html||'';
+      return pb.innerHTML.replace(/<div[^>]*class=["']mm-info["'][^>]*>[\s\S]*?<\/div>/gi,'');
+    })(),
   };
 }
 
@@ -1125,6 +1207,56 @@ const SAMPLES=[
    address:'Industrial Zone, Kanifing\nThe Gambia',contact_info:'+220 702 9876 | info@buildright.gm',
    template_key:'bold',color_primary:'#dc2626',color_secondary:'#111827',
    font_header:'Trebuchet MS',font_body:'Arial',bg:'linear-gradient(135deg,#dc2626,#111827)'},
+
+  {name:'Financial Services',company:'Gambia Capital Partners',tagline:'Growing Wealth · Building Futures',
+   address:'ECOWAS Avenue\nBanjul, The Gambia',contact_info:'+220 446 7890 | invest@gamcap.gm',
+   template_key:'modern',color_primary:'#047857',color_secondary:'#1f2937',
+   font_header:'Georgia',font_body:'Arial',bg:'linear-gradient(135deg,#047857,#1f2937)'},
+
+  {name:'Media & Publishing',company:'The Daily Observer',tagline:'News That Informs · Stories That Matter',
+   address:'Press Centre, Bakau\nThe Gambia',contact_info:'+220 495 1122 | editor@dailyobserver.gm',
+   template_key:'classic',color_primary:'#1f2937',color_secondary:'#000000',
+   font_header:"'Times New Roman'",font_body:'Georgia',bg:'linear-gradient(135deg,#1f2937,#000000)'},
+
+  {name:'Restaurant',company:'Café Atlantique',tagline:'Fresh · Local · Unforgettable',
+   address:'Kololi Beach Road\nThe Gambia',contact_info:'+220 778 4455 | bonjour@cafeatlantique.gm',
+   template_key:'elegant',color_primary:'#166534',color_secondary:'#422006',
+   font_header:'Palatino',font_body:'Georgia',bg:'linear-gradient(135deg,#166534,#422006)'},
+
+  {name:'Consulting Group',company:'Jallow Strategy Consulting',tagline:'Insight · Strategy · Results',
+   address:'Pipeline Junction, Serrekunda\nThe Gambia',contact_info:'+220 301 5566 | info@jallow-strategy.com',
+   template_key:'minimal',color_primary:'#1e40af',color_secondary:'#1e293b',
+   font_header:'Georgia',font_body:'Arial',bg:'linear-gradient(135deg,#1e40af,#1e293b)'},
+
+  {name:'Real Estate',company:'Gambia Premier Properties',tagline:'Your Home · Our Commitment',
+   address:'Bertil Harding Highway\nThe Gambia',contact_info:'+220 812 3344 | sales@gppgm.com',
+   template_key:'split',color_primary:'#be185d',color_secondary:'#1f2937',
+   font_header:'Trebuchet MS',font_body:'Verdana',bg:'linear-gradient(135deg,#be185d,#1f2937)'},
+
+  {name:'Fashion & Design',company:'Njie Atelier',tagline:'Couture rooted in heritage',
+   address:'Fajara Market District\nThe Gambia',contact_info:'+220 299 8877 | studio@njieatelier.gm',
+   template_key:'minimal',color_primary:'#9333ea',color_secondary:'#4c1d95',
+   font_header:'Palatino',font_body:'Georgia',bg:'linear-gradient(135deg,#9333ea,#4c1d95)'},
+
+  {name:'Transport & Logistics',company:'SeneGambia Freight Ltd',tagline:'Moving Business Forward',
+   address:'Port of Banjul\nThe Gambia',contact_info:'+220 422 5566 | ops@sgfreight.gm',
+   template_key:'bold',color_primary:'#ea580c',color_secondary:'#0f172a',
+   font_header:'Arial',font_body:'Arial',bg:'linear-gradient(135deg,#ea580c,#0f172a)'},
+
+  {name:'Agricultural Co-op',company:'Kombo Farmers Cooperative',tagline:'Sowing growth · Reaping prosperity',
+   address:'Brikama Main Road\nThe Gambia',contact_info:'+220 440 1122 | info@komboco-op.gm',
+   template_key:'classic',color_primary:'#65a30d',color_secondary:'#365314',
+   font_header:'Georgia',font_body:'Verdana',bg:'linear-gradient(135deg,#65a30d,#365314)'},
+
+  {name:'Creative Agency',company:'Mbalax Creative',tagline:'Stories. Design. Motion.',
+   address:'Senegambia Strip\nThe Gambia',contact_info:'+220 888 4321 | hi@mbalax.design',
+   template_key:'split',color_primary:'#0ea5e9',color_secondary:'#0c4a6e',
+   font_header:'Trebuchet MS',font_body:'Arial',bg:'linear-gradient(135deg,#0ea5e9,#0c4a6e)'},
+
+  {name:'Charity / Foundation',company:'Hope for Gambia Foundation',tagline:'Changing lives, one child at a time',
+   address:'Kanifing Estate\nThe Gambia',contact_info:'+220 220 3344 | donate@hope4gambia.org',
+   template_key:'elegant',color_primary:'#0d9488',color_secondary:'#134e4a',
+   font_header:'Georgia',font_body:'Georgia',bg:'linear-gradient(135deg,#0d9488,#134e4a)'},
 ];
 
 function buildSamplesGrid(){
@@ -1312,13 +1444,203 @@ function elToolbar(uid, label){
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   DRAG & DROP — reorder block elements inside page-body
-   ═══════════════════════════════════════════════════════════════════════ */
-let _dragEl=null, _dragClone=null, _savedEditable=null;
+   MOVE MODE — Canva-style free positioning for body elements.
 
-/* Attach mousedown handlers to drag handles. Idempotent — safe to call
-   many times. Also sets up a MutationObserver so that elements added
-   later (e.g. from insertHtml, renderPreview) are wired up automatically. */
+   Two modes:
+   1. Edit mode (default): page-body is contenteditable. User types freely.
+      The ⠿ handle on each element still works for VERTICAL reordering.
+   2. Move mode: page-body is NOT contenteditable. Each element becomes
+      absolutely positioned and can be dragged anywhere by grabbing any
+      part of it. A selection handle allows resizing from the corner.
+
+   Toggle via the Move button in the body toolbar.
+   ═══════════════════════════════════════════════════════════════════════ */
+let _moveMode = false;
+let _mmSelected = null;     // currently-selected element in move mode
+let _dragEl = null;
+
+function toggleMoveMode(){
+  _moveMode = !_moveMode;
+  const body = document.getElementById('page-body');
+  const btn  = document.getElementById('tb-move');
+  if(!body)return;
+
+  if(_moveMode){
+    // Enter move mode: lock editing, convert elements to absolute positioning
+    body.classList.add('move-mode');
+    body.setAttribute('contenteditable','false');
+    btn?.classList.add('on');
+    _convertElementsToAbsolute(body);
+    toast('Move mode ON — drag elements freely');
+  } else {
+    // Exit move mode: restore editability
+    body.classList.remove('move-mode');
+    body.setAttribute('contenteditable','true');
+    btn?.classList.remove('on');
+    _clearSelection();
+    toast('Move mode OFF');
+  }
+}
+
+/* Switch every draggable to position:absolute, preserving its current
+   visual layout (top/left computed from its bounding rect). */
+function _convertElementsToAbsolute(body){
+  const bodyRect = body.getBoundingClientRect();
+  body.querySelectorAll('[data-draggable="true"]').forEach(el=>{
+    const rect = el.getBoundingClientRect();
+    // Snapshot the current inline dimensions so it doesn't collapse
+    const w = rect.width;
+    const h = rect.height;
+    const top  = rect.top  - bodyRect.top  + body.scrollTop;
+    const left = rect.left - bodyRect.left + body.scrollLeft;
+    el.style.position = 'absolute';
+    el.style.left   = left + 'px';
+    el.style.top    = top  + 'px';
+    el.style.width  = w    + 'px';
+    el.style.margin = '0';
+    if(!el.querySelector('.mm-resize')){
+      const h = document.createElement('div');
+      h.className = 'mm-resize';
+      h.setAttribute('contenteditable','false');
+      el.appendChild(h);
+    }
+  });
+  // Ensure body has enough height to contain absolutely-positioned children
+  body.style.minHeight = Math.max(parseInt(getComputedStyle(body).minHeight)||0, 600) + 'px';
+  _wireMoveMode(body);
+}
+
+function _wireMoveMode(body){
+  if(body._mmWired)return;
+  body._mmWired = true;
+  body.addEventListener('mousedown', _mmMouseDown);
+  body.addEventListener('touchstart', _mmTouchStart, {passive:false});
+  // Deselect when clicking empty area
+  body.addEventListener('click', e=>{
+    if(!_moveMode)return;
+    if(e.target===body){ _clearSelection(); }
+  });
+}
+
+function _clearSelection(){
+  if(_mmSelected){ _mmSelected.classList.remove('mm-selected'); _mmSelected=null; }
+}
+
+function _findDgEl(target){
+  while(target && target.nodeType===1){
+    if(target.matches && target.matches('[data-draggable="true"]'))return target;
+    target = target.parentElement;
+  }
+  return null;
+}
+
+function _mmMouseDown(e){
+  if(!_moveMode || e.button!==0)return;
+  // Resize handle?
+  if(e.target && e.target.classList && e.target.classList.contains('mm-resize')){
+    e.preventDefault(); e.stopPropagation();
+    const el = _findDgEl(e.target);
+    if(el){ _startResize(e.clientX, e.clientY, el); }
+    return;
+  }
+  const el = _findDgEl(e.target);
+  if(!el)return;
+  e.preventDefault(); e.stopPropagation();
+  _clearSelection();
+  el.classList.add('mm-selected');
+  _mmSelected = el;
+  _startMove(e.clientX, e.clientY, el);
+}
+
+function _mmTouchStart(e){
+  if(!_moveMode || !e.touches || !e.touches.length)return;
+  const t = e.touches[0];
+  if(t.target && t.target.classList && t.target.classList.contains('mm-resize')){
+    e.preventDefault(); e.stopPropagation();
+    const el = _findDgEl(t.target);
+    if(el) _startResize(t.clientX, t.clientY, el, true);
+    return;
+  }
+  const el = _findDgEl(t.target);
+  if(!el)return;
+  e.preventDefault(); e.stopPropagation();
+  _clearSelection();
+  el.classList.add('mm-selected');
+  _mmSelected = el;
+  _startMove(t.clientX, t.clientY, el, true);
+}
+
+function _startMove(startX, startY, el, isTouch){
+  const rect = el.getBoundingClientRect();
+  const startLeft = parseFloat(el.style.left)||0;
+  const startTop  = parseFloat(el.style.top)||0;
+  const body = document.getElementById('page-body');
+  const bodyRect = body.getBoundingClientRect();
+  const maxLeft = body.clientWidth  - rect.width;
+  const maxTop  = body.clientHeight - rect.height;
+
+  const onMove = ev => {
+    const x = ev.touches ? ev.touches[0].clientX : ev.clientX;
+    const y = ev.touches ? ev.touches[0].clientY : ev.clientY;
+    let newLeft = startLeft + (x - startX);
+    let newTop  = startTop  + (y - startY);
+    // Clamp to body bounds (plus small margin)
+    newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+    newTop  = Math.max(0, Math.min(newTop,  maxTop));
+    el.style.left = newLeft + 'px';
+    el.style.top  = newTop  + 'px';
+    if(ev.preventDefault) ev.preventDefault();
+  };
+  const onUp = () => _teardown();
+  const _teardown = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup',   onUp);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend',  onUp);
+  };
+  if(isTouch){
+    document.addEventListener('touchmove', onMove, {passive:false});
+    document.addEventListener('touchend',  onUp);
+  } else {
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  }
+}
+
+function _startResize(startX, startY, el, isTouch){
+  const rect = el.getBoundingClientRect();
+  const startW = rect.width;
+  const startH = rect.height;
+  const onMove = ev => {
+    const x = ev.touches ? ev.touches[0].clientX : ev.clientX;
+    const y = ev.touches ? ev.touches[0].clientY : ev.clientY;
+    const newW = Math.max(60, startW + (x - startX));
+    const newH = Math.max(30, startH + (y - startY));
+    el.style.width  = newW + 'px';
+    el.style.height = newH + 'px';
+    if(ev.preventDefault) ev.preventDefault();
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup',   onUp);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend',  onUp);
+  };
+  if(isTouch){
+    document.addEventListener('touchmove', onMove, {passive:false});
+    document.addEventListener('touchend',  onUp);
+  } else {
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   EDIT-MODE VERTICAL REORDER (legacy handle-based drag)
+   Still works when move-mode is off and the user drags the ⠿ handle.
+   ═══════════════════════════════════════════════════════════════════════ */
+let _savedEditable=null;
+
 function initDraggables(){
   const body=document.getElementById('page-body');
   if(!body)return;
@@ -1335,16 +1657,14 @@ function _wireHandlesIn(body){
     el._dragInit=true;
     const handle=el.querySelector('.el-drag-handle');
     if(handle){
-      // Use mousedown to start drag. preventDefault stops contenteditable
-      // from placing the caret / starting text selection.
       const onDown=e=>{
-        if(e.button!==0)return;                // left-click only
+        if(e.button!==0||_moveMode)return;
         e.preventDefault();e.stopPropagation();
         startDrag(e,el);
       };
       handle.addEventListener('mousedown',onDown);
-      // Touch support (basic): translate touchstart to mousedown-style
       handle.addEventListener('touchstart',e=>{
+        if(_moveMode)return;
         if(!e.touches||!e.touches.length)return;
         e.preventDefault();e.stopPropagation();
         const t=e.touches[0];
@@ -1357,9 +1677,6 @@ function _wireHandlesIn(body){
 function startDrag(e, el, isTouch){
   _dragEl=el;
   el.classList.add('drag-ghost');
-
-  // Disable contenteditable + text selection while dragging so the
-  // browser doesn't fight us with caret placement / text selection.
   const body=document.getElementById('page-body');
   if(body){
     _savedEditable=body.getAttribute('contenteditable');
@@ -1407,14 +1724,12 @@ function startDrag(e, el, isTouch){
     cleanup();
     if(!_dragEl)return;
     _dragEl.classList.remove('drag-ghost');
-
     const body=document.getElementById('page-body');
     const before=body?.querySelector('.drop-before');
     const after=body?.querySelector('.drop-after');
     body?.querySelectorAll('.drop-before,.drop-after').forEach(c=>{
       c.classList.remove('drop-before','drop-after');
     });
-
     if(before&&before!==_dragEl){
       body.insertBefore(_dragEl,before);
     } else if(after&&after!==_dragEl){

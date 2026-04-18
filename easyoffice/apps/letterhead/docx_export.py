@@ -114,6 +114,638 @@ def _logo_path(template: LetterheadTemplate):
             return None
 
 
+# ── HTML body parsing ──────────────────────────────────────────────────────
+# The builder stores the user-edited body as HTML. For exports we need to
+# convert that HTML back into a format the target engine understands.
+#
+# _strip_transient_html removes UI-only decorations (drag handles, toolbars,
+# move-mode banner) that have no place in the exported output.
+#
+# _html_to_docx_paragraphs — walks the HTML, appending paragraphs and runs to
+# a python-docx Document so headings, bold/italic/underline, and lists are
+# preserved. Unsupported tags fall back to plain text.
+#
+# _html_to_pdf_flowables — produces a list of ReportLab flowables (Paragraph,
+# Spacer, Table) that can be drawn into a PDF with a Frame.
+
+def _strip_transient_html(html: str) -> str:
+    """Remove builder UI chrome that shouldn't appear in exports."""
+    if not html:
+        return ""
+    import re as _re
+    # Remove move-mode info banner, element toolbars, drag handles
+    html = _re.sub(r'<div[^>]*class=["\'][^"\']*\bmm-info\b[^"\']*["\'][^>]*>[\s\S]*?</div>',
+                   '', html, flags=_re.I)
+    html = _re.sub(r'<div[^>]*class=["\'][^"\']*\bel-toolbar\b[^"\']*["\'][^>]*>[\s\S]*?</div>',
+                   '', html, flags=_re.I)
+    html = _re.sub(r'<div[^>]*class=["\'][^"\']*\bmm-resize\b[^"\']*["\'][^>]*>[\s\S]*?</div>',
+                   '', html, flags=_re.I)
+    # Strip class/style attributes that are builder-specific
+    html = _re.sub(r'\sdata-uid=["\'][^"\']*["\']', '', html, flags=_re.I)
+    html = _re.sub(r'\sdata-draggable=["\'][^"\']*["\']', '', html, flags=_re.I)
+    return html
+
+
+# ── Bootstrap Icon → Unicode mapping ────────────────────────────────────────
+# Bootstrap Icons uses a custom webfont. Since Word/PDF don't have that
+# font, we substitute sensible Unicode characters for common icons. Any
+# icon not in this map falls back to a bullet character ●.
+#
+# Coverage is pragmatic: the most common ~80 icons users insert in
+# letterheads (checks, arrows, stars, common objects, social/contact
+# symbols). Extend this map as needed.
+
+_BI_TO_UNICODE = {
+    # Checks & crosses
+    "bi-check": "✓", "bi-check-lg": "✓", "bi-check2": "✓",
+    "bi-check-circle": "✓", "bi-check-circle-fill": "✓",
+    "bi-check-square": "☑", "bi-check-square-fill": "☑",
+    "bi-x": "✗", "bi-x-lg": "✗", "bi-x-circle": "✗", "bi-x-circle-fill": "✗",
+    # Stars & awards
+    "bi-star": "☆", "bi-star-fill": "★", "bi-stars": "✨",
+    "bi-trophy": "🏆", "bi-trophy-fill": "🏆", "bi-award": "🏅", "bi-award-fill": "🏅",
+    # Arrows
+    "bi-arrow-up": "↑", "bi-arrow-down": "↓", "bi-arrow-left": "←", "bi-arrow-right": "→",
+    "bi-arrow-up-right": "↗", "bi-arrow-down-right": "↘",
+    "bi-chevron-up": "‹", "bi-chevron-down": "›",
+    "bi-arrow-right-circle": "➤", "bi-arrow-right-circle-fill": "➤",
+    # Hearts & faces
+    "bi-heart": "♡", "bi-heart-fill": "♥",
+    "bi-emoji-smile": "🙂", "bi-emoji-smile-fill": "😀", "bi-emoji-heart-eyes": "😍",
+    # Contact
+    "bi-telephone": "☎", "bi-telephone-fill": "☎",
+    "bi-envelope": "✉", "bi-envelope-fill": "✉", "bi-at": "@",
+    "bi-globe": "🌐", "bi-globe2": "🌐",
+    "bi-geo-alt": "📍", "bi-geo-alt-fill": "📍", "bi-pin-map": "📌", "bi-pin-map-fill": "📌",
+    # Time & calendar
+    "bi-clock": "⏰", "bi-clock-fill": "⏰", "bi-alarm": "⏰", "bi-alarm-fill": "⏰",
+    "bi-calendar": "📅", "bi-calendar-fill": "📅",
+    "bi-calendar-check": "📅", "bi-calendar-event": "📅",
+    # Documents
+    "bi-file": "📄", "bi-file-fill": "📄",
+    "bi-file-earmark": "📄", "bi-file-earmark-fill": "📄",
+    "bi-file-text": "📄", "bi-file-text-fill": "📄",
+    "bi-files": "📑", "bi-folder": "📁", "bi-folder-fill": "📁",
+    "bi-book": "📖", "bi-book-fill": "📖", "bi-journal-text": "📓",
+    "bi-clipboard": "📋", "bi-clipboard-fill": "📋", "bi-clipboard-check": "📋",
+    # People & orgs
+    "bi-person": "👤", "bi-person-fill": "👤",
+    "bi-people": "👥", "bi-people-fill": "👥",
+    "bi-building": "🏢", "bi-building-fill": "🏢",
+    "bi-bank": "🏛", "bi-bank2": "🏛",
+    "bi-briefcase": "💼", "bi-briefcase-fill": "💼",
+    # Money
+    "bi-cash": "💵", "bi-cash-stack": "💵", "bi-currency-dollar": "$",
+    "bi-credit-card": "💳", "bi-credit-card-fill": "💳",
+    "bi-graph-up": "📈", "bi-graph-up-arrow": "📈", "bi-graph-down": "📉",
+    # Tech & web
+    "bi-wifi": "📶", "bi-shield": "🛡", "bi-shield-fill": "🛡",
+    "bi-shield-check": "🛡", "bi-lock": "🔒", "bi-lock-fill": "🔒",
+    "bi-unlock": "🔓", "bi-key": "🔑", "bi-key-fill": "🔑",
+    # Misc common
+    "bi-info-circle": "ℹ", "bi-info-circle-fill": "ℹ",
+    "bi-exclamation-circle": "⚠", "bi-exclamation-triangle": "⚠",
+    "bi-question-circle": "?", "bi-question-circle-fill": "?",
+    "bi-lightbulb": "💡", "bi-lightbulb-fill": "💡",
+    "bi-gear": "⚙", "bi-gear-fill": "⚙",
+    "bi-flag": "⚑", "bi-flag-fill": "⚑",
+    "bi-bell": "🔔", "bi-bell-fill": "🔔",
+    "bi-bookmark": "🔖", "bi-bookmark-fill": "🔖",
+    "bi-pencil": "✏", "bi-pencil-fill": "✏", "bi-pen": "🖊", "bi-pen-fill": "🖊",
+    "bi-printer": "🖨", "bi-printer-fill": "🖨",
+    "bi-camera": "📷", "bi-camera-fill": "📷",
+    "bi-image": "🖼", "bi-image-fill": "🖼",
+    "bi-music-note": "♪", "bi-music-note-beamed": "♫",
+    "bi-search": "🔍",
+    "bi-three-dots": "⋯", "bi-three-dots-vertical": "⋮",
+    "bi-dot": "•", "bi-circle-fill": "●", "bi-circle": "○",
+    "bi-square-fill": "■", "bi-square": "□",
+    "bi-triangle-fill": "▲", "bi-triangle": "△",
+    "bi-plus": "+", "bi-plus-lg": "+", "bi-plus-circle": "⊕", "bi-plus-circle-fill": "⊕",
+    "bi-dash": "−", "bi-dash-lg": "−", "bi-dash-circle": "⊖",
+    "bi-cart": "🛒", "bi-cart-fill": "🛒", "bi-bag": "🛍", "bi-bag-fill": "🛍",
+    "bi-truck": "🚚", "bi-airplane": "✈", "bi-airplane-fill": "✈",
+    "bi-house": "🏠", "bi-house-fill": "🏠",
+    "bi-cup": "☕", "bi-cup-hot": "☕", "bi-cup-fill": "☕",
+    # Social (use Unicode circled letters as placeholders — most
+    # fonts won't have the brand glyphs; these are better than
+    # missing-square boxes)
+    "bi-facebook": "f", "bi-twitter": "𝕏", "bi-twitter-x": "𝕏",
+    "bi-instagram": "📷", "bi-linkedin": "in", "bi-youtube": "▶",
+    "bi-github": "⌨", "bi-whatsapp": "💬",
+}
+_FALLBACK_ICON_CHAR = "●"
+
+def _bi_to_unicode(class_attr: str) -> str:
+    """Return a Unicode character for the first bi-* class found, or a
+    fallback bullet. Accepts the raw ``class="..."`` attribute value."""
+    if not class_attr:
+        return _FALLBACK_ICON_CHAR
+    for cls in class_attr.split():
+        if cls in _BI_TO_UNICODE:
+            return _BI_TO_UNICODE[cls]
+    return _FALLBACK_ICON_CHAR
+
+
+def _replace_icons_with_unicode(html: str) -> str:
+    """
+    Replace every ``<i class="bi bi-..." ...></i>`` (Bootstrap Icon) with
+    the matching Unicode character wrapped in a <span> that preserves its
+    inline style (colour, font-size) so downstream parsers don't treat
+    it as an italic element.
+    """
+    if not html:
+        return ""
+    import re as _re
+    pattern = _re.compile(
+        r'<i\b([^>]*\bclass\s*=\s*["\'][^"\']*\bbi\b[^"\']*["\'][^>]*)>[^<]*</i>',
+        _re.I,
+    )
+
+    def _sub(m):
+        attrs = m.group(1)
+        # Pull class value
+        cls_m = _re.search(r'class\s*=\s*["\']([^"\']*)["\']', attrs, _re.I)
+        cls_val = cls_m.group(1) if cls_m else ""
+        ch = _bi_to_unicode(cls_val)
+        # Keep style if present (e.g. colour, size)
+        style_m = _re.search(r'style\s*=\s*["\']([^"\']*)["\']', attrs, _re.I)
+        style = style_m.group(1) if style_m else ""
+        style_attr = f' style="{style}"' if style else ""
+        return f'<span class="bi-icon"{style_attr}>{ch}</span>'
+
+    return pattern.sub(_sub, html)
+
+
+def _html_to_docx_paragraphs(html: str, doc, body_font: str = "Arial"):
+    """
+    Convert a chunk of HTML into python-docx paragraphs appended to ``doc``.
+    Supports: <p>, <h1>-<h6>, <ul>/<ol>/<li>, <b>/<strong>, <i>/<em>,
+    <u>, <br>, <hr>, <table>/<tr>/<td>/<th>, and Bootstrap Icons
+    (<i class="bi bi-..."> → Unicode character).
+    """
+    if not html or not html.strip():
+        return
+
+    from html.parser import HTMLParser
+    from docx.shared import Pt, RGBColor, Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    html = _strip_transient_html(html)
+    html = _replace_icons_with_unicode(html)
+
+    # ── PASS 1: walk the DOM once to discover every <table> and count its
+    # rows × columns so we can pre-create a correctly-sized docx table
+    # (python-docx doesn't gracefully add columns after creation).
+    class TableShapes(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.shapes = []      # list of (rows, max_cols) in document order
+            self.stack  = []      # depth stack for nested tables (rare)
+            self.cur_rows = 0
+            self.cur_cols_in_row = 0
+            self.cur_max_cols = 0
+        def handle_starttag(self, tag, attrs):
+            tag = tag.lower()
+            if tag == 'table':
+                self.stack.append({'rows':0, 'max_cols':0})
+            elif tag == 'tr' and self.stack:
+                self.stack[-1]['rows'] += 1
+                self.stack[-1]['_cur_cols'] = 0
+            elif tag in ('td','th') and self.stack:
+                self.stack[-1]['_cur_cols'] = self.stack[-1].get('_cur_cols',0) + 1
+                if self.stack[-1]['_cur_cols'] > self.stack[-1]['max_cols']:
+                    self.stack[-1]['max_cols'] = self.stack[-1]['_cur_cols']
+        def handle_endtag(self, tag):
+            tag = tag.lower()
+            if tag == 'table' and self.stack:
+                info = self.stack.pop()
+                self.shapes.append((max(1, info['rows']), max(1, info['max_cols'])))
+
+    shape_walker = TableShapes()
+    try:
+        shape_walker.feed(html)
+    except Exception:
+        pass
+    table_shapes = list(shape_walker.shapes)
+
+    # ── PASS 2: emit paragraphs and tables
+    class Emitter(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.style_stack = []
+            self.current_p  = None
+            self.list_stack = []         # stack of ('ul'|'ol', counter)
+            self.default_size = 11
+            self.skip_depth = 0
+            # Nested-table support via stack
+            self.table_stack = []        # list of dicts (see _start_table)
+            self.table_shape_idx = 0     # which preview shape we're on
+
+        def _active_cell(self):
+            """If inside a table, return the current table cell; else None."""
+            for tb in reversed(self.table_stack):
+                if tb['cell'] is not None:
+                    return tb['cell']
+            return None
+
+        def _start_para(self, size=None, align=None):
+            if size is None:
+                size = self.default_size
+            cell = self._active_cell()
+            if cell is not None:
+                # First paragraph in a cell is the empty one docx creates.
+                if cell.paragraphs and not cell.paragraphs[-1].text \
+                        and not cell.paragraphs[-1].runs:
+                    p = cell.paragraphs[-1]
+                else:
+                    p = cell.add_paragraph()
+            else:
+                p = doc.add_paragraph()
+            if align:
+                p.alignment = align
+            p.paragraph_format.space_after = Pt(4)
+            self.current_p = p
+            self.current_size = size
+            return p
+
+        def _add_run(self, text):
+            if not text:
+                return
+            if self.current_p is None:
+                self._start_para()
+            r = self.current_p.add_run(text)
+            r.font.name = body_font
+            r.font.size = Pt(self.current_size)
+            if 'b' in self.style_stack: r.bold = True
+            if 'i' in self.style_stack: r.italic = True
+            if 'u' in self.style_stack: r.underline = True
+
+        def _start_table(self):
+            if self.table_shape_idx >= len(table_shapes):
+                return None
+            rows, cols = table_shapes[self.table_shape_idx]
+            self.table_shape_idx += 1
+            # Can't add tables inside a cell with doc.add_table — use the
+            # cell's add_table method if we're nested.
+            parent_cell = self._active_cell()
+            if parent_cell is not None:
+                try:
+                    tbl = parent_cell.add_table(rows=rows, cols=cols)
+                except TypeError:
+                    tbl = parent_cell.add_table(rows=rows, cols=cols, width=None)
+            else:
+                tbl = doc.add_table(rows=rows, cols=cols)
+            # Apply a light-grid style if it exists; fall back silently.
+            try:
+                tbl.style = 'Light Grid'
+            except Exception:
+                try: tbl.style = 'Table Grid'
+                except Exception: pass
+            self.table_stack.append({
+                'tbl':    tbl,
+                'rows':   rows,
+                'cols':   cols,
+                'r_idx': -1,      # index of current row (-1 = none yet)
+                'c_idx':  0,
+                'cell':   None,
+                'header_row': False,
+            })
+            return tbl
+
+        def _end_table(self):
+            if self.table_stack:
+                self.table_stack.pop()
+            self.current_p = None
+
+        def _start_row(self):
+            if not self.table_stack:
+                return
+            tb = self.table_stack[-1]
+            tb['r_idx'] += 1
+            tb['c_idx'] = 0
+
+        def _start_cell(self, is_header=False):
+            if not self.table_stack:
+                return
+            tb = self.table_stack[-1]
+            if tb['r_idx'] >= tb['rows'] or tb['c_idx'] >= tb['cols']:
+                return   # guard against over-shoot
+            cell = tb['tbl'].cell(tb['r_idx'], tb['c_idx'])
+            tb['cell'] = cell
+            tb['c_idx'] += 1
+            tb['header_row'] = is_header
+            # Reset current paragraph target; next content goes into this cell
+            self.current_p = None
+            if is_header:
+                self.style_stack.append('b')
+
+        def _end_cell(self, is_header=False):
+            if not self.table_stack:
+                return
+            tb = self.table_stack[-1]
+            tb['cell'] = None
+            if is_header and 'b' in self.style_stack:
+                self.style_stack.remove('b')
+            self.current_p = None
+
+        def handle_starttag(self, tag, attrs):
+            tag = tag.lower()
+            if self.skip_depth > 0:
+                self.skip_depth += 1
+                return
+            if tag in ('script','style'):
+                self.skip_depth = 1
+                return
+            if tag in ('b','strong'):
+                # Skip when the <b> is inside an icon placeholder span
+                self.style_stack.append('b')
+            elif tag in ('i','em'):
+                self.style_stack.append('i')
+            elif tag == 'u':
+                self.style_stack.append('u')
+            elif tag == 'br':
+                if self.current_p:
+                    self.current_p.add_run().add_break()
+            elif tag == 'p':
+                self._start_para()
+            elif tag in ('h1','h2','h3','h4','h5','h6'):
+                sizes = {'h1':20,'h2':18,'h3':16,'h4':14,'h5':13,'h6':12}
+                self.default_size = sizes[tag]
+                self._start_para(size=sizes[tag])
+                self.style_stack.append('b')
+            elif tag == 'hr':
+                self._start_para()
+            elif tag in ('ul','ol'):
+                self.list_stack.append([tag, 0])
+            elif tag == 'li':
+                self._start_para()
+                if self.list_stack:
+                    self.list_stack[-1][1] += 1
+                    kind, idx = self.list_stack[-1]
+                    bullet = '•  ' if kind == 'ul' else f'{idx}.  '
+                    r = self.current_p.add_run(bullet)
+                    r.font.name = body_font
+                    r.font.size = Pt(self.current_size)
+            elif tag == 'table':
+                self._start_table()
+            elif tag == 'tr':
+                self._start_row()
+            elif tag == 'td':
+                self._start_cell(is_header=False)
+            elif tag == 'th':
+                self._start_cell(is_header=True)
+
+        def handle_endtag(self, tag):
+            tag = tag.lower()
+            if self.skip_depth > 0:
+                self.skip_depth -= 1
+                return
+            if tag in ('b','strong') and 'b' in self.style_stack:
+                self.style_stack.remove('b')
+            elif tag in ('i','em') and 'i' in self.style_stack:
+                self.style_stack.remove('i')
+            elif tag == 'u' and 'u' in self.style_stack:
+                self.style_stack.remove('u')
+            elif tag in ('h1','h2','h3','h4','h5','h6'):
+                if 'b' in self.style_stack:
+                    self.style_stack.remove('b')
+                self.default_size = 11
+            elif tag in ('ul','ol') and self.list_stack:
+                self.list_stack.pop()
+            elif tag == 'table':
+                self._end_table()
+            elif tag == 'td':
+                self._end_cell(is_header=False)
+            elif tag == 'th':
+                self._end_cell(is_header=True)
+
+        def handle_data(self, data):
+            if self.skip_depth > 0:
+                return
+            if not data.strip():
+                return
+            text = ' '.join(data.split())
+            self._add_run(text + ' ')
+
+    try:
+        Emitter().feed(html)
+    except Exception as exc:
+        logger.warning("HTML-to-DOCX fallback: %s", exc)
+        import re as _re
+        plain = _re.sub(r'<[^>]+>', ' ', html)
+        plain = _re.sub(r'\s+', ' ', plain).strip()
+        if plain:
+            doc.add_paragraph(plain)
+
+
+def _html_to_pdf_flowables(html: str, pri_color, font_h: str, font_b: str):
+    """
+    Convert HTML to ReportLab flowables. Emits Paragraph, Spacer, and
+    Table objects. Supports the same subset as the DOCX variant.
+    """
+    if not html or not html.strip():
+        return []
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import Paragraph, Spacer, Table as RLTable, TableStyle
+    from reportlab.lib import colors as rl_colors
+
+    html = _strip_transient_html(html)
+    html = _replace_icons_with_unicode(html)
+
+    styles = getSampleStyleSheet()
+    normal   = ParagraphStyle('Body', parent=styles['Normal'],
+                              fontName='Helvetica', fontSize=10, leading=14,
+                              spaceAfter=3)
+    heading1 = ParagraphStyle('H1', parent=normal, fontName='Helvetica-Bold',
+                              fontSize=18, leading=22, spaceAfter=6)
+    heading2 = ParagraphStyle('H2', parent=normal, fontName='Helvetica-Bold',
+                              fontSize=14, leading=18, spaceAfter=5)
+
+    from html.parser import HTMLParser
+    flows = []
+
+    class Walker(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.buffer = []
+            self.current_style = normal
+            self.list_stack = []          # ('ul'|'ol', counter)
+            self.table_stack = []         # each: {'rows':[], 'cur_row':[], 'cur_cell':[]}
+            self.skip = 0
+
+        def _emit_paragraph(self, style=None):
+            style = style or self.current_style
+            txt = ''.join(self.buffer).strip()
+            if txt:
+                # Sanitize stray unmatched tags so Paragraph doesn't throw
+                try:
+                    flows.append(Paragraph(txt, style))
+                except Exception:
+                    import re as _re
+                    safe = _re.sub(r'<(?!/?(b|i|u|br)\b)[^>]+>', '', txt)
+                    try:
+                        flows.append(Paragraph(safe, style))
+                    except Exception:
+                        flows.append(Paragraph(_re.sub(r'<[^>]+>', '', txt), normal))
+                flows.append(Spacer(1, 3))
+            self.buffer = []
+
+        def _in_table(self):
+            return bool(self.table_stack)
+
+        def handle_starttag(self, tag, attrs):
+            tag = tag.lower()
+            if self.skip > 0:
+                self.skip += 1; return
+            if tag in ('script','style'):
+                self.skip = 1; return
+            if tag in ('b','strong'):
+                self.buffer.append('<b>')
+            elif tag in ('i','em'):
+                self.buffer.append('<i>')
+            elif tag == 'u':
+                self.buffer.append('<u>')
+            elif tag == 'br':
+                self.buffer.append('<br/>')
+            elif tag == 'p':
+                self._emit_paragraph()
+            elif tag == 'h1':
+                self._emit_paragraph(); self.current_style = heading1
+            elif tag == 'h2':
+                self._emit_paragraph(); self.current_style = heading2
+            elif tag in ('h3','h4','h5','h6'):
+                self._emit_paragraph(); self.current_style = heading2
+            elif tag == 'ul':
+                self.list_stack.append(['ul', 0])
+            elif tag == 'ol':
+                self.list_stack.append(['ol', 0])
+            elif tag == 'li':
+                self._emit_paragraph()
+                if self.list_stack:
+                    self.list_stack[-1][1] += 1
+                    kind, idx = self.list_stack[-1]
+                    prefix = '•&nbsp;&nbsp;' if kind == 'ul' else f'{idx}.&nbsp;&nbsp;'
+                    self.buffer.append(prefix)
+            elif tag == 'hr':
+                self._emit_paragraph()
+                flows.append(Spacer(1, 6))
+            elif tag == 'table':
+                # Start a new table context. Emit anything pending first.
+                self._emit_paragraph()
+                self.table_stack.append({'rows': [], 'cur_row': None, 'cur_cell': None,
+                                         'header_first_row': False, 'saw_header': False})
+            elif tag == 'thead' and self._in_table():
+                self.table_stack[-1]['header_first_row'] = True
+            elif tag == 'tr' and self._in_table():
+                self.table_stack[-1]['cur_row'] = []
+            elif tag in ('td','th') and self._in_table():
+                self.table_stack[-1]['cur_cell'] = []
+                if tag == 'th':
+                    self.table_stack[-1]['saw_header'] = True
+
+        def handle_endtag(self, tag):
+            tag = tag.lower()
+            if self.skip > 0:
+                self.skip -= 1; return
+            if tag in ('b','strong'):
+                self.buffer.append('</b>')
+            elif tag in ('i','em'):
+                self.buffer.append('</i>')
+            elif tag == 'u':
+                self.buffer.append('</u>')
+            elif tag == 'p':
+                self._emit_paragraph()
+            elif tag == 'h1':
+                self._emit_paragraph(heading1); self.current_style = normal
+            elif tag == 'h2':
+                self._emit_paragraph(heading2); self.current_style = normal
+            elif tag in ('h3','h4','h5','h6'):
+                self._emit_paragraph(heading2); self.current_style = normal
+            elif tag == 'li':
+                self._emit_paragraph()
+            elif tag in ('ul','ol'):
+                if self.list_stack:
+                    self.list_stack.pop()
+            elif tag in ('td','th') and self._in_table():
+                tb = self.table_stack[-1]
+                if tb['cur_cell'] is not None and tb['cur_row'] is not None:
+                    cell_html = ''.join(tb['cur_cell']).strip() or '&nbsp;'
+                    try:
+                        p = Paragraph(cell_html, normal)
+                    except Exception:
+                        import re as _re
+                        p = Paragraph(_re.sub(r'<[^>]+>', '', cell_html), normal)
+                    tb['cur_row'].append(p)
+                    tb['cur_cell'] = None
+            elif tag == 'tr' and self._in_table():
+                tb = self.table_stack[-1]
+                if tb['cur_row']:
+                    tb['rows'].append(tb['cur_row'])
+                tb['cur_row'] = None
+            elif tag == 'table' and self._in_table():
+                tb = self.table_stack.pop()
+                rows = tb['rows']
+                if not rows:
+                    return
+                # Normalise column counts (pad short rows with empties)
+                max_cols = max(len(r) for r in rows)
+                for r in rows:
+                    while len(r) < max_cols:
+                        r.append(Paragraph('&nbsp;', normal))
+                try:
+                    rl_tbl = RLTable(rows, hAlign='LEFT', repeatRows=1 if tb['saw_header'] else 0)
+                    styles_list = [
+                        ('GRID', (0,0), (-1,-1), 0.5, rl_colors.grey),
+                        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                        ('LEFTPADDING', (0,0), (-1,-1), 4),
+                        ('RIGHTPADDING', (0,0), (-1,-1), 4),
+                        ('TOPPADDING', (0,0), (-1,-1), 3),
+                        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+                    ]
+                    if tb['saw_header']:
+                        styles_list += [
+                            ('BACKGROUND', (0,0), (-1,0), rl_colors.whitesmoke),
+                            ('FONTNAME',   (0,0), (-1,0), 'Helvetica-Bold'),
+                        ]
+                    rl_tbl.setStyle(TableStyle(styles_list))
+                    flows.append(rl_tbl)
+                    flows.append(Spacer(1, 6))
+                except Exception as exc:
+                    logger.warning("PDF table fallback: %s", exc)
+
+        def handle_data(self, data):
+            if self.skip > 0:
+                return
+            if not data.strip():
+                return
+            txt = ' '.join(data.split()) + ' '
+            # Escape &, <, > for Paragraph safety (but our <b>/<i>/<u> are
+            # raw strings in buffer — we escape only incoming text).
+            esc = (txt.replace('&','&amp;')
+                      .replace('<','&lt;').replace('>','&gt;'))
+            tb = self.table_stack[-1] if self.table_stack else None
+            if tb and tb.get('cur_cell') is not None:
+                tb['cur_cell'].append(esc)
+            else:
+                self.buffer.append(esc)
+
+    try:
+        w = Walker(); w.feed(html); w._emit_paragraph()
+    except Exception as exc:
+        logger.warning("HTML-to-PDF fallback: %s", exc)
+        import re as _re
+        plain = _re.sub(r'<[^>]+>', ' ', html)
+        plain = _re.sub(r'\s+', ' ', plain).strip()
+        if plain:
+            flows.append(Paragraph(plain, normal))
+
+    return flows
+
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # DOCX  (python-docx)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -240,6 +872,79 @@ def _build_docx(t: LetterheadTemplate) -> bytes:
             bdr.append(el)
         tbl_pr.append(bdr)
 
+    # ── helper: stretch a table to full page width with negative indent
+    # so the table's coloured cells / content reach the true page edges.
+    # Full page = 21 cm; sets tblInd = -LEFT_M and tblW = 21 cm.
+    def _full_width_table(tbl):
+        tbl_element = tbl._tbl
+        tbl_pr = tbl_element.find(qn("w:tblPr"))
+        if tbl_pr is None:
+            tbl_pr = OxmlElement("w:tblPr")
+            tbl_element.insert(0, tbl_pr)
+        # Remove any existing tblInd/tblW
+        for tag in ("w:tblInd","w:tblW"):
+            existing = tbl_pr.find(qn(tag))
+            if existing is not None:
+                tbl_pr.remove(existing)
+        # Negative indent to push table to left page edge (in twips)
+        tbl_ind = OxmlElement("w:tblInd")
+        tbl_ind.set(qn("w:w"),    str(-int(LEFT_M * 567)))
+        tbl_ind.set(qn("w:type"), "dxa")
+        tbl_pr.append(tbl_ind)
+        # Width = 21 cm (A4 width) so it fills the whole page
+        tbl_w = OxmlElement("w:tblW")
+        tbl_w.set(qn("w:w"),    str(int(21.0 * 567)))
+        tbl_w.set(qn("w:type"), "dxa")
+        tbl_pr.append(tbl_w)
+        # Fixed layout so Word doesn't auto-resize cells
+        tbl_layout = OxmlElement("w:tblLayout")
+        tbl_layout.set(qn("w:type"), "fixed")
+        tbl_pr.append(tbl_layout)
+
+    # ── helper: set per-cell internal margins (padding) in twips
+    # default is ~108 twips (~0.19 cm) on left/right; we often want more.
+    def _set_cell_margins(cell, top=100, left=200, bottom=100, right=200):
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        # Remove existing tcMar
+        existing = tcPr.find(qn("w:tcMar"))
+        if existing is not None:
+            tcPr.remove(existing)
+        mar = OxmlElement("w:tcMar")
+        for side, val in (("top",top),("left",left),("bottom",bottom),("right",right)):
+            el = OxmlElement(f"w:{side}")
+            el.set(qn("w:w"),    str(val))
+            el.set(qn("w:type"), "dxa")
+            mar.append(el)
+        tcPr.append(mar)
+
+    # ── helper: vertically centre cell content
+    def _cell_vcenter(cell):
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        existing = tcPr.find(qn("w:vAlign"))
+        if existing is not None:
+            tcPr.remove(existing)
+        v = OxmlElement("w:vAlign")
+        v.set(qn("w:val"), "center")
+        tcPr.append(v)
+
+    # ── helper: put a coloured border on the LEFT side of a cell (accent stripe)
+    def _cell_left_border(cell, color_hex, width_eighths_pt=24):
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        existing = tcPr.find(qn("w:tcBorders"))
+        if existing is not None:
+            tcPr.remove(existing)
+        bdr = OxmlElement("w:tcBorders")
+        left = OxmlElement("w:left")
+        left.set(qn("w:val"),   "single")
+        left.set(qn("w:sz"),    str(width_eighths_pt))
+        left.set(qn("w:space"), "0")
+        left.set(qn("w:color"), color_hex)
+        bdr.append(left)
+        tcPr.append(bdr)
+
     # ── helper: try to insert logo image ────────────────────────────────
     def _add_logo(run, height_inches=0.5):
         lp = _logo_path(t)
@@ -300,26 +1005,33 @@ def _build_docx(t: LetterheadTemplate) -> bytes:
     # ════════════════════════════════════════════════════════
     # MODERN  — left accent border, name, contact right, thin rule
     # ════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════
+    # MODERN  — flush-left accent stripe, name + tagline, contact right
+    # ════════════════════════════════════════════════════════
     elif k == "modern":
-        p_name = para(hdr, sp_before=4, sp_after=2)
-        # Stretch to the left page edge so the accent stripe is flush-left.
-        # inner_pad=0 on the left side; we use our own left_indent below.
-        _edge_to_edge(p_name, inner_pad_cm=0)
-        # Left border via paragraph border (becomes a flush-left stripe)
-        pPr  = p_name._p.get_or_add_pPr()
-        pBdr = OxmlElement("w:pBdr")
-        left = OxmlElement("w:left")
-        left.set(qn("w:val"),   "single")
-        left.set(qn("w:sz"),    "24")
-        left.set(qn("w:space"), "12")
-        left.set(qn("w:color"), pri)
-        pBdr.append(left)
-        pPr.append(pBdr)
-        # Use Cm (not Pt) so we can override the negative left_indent we
-        # just set via _edge_to_edge and push the text back in from the
-        # left edge without re-triggering that helper's logic.
-        p_name.paragraph_format.left_indent = Cm(0.5)
+        from docx.shared import Cm as _Cm
+        # 3-column table, full page width:
+        #   col 0 = narrow shaded stripe (the accent)
+        #   col 1 = content (name, tagline, address)
+        #   col 2 = tiny right-side gutter
+        tbl = hdr.add_table(rows=1, cols=3, width=_Cm(21))
+        _no_borders(tbl)
+        _full_width_table(tbl)
+        tbl.columns[0].width = _Cm(0.35)
+        tbl.columns[1].width = _Cm(20.35)
+        tbl.columns[2].width = _Cm(0.30)
+        c_stripe = tbl.cell(0,0)
+        c_main   = tbl.cell(0,1)
+        c_right  = tbl.cell(0,2)
+        # Shaded narrow cell = the accent stripe (guaranteed-visible)
+        _shade_cell(c_stripe, pri)
+        _set_cell_margins(c_stripe, top=0, left=0, bottom=0, right=0)
+        _set_cell_margins(c_main,   top=240, left=320, bottom=200, right=0)
+        _set_cell_margins(c_right,  top=0, left=0, bottom=0, right=0)
 
+        # Main cell: name line (with optional logo)
+        p_name = c_main.paragraphs[0]
+        p_name.paragraph_format.space_after = Pt(2)
         r_logo = p_name.add_run()
         has_logo = _add_logo(r_logo, 0.45)
         if has_logo:
@@ -329,18 +1041,34 @@ def _build_docx(t: LetterheadTemplate) -> bytes:
         r_name.font.color.rgb = sec_rgb
 
         if t.tagline:
-            p_tag = para(hdr, t.tagline, italic=True, size=10,
-                         color_rgb=RGBColor(0xaa,0xaa,0xaa), sp_after=2)
-            p_tag.paragraph_format.left_indent = Pt(16)
+            p_tag = c_main.add_paragraph()
+            p_tag.paragraph_format.space_after = Pt(2)
+            r_t = p_tag.add_run(t.tagline)
+            r_t.italic = True; r_t.font.size = Pt(10)
+            r_t.font.color.rgb = RGBColor(0xaa,0xaa,0xaa)
 
+        # Contact + address, right-aligned
         if t.contact_info:
-            para(hdr, t.contact_info, size=9, color_rgb=RGBColor(0x88,0x88,0x88),
-                 align=WD_ALIGN_PARAGRAPH.RIGHT, sp_after=0)
+            p_c = c_main.add_paragraph()
+            p_c.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            p_c.paragraph_format.space_after = Pt(0)
+            # Negative right-indent on this paragraph to push up to right edge
+            p_c.paragraph_format.right_indent = Cm(-0.5)
+            r_c = p_c.add_run(t.contact_info)
+            r_c.font.size = Pt(9)
+            r_c.font.color.rgb = RGBColor(0x88,0x88,0x88)
         for line in addr_lines:
-            para(hdr, line, size=9, color_rgb=RGBColor(0xbb,0xbb,0xbb),
-                 align=WD_ALIGN_PARAGRAPH.RIGHT, sp_after=0)
+            p_l = c_main.add_paragraph()
+            p_l.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            p_l.paragraph_format.space_after = Pt(0)
+            p_l.paragraph_format.right_indent = Cm(-0.5)
+            r_l = p_l.add_run(line)
+            r_l.font.size = Pt(9)
+            r_l.font.color.rgb = RGBColor(0xbb,0xbb,0xbb)
 
+        # Thin divider under the whole header (edge-to-edge)
         p_div = para(hdr, sp_before=4, sp_after=0)
+        _edge_to_edge(p_div, inner_pad_cm=0)
         _hrule(p_div, "E0E0E0", size=4, space=2)
 
         # Footer rule spans the full width
@@ -353,12 +1081,24 @@ def _build_docx(t: LetterheadTemplate) -> bytes:
     # ════════════════════════════════════════════════════════
     # BOLD  — dark shaded header, accent rule under it
     # ════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════
+    # BOLD  — full-width dark banner, accent rule under it, dark footer
+    # ════════════════════════════════════════════════════════
     elif k == "bold":
-        # Name paragraph — dark banner edge-to-edge. inner_pad_cm > 0 so
-        # text has some breathing room inside the banner.
-        p_name = para(hdr, sp_before=0, sp_after=2)
-        _edge_to_edge(p_name, inner_pad_cm=0.8)
-        _shade_para(p_name, sec_col)
+        from docx.shared import Cm as _Cm
+        # One-cell full-width table for the dark banner so text has proper
+        # inner padding while the background spans the page edge-to-edge.
+        tbl = hdr.add_table(rows=1, cols=1, width=_Cm(21))
+        _no_borders(tbl)
+        _full_width_table(tbl)
+        tbl.columns[0].width = _Cm(21)
+        cell = tbl.cell(0,0)
+        _shade_cell(cell, sec_col)
+        _set_cell_margins(cell, top=220, left=560, bottom=220, right=560)
+
+        # Name paragraph
+        p_name = cell.paragraphs[0]
+        p_name.paragraph_format.space_after = Pt(2)
         r_logo = p_name.add_run()
         has_logo = _add_logo(r_logo, 0.48)
         if has_logo:
@@ -368,34 +1108,60 @@ def _build_docx(t: LetterheadTemplate) -> bytes:
         r_name.font.color.rgb = RGBColor(255,255,255)
 
         if t.tagline:
-            p_tag = para(hdr, t.tagline, italic=True, size=10,
-                         color_rgb=RGBColor(0xaa,0xaa,0xaa), sp_after=0)
-            _edge_to_edge(p_tag, inner_pad_cm=0.8)
-            _shade_para(p_tag, sec_col)
+            p_tag = cell.add_paragraph()
+            p_tag.paragraph_format.space_after = Pt(2)
+            r_t = p_tag.add_run(t.tagline)
+            r_t.italic = True; r_t.font.size = Pt(10)
+            r_t.font.color.rgb = RGBColor(0xaa,0xaa,0xaa)
 
         if t.contact_info:
-            p_c = para(hdr, t.contact_info, size=9,
-                       color_rgb=RGBColor(0x99,0x99,0x99), sp_after=0)
-            _edge_to_edge(p_c, inner_pad_cm=0.8)
-            _shade_para(p_c, sec_col)
+            p_c = cell.add_paragraph()
+            p_c.paragraph_format.space_after = Pt(0)
+            r_c = p_c.add_run(t.contact_info)
+            r_c.font.size = Pt(9)
+            r_c.font.color.rgb = RGBColor(0x99,0x99,0x99)
 
-        # Accent rule edge-to-edge
+        # Accent rule below the banner — edge-to-edge
         p_acc = para(hdr, sp_before=0, sp_after=8)
         _edge_to_edge(p_acc, inner_pad_cm=0)
         _hrule(p_acc, pri, size=12, space=0)
 
-        # Footer dark band edge-to-edge
-        p_ftr = para(ftr, f"{t.company_name or ''}  ·  {addr_flat}  ·  {t.contact_info or ''}",
-                     size=9, color_rgb=RGBColor(0x99,0x99,0x99),
-                     align=WD_ALIGN_PARAGRAPH.CENTER, sp_before=4, sp_after=4)
-        _edge_to_edge(p_ftr, inner_pad_cm=0)
-        _shade_para(p_ftr, sec_col)
+        # Footer: dark band using a shaded table cell too
+        ftbl = ftr.add_table(rows=1, cols=1, width=_Cm(21))
+        _no_borders(ftbl)
+        _full_width_table(ftbl)
+        ftbl.columns[0].width = _Cm(21)
+        fcell = ftbl.cell(0,0)
+        _shade_cell(fcell, sec_col)
+        _set_cell_margins(fcell, top=140, left=400, bottom=140, right=400)
+        p_f = fcell.paragraphs[0]
+        p_f.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r_f = p_f.add_run(f"{t.company_name or ''}  ·  {addr_flat}  ·  {t.contact_info or ''}")
+        r_f.font.size = Pt(9)
+        r_f.font.color.rgb = RGBColor(0x99,0x99,0x99)
 
     # ════════════════════════════════════════════════════════
     # MINIMAL  — name and contact inline, thin rule
     # ════════════════════════════════════════════════════════
     elif k == "minimal":
-        p_name = para(hdr, sp_before=4, sp_after=2)
+        from docx.shared import Cm as _Cm
+        # 2-column table: name+tagline on left, address+contact on right,
+        # both on the same baseline (matches the flex-row HTML preview).
+        tbl = hdr.add_table(rows=1, cols=2, width=_Cm(16.0))
+        _no_borders(tbl)
+        # Use normal margins here (not full-width) so the content sits
+        # inside the body column; the divider below goes edge-to-edge.
+        tbl.columns[0].width = _Cm(7.0)
+        tbl.columns[1].width = _Cm(9.0)
+        cl = tbl.cell(0,0); cr = tbl.cell(0,1)
+        _set_cell_margins(cl, top=40, left=0,   bottom=40, right=0)
+        _set_cell_margins(cr, top=40, left=0,   bottom=40, right=0)
+        _cell_vcenter(cl); _cell_vcenter(cr)
+
+        # Left cell: logo + name on one line, tagline below (tagline on a
+        # separate paragraph avoids it wrapping awkwardly after long names)
+        p_name = cl.paragraphs[0]
+        p_name.paragraph_format.space_after = Pt(1)
         r_logo = p_name.add_run()
         has_logo = _add_logo(r_logo, 0.42)
         if has_logo:
@@ -404,16 +1170,24 @@ def _build_docx(t: LetterheadTemplate) -> bytes:
         r_name.bold = True; r_name.font.name = fh; r_name.font.size = Pt(17)
         r_name.font.color.rgb = sec_rgb
         if t.tagline:
-            p_name.add_run(f"  ·  {t.tagline}").font.color.rgb = RGBColor(0xbb,0xbb,0xbb)
+            p_tag = cl.add_paragraph()
+            p_tag.paragraph_format.space_after = Pt(0)
+            r_t = p_tag.add_run(t.tagline)
+            r_t.font.size = Pt(10); r_t.italic = True
+            r_t.font.color.rgb = RGBColor(0xbb,0xbb,0xbb)
 
+        # Right cell: address + contact, right-aligned
         contact_line = addr_flat
         if t.contact_info:
             contact_line = f"{addr_flat}  ·  {t.contact_info}" if addr_flat else t.contact_info
-        para(hdr, contact_line, size=9, color_rgb=RGBColor(0xbb,0xbb,0xbb),
-             align=WD_ALIGN_PARAGRAPH.RIGHT, sp_after=2)
+        p_r = cr.paragraphs[0]
+        p_r.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        r_r = p_r.add_run(contact_line)
+        r_r.font.size = Pt(9)
+        r_r.font.color.rgb = RGBColor(0xbb,0xbb,0xbb)
 
         # Divider rule spans the full page width
-        p_div = para(hdr, sp_before=2, sp_after=0)
+        p_div = para(hdr, sp_before=4, sp_after=0)
         _edge_to_edge(p_div, inner_pad_cm=0)
         _hrule(p_div, sec_col, size=4, space=2)
 
@@ -426,74 +1200,69 @@ def _build_docx(t: LetterheadTemplate) -> bytes:
     # ════════════════════════════════════════════════════════
     elif k == "split":
         from docx.shared import Cm as _Cm
-        tbl = hdr.add_table(rows=1, cols=2, width=_Cm(20.8))
+        tbl = hdr.add_table(rows=1, cols=2, width=_Cm(21))
         _no_borders(tbl)
-        # Widen the table to span the full page width (21 cm - 0.2 cm safety).
-        # Left cell = 5.5 cm (coloured sidebar), right cell = the rest.
+        _full_width_table(tbl)
+        # Left sidebar 5.5 cm, right content the rest
         tbl.columns[0].width = _Cm(5.5)
-        tbl.columns[1].width = _Cm(15.3)
-
-        # Indent the table by -LEFT_M so it starts at the left page edge.
-        # Uses w:tblPr/w:tblInd which supports negative values in OOXML.
-        # CT_Tbl doesn't expose get_or_add_tblPr(); access via the element tree.
-        tbl_element = tbl._tbl
-        tbl_pr = tbl_element.find(qn("w:tblPr"))
-        if tbl_pr is None:
-            tbl_pr = OxmlElement("w:tblPr")
-            tbl_element.insert(0, tbl_pr)
-        tbl_ind = OxmlElement("w:tblInd")
-        # w:w is in twips (1/20 pt). 2.54 cm = 1 in = 1440 twips, negated.
-        tbl_ind.set(qn("w:w"),    str(-int(LEFT_M * 567)))   # ~-1440 twips
-        tbl_ind.set(qn("w:type"), "dxa")
-        tbl_pr.append(tbl_ind)
-        # Also set the table width explicitly to the full page width so it
-        # doesn't get auto-shrunk.
-        tbl_w = OxmlElement("w:tblW")
-        tbl_w.set(qn("w:w"),    str(int(20.8 * 567)))        # ~20.8 cm
-        tbl_w.set(qn("w:type"), "dxa")
-        tbl_pr.append(tbl_w)
+        tbl.columns[1].width = _Cm(15.5)
 
         cl = tbl.cell(0,0)
         cr = tbl.cell(0,1)
         _shade_cell(cl, pri)
+        # Left cell: moderate top margin so the logo/name don't hug the
+        # top edge of the sidebar (but the coloured bg still starts at top=0
+        # because we don't change the table's top edge).
+        _set_cell_margins(cl, top=280, left=280, bottom=280, right=280)
+        _set_cell_margins(cr, top=0, left=280, bottom=280, right=400)
 
-        # Left cell content (add a bit of inner padding via paragraph indent)
+        # Left cell content — tight vertical spacing
         p_logo = cl.paragraphs[0]
-        p_logo.paragraph_format.left_indent = Cm(0.3)
+        p_logo.paragraph_format.space_before = Pt(0)
+        p_logo.paragraph_format.space_after = Pt(4)
         r_logo = p_logo.add_run()
         _add_logo(r_logo, 0.5)
-        p_logo.paragraph_format.space_after = Pt(4)
 
         p_cl_name = cl.add_paragraph()
-        p_cl_name.paragraph_format.left_indent = Cm(0.3)
+        p_cl_name.paragraph_format.space_after = Pt(2)
         r_cn = p_cl_name.add_run(t.company_name or "")
         r_cn.bold = True; r_cn.font.name = fh; r_cn.font.size = Pt(13)
         r_cn.font.color.rgb = RGBColor(255,255,255)
 
         if t.tagline:
             p_cl_tag = cl.add_paragraph()
-            p_cl_tag.paragraph_format.left_indent = Cm(0.3)
+            p_cl_tag.paragraph_format.space_after = Pt(0)
             r_ct = p_cl_tag.add_run(t.tagline)
             r_ct.font.size = Pt(9); r_ct.italic = True
             r_ct.font.color.rgb = RGBColor(0xdd,0xdd,0xdd)
 
-        # Right cell content — keep a small right padding so it's not flush
-        for line in addr_lines:
-            p_r = cr.add_paragraph(line)
-            p_r.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            p_r.paragraph_format.right_indent = Cm(0.5)
-            p_r.runs[0].font.size = Pt(9)
-            p_r.runs[0].font.color.rgb = RGBColor(0x88,0x88,0x88)
+        # Right cell — address + contact, right-aligned, vertically centred
+        _cell_vcenter(cr)
+        first_right_p = cr.paragraphs[0]   # first paragraph already exists
+        first_right_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        first_right_p.paragraph_format.space_after = Pt(0)
+        if addr_lines:
+            r = first_right_p.add_run(addr_lines[0])
+            r.font.size = Pt(9); r.font.color.rgb = RGBColor(0x88,0x88,0x88)
+            for line in addr_lines[1:]:
+                p_l = cr.add_paragraph()
+                p_l.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                p_l.paragraph_format.space_after = Pt(0)
+                r = p_l.add_run(line)
+                r.font.size = Pt(9); r.font.color.rgb = RGBColor(0x88,0x88,0x88)
         if t.contact_info:
-            p_rc = cr.add_paragraph(t.contact_info)
+            p_rc = cr.add_paragraph()
             p_rc.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            p_rc.paragraph_format.right_indent = Cm(0.5)
-            p_rc.runs[0].font.size = Pt(9)
-            p_rc.runs[0].font.color.rgb = RGBColor(0xaa,0xaa,0xaa)
+            p_rc.paragraph_format.space_before = Pt(2)
+            r = p_rc.add_run(t.contact_info)
+            r.font.size = Pt(9); r.font.color.rgb = RGBColor(0xaa,0xaa,0xaa)
 
-        para(ftr, f"{t.contact_info or ''}  ·  {addr_flat}",
+        # Thin footer rule
+        p_ftr = para(ftr, f"{t.contact_info or ''}  ·  {addr_flat}",
              size=9, color_rgb=RGBColor(0xaa,0xaa,0xaa),
              align=WD_ALIGN_PARAGRAPH.CENTER, sp_before=4, sp_after=4)
+        _edge_to_edge(p_ftr, inner_pad_cm=0)
+        _hrule(p_ftr, "DDDDDD", size=4, space=2, position="top")
 
     # ════════════════════════════════════════════════════════
     # ELEGANT  — centred logo, name, double rule, contact line
@@ -540,8 +1309,12 @@ def _build_docx(t: LetterheadTemplate) -> bytes:
         para(ftr, t.contact_info or "", size=9, color_rgb=pri_rgb,
              align=WD_ALIGN_PARAGRAPH.CENTER)
 
-    # ── Body: ONE blank paragraph so cursor lands in the right place ─────
-    doc.add_paragraph()
+    # ── Body: render the user-authored HTML (from the builder) ──────────
+    if getattr(t, 'body_html', None) and t.body_html.strip():
+        _html_to_docx_paragraphs(t.body_html, doc, body_font=fb)
+    else:
+        # Default: one blank paragraph so the cursor has somewhere to land.
+        doc.add_paragraph()
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -877,6 +1650,32 @@ def _build_pdf(t: LetterheadTemplate) -> bytes:
         c.setStrokeColor(pri); c.setLineWidth(1)
         c.line(PAD_X, y - 10, W - PAD_X, y - 10)
         draw_footer_band()
+
+    # ── Body: render the user-authored HTML (if any) ────────────────────
+    # The body sits between the header zone (top ~130pt of the page) and
+    # the footer band (bottom 28pt). We use a Frame + flowables so content
+    # wraps naturally and honours the body font/colours.
+    if getattr(t, 'body_html', None) and t.body_html.strip():
+        try:
+            from reportlab.platypus import Frame
+            flowables = _html_to_pdf_flowables(t.body_html, pri, font_h, font_b)
+            if flowables:
+                # Header zones vary by style but ~135pt is a safe ceiling
+                # that puts the body below every style's header.
+                frame_top    = H - 155
+                frame_bottom = 40        # clear the 28pt footer + breathing room
+                frame_left   = PAD_X
+                frame_right  = W - PAD_X
+                frame = Frame(
+                    frame_left, frame_bottom,
+                    frame_right - frame_left,
+                    frame_top   - frame_bottom,
+                    showBoundary=0, leftPadding=0, rightPadding=0,
+                    topPadding=4, bottomPadding=4,
+                )
+                frame.addFromList(flowables, c)
+        except Exception as exc:
+            logger.warning("PDF body render failed: %s", exc)
 
     c.save()
     return buf.getvalue()

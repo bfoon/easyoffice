@@ -1,0 +1,453 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}New Invoice · EasyOffice{% endblock %}
+
+{% block extra_css %}
+<style>
+  .nw-shell { max-width: 1100px; margin: 0 auto; padding: 24px; }
+  .nw-head { margin-bottom: 22px; display:flex; justify-content:space-between; align-items:center; }
+  .nw-head h1 { font-size: 22px; font-weight:700; margin:0; color: var(--eo-text, #0f172a); }
+  .nw-head p  { color: var(--eo-text-muted, #64748b); font-size: 13px; margin-top: 4px;}
+
+  .mode-tabs {
+    display:flex; gap: 8px; margin-bottom: 18px;
+    background: #f1f5f9; padding: 4px; border-radius: 10px;
+    width: fit-content;
+  }
+  .mode-tab {
+    padding: 10px 20px; border-radius: 8px;
+    font-size: 13.5px; font-weight: 600;
+    background: transparent; border: 0; cursor: pointer; color: #64748b;
+    transition: all .15s;
+  }
+  .mode-tab.active { background: #fff; color: #0ea5e9; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .mode-tab i { margin-right: 4px; }
+
+  .nw-card {
+    background:#fff; border:1px solid var(--eo-border,#e2e8f0);
+    border-radius:12px; padding: 20px; margin-bottom: 18px;
+  }
+  .nw-label { font-size: 12px; font-weight:600; color:#475569; text-transform:uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+  .nw-sub   { font-size: 12.5px; color: #64748b; margin: -4px 0 14px; }
+
+  /* Template grid */
+  .tmpl-section-title {
+    font-size: 11px; font-weight: 700; color: #64748b;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    margin: 14px 0 10px; padding-bottom: 6px;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .tmpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+  .tmpl-card {
+    border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px;
+    background: #fff; transition: all .15s; cursor: pointer;
+    position: relative;
+  }
+  .tmpl-card:hover { border-color: #0ea5e9; box-shadow: 0 2px 8px rgba(14,165,233,0.10); transform: translateY(-1px); }
+  .tmpl-card .tmpl-header { display:flex; align-items:center; gap: 10px; margin-bottom: 8px; }
+  .tmpl-card .tmpl-icon {
+    width: 36px; height: 36px; border-radius: 8px;
+    background: linear-gradient(135deg, #0ea5e9, #0284c7); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 16px;
+    flex-shrink: 0;
+  }
+  .tmpl-card .tmpl-name { font-weight: 700; color: #0f172a; font-size: 14px; line-height: 1.25;}
+  .tmpl-card .tmpl-meta { font-size: 11.5px; color: #64748b; margin-top: 2px; }
+  .tmpl-card .tmpl-desc { font-size: 12px; color: #475569; margin-top: 6px; min-height: 16px; }
+  .tmpl-card .tmpl-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+  .tmpl-card .badge {
+    font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .badge-locked   { background:#fef3c7; color:#92400e; }
+  .badge-shared   { background:#dbeafe; color:#1e40af; }
+  .badge-personal { background:#f1f5f9; color:#475569; }
+  .badge-type     { background:#e0f2fe; color:#0369a1; }
+
+  .tmpl-empty {
+    padding: 30px; text-align:center; color: #94a3b8;
+    background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 10px;
+    font-size: 13px;
+  }
+
+  /* Fresh mode shared styles */
+  .type-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 12px; }
+  .type-card {
+    cursor:pointer; border: 2px solid var(--eo-border,#e2e8f0);
+    border-radius: 10px; padding: 16px; background:#fff; transition: all .15s;
+  }
+  .type-card:hover { border-color:#0ea5e9; }
+  .type-card.selected { border-color:#0ea5e9; background: #f0f9ff; box-shadow: 0 0 0 3px rgba(14,165,233,0.12); }
+  .type-card .name { font-weight: 700; color: #0f172a; margin-bottom: 4px;}
+  .type-card .desc { font-size: 12.5px; color:#64748b; }
+  .type-card input { display:none; }
+
+  .pick-tabs { display:flex; gap: 6px; margin-bottom: 12px; }
+  .pick-tab {
+    padding: 8px 14px; border-radius: 8px; border:1px solid var(--eo-border,#e2e8f0);
+    background:#fff; font-weight:600; font-size: 13px; cursor:pointer; color:#64748b;
+  }
+  .pick-tab.active { background:#0ea5e9; color:#fff; border-color:#0ea5e9; }
+
+  .lh-search { width:100%; padding: 8px 12px; border:1px solid var(--eo-border,#e2e8f0);
+    border-radius: 8px; font-size: 13px; margin-bottom: 10px; }
+
+  .lh-list {
+    max-height: 380px; overflow-y: auto; border:1px solid var(--eo-border,#e2e8f0);
+    border-radius: 8px; background:#f8fafc;
+  }
+  .lh-item {
+    display:flex; align-items:center; gap:12px; padding: 10px 14px;
+    cursor:pointer; border-bottom:1px solid #e2e8f0; background:#fff;
+    transition: background .1s;
+  }
+  .lh-item:last-child { border-bottom: 0; }
+  .lh-item:hover { background:#f1f5f9; }
+  .lh-item.selected { background:#e0f2fe; }
+  .lh-item .pdf-icon { font-size: 26px; color:#ef4444; }
+  .lh-item .meta { flex:1; min-width: 0;}
+  .lh-item .n { font-weight: 600; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .lh-item .s { font-size: 12px; color:#64748b; }
+
+  .upload-dropzone {
+    border: 2px dashed var(--eo-border,#cbd5e1); border-radius: 10px;
+    padding: 40px 20px; text-align:center; cursor:pointer;
+    background: #fafbff; transition: all .15s;
+  }
+  .upload-dropzone:hover, .upload-dropzone.drag { border-color: #0ea5e9; background:#f0f9ff;}
+  .upload-dropzone i { font-size: 36px; color:#94a3b8; }
+  .upload-dropzone p { margin: 8px 0 0; color:#64748b; font-size: 13px; }
+
+  .actions { display:flex; gap:10px; justify-content: flex-end; margin-top: 10px; }
+  .btn-inv {
+    display:inline-flex; align-items:center; gap:6px; padding: 9px 16px; border-radius: 8px;
+    font-size: 13px; font-weight:600; text-decoration:none; cursor:pointer;
+    border:1px solid transparent;
+  }
+  .btn-inv.primary { background:#0ea5e9; color:#fff;}
+  .btn-inv.primary:disabled { background:#cbd5e1; cursor: not-allowed; }
+  .btn-inv.primary:hover:not(:disabled) { background:#0284c7; }
+  .btn-inv.ghost { background:#fff; color:#0f172a; border-color:#e2e8f0;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="nw-shell">
+  <div class="nw-head">
+    <div>
+      <h1>New Invoice</h1>
+      <p>Use a saved template for consistency, or build from a letterhead fresh.</p>
+    </div>
+    <a href="{% url 'invoice_dashboard' %}" class="btn-inv ghost">
+      <i class="bi bi-arrow-left"></i> Back to Dashboard
+    </a>
+  </div>
+
+  <div class="mode-tabs" role="tablist">
+    <button type="button" class="mode-tab active" data-mode="template">
+      <i class="bi bi-collection"></i> Use a Template
+    </button>
+    <button type="button" class="mode-tab" data-mode="fresh">
+      <i class="bi bi-file-earmark-plus"></i> Start Fresh
+    </button>
+  </div>
+
+  <!-- ── Template mode ───────────────────────────────────────────────── -->
+  <div id="mode-template">
+
+    {% if my_templates or shared_templates %}
+
+      {% if my_templates %}
+        <div class="nw-card">
+          <div class="tmpl-section-title">My Templates ({{ my_templates|length }})</div>
+          <div class="tmpl-grid">
+            {% for tmpl in my_templates %}
+              <form method="post" action="{% url 'template_use' tmpl.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="tmpl-card"
+                        style="width: 100%; text-align: left; border: 1px solid #e2e8f0; font-family: inherit;">
+                  <div class="tmpl-header">
+                    <div class="tmpl-icon"><i class="bi bi-receipt"></i></div>
+                    <div style="min-width:0;">
+                      <div class="tmpl-name">{{ tmpl.name }}</div>
+                      <div class="tmpl-meta">
+                        <i class="bi bi-file-earmark-pdf" style="color:#ef4444"></i>
+                        {{ tmpl.letterhead.name|truncatechars:28 }}
+                      </div>
+                    </div>
+                  </div>
+                  {% if tmpl.description %}
+                    <div class="tmpl-desc">{{ tmpl.description|truncatechars:80 }}</div>
+                  {% endif %}
+                  <div class="tmpl-badges">
+                    {% if tmpl.locked_layout %}<span class="badge badge-locked"><i class="bi bi-lock-fill"></i> Locked</span>{% endif %}
+                    {% if tmpl.doc_type %}<span class="badge badge-type">{{ tmpl.get_doc_type_display }}</span>{% endif %}
+                    {% if tmpl.visibility == 'shared' %}<span class="badge badge-shared">Shared</span>{% else %}<span class="badge badge-personal">Personal</span>{% endif %}
+                    {% if tmpl.usage_count %}<span class="badge badge-personal">{{ tmpl.usage_count }}× used</span>{% endif %}
+                  </div>
+                </button>
+              </form>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+
+      {% if shared_templates %}
+        <div class="nw-card">
+          <div class="tmpl-section-title">Shared Templates ({{ shared_templates|length }})</div>
+          <div class="tmpl-grid">
+            {% for tmpl in shared_templates %}
+              <form method="post" action="{% url 'template_use' tmpl.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="tmpl-card"
+                        style="width: 100%; text-align: left; border: 1px solid #e2e8f0; font-family: inherit;">
+                  <div class="tmpl-header">
+                    <div class="tmpl-icon" style="background: linear-gradient(135deg,#8b5cf6,#6d28d9);"><i class="bi bi-people"></i></div>
+                    <div style="min-width:0;">
+                      <div class="tmpl-name">{{ tmpl.name }}</div>
+                      <div class="tmpl-meta">
+                        by {{ tmpl.owner.full_name|default:tmpl.owner.username|truncatechars:20 }}
+                      </div>
+                    </div>
+                  </div>
+                  {% if tmpl.description %}
+                    <div class="tmpl-desc">{{ tmpl.description|truncatechars:80 }}</div>
+                  {% endif %}
+                  <div class="tmpl-badges">
+                    {% if tmpl.locked_layout %}<span class="badge badge-locked"><i class="bi bi-lock-fill"></i> Locked</span>{% endif %}
+                    {% if tmpl.doc_type %}<span class="badge badge-type">{{ tmpl.get_doc_type_display }}</span>{% endif %}
+                    <span class="badge badge-shared">Shared</span>
+                  </div>
+                </button>
+              </form>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+
+      <div style="text-align: center; margin-top: 12px;">
+        <a href="{% url 'template_list' %}" class="btn-inv ghost">
+          <i class="bi bi-gear"></i> Manage All Templates
+        </a>
+      </div>
+
+    {% else %}
+      <div class="nw-card">
+        <div class="tmpl-empty">
+          <i class="bi bi-collection" style="font-size: 32px; color:#cbd5e1;"></i>
+          <h3 style="font-size: 15px; color:#475569; margin: 10px 0 4px;">No templates yet</h3>
+          <p style="margin: 0 0 14px;">Create your first invoice, then save it as a template from the builder.</p>
+          <button type="button" class="btn-inv primary" onclick="document.querySelector('[data-mode=fresh]').click()">
+            <i class="bi bi-file-earmark-plus"></i> Start Fresh
+          </button>
+        </div>
+      </div>
+    {% endif %}
+
+  </div>
+
+  <!-- ── Fresh mode ──────────────────────────────────────────────────── -->
+  <div id="mode-fresh" style="display:none;">
+    <form method="post" action="{% url 'invoice_new' %}" id="new-inv-form" enctype="multipart/form-data">
+      {% csrf_token %}
+
+      <div class="nw-card">
+        <div class="nw-label">1. Document Type</div>
+        <div class="type-grid">
+          {% for val, label in doc_type_choices %}
+          <label class="type-card {% if forloop.first %}selected{% endif %}" data-value="{{ val }}">
+            <input type="radio" name="doc_type" value="{{ val }}" {% if forloop.first %}checked{% endif %}>
+            <div class="name">{{ label }}</div>
+            <div class="desc">
+              {% if val == 'invoice' %}Standard billable invoice with tax and totals.
+              {% elif val == 'proforma' %}Quotation before the final invoice is issued.
+              {% else %}Goods dispatch record — no financial obligation.
+              {% endif %}
+            </div>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="nw-card">
+        <div class="nw-label">2. Letterhead PDF</div>
+
+        <div class="pick-tabs">
+          <button type="button" class="pick-tab active" data-tab="browse">
+            <i class="bi bi-folder2-open"></i> Browse Files
+          </button>
+          <button type="button" class="pick-tab" data-tab="upload">
+            <i class="bi bi-cloud-upload"></i> Upload New
+          </button>
+        </div>
+
+        <div id="tab-browse">
+          <input type="text" class="lh-search" id="lh-search" placeholder="Search PDFs by name…">
+          <div class="lh-list" id="lh-list">
+            {% for pdf in pdfs %}
+            <div class="lh-item" data-id="{{ pdf.id }}">
+              <i class="bi bi-file-earmark-pdf pdf-icon"></i>
+              <div class="meta">
+                <div class="n">{{ pdf.name }}</div>
+                <div class="s">{{ pdf.size_display }} · uploaded {{ pdf.created_at|date:"d M Y" }}
+                  by {{ pdf.uploaded_by.full_name|default:pdf.uploaded_by.username }}</div>
+              </div>
+              <i class="bi bi-check-circle-fill" style="color:#0ea5e9; font-size:20px; display:none;"></i>
+            </div>
+            {% empty %}
+            <div style="padding: 24px; text-align:center; color:#64748b; font-size: 13px;">
+              No PDFs found in files accessible to you. Upload one below.
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div id="tab-upload" style="display:none;">
+          <label class="upload-dropzone" id="dropzone">
+            <i class="bi bi-cloud-arrow-up-fill"></i>
+            <p><strong>Click to browse</strong> or drag a PDF letterhead here</p>
+            <p style="font-size: 11px; margin-top: 4px;">The file will be saved to your files app before being used.</p>
+            <input type="file" id="upload-input" accept="application/pdf" style="display:none;">
+          </label>
+          <div id="upload-status" style="margin-top: 10px; font-size: 13px; color:#475569;"></div>
+        </div>
+      </div>
+
+      <input type="hidden" name="letterhead_id" id="letterhead_id">
+
+      <div class="actions">
+        <a href="{% url 'invoice_dashboard' %}" class="btn-inv ghost">Cancel</a>
+        <button type="submit" class="btn-inv primary" id="create-btn" disabled>
+          <i class="bi bi-arrow-right"></i> Continue to Editor
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function(){
+  // Mode tabs
+  document.querySelectorAll('.mode-tab').forEach(t => t.addEventListener('click', () => {
+    document.querySelectorAll('.mode-tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    const mode = t.dataset.mode;
+    document.getElementById('mode-template').style.display = (mode === 'template') ? '' : 'none';
+    document.getElementById('mode-fresh').style.display    = (mode === 'fresh')    ? '' : 'none';
+  }));
+
+  // Doc type cards
+  const typeCards = document.querySelectorAll('.type-card');
+  typeCards.forEach(c => c.addEventListener('click', () => {
+    typeCards.forEach(x => x.classList.remove('selected'));
+    c.classList.add('selected');
+    c.querySelector('input').checked = true;
+  }));
+
+  // Browse/Upload tabs
+  const tabs = document.querySelectorAll('.pick-tab');
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    const which = t.dataset.tab;
+    document.getElementById('tab-browse').style.display = (which === 'browse') ? '' : 'none';
+    document.getElementById('tab-upload').style.display = (which === 'upload') ? '' : 'none';
+  }));
+
+  // Letterhead picker
+  const lhList = document.getElementById('lh-list');
+  const lhIdInput = document.getElementById('letterhead_id');
+  const createBtn = document.getElementById('create-btn');
+  function selectItem(el){
+    lhList.querySelectorAll('.lh-item').forEach(x => {
+      x.classList.remove('selected');
+      x.querySelector('.bi-check-circle-fill').style.display = 'none';
+    });
+    el.classList.add('selected');
+    el.querySelector('.bi-check-circle-fill').style.display = '';
+    lhIdInput.value = el.dataset.id;
+    createBtn.disabled = false;
+  }
+  lhList.addEventListener('click', (e) => {
+    const item = e.target.closest('.lh-item');
+    if (item) selectItem(item);
+  });
+
+  // Search
+  const search = document.getElementById('lh-search');
+  let searchTimer = null;
+  search.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(async () => {
+      const q = encodeURIComponent(search.value.trim());
+      const res = await fetch(`{% url 'invoice_letterheads' %}?q=${q}`);
+      const data = await res.json();
+      lhList.innerHTML = '';
+      if (!data.pdfs.length) {
+        lhList.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;font-size:13px;">No matching PDFs.</div>';
+        return;
+      }
+      data.pdfs.forEach(p => {
+        const div = document.createElement('div');
+        div.className = 'lh-item';
+        div.dataset.id = p.id;
+        div.innerHTML = `
+          <i class="bi bi-file-earmark-pdf pdf-icon"></i>
+          <div class="meta">
+            <div class="n"></div>
+            <div class="s"></div>
+          </div>
+          <i class="bi bi-check-circle-fill" style="color:#0ea5e9; font-size:20px; display:none;"></i>`;
+        div.querySelector('.n').textContent = p.name;
+        div.querySelector('.s').textContent = `${p.size_display} · uploaded ${p.created_at} by ${p.uploaded_by}`;
+        lhList.appendChild(div);
+      });
+    }, 220);
+  });
+
+  // Upload
+  const dz = document.getElementById('dropzone');
+  const fi = document.getElementById('upload-input');
+  const st = document.getElementById('upload-status');
+  dz.addEventListener('click', () => fi.click());
+  ;['dragenter','dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('drag'); }));
+  ;['dragleave','drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('drag'); }));
+  dz.addEventListener('drop', e => {
+    if (e.dataTransfer.files.length) { fi.files = e.dataTransfer.files; doUpload(); }
+  });
+  fi.addEventListener('change', doUpload);
+
+  async function doUpload(){
+    if (!fi.files.length) return;
+    const f = fi.files[0];
+    if (f.type !== 'application/pdf' && !f.name.toLowerCase().endsWith('.pdf')) {
+      st.innerHTML = '<span style="color:#dc2626">Only PDF files accepted.</span>'; return;
+    }
+    st.textContent = 'Uploading…';
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('name', f.name);
+    fd.append('visibility', 'private');
+    const csrf = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    try {
+      const res = await fetch('{% url "file_upload" %}', {
+        method: 'POST', body: fd, headers: { 'X-CSRFToken': csrf },
+      });
+      if (!res.ok) throw new Error('Upload failed');
+      const data = await res.json().catch(() => ({}));
+      const newId = (data.file && data.file.id) || data.id;
+      if (newId) {
+        lhIdInput.value = newId;
+        createBtn.disabled = false;
+        st.innerHTML = '<span style="color:#16a34a"><i class="bi bi-check-circle"></i> Uploaded. Click Continue.</span>';
+      } else {
+        st.innerHTML = '<span style="color:#16a34a">Uploaded — switch to Browse tab and select it.</span>';
+      }
+    } catch (err) {
+      st.innerHTML = '<span style="color:#dc2626">Upload failed: ' + err.message + '</span>';
+    }
+  }
+})();
+</script>
+{% endblock %}

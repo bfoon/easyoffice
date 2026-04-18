@@ -49,6 +49,7 @@ urlpatterns = [
     # API
     path('api/v1/', include('apps.core.urls.api')),
     path('letterhead/', include('apps.letterhead.urls')),
+    path('invoices/', include('apps.invoices.urls')),
 
 ]
 

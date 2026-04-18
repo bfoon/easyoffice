@@ -169,6 +169,15 @@ class LetterheadTemplate(models.Model):
         ),
     )
 
+    # ── Body content ──────────────────────────────────────────────────────
+    # Rich HTML authored in the builder's editable page body. Persisted so
+    # the user's draft is recovered on reload and so the exporters can
+    # render it below the letterhead header.
+    body_html = models.TextField(
+        blank=True, default='',
+        help_text='User-edited HTML for the page body (below the header).',
+    )
+
     # ── Audit ─────────────────────────────────────────────────────────────
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -274,6 +283,8 @@ class LetterheadTemplate(models.Model):
             # Always include the resolved table presets so the JS builder
             # never has to guess whether to use defaults or custom data.
             'default_tables':  self.get_tables(),
+            # User-edited body content (HTML). Empty string if never edited.
+            'body_html':       self.body_html or '',
         }
 
     @classmethod

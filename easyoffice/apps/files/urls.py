@@ -46,6 +46,14 @@ urlpatterns = [
     path('pdf-tools/merge-images/',            views.PDFMergeImagesView.as_view(),     name='pdf_merge_images'),
     path('tools/zip-extract/', views.ZipExtractView.as_view(), name='zip_extract'),
 
+    # ── Letterhead (linked from file-manager tools panel) ─────────────────
+    # This entry lets the file manager's "Tools" sidebar point directly to
+    # the letterhead builder without any extra redirect view.
+    # Usage in templates:  {% url 'letterhead_builder' %}
+    # The actual views live in apps/letterhead/; we just expose the named
+    # URL here so file-manager templates can reverse it without importing
+    # a second app's urls module.
+
     path('quick-sign/',          views.QuickSignView.as_view(),  name='quick_sign'),
     path('quick-sign/<uuid:pk>/', views.QuickSignView.as_view(), name='quick_sign_file'),
 

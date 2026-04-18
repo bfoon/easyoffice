@@ -1,40 +1,1611 @@
 {% comment %}
-templates/letterhead/builder.html
-
-The letterhead builder SPA shell.
-The entire builder UI (canvas, panel, export) runs in the browser.
-This template just boots it with the saved state from the server.
+templates/letterhead/builder.html — Full featured letterhead builder SPA
 {% endcomment %}
 {% load static %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Letterhead Builder</title>
-  {% block extra_css %}{% endblock %}
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Letterhead Builder</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"/>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#eef2f7;--surface:#fff;--border:#e0e7ef;--text:#0d1b2a;--muted:#6b7a90;
+  --primary:#1a7f5e;--primary-d:#155f47;--primary-l:#e8f7f2;
+  --accent:#f59e0b;--danger:#e53e3e;--info:#3b82f6;
+  --radius:10px;--shadow:0 2px 16px rgba(13,27,42,.09);
+}
+html,body{height:100%}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);
+  display:flex;flex-direction:column;overflow:hidden}
+
+/* ── Topbar ─────────────────────────────────────────────── */
+.bar{height:54px;flex-shrink:0;background:var(--text);display:flex;align-items:center;
+  gap:12px;padding:0 18px;position:relative;z-index:200}
+.bar-logo{display:flex;align-items:center;gap:8px;color:#fff;font-size:.9rem;font-weight:800;
+  text-decoration:none;padding:5px 10px;border-radius:8px;transition:background .15s}
+.bar-logo:hover{background:rgba(255,255,255,.1)}
+.bar-logo i{font-size:1.2rem;color:var(--primary)}
+.bar-sep{width:1px;height:24px;background:rgba(255,255,255,.15)}
+.bar-title{color:rgba(255,255,255,.9);font-size:.85rem;font-weight:600}
+.bar-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
+.bar-tpl-name{color:rgba(255,255,255,.5);font-size:.78rem;font-style:italic}
+
+/* ── Layout ─────────────────────────────────────────────── */
+.shell{flex:1;display:grid;grid-template-columns:260px 1fr 320px;overflow:hidden;min-height:0}
+
+/* ── Panels ─────────────────────────────────────────────── */
+.panel{background:var(--surface);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;overflow:hidden}
+.panel.right{border-right:none;border-left:1px solid var(--border)}
+.ph{padding:11px 14px 9px;border-bottom:1px solid var(--border);flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ph-title{font-size:.64rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
+.pb{flex:1;overflow-y:auto;padding:13px 14px;display:flex;flex-direction:column;gap:11px}
+
+/* ── Canvas ─────────────────────────────────────────────── */
+.canvas{overflow-y:auto;padding:28px;background:var(--bg);display:flex;
+  flex-direction:column;align-items:center;gap:20px;position:relative}
+.canvas-toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:8px 12px;box-shadow:var(--shadow);width:100%;max-width:720px;flex-shrink:0}
+.ct-sep{width:1px;height:20px;background:var(--border);margin:0 4px}
+.ct-label{font-size:.64rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+
+/* ── Page preview ───────────────────────────────────────── */
+.page{background:#fff;width:100%;max-width:720px;min-height:920px;
+  border-radius:3px;box-shadow:0 6px 40px rgba(13,27,42,.16);
+  display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;
+  transition:box-shadow .2s}
+.page:hover{box-shadow:0 8px 50px rgba(13,27,42,.22)}
+.page-body{flex:1;padding:20px 30px;font-size:11px;color:#444;line-height:1.9;
+  outline:none;min-height:200px}
+.page-body:focus{outline:2px solid var(--primary-l);outline-offset:-2px}
+.page-body p{margin-bottom:11px}
+.placeholder-text{color:#b0bec5!important;font-style:italic}
+
+/* ── Buttons ────────────────────────────────────────────── */
+.btn{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;
+  border-radius:var(--radius);font-size:.77rem;font-weight:700;cursor:pointer;
+  border:1px solid var(--border);background:var(--surface);color:var(--text);
+  transition:background .12s,border-color .12s,color .12s;text-decoration:none;
+  white-space:nowrap}
+.btn:hover{background:var(--bg)}
+.btn.pri{background:var(--primary);color:#fff;border-color:var(--primary)}
+.btn.pri:hover{background:var(--primary-d);border-color:var(--primary-d)}
+.btn.ghost{background:transparent;border:none;color:var(--muted);padding:5px 8px}
+.btn.ghost:hover{background:var(--bg);color:var(--text)}
+.btn.danger{color:var(--danger);border-color:#fecaca}
+.btn.danger:hover{background:#fef2f2}
+.btn.sm{padding:4px 9px;font-size:.7rem}
+.btn.xs{padding:2px 7px;font-size:.66rem}
+.btn.active-btn{background:var(--primary-l);border-color:var(--primary);color:var(--primary)}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+
+/* ── Toolbar icon buttons ───────────────────────────────── */
+.tb-btn{display:inline-flex;align-items:center;justify-content:center;
+  width:28px;height:28px;border-radius:6px;font-size:.8rem;cursor:pointer;
+  border:1px solid transparent;background:transparent;color:var(--text);
+  transition:background .1s,border-color .1s}
+.tb-btn:hover{background:var(--bg);border-color:var(--border)}
+.tb-btn.on{background:var(--primary-l);border-color:var(--primary);color:var(--primary)}
+select.tb-select{height:28px;border:1px solid var(--border);border-radius:6px;
+  font-size:.72rem;padding:0 6px;background:var(--surface);color:var(--text);cursor:pointer}
+input.tb-color{width:28px;height:28px;border:1px solid var(--border);
+  border-radius:6px;padding:2px;cursor:pointer;background:var(--surface)}
+input.tb-size{width:44px;height:28px;border:1px solid var(--border);
+  border-radius:6px;font-size:.72rem;padding:0 5px;text-align:center}
+
+/* ── Form fields ────────────────────────────────────────── */
+.fld{display:flex;flex-direction:column;gap:3px}
+.fld label{font-size:.62rem;font-weight:800;text-transform:uppercase;
+  letter-spacing:.07em;color:var(--muted)}
+.fld input,.fld textarea,.fld select{padding:6px 9px;border:1px solid var(--border);
+  border-radius:7px;font-size:.8rem;background:var(--surface);color:var(--text);
+  outline:none;width:100%;transition:border-color .15s}
+.fld input:focus,.fld textarea:focus,.fld select:focus{border-color:var(--primary)}
+.fld textarea{resize:vertical;min-height:52px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.color-row{display:flex;gap:5px;align-items:center}
+.color-row input[type=color]{width:32px;height:30px;border:1px solid var(--border);
+  border-radius:6px;padding:2px;cursor:pointer}
+.color-row input[type=text]{flex:1;font-size:.75rem;font-family:monospace;
+  padding:5px 7px;border:1px solid var(--border);border-radius:6px}
+
+/* ── Style picker cards ─────────────────────────────────── */
+.style-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.scard{border:2px solid var(--border);border-radius:9px;padding:8px 4px 6px;
+  text-align:center;cursor:pointer;font-size:.62rem;font-weight:800;
+  color:var(--muted);background:var(--surface);transition:all .15s;
+  display:flex;flex-direction:column;align-items:center;gap:2px}
+.scard:hover,.scard.on{border-color:var(--primary);color:var(--primary);background:var(--primary-l)}
+.scard i{font-size:1.3rem}
+.scard .preview-mini{width:100%;height:28px;border-radius:4px;overflow:hidden;margin-bottom:2px;border:1px solid var(--border)}
+
+/* ── Template list cards ────────────────────────────────── */
+.tcard{border:1px solid var(--border);border-radius:var(--radius);padding:9px 11px;
+  cursor:pointer;transition:all .15s;background:var(--surface);position:relative}
+.tcard:hover{border-color:var(--primary);box-shadow:0 2px 12px rgba(26,127,94,.1)}
+.tcard.sel{border-color:var(--primary);background:var(--primary-l);
+  box-shadow:0 2px 12px rgba(26,127,94,.12)}
+.tcard-name{font-size:.82rem;font-weight:700;color:var(--text)}
+.tcard-sub{font-size:.68rem;color:var(--muted);margin-top:1px}
+.tcard-color-dot{width:10px;height:10px;border-radius:50%;display:inline-block;
+  margin-right:4px;border:1px solid rgba(0,0,0,.1)}
+.badge-active{display:inline-flex;align-items:center;gap:3px;padding:1px 7px;
+  border-radius:999px;font-size:.58rem;font-weight:800;
+  background:#dcfce7;color:#15803d;letter-spacing:.02em}
+.tcard-del{background:none;border:none;color:#94a3b8;cursor:pointer;
+  padding:3px 5px;border-radius:5px;font-size:.78rem;line-height:1;
+  transition:all .12s;display:inline-flex;align-items:center;justify-content:center}
+.tcard-del:hover{background:#fee2e2;color:var(--danger)}
+
+/* ── Logo drop ──────────────────────────────────────────── */
+.logo-drop{border:2px dashed var(--border);border-radius:9px;padding:14px;
+  text-align:center;cursor:pointer;transition:all .15s;position:relative;overflow:hidden}
+.logo-drop:hover{border-color:var(--primary);background:var(--primary-l)}
+.logo-drop input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+
+/* ── Sample templates grid ──────────────────────────────── */
+.sample-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.sample-card{border:1px solid var(--border);border-radius:9px;overflow:hidden;
+  cursor:pointer;transition:all .15s;background:var(--surface)}
+.sample-card:hover{border-color:var(--primary);box-shadow:0 3px 14px rgba(26,127,94,.15);transform:translateY(-1px)}
+.sample-preview{height:72px;position:relative;overflow:hidden}
+.sample-label{padding:6px 9px;font-size:.7rem;font-weight:700;color:var(--text);
+  border-top:1px solid var(--border)}
+
+/* ── Preset cards ───────────────────────────────────────── */
+.preset-card{border:1px solid var(--border);border-radius:8px;padding:8px 10px;
+  cursor:grab;transition:border-color .15s}
+.preset-card:hover{border-color:var(--primary)}
+.preset-card.dragging{opacity:.4;cursor:grabbing}
+.chips{display:flex;flex-wrap:wrap;gap:3px;margin-top:4px}
+.chip{padding:1px 6px;border-radius:999px;font-size:.6rem;font-weight:600;
+  background:var(--bg);border:1px solid var(--border);color:var(--muted)}
+.sbadge{padding:1px 6px;border-radius:999px;font-size:.58rem;font-weight:800;text-transform:uppercase}
+.s-str{background:#dbeafe;color:#1d4ed8}.s-brd{background:#dcfce7;color:#166534}.s-min{background:#f1f5f9;color:#475569}
+
+/* ── Toast ──────────────────────────────────────────────── */
+#toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(50px);
+  background:var(--text);color:#fff;padding:9px 20px;border-radius:10px;
+  font-size:.8rem;font-weight:600;z-index:9999;
+  transition:transform .22s,opacity .22s;opacity:0;pointer-events:none;
+  display:flex;align-items:center;gap:7px}
+#toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+
+/* ── Modal ──────────────────────────────────────────────── */
+.modal-bg{position:fixed;inset:0;background:rgba(13,27,42,.5);
+  display:flex;align-items:center;justify-content:center;z-index:1000;padding:16px}
+.modal-bg.hidden{display:none}
+.modal{background:var(--surface);border-radius:14px;
+  box-shadow:0 24px 64px rgba(13,27,42,.25);
+  width:100%;max-width:500px;max-height:92vh;overflow-y:auto;padding:24px}
+.modal h2{font-size:.96rem;font-weight:800;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.modal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+
+/* ── Tabs ───────────────────────────────────────────────── */
+.tab-bar{display:flex;gap:2px;background:var(--bg);border-radius:8px;padding:3px}
+.tab-btn{padding:4px 11px;border-radius:6px;font-size:.7rem;font-weight:700;
+  cursor:pointer;border:none;background:transparent;color:var(--muted);transition:all .15s}
+.tab-btn.on{background:var(--surface);color:var(--text);
+  box-shadow:0 1px 4px rgba(13,27,42,.1)}
+
+/* ── Divider ────────────────────────────────────────────── */
+hr.dv{border:none;border-top:1px solid var(--border);margin:3px 0}
+
+/* ── Empty state ────────────────────────────────────────── */
+.empty{text-align:center;padding:40px 16px;color:var(--muted)}
+.empty i{font-size:2.4rem;display:block;margin-bottom:8px;opacity:.25}
+
+/* ── Section label ──────────────────────────────────────── */
+.sec-label{font-size:.6rem;font-weight:800;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--muted);margin-bottom:6px;display:block}
+
+/* ── Export btn group ───────────────────────────────────── */
+.export-btns{display:flex;gap:6px;flex-wrap:wrap}
+.export-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;
+  border-radius:var(--radius);font-size:.77rem;font-weight:700;cursor:pointer;
+  border:1px solid var(--border);background:var(--surface);color:var(--text);
+  text-decoration:none;transition:all .15s;flex:1;justify-content:center}
+.export-btn:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-l)}
+.export-btn.docx i{color:#2b7cd3}
+.export-btn.pdf  i{color:#e53e3e}
+.export-btn.png  i{color:#a855f7}
+
+
+/* ── Draggable elements in page body ────────────────────── */
+.dg-el{position:relative;cursor:default}
+.dg-el[data-draggable="true"]{cursor:grab}
+.dg-el[data-draggable="true"]:active{cursor:grabbing}
+.dg-el:hover .el-toolbar,
+.dg-el.drag-ghost .el-toolbar{opacity:1;pointer-events:all}
+.el-toolbar{
+  position:absolute;top:-28px;left:0;
+  display:flex;gap:2px;align-items:center;
+  background:var(--text);border-radius:6px;padding:3px 5px;
+  opacity:0;pointer-events:none;transition:opacity .15s;
+  z-index:100;white-space:nowrap;
+  user-select:none;-webkit-user-select:none;
+}
+.el-toolbar button{
+  background:none;border:none;color:#fff;cursor:pointer;
+  padding:2px 5px;border-radius:4px;font-size:11px;
+  display:inline-flex;align-items:center;gap:3px;
+  transition:background .1s;
+}
+.el-toolbar button:hover{background:rgba(255,255,255,.15)}
+.el-toolbar .el-drag-handle{
+  cursor:grab;padding:3px 6px;color:rgba(255,255,255,.7);
+  font-size:13px;line-height:1;user-select:none;
+  -webkit-user-select:none;-webkit-user-drag:none;
+}
+.el-toolbar .el-drag-handle:hover{color:#fff;background:rgba(255,255,255,.12);border-radius:4px}
+.el-toolbar .el-drag-handle:active{cursor:grabbing}
+.el-toolbar .el-sep{width:1px;height:14px;background:rgba(255,255,255,.2);margin:0 2px}
+
+/* Global state while a drag is in progress — disables text selection
+   and caret placement so the browser doesn't fight the drag logic. */
+body.dragging-active{
+  user-select:none!important;-webkit-user-select:none!important;
+  cursor:grabbing!important;
+}
+body.dragging-active *{
+  user-select:none!important;-webkit-user-select:none!important;
+}
+
+/* ── Drag ghost ─────────────────────────────────────────── */
+.drag-ghost{
+  opacity:.35;background:#e8f7f2!important;
+  outline:2px dashed var(--primary)!important;
+}
+
+/* ── Drop indicator ─────────────────────────────────────── */
+.drop-before{border-top:3px solid var(--primary)!important}
+.drop-after{border-bottom:3px solid var(--primary)!important}
+
+/* ── Icon picker modal ──────────────────────────────────── */
+#icon-modal .modal{max-width:620px}
+.icon-search{width:100%;padding:7px 10px;border:1px solid var(--border);
+  border-radius:8px;font-size:.82rem;margin-bottom:12px;outline:none}
+.icon-search:focus{border-color:var(--primary)}
+.icon-grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(48px,1fr));
+  gap:4px;max-height:320px;overflow-y:auto;
+}
+.icon-btn{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:8px 4px;border:1px solid transparent;border-radius:7px;
+  cursor:pointer;background:var(--surface);gap:3px;transition:all .12s;
+}
+.icon-btn:hover{border-color:var(--primary);background:var(--primary-l)}
+.icon-btn i{font-size:1.2rem}
+.icon-btn span{font-size:.56rem;color:var(--muted);text-align:center;
+  line-height:1.2;word-break:break-all;max-width:46px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.icon-btn.sel{border-color:var(--primary);background:var(--primary-l)}
+.icon-size-row{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.icon-color-row{display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.icon-preview{
+  width:60px;height:60px;border:1px solid var(--border);border-radius:10px;
+  display:flex;align-items:center;justify-content:center;font-size:2rem;
+}
+
+/* ── Table resize handles (subtle) ─────────────────────── */
+.page-body table td,
+.page-body table th{
+  position:relative;min-width:30px;
+}
+
+@media(max-width:1000px){
+  .shell{grid-template-columns:1fr;grid-template-rows:auto 1fr auto}
+  .panel.right{border-left:none;border-top:1px solid var(--border)}
+}
+</style>
 </head>
 <body>
 
-{# ── Builder mount point ─────────────────────────────────────────────────── #}
-<div id="letterhead-builder-root"
-     data-active-template="{{ active_template_json|escapejs }}">
+<!-- Topbar -->
+<div class="bar">
+  <a href="{% url 'file_manager' %}?tab=tools" class="bar-logo">
+    <i class="bi bi-arrow-left-circle-fill"></i> Files
+  </a>
+  <div class="bar-sep"></div>
+  <span class="bar-title">Letterhead Builder</span>
+  <span class="bar-tpl-name" id="bar-tpl-name"></span>
+  <div class="bar-actions">
+    <button class="btn sm" style="background:rgba(255,255,255,.1);color:#fff;border-color:rgba(255,255,255,.2)"
+      id="btn-samples"><i class="bi bi-grid-3x3-gap"></i> Samples</button>
+    <button class="btn pri sm" id="btn-new"><i class="bi bi-plus-lg"></i> New Template</button>
+  </div>
 </div>
 
-{# ── Saved-templates sidebar data (injected for the JS list view) ─────────── #}
+<!-- Main shell -->
+<div class="shell">
+
+  <!-- LEFT: template list -->
+  <div class="panel">
+    <div class="ph">
+      <span class="ph-title">Templates</span>
+      <span id="tpl-count" style="font-size:.66rem;color:var(--muted)"></span>
+    </div>
+    <div class="pb" id="tpl-list">
+      <div class="empty"><i class="bi bi-file-richtext"></i>
+        <div style="font-size:.8rem;font-weight:700;color:var(--text);margin-bottom:3px">No templates</div>
+        <div style="font-size:.72rem">Use "New" or "Samples"</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CENTRE: canvas + rich-text toolbar -->
+  <div class="canvas" id="canvas">
+    <div style="text-align:center;padding:60px 20px;color:var(--muted);max-width:500px">
+      <i class="bi bi-layout-text-window" style="font-size:3.2rem;display:block;margin-bottom:12px;opacity:.2"></i>
+      <div style="font-size:1rem;font-weight:800;color:var(--text);margin-bottom:7px">Select or create a template</div>
+      <div style="font-size:.82rem">Your live letterhead preview appears here. Click to edit text inline.</div>
+    </div>
+  </div>
+
+  <!-- RIGHT: edit panel -->
+  <div class="panel right">
+    <div class="ph">
+      <span class="ph-title">Properties</span>
+      <div class="tab-bar">
+        <button class="tab-btn on" id="tab-design-btn" onclick="switchTab('design')">Design</button>
+        <button class="tab-btn" id="tab-tables-btn" onclick="switchTab('tables')">Tables</button>
+      </div>
+    </div>
+
+    <!-- Design Tab -->
+    <div class="pb" id="design-tab">
+      <div id="no-tpl-msg" style="text-align:center;padding:32px 0;color:var(--muted);font-size:.78rem">
+        Select a template to edit
+      </div>
+      <div id="edit-form" style="display:none;flex-direction:column;gap:11px">
+
+        <!-- Style picker -->
+        <div>
+          <span class="sec-label">Layout Style</span>
+          <div class="style-grid" id="style-grid">
+            <div class="scard on" data-k="classic" onclick="setStyle('classic')">
+              <div class="preview-mini" id="mini-classic"></div>Classic</div>
+            <div class="scard" data-k="modern" onclick="setStyle('modern')">
+              <div class="preview-mini" id="mini-modern"></div>Modern</div>
+            <div class="scard" data-k="bold" onclick="setStyle('bold')">
+              <div class="preview-mini" id="mini-bold"></div>Bold</div>
+            <div class="scard" data-k="minimal" onclick="setStyle('minimal')">
+              <div class="preview-mini" id="mini-minimal"></div>Minimal</div>
+            <div class="scard" data-k="split" onclick="setStyle('split')">
+              <div class="preview-mini" id="mini-split"></div>Split</div>
+            <div class="scard" data-k="elegant" onclick="setStyle('elegant')">
+              <div class="preview-mini" id="mini-elegant"></div>Elegant</div>
+          </div>
+        </div>
+
+        <hr class="dv">
+
+        <div class="fld"><label>Template Name</label>
+          <input id="f-name" placeholder="e.g. Main Office Letterhead"></div>
+        <div class="fld"><label>Company Name *</label>
+          <input id="f-company" placeholder="e.g. Acme Corporation Ltd"></div>
+        <div class="fld"><label>Tagline / Motto</label>
+          <input id="f-tagline" placeholder="Innovation · Excellence · Integrity"></div>
+        <div class="fld"><label>Address</label>
+          <textarea id="f-address" placeholder="14 Independence Drive&#10;Banjul, The Gambia"></textarea></div>
+        <div class="fld"><label>Contact Info</label>
+          <input id="f-contact" placeholder="+220 123 4567  |  info@company.com  |  www.company.gm"></div>
+
+        <hr class="dv">
+
+        <!-- Colors -->
+        <div>
+          <span class="sec-label">Brand Colors</span>
+          <div class="row2">
+            <div class="fld"><label>Primary</label>
+              <div class="color-row">
+                <input type="color" id="cp-p" value="#1D9E75">
+                <input type="text" id="f-cp" value="#1D9E75" maxlength="7" placeholder="#1D9E75">
+              </div></div>
+            <div class="fld"><label>Secondary</label>
+              <div class="color-row">
+                <input type="color" id="cp-s" value="#2C2C2A">
+                <input type="text" id="f-cs" value="#2C2C2A" maxlength="7" placeholder="#2C2C2A">
+              </div></div>
+          </div>
+        </div>
+
+        <!-- Fonts -->
+        <div>
+          <span class="sec-label">Typography</span>
+          <div class="row2">
+            <div class="fld"><label>Header Font</label>
+              <select id="f-fh">
+                <option value="Georgia">Georgia</option>
+                <option value="'Times New Roman'">Times New Roman</option>
+                <option value="Palatino">Palatino</option>
+                <option value="Arial">Arial</option>
+                <option value="Helvetica">Helvetica</option>
+                <option value="Verdana">Verdana</option>
+                <option value="Trebuchet MS">Trebuchet MS</option>
+                <option value="'Courier New'">Courier New</option>
+              </select></div>
+            <div class="fld"><label>Body Font</label>
+              <select id="f-fb">
+                <option value="Arial">Arial</option>
+                <option value="Helvetica">Helvetica</option>
+                <option value="Georgia">Georgia</option>
+                <option value="'Times New Roman'">Times New Roman</option>
+                <option value="Verdana">Verdana</option>
+                <option value="Trebuchet MS">Trebuchet MS</option>
+                <option value="'Courier New'">Courier New</option>
+              </select></div>
+          </div>
+        </div>
+
+        <hr class="dv">
+
+        <!-- Logo -->
+        <div>
+          <span class="sec-label">Logo</span>
+          <div class="logo-drop" id="logo-drop">
+            <input type="file" id="f-logo" accept="image/png,image/jpeg,image/svg+xml,image/webp">
+            <div id="logo-inner">
+              <i class="bi bi-image" style="font-size:1.4rem;color:var(--muted);display:block;margin-bottom:3px"></i>
+              <div style="font-size:.74rem;color:var(--muted)">Click or drag to upload logo</div>
+              <div style="font-size:.64rem;color:var(--muted);margin-top:2px">PNG, JPG, SVG, WEBP · Max 2 MB</div>
+            </div>
+          </div>
+          <div style="margin-top:6px;display:flex;gap:5px" id="logo-actions" style="display:none">
+            <button class="btn xs danger" id="btn-rm-logo" style="display:none"><i class="bi bi-trash"></i> Remove logo</button>
+          </div>
+        </div>
+
+        <hr class="dv">
+
+        <!-- Actions -->
+        <div style="display:flex;gap:7px;flex-wrap:wrap">
+          <button class="btn pri" id="btn-save" style="flex:1"><i class="bi bi-check-lg"></i> Save</button>
+          <button class="btn" id="btn-star" title="Set as default/active"><i class="bi bi-star"></i></button>
+          <button class="btn" id="btn-dup" title="Duplicate template"><i class="bi bi-copy"></i></button>
+          <button class="btn danger" id="btn-del"><i class="bi bi-trash"></i></button>
+        </div>
+
+        <!-- Export -->
+        <div>
+          <span class="sec-label">Export</span>
+          <div class="export-btns">
+            <a class="export-btn docx" id="ex-docx" href="#"><i class="bi bi-file-word-fill"></i> Word</a>
+            <a class="export-btn pdf"  id="ex-pdf"  href="#"><i class="bi bi-file-pdf-fill"></i> PDF</a>
+            <a class="export-btn png"  id="ex-png"  href="#"><i class="bi bi-file-image-fill"></i> Image</a>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Tables Tab -->
+    <div class="pb" id="tables-tab" style="display:none;flex-direction:column;gap:9px">
+      <div id="reset-bar" style="display:none;padding:7px 9px;background:#fef9c3;
+        border:1px solid #fde68a;border-radius:8px;font-size:.7rem;color:#92400e;
+        align-items:center;justify-content:space-between;gap:7px">
+        <span><i class="bi bi-pencil"></i> Custom presets active</span>
+        <button class="btn xs" id="btn-reset-presets">Reset</button>
+      </div>
+      <div id="presets-list" style="display:flex;flex-direction:column;gap:7px"></div>
+      <button class="btn sm" id="btn-add-preset" style="align-self:flex-start">
+        <i class="bi bi-plus-lg"></i> Add preset</button>
+      <div id="add-preset-form" style="display:none;flex-direction:column;gap:8px;
+        padding:11px;background:var(--bg);border:1px dashed var(--border);border-radius:var(--radius)">
+        <div class="fld"><label>Label</label><input id="ap-l" placeholder="e.g. Invoice"></div>
+        <div class="fld"><label>Columns (comma-separated)</label>
+          <input id="ap-c" placeholder="Item, Qty, Unit Price, Total"></div>
+        <div class="row2">
+          <div class="fld"><label>Rows</label><input id="ap-r" type="number" min="1" max="20" value="4"></div>
+          <div class="fld"><label>Style</label>
+            <select id="ap-s">
+              <option value="striped">Striped</option>
+              <option value="bordered">Bordered</option>
+              <option value="minimal">Minimal</option>
+            </select></div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn pri sm" id="btn-save-preset">Add</button>
+          <button class="btn sm" id="btn-cancel-preset">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- New Template Modal -->
+<div class="modal-bg hidden" id="new-modal">
+  <div class="modal">
+    <h2><i class="bi bi-file-richtext" style="color:var(--primary)"></i> New Letterhead Template</h2>
+    <div style="display:flex;flex-direction:column;gap:11px">
+      <div class="fld"><label>Template Name *</label>
+        <input id="m-name" placeholder="e.g. Main Office Letterhead"></div>
+      <div class="fld"><label>Company Name *</label>
+        <input id="m-company" placeholder="e.g. Acme Corporation Ltd"></div>
+      <div class="fld"><label>Starting Style</label>
+        <select id="m-style">
+          <option value="classic">Classic</option><option value="modern">Modern</option>
+          <option value="bold">Bold</option><option value="minimal">Minimal</option>
+          <option value="split">Split</option><option value="elegant">Elegant</option>
+        </select></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="m-cancel">Cancel</button>
+      <button class="btn pri" id="m-create">Create Template</button>
+    </div>
+  </div>
+</div>
+
+<!-- Samples Modal -->
+<div class="modal-bg hidden" id="samples-modal">
+  <div class="modal" style="max-width:600px">
+    <h2><i class="bi bi-grid-3x3-gap" style="color:var(--primary)"></i> Sample Templates</h2>
+    <p style="font-size:.78rem;color:var(--muted);margin-bottom:14px">Click any sample to load it as a new template — fully editable.</p>
+    <div class="sample-grid" id="samples-grid"></div>
+    <div class="modal-foot">
+      <button class="btn" id="samples-close">Close</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Icon Picker Modal -->
+<div class="modal-bg hidden" id="icon-modal">
+  <div class="modal" style="max-width:620px">
+    <h2><i class="bi bi-emoji-smile" style="color:var(--primary)"></i> Insert Icon</h2>
+    <input class="icon-search" type="text" id="icon-search" placeholder="Search icons…" oninput="renderIconGrid(this.value)">
+
+    <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:12px">
+      <div>
+        <div class="sec-label" style="margin-bottom:4px">Preview</div>
+        <div class="icon-preview" id="icon-preview-el">
+          <i class="bi bi-star-fill" style="font-size:24px;color:#1D9E75"></i>
+        </div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:9px">
+        <div class="icon-size-row">
+          <label class="sec-label" style="margin:0;white-space:nowrap">Size</label>
+          <input type="range" min="12" max="96" value="24" step="4" id="icon-size-range"
+            style="flex:1" oninput="_iconSize=+this.value;document.getElementById('icon-size-val').textContent=this.value+'px';updateIconPreview()">
+          <span style="font-size:.76rem;min-width:34px;color:var(--muted)" id="icon-size-val">24px</span>
+        </div>
+        <div class="icon-color-row">
+          <label class="sec-label" style="margin:0;white-space:nowrap">Color</label>
+          <input type="color" value="#1D9E75" id="icon-color-pick"
+            oninput="_iconColor=this.value;document.getElementById('icon-color-hex').value=this.value;updateIconPreview()"
+            style="width:34px;height:28px;border:1px solid var(--border);border-radius:6px;padding:2px;cursor:pointer">
+          <input type="text" value="#1D9E75" id="icon-color-hex" maxlength="7"
+            oninput="if(/^#[0-9a-f]{6}$/i.test(this.value)){_iconColor=this.value;document.getElementById('icon-color-pick').value=this.value;updateIconPreview()}"
+            style="flex:1;padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-size:.76rem;font-family:monospace">
+          <div id="icon-quick-colors" style="display:flex;gap:4px"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="icon-grid" id="icon-grid"></div>
+
+    <div class="modal-foot">
+      <button class="btn" onclick="document.getElementById('icon-modal').classList.add('hidden')">Cancel</button>
+      <button class="btn pri" onclick="insertIcon()"><i class="bi bi-plus-lg"></i> Insert Icon</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"><i class="bi bi-check-circle-fill"></i><span id="toast-msg"></span></div>
+
 <script>
-  window.LETTERHEAD = {
-    activeTemplate: {{ active_template_json|safe }},
-    apiBase: "{% url 'letterhead_api_list' %}",
-    csrfToken: "{{ csrf_token }}",
+window.LH={apiList:"{% url 'letterhead_api_list' %}",csrf:"{{ csrf_token }}"};
+
+/* ─── State ─────────────────────────────────────────────────────────── */
+let templates=[],currentId=null,currentData={},tables=[],dragSrc=null;
+
+/* ─── API helper ────────────────────────────────────────────────────── */
+async function api(url,method='GET',body=null,isForm=false){
+  const o={method,headers:{'X-CSRFToken':window.LH.csrf}};
+  if(body&&!isForm){o.headers['Content-Type']='application/json';o.body=JSON.stringify(body);}
+  else if(body&&isForm)o.body=body;
+  try{const r=await fetch(url,o);const d=await r.json();return{ok:r.ok,d};}
+  catch(e){return{ok:false,d:{error:e.message}};}
+}
+
+/* ─── Toast ─────────────────────────────────────────────────────────── */
+let _toastTimer;
+function toast(msg,type='ok'){
+  const el=document.getElementById('toast');
+  const icon=el.querySelector('i');
+  const span=document.getElementById('toast-msg');
+  icon.className='bi '+(type==='ok'?'bi-check-circle-fill':type==='err'?'bi-exclamation-circle-fill':'bi-info-circle-fill');
+  el.style.background=type==='err'?'#c53030':type==='warn'?'#c05621':'#0d1b2a';
+  span.textContent=msg;
+  el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer=setTimeout(()=>el.classList.remove('show'),2800);
+}
+
+/* ─── HTML escape ───────────────────────────────────────────────────── */
+const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+/* ═══════════════════════════════════════════════════════════════════════
+   TEMPLATE LIST
+   ═══════════════════════════════════════════════════════════════════════ */
+async function loadTemplates(){
+  const{ok,d}=await api(window.LH.apiList);
+  if(!ok){toast('Could not load templates','err');return;}
+  templates=d.templates||[];renderList();
+  document.getElementById('tpl-count').textContent=templates.length+' template'+(templates.length!==1?'s':'');
+}
+
+function renderList(){
+  const el=document.getElementById('tpl-list');
+  if(!templates.length){
+    el.innerHTML='<div class="empty"><i class="bi bi-file-richtext"></i><div style="font-size:.8rem;font-weight:700;color:var(--text);margin-bottom:3px">No templates</div><div style="font-size:.72rem">Use "New" or "Samples"</div></div>';return;
+  }
+  el.innerHTML='';
+  templates.forEach(t=>{
+    const c=document.createElement('div');
+    c.className='tcard'+(t.id===currentId?' sel':'');
+    c.innerHTML=`
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px;margin-bottom:5px">
+        <div style="min-width:0;flex:1">
+          <div class="tcard-name">${esc(t.name)}</div>
+          <div class="tcard-sub">
+            <span class="tcard-color-dot" style="background:${esc(t.color_primary)}"></span>
+            ${esc(t.company_name)} &middot; ${esc(t.template_key)}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+          ${t.is_active?'<span class="badge-active"><i class="bi bi-star-fill"></i> Active</span>':''}
+          <button class="tcard-del" onclick="deleteTplFromList('${t.id}',event)" title="Delete template">
+            <i class="bi bi-trash3"></i>
+          </button>
+        </div>
+      </div>
+      <div style="display:flex;gap:4px">
+        <button class="btn xs pri" onclick="selTpl('${t.id}')">Edit</button>
+        ${t.is_active?'':'<button class="btn xs" onclick="activateTpl(\''+t.id+'\',event)">Set active</button>'}
+      </div>`;
+    el.appendChild(c);
+  });
+  document.getElementById('tpl-count').textContent=templates.length+' template'+(templates.length!==1?'s':'');
+}
+
+/* Delete a template directly from its card in the sidebar list. */
+async function deleteTplFromList(id, ev){
+  if(ev){ev.stopPropagation();ev.preventDefault();}
+  const t=templates.find(x=>x.id===id);
+  if(!t)return;
+  const name=t.name||'this template';
+  if(!confirm('Delete "'+name+'"? This cannot be undone.'))return;
+  const{ok,d}=await api('/letterhead/api/templates/'+id+'/delete/','POST');
+  if(!ok){toast(d?.error||'Delete failed','err');return;}
+  templates=templates.filter(x=>x.id!==id);
+  // If we just deleted the currently selected template, clear the editor
+  if(currentId===id){
+    currentId=null;currentData={};
+    const ef=document.getElementById('edit-form');if(ef)ef.style.display='none';
+    const nm=document.getElementById('no-tpl-msg');if(nm)nm.style.display='';
+    const bn=document.getElementById('bar-tpl-name');if(bn)bn.textContent='';
+    const cv=document.getElementById('canvas');
+    if(cv)cv.innerHTML='<div style="text-align:center;padding:60px 20px;color:var(--muted);max-width:500px"><i class="bi bi-layout-text-window" style="font-size:3.2rem;display:block;margin-bottom:12px;opacity:.2"></i><div style="font-size:1rem;font-weight:800;color:var(--text);margin-bottom:7px">Select or create a template</div></div>';
+  }
+  renderList();toast('"'+name+'" deleted');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   SELECT & POPULATE
+   ═══════════════════════════════════════════════════════════════════════ */
+function selTpl(id){
+  const t=templates.find(x=>x.id===id);if(!t)return;
+  currentId=id;currentData=JSON.parse(JSON.stringify(t));
+  tables=Array.isArray(t.default_tables)?[...t.default_tables]:[];
+  // populate fields
+  set('f-name',t.name||'');set('f-company',t.company_name||'');
+  set('f-tagline',t.tagline||'');set('f-address',t.address||'');
+  set('f-contact',t.contact_info||'');
+  setV('f-cp',t.color_primary||'#1D9E75');setV('cp-p',t.color_primary||'#1D9E75');
+  setV('f-cs',t.color_secondary||'#2C2C2A');setV('cp-s',t.color_secondary||'#2C2C2A');
+  setV('f-fh',t.font_header||'Georgia');setV('f-fb',t.font_body||'Arial');
+  setLogoPreview(t.logo_url);
+  document.querySelectorAll('.scard').forEach(b=>b.classList.toggle('on',b.dataset.k===t.template_key));
+  setExportLinks(id);
+  document.getElementById('btn-star').innerHTML=t.is_active
+    ?'<i class="bi bi-star-fill" style="color:var(--accent)"></i>'
+    :'<i class="bi bi-star"></i>';
+  document.getElementById('no-tpl-msg').style.display='none';
+  document.getElementById('edit-form').style.display='flex';
+  document.getElementById('bar-tpl-name').textContent='— '+t.name;
+  renderPreview(t);renderList();renderPresets();
+}
+
+function set(id,v){document.getElementById(id).value=v;}
+function setV(id,v){document.getElementById(id).value=v;}
+
+function setExportLinks(id){
+  document.getElementById('ex-docx').href='/letterhead/api/templates/'+id+'/export/docx/';
+  document.getElementById('ex-pdf').href='/letterhead/api/templates/'+id+'/export/pdf/';
+  document.getElementById('ex-png').href='/letterhead/api/templates/'+id+'/export/png/';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   RICH TEXT TOOLBAR
+   ═══════════════════════════════════════════════════════════════════════ */
+function buildToolbar(){
+  return `
+  <div class="canvas-toolbar" id="rt-toolbar">
+    <span class="ct-label">Text</span>
+    <select class="tb-select" id="tb-font" onchange="execCmd('fontName',this.value)" title="Font">
+      <option value="Arial">Arial</option>
+      <option value="Georgia">Georgia</option>
+      <option value="Times New Roman">Times New Roman</option>
+      <option value="Palatino">Palatino</option>
+      <option value="Verdana">Verdana</option>
+      <option value="Trebuchet MS">Trebuchet MS</option>
+      <option value="Courier New">Courier New</option>
+    </select>
+    <select class="tb-select" id="tb-size" onchange="execCmd('fontSize',this.value)" title="Size" style="width:50px">
+      <option value="1">8</option><option value="2">10</option>
+      <option value="3" selected>12</option><option value="4">14</option>
+      <option value="5">18</option><option value="6">24</option>
+      <option value="7">36</option>
+    </select>
+    <div class="ct-sep"></div>
+    <button class="tb-btn" id="tb-b" onclick="execCmd('bold')" title="Bold"><b>B</b></button>
+    <button class="tb-btn" id="tb-i" onclick="execCmd('italic')" title="Italic"><i>I</i></button>
+    <button class="tb-btn" id="tb-u" onclick="execCmd('underline')" title="Underline"><u>U</u></button>
+    <button class="tb-btn" id="tb-s" onclick="execCmd('strikeThrough')" title="Strikethrough"><s>S</s></button>
+    <div class="ct-sep"></div>
+    <input class="tb-color" type="color" id="tb-fc" value="#000000" onchange="execCmd('foreColor',this.value)" title="Text color">
+    <input class="tb-color" type="color" id="tb-bc" value="#ffffff" onchange="execCmd('hiliteColor',this.value)" title="Highlight color">
+    <div class="ct-sep"></div>
+    <button class="tb-btn" onclick="execCmd('justifyLeft')" title="Align left"><i class="bi bi-text-left"></i></button>
+    <button class="tb-btn" onclick="execCmd('justifyCenter')" title="Centre"><i class="bi bi-text-center"></i></button>
+    <button class="tb-btn" onclick="execCmd('justifyRight')" title="Align right"><i class="bi bi-text-right"></i></button>
+    <div class="ct-sep"></div>
+    <button class="tb-btn" onclick="execCmd('insertUnorderedList')" title="Bullet list"><i class="bi bi-list-ul"></i></button>
+    <button class="tb-btn" onclick="execCmd('insertOrderedList')" title="Numbered list"><i class="bi bi-list-ol"></i></button>
+    <div class="ct-sep"></div>
+    <button class="tb-btn" onclick="execCmd('undo')" title="Undo"><i class="bi bi-arrow-counterclockwise"></i></button>
+    <button class="tb-btn" onclick="execCmd('redo')" title="Redo"><i class="bi bi-arrow-clockwise"></i></button>
+    <div class="ct-sep"></div>
+    <button class="tb-btn" onclick="insertTable()" title="Insert table"><i class="bi bi-table"></i></button>
+    <button class="tb-btn pri" onclick="openIconPicker()" title="Insert icon" style="background:var(--primary-l);border-color:var(--primary);color:var(--primary)"><i class="bi bi-emoji-smile"></i></button>
+    <div class="ct-sep"></div>
+    <button class="tb-btn" onclick="deleteSelectedElement()" title="Delete selected element" style="color:var(--danger)"><i class="bi bi-trash3"></i></button>
+    <button class="btn xs" onclick="clearBody()" title="Clear all body text" style="margin-left:2px"><i class="bi bi-file-earmark-x"></i> Clear</button>
+  </div>`;
+}
+
+function execCmd(cmd,val=null){
+  document.getElementById('page-body')?.focus();
+  document.execCommand(cmd,false,val);
+  updateToolbarState();
+}
+
+function updateToolbarState(){
+  ['bold','italic','underline','strikeThrough'].forEach(cmd=>{
+    const id={bold:'tb-b',italic:'tb-i',underline:'tb-u',strikeThrough:'tb-s'}[cmd];
+    document.getElementById(id)?.classList.toggle('on',document.queryCommandState(cmd));
+  });
+}
+
+function insertTable(){
+  const cols=parseInt(prompt('Number of columns?','4')||'0');
+  const rows=parseInt(prompt('Number of rows (excluding header)?','4')||'0');
+  if(!cols||!rows)return;
+  const uid='tbl_'+Date.now();
+  let tbl=`<div class="dg-el" data-draggable="true" data-uid="${uid}" style="margin:14px 0">`
+    +elToolbar(uid,'Table')
+    +'<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr>';
+  for(let c=0;c<cols;c++)tbl+=`<th style="border:1px solid #ccc;padding:6px 9px;background:#f5f5f5;font-weight:700;text-align:left" contenteditable="true">Col ${c+1}</th>`;
+  tbl+='</tr></thead><tbody>';
+  for(let r=0;r<rows;r++){tbl+='<tr>';for(let c=0;c<cols;c++)tbl+=`<td style="border:1px solid #ccc;padding:6px 9px" contenteditable="true">&nbsp;</td>`; tbl+='</tr>';}
+  tbl+='</tbody></table></div>';
+  execCmd('insertHTML',tbl);
+  initDraggables();
+}
+
+function clearBody(){
+  if(!confirm('Clear the body text?'))return;
+  const b=document.getElementById('page-body');
+  if(b){b.innerHTML=defaultBodyHtml();}
+}
+
+function defaultBodyHtml(){
+  return `<p class="placeholder-text" style="color:#b0bec5;font-style:italic">Date</p>
+<p>&nbsp;</p><p>Recipient Name</p><p>Recipient Title / Organisation</p><p>Address Line 1, City</p>
+<p>&nbsp;</p><p>Dear Sir/Madam,</p><p>&nbsp;</p>
+<p><strong>Re: Subject of Letter</strong></p><p>&nbsp;</p><p>&nbsp;</p><p>&nbsp;</p>
+<p>Yours sincerely,</p><p>&nbsp;</p><p>&nbsp;</p>
+<p><strong>Name &amp; Title</strong></p><p>Organisation</p>`;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PREVIEW RENDERER
+   ═══════════════════════════════════════════════════════════════════════ */
+function renderPreview(t){
+  const canvas=document.getElementById('canvas');
+  const p=t.color_primary||'#1D9E75';
+  const s=t.color_secondary||'#2C2C2A';
+  const fh=t.font_header||'Georgia';
+  const fb=t.font_body||'Arial';
+  const addrHtml=(t.address||'').split('\n').map(l=>l.trim()?`<div>${esc(l)}</div>`:'').join('');
+  const logoHtml=t.logo_url?`<img src="${esc(t.logo_url)}" style="height:42px;margin-right:9px;vertical-align:middle;border-radius:3px;object-fit:contain" alt="logo">`:'';
+  const k=t.template_key||'classic';
+  const addrFlat=esc((t.address||'').replace(/\n/g,' · '));
+  let hdr='',ftr='';
+
+  if(k==='classic'){
+    hdr=`<div style="border-top:5px solid ${p};padding:14px 28px 0">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">${logoHtml}
+        <span style="font-family:${fh},serif;font-size:20px;font-weight:800;color:${s}">${esc(t.company_name)}</span></div>
+      ${t.tagline?`<div style="font-style:italic;color:${p};font-size:11px;margin-bottom:4px">${esc(t.tagline)}</div>`:''}
+      <div style="text-align:right;font-size:9px;color:#888;margin-bottom:4px">${addrHtml}</div>
+      ${t.contact_info?`<div style="text-align:right;font-size:9px;color:#aaa;margin-bottom:4px">${esc(t.contact_info)}</div>`:''}
+      <div style="border-bottom:1px solid #ddd;margin-top:4px"></div></div>`;
+    ftr=`<div style="border-top:3px solid ${p};padding:8px 28px;background:${p};color:#fff;font-size:9px;text-align:center">
+      ${esc(t.contact_info||'')} &nbsp;·&nbsp; ${addrFlat}</div>`;
+  } else if(k==='modern'){
+    hdr=`<div style="border-left:6px solid ${p};padding:12px 26px 0 16px;margin-bottom:6px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">${logoHtml}
+        <span style="font-family:${fh},serif;font-size:18px;font-weight:800;color:${s}">${esc(t.company_name)}</span></div>
+      ${t.tagline?`<div style="font-style:italic;color:#999;font-size:10px;margin-bottom:2px">${esc(t.tagline)}</div>`:''}
+    </div>
+    <div style="text-align:right;padding:0 26px 5px;font-size:9px;color:#888">${esc(t.contact_info||'')} ${addrHtml}</div>
+    <div style="border-bottom:1px solid #e0e0e0;margin:0 26px 9px"></div>`;
+    ftr=`<div style="border-top:2px solid ${p};padding:7px;text-align:center;font-size:9px;color:${p}">${esc(t.contact_info||'')} · ${addrFlat}</div>`;
+  } else if(k==='bold'){
+    hdr=`<div style="background:${s};padding:14px 26px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">${logoHtml}
+        <span style="font-family:${fh},serif;font-size:20px;font-weight:800;color:#fff">${esc(t.company_name)}</span></div>
+      ${t.tagline?`<div style="font-style:italic;color:#aaa;font-size:10px">${esc(t.tagline)}</div>`:''}
+      <div style="font-size:9px;color:#888;margin-top:3px">${esc(t.contact_info||'')}</div>
+    </div><div style="height:5px;background:${p}"></div>`;
+    ftr=`<div style="background:${s};padding:9px;text-align:center;font-size:9px;color:#888">${esc(t.company_name)} · ${addrFlat} · ${esc(t.contact_info||'')}</div>`;
+  } else if(k==='minimal'){
+    hdr=`<div style="padding:14px 28px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px">
+      <div style="display:flex;align-items:center;gap:8px">${logoHtml}
+        <span style="font-family:${fh},serif;font-size:17px;font-weight:800;color:${s}">${esc(t.company_name)}</span>
+        ${t.tagline?`<span style="font-size:9px;color:#bbb;font-style:italic"> · ${esc(t.tagline)}</span>`:''}
+      </div>
+      <div style="text-align:right;font-size:9px;color:#bbb">${addrFlat}${t.contact_info?' · '+esc(t.contact_info):''}</div>
+    </div><div style="border-bottom:1px solid ${s};margin:0 28px 10px"></div>`;
+    ftr=`<div style="border-top:1px solid #ddd;padding:6px;text-align:center;font-size:9px;color:#bbb">${esc(t.contact_info||'')} | ${addrFlat}</div>`;
+  } else if(k==='split'){
+    const lr=_hex_to_rgb_css(p);
+    hdr=`<div style="display:flex">
+      <div style="background:${p};padding:14px 14px;min-width:170px;max-width:190px">
+        ${logoHtml?`<div style="margin-bottom:5px">${logoHtml}</div>`:''}
+        <div style="font-family:${fh},serif;font-size:14px;font-weight:800;color:#fff">${esc(t.company_name)}</div>
+        ${t.tagline?`<div style="font-size:9px;color:rgba(255,255,255,.7);margin-top:3px;font-style:italic">${esc(t.tagline)}</div>`:''}
+      </div>
+      <div style="flex:1;padding:14px 14px;display:flex;flex-direction:column;justify-content:flex-end;text-align:right">
+        <div style="font-size:9px;color:#888">${addrHtml}
+          ${t.contact_info?`<div>${esc(t.contact_info)}</div>`:''}</div>
+      </div></div>`;
+    ftr=`<div style="border-top:1px solid #ddd;padding:7px;text-align:center;font-size:9px;color:#aaa">${esc(t.contact_info||'')} · ${addrFlat}</div>`;
+  } else if(k==='elegant'){
+    hdr=`<div style="padding:16px 28px 0;text-align:center">
+      ${logoHtml?`<div style="margin-bottom:6px">${logoHtml}</div>`:''}
+      <div style="font-family:${fh},serif;font-size:22px;font-weight:800;color:${s};letter-spacing:.02em;margin-bottom:3px">${esc(t.company_name)}</div>
+      ${t.tagline?`<div style="font-style:italic;color:${p};font-size:11px;margin-bottom:7px;letter-spacing:.04em">${esc(t.tagline)}</div>`:''}
+      <div style="border-bottom:3px double ${p};margin-bottom:3px"></div>
+      <div style="border-bottom:1px solid ${p};margin-bottom:7px"></div>
+      <div style="font-size:9px;color:#aaa;margin-bottom:9px;letter-spacing:.03em">${addrFlat}${t.contact_info?' · '+esc(t.contact_info):''}</div>
+    </div>`;
+    ftr=`<div style="border-top:3px double ${p};padding:9px;text-align:center;font-size:9px;color:#aaa;letter-spacing:.03em">${esc(t.contact_info||'')}</div>`;
+  }
+
+  // Preserve existing body if page already rendered
+  const existingBody=document.getElementById('page-body')?.innerHTML||defaultBodyHtml();
+
+  canvas.innerHTML=buildToolbar()+`
+    <div class="page" id="page" style="font-family:${fb},Arial,sans-serif">
+      ${hdr}
+      <div class="page-body" id="page-body" contenteditable="true"
+        style="font-family:${fb},Arial,sans-serif" spellcheck="false">
+        ${existingBody}
+      </div>
+      ${ftr}
+    </div>`;
+
+  // Attach toolbar state updater
+  document.getElementById('page-body').addEventListener('keyup',updateToolbarState);
+  document.getElementById('page-body').addEventListener('mouseup',updateToolbarState);
+  document.getElementById('page-body').addEventListener('selectionchange',updateToolbarState);
+  // Init draggables on existing elements
+  setTimeout(initDraggables,50);
+}
+
+function _hex_to_rgb_css(hex){
+  const h=hex.replace('#','');
+  return `rgb(${parseInt(h.slice(0,2),16)},${parseInt(h.slice(2,4),16)},${parseInt(h.slice(4,6),16)})`;
+}
+
+/* ─── Live preview on field change ──────────────────────── */
+['f-name','f-company','f-tagline','f-address','f-contact','f-cp','f-cs','f-fh','f-fb'].forEach(id=>{
+  document.getElementById(id)?.addEventListener('input',()=>{if(currentId)renderPreview(gather());});
+});
+document.getElementById('cp-p').addEventListener('input',e=>{
+  document.getElementById('f-cp').value=e.target.value;if(currentId)renderPreview(gather());});
+document.getElementById('f-cp').addEventListener('input',e=>{
+  if(/^#[0-9a-f]{6}$/i.test(e.target.value))document.getElementById('cp-p').value=e.target.value;
+  if(currentId)renderPreview(gather());});
+document.getElementById('cp-s').addEventListener('input',e=>{
+  document.getElementById('f-cs').value=e.target.value;if(currentId)renderPreview(gather());});
+document.getElementById('f-cs').addEventListener('input',e=>{
+  if(/^#[0-9a-f]{6}$/i.test(e.target.value))document.getElementById('cp-s').value=e.target.value;
+  if(currentId)renderPreview(gather());});
+
+function gather(){
+  return{
+    id:currentId,
+    name:document.getElementById('f-name').value.trim(),
+    company_name:document.getElementById('f-company').value.trim(),
+    tagline:document.getElementById('f-tagline').value.trim(),
+    address:document.getElementById('f-address').value.trim(),
+    contact_info:document.getElementById('f-contact').value.trim(),
+    color_primary:document.getElementById('f-cp').value.trim()||'#1D9E75',
+    color_secondary:document.getElementById('f-cs').value.trim()||'#2C2C2A',
+    font_header:document.getElementById('f-fh').value,
+    font_body:document.getElementById('f-fb').value,
+    template_key:(document.querySelector('.scard.on')||{}).dataset?.k||'classic',
+    logo_url:currentData.logo_url||null,
+    is_active:currentData.is_active||false,
   };
+}
+
+function setStyle(k){
+  document.querySelectorAll('.scard').forEach(b=>b.classList.toggle('on',b.dataset.k===k));
+  if(currentId){const d=gather();d.template_key=k;renderPreview(d);}
+}
+
+/* ─── Logo ─────────────────────────────────────────────── */
+function setLogoPreview(url){
+  const c=document.getElementById('logo-inner');
+  const act=document.getElementById('btn-rm-logo');
+  if(url){
+    c.innerHTML=`<img src="${esc(url)}" style="max-height:48px;max-width:100%;border-radius:4px;margin-bottom:4px" alt="Logo">
+      <div style="font-size:.68rem;color:var(--muted)">Click to replace</div>`;
+    if(act)act.style.display='';
+  }else{
+    c.innerHTML='<i class="bi bi-image" style="font-size:1.4rem;color:var(--muted);display:block;margin-bottom:3px"></i><div style="font-size:.74rem;color:var(--muted)">Click or drag to upload</div><div style="font-size:.64rem;color:var(--muted);margin-top:2px">PNG, JPG, SVG, WEBP · Max 2 MB</div>';
+    if(act)act.style.display='none';
+  }
+}
+
+document.getElementById('f-logo').addEventListener('change',async e=>{
+  if(!currentId){toast('Select a template first','warn');return;}
+  const file=e.target.files[0];if(!file)return;
+  const fd=new FormData();fd.append('logo',file);
+  const{ok,d}=await api('/letterhead/api/templates/'+currentId+'/logo/','POST',fd,true);
+  if(!ok){toast(d.error||'Upload failed','err');return;}
+  currentData.logo_url=d.logo_url;
+  const i=templates.findIndex(t=>t.id===currentId);if(i>=0)templates[i].logo_url=d.logo_url;
+  setLogoPreview(d.logo_url);renderPreview(gather());toast('Logo uploaded!');
+});
+
+document.getElementById('btn-rm-logo')?.addEventListener('click',async()=>{
+  if(!currentId)return;
+  // Just clear locally (actual deletion can be added to views)
+  currentData.logo_url=null;
+  const i=templates.findIndex(t=>t.id===currentId);if(i>=0)templates[i].logo_url=null;
+  setLogoPreview(null);renderPreview(gather());toast('Logo removed');
+});
+
+/* ─── Save ─────────────────────────────────────────────── */
+document.getElementById('btn-save').addEventListener('click',async()=>{
+  if(!currentId)return;
+  const d=gather();
+  if(!d.company_name){toast('Company name is required','err');return;}
+  const btn=document.getElementById('btn-save');
+  btn.disabled=true;btn.innerHTML='<i class="bi bi-hourglass-split"></i> Saving…';
+  const{ok,d:r}=await api('/letterhead/api/templates/'+currentId+'/update/','POST',d);
+  btn.disabled=false;btn.innerHTML='<i class="bi bi-check-lg"></i> Save';
+  if(!ok){toast(r.error||'Save failed','err');return;}
+  const i=templates.findIndex(t=>t.id===currentId);
+  if(i>=0)templates[i]=r.template;currentData=r.template;
+  renderList();renderPreview(r.template);toast('Saved!');
+});
+
+/* ─── Set active ────────────────────────────────────────── */
+document.getElementById('btn-star').addEventListener('click',()=>activateTpl(currentId));
+async function activateTpl(id,e){
+  if(e)e.stopPropagation();
+  if(!id)return;
+  const{ok,d}=await api('/letterhead/api/templates/'+id+'/set-active/','POST');
+  if(!ok){toast(d.error||'Failed','err');return;}
+  templates=templates.map(t=>({...t,is_active:t.id===id}));
+  if(id===currentId){
+    currentData.is_active=true;
+    document.getElementById('btn-star').innerHTML='<i class="bi bi-star-fill" style="color:var(--accent)"></i>';
+  }
+  renderList();toast('Set as active template!');
+}
+
+/* ─── Duplicate ─────────────────────────────────────────── */
+document.getElementById('btn-dup').addEventListener('click',async()=>{
+  if(!currentId)return;
+  const d=gather();
+  d.name=(d.name||'Template')+' (copy)';
+  const{ok,r2}=await api(window.LH.apiList,'POST',d);
+  if(!ok){toast((r2||{}).error||'Duplicate failed','err');return;}
+  // create then immediately update to copy all fields
+  // Actually just POST the gathered data
+  const{ok:ok2,d:nr}=await api(window.LH.apiList,'POST',{name:d.name,company_name:d.company_name});
+  if(ok2){
+    const{ok:ok3,d:nr2}=await api('/letterhead/api/templates/'+nr.template.id+'/update/','POST',d);
+    if(ok3){templates.push(nr2.template);renderList();selTpl(nr2.template.id);toast('Duplicated!');}
+  }
+});
+
+/* ─── Delete ────────────────────────────────────────────── */
+document.getElementById('btn-del').addEventListener('click',async()=>{
+  if(!currentId)return;
+  const name=currentData.name||'this template';
+  if(!confirm('Delete "'+name+'"? This cannot be undone.'))return;
+  const{ok,d}=await api('/letterhead/api/templates/'+currentId+'/delete/','POST');
+  if(!ok){toast(d.error||'Delete failed','err');return;}
+  templates=templates.filter(t=>t.id!==currentId);
+  currentId=null;currentData={};
+  document.getElementById('edit-form').style.display='none';
+  document.getElementById('no-tpl-msg').style.display='';
+  document.getElementById('bar-tpl-name').textContent='';
+  document.getElementById('canvas').innerHTML='<div style="text-align:center;padding:60px 20px;color:var(--muted);max-width:500px"><i class="bi bi-layout-text-window" style="font-size:3.2rem;display:block;margin-bottom:12px;opacity:.2"></i><div style="font-size:1rem;font-weight:800;color:var(--text);margin-bottom:7px">Select or create a template</div></div>';
+  renderList();toast('"'+name+'" deleted');
+});
+
+/* ─── New template modal ────────────────────────────────── */
+document.getElementById('btn-new').addEventListener('click',()=>{
+  set('m-name','');set('m-company','');
+  document.getElementById('new-modal').classList.remove('hidden');
+  setTimeout(()=>document.getElementById('m-name').focus(),50);
+});
+document.getElementById('m-cancel').addEventListener('click',()=>document.getElementById('new-modal').classList.add('hidden'));
+document.getElementById('new-modal').addEventListener('click',e=>{if(e.target===e.currentTarget)e.currentTarget.classList.add('hidden');});
+document.getElementById('m-create').addEventListener('click',async()=>{
+  const name=document.getElementById('m-name').value.trim();
+  const company=document.getElementById('m-company').value.trim();
+  const style=document.getElementById('m-style').value;
+  if(!name){toast('Name required','err');return;}
+  if(!company){toast('Company required','err');return;}
+  const btn=document.getElementById('m-create');btn.disabled=true;btn.textContent='Creating…';
+  const{ok,d}=await api(window.LH.apiList,'POST',{name,company_name:company,template_key:style});
+  btn.disabled=false;btn.textContent='Create Template';
+  if(!ok){toast(d.error||'Failed','err');return;}
+  templates.push(d.template);renderList();
+  document.getElementById('new-modal').classList.add('hidden');
+  selTpl(d.template.id);toast('"'+name+'" created!');
+});
+
+/* ═══════════════════════════════════════════════════════════════════════
+   SAMPLE TEMPLATES
+   ═══════════════════════════════════════════════════════════════════════ */
+const SAMPLES=[
+  {name:'Government Ministry',company:'Ministry of Finance',tagline:'Accountable · Transparent · Efficient',
+   address:'Independence Drive\nBanjul, The Gambia',contact_info:'+220 422 1234 | info@mof.gm | www.mof.gm',
+   template_key:'classic',color_primary:'#1a56a0',color_secondary:'#0d2d5e',
+   font_header:'Georgia',font_body:'Arial',bg:'linear-gradient(135deg,#1a56a0,#0d2d5e)'},
+
+  {name:'Law Firm',company:'Touray & Associates',tagline:'Justice · Integrity · Excellence',
+   address:'22 Liberation Avenue\nBanjul, The Gambia',contact_info:'+220 437 5678 | law@tourayassociates.gm',
+   template_key:'elegant',color_primary:'#8b0000',color_secondary:'#1a1a1a',
+   font_header:"'Times New Roman'",font_body:'Georgia',bg:'linear-gradient(135deg,#8b0000,#1a1a1a)'},
+
+  {name:'Tech Startup',company:'InnoDev Labs',tagline:'Build · Launch · Scale',
+   address:'Silicon Hub, Kombo North\nThe Gambia',contact_info:'+220 991 2345 | hello@innodevlabs.com',
+   template_key:'modern',color_primary:'#7c3aed',color_secondary:'#1e1b4b',
+   font_header:'Trebuchet MS',font_body:'Arial',bg:'linear-gradient(135deg,#7c3aed,#1e1b4b)'},
+
+  {name:'Healthcare Clinic',company:'GamHealth Medical Centre',tagline:'Caring · Healing · Serving',
+   address:'Atlantic Road, Bakau\nThe Gambia',contact_info:'+220 449 8888 | info@gamhealth.gm',
+   template_key:'split',color_primary:'#059669',color_secondary:'#064e3b',
+   font_header:'Arial',font_body:'Verdana',bg:'linear-gradient(135deg,#059669,#064e3b)'},
+
+  {name:'University',company:'University of The Gambia',tagline:'Knowledge · Service · Excellence',
+   address:'MDI Road, Kanifing\nThe Gambia',contact_info:'+220 373 0100 | registrar@utg.edu.gm',
+   template_key:'bold',color_primary:'#d97706',color_secondary:'#1c1917',
+   font_header:'Georgia',font_body:"'Times New Roman'",bg:'linear-gradient(135deg,#d97706,#1c1917)'},
+
+  {name:'NGO / Non-Profit',company:'Gambia Helps Foundation',tagline:'Empowering Communities Since 2001',
+   address:'Kairaba Avenue, Serrekunda\nThe Gambia',contact_info:'+220 566 4321 | contact@gambiahelps.org',
+   template_key:'minimal',color_primary:'#0891b2',color_secondary:'#164e63',
+   font_header:'Verdana',font_body:'Arial',bg:'linear-gradient(135deg,#0891b2,#164e63)'},
+
+  {name:'Hotel & Hospitality',company:'Atlantic Sands Resort',tagline:'Where Every Stay is a Memory',
+   address:'Cape Point, Bakau\nThe Gambia',contact_info:'+220 449 1234 | reservations@atlanticsands.gm',
+   template_key:'elegant',color_primary:'#b45309',color_secondary:'#1c1917',
+   font_header:'Palatino',font_body:'Georgia',bg:'linear-gradient(135deg,#b45309,#1c1917)'},
+
+  {name:'Construction Firm',company:'BuildRight Engineering',tagline:'Strong Foundations · Lasting Structures',
+   address:'Industrial Zone, Kanifing\nThe Gambia',contact_info:'+220 702 9876 | info@buildright.gm',
+   template_key:'bold',color_primary:'#dc2626',color_secondary:'#111827',
+   font_header:'Trebuchet MS',font_body:'Arial',bg:'linear-gradient(135deg,#dc2626,#111827)'},
+];
+
+function buildSamplesGrid(){
+  const grid=document.getElementById('samples-grid');
+  grid.innerHTML='';
+  SAMPLES.forEach((s,i)=>{
+    const card=document.createElement('div');
+    card.className='sample-card';
+    card.innerHTML=`
+      <div class="sample-preview" style="background:${s.bg}">
+        <div style="padding:8px 10px">
+          <div style="font-size:9px;font-weight:800;color:#fff;opacity:.9">${esc(s.company)}</div>
+          <div style="font-size:7px;color:rgba(255,255,255,.6);font-style:italic">${esc(s.tagline)}</div>
+          <div style="margin-top:4px;height:1px;background:rgba(255,255,255,.3)"></div>
+        </div>
+      </div>
+      <div class="sample-label">${esc(s.name)}</div>`;
+    card.addEventListener('click',()=>loadSample(i));
+    grid.appendChild(card);
+  });
+}
+
+async function loadSample(i){
+  const s=SAMPLES[i];
+  const{ok,d}=await api(window.LH.apiList,'POST',{name:s.name,company_name:s.company});
+  if(!ok){toast(d.error||'Failed','err');return;}
+  // Update with all fields
+  const fullData={...s,name:s.name,company_name:s.company,
+    tagline:s.tagline,address:s.address,contact_info:s.contact_info,
+    template_key:s.template_key,color_primary:s.color_primary,color_secondary:s.color_secondary,
+    font_header:s.font_header,font_body:s.font_body};
+  const{ok:ok2,d:r}=await api('/letterhead/api/templates/'+d.template.id+'/update/','POST',fullData);
+  if(ok2){
+    templates.push(r.template);renderList();
+    document.getElementById('samples-modal').classList.add('hidden');
+    selTpl(r.template.id);toast('"'+s.name+'" sample loaded!');
+  }
+}
+
+document.getElementById('btn-samples').addEventListener('click',()=>{
+  buildSamplesGrid();
+  document.getElementById('samples-modal').classList.remove('hidden');
+});
+document.getElementById('samples-close').addEventListener('click',()=>
+  document.getElementById('samples-modal').classList.add('hidden'));
+document.getElementById('samples-modal').addEventListener('click',e=>{
+  if(e.target===e.currentTarget)e.currentTarget.classList.add('hidden');});
+
+/* ═══════════════════════════════════════════════════════════════════════
+   TAB SWITCHING
+   ═══════════════════════════════════════════════════════════════════════ */
+function switchTab(t){
+  const dd=document.getElementById('design-tab');
+  const tt=document.getElementById('tables-tab');
+  const bd=document.getElementById('tab-design-btn');
+  const bt=document.getElementById('tab-tables-btn');
+  if(t==='design'){
+    dd.style.display='flex';tt.style.display='none';
+    bd.classList.add('on');bt.classList.remove('on');
+  }else{
+    dd.style.display='none';tt.style.display='flex';
+    bt.classList.add('on');bd.classList.remove('on');
+    renderPresets();
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   TABLE PRESETS
+   ═══════════════════════════════════════════════════════════════════════ */
+function renderPresets(){
+  const list=document.getElementById('presets-list');list.innerHTML='';
+  const sm={striped:'s-str',bordered:'s-brd',minimal:'s-min'};
+  tables.forEach((t,i)=>{
+    const el=document.createElement('div');
+    el.className='preset-card';el.draggable=true;
+    el.dataset.idx=i;el.dataset.id=t.id;
+    el.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:5px">
+      <span style="font-size:.78rem;font-weight:700">${esc(t.label)}</span>
+      <span class="sbadge ${sm[t.style]||'s-min'}">${esc(t.style)}</span></div>
+      <div style="font-size:.67rem;color:var(--muted);margin-top:2px">${t.columns.length} cols · ${t.rows} rows</div>
+      <div class="chips">${t.columns.map(c=>`<span class="chip">${esc(c)}</span>`).join('')}</div>
+      <div style="display:flex;gap:5px;margin-top:6px">
+        <button class="btn xs pri" data-ins="${t.id}">Insert</button>
+        <button class="btn xs danger" data-del="${t.id}">Delete</button></div>`;
+    list.appendChild(el);
+  });
+  // drag-drop
+  list.querySelectorAll('.preset-card').forEach(el=>{
+    el.addEventListener('dragstart',e=>{dragSrc=+el.dataset.idx;el.classList.add('dragging');e.dataTransfer.effectAllowed='move';});
+    el.addEventListener('dragend',()=>el.classList.remove('dragging'));
+    el.addEventListener('dragover',e=>{e.preventDefault();});
+    el.addEventListener('drop',async e=>{
+      e.preventDefault();const to=+el.dataset.idx;
+      if(dragSrc===null||dragSrc===to)return;
+      const m=tables.splice(dragSrc,1)[0];tables.splice(to,0,m);renderPresets();
+      if(currentId)await api('/letterhead/api/templates/'+currentId+'/tables/reorder/','POST',{ordered_ids:tables.map(t=>t.id)});
+    });
+  });
+  list.addEventListener('click',async e=>{
+    const ins=e.target.closest('[data-ins]');
+    if(ins){
+      const t=tables.find(t=>t.id===ins.dataset.ins);
+      if(t){
+        const uid2='ptbl_'+Date.now();
+        let tbl=`<div class="dg-el" data-draggable="true" data-uid="${uid2}" style="margin:14px 0">`
+          +elToolbar(uid2,'Table: '+t.label)
+          +`<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr>`;
+        t.columns.forEach(c=>{
+          const border=t.style==='minimal'?'border-bottom:2px solid #333':'border:1px solid #ccc';
+          const bg=t.style==='minimal'?'background:transparent;font-weight:800':'background:#f5f5f5;font-weight:700';
+          tbl+=`<th style="${border};${bg};padding:7px 9px;text-align:left" contenteditable="true">${esc(c)}</th>`;
+        });
+        tbl+='</tr></thead><tbody>';
+        for(let r=0;r<t.rows;r++){
+          const rowBg=t.style==='striped'&&r%2===0?'background:#fafafa':'';
+          tbl+=`<tr style="${rowBg}">`;
+          t.columns.forEach(()=>{tbl+=`<td style="border:1px solid #e0e0e0;padding:7px 9px" contenteditable="true">&nbsp;</td>`;});
+          tbl+='</tr>';
+        }
+        tbl+='</tbody></table></div>';
+        document.getElementById('page-body')?.focus();
+        document.execCommand('insertHTML',false,tbl);
+        initDraggables();
+        toast('Table inserted! Drag ⠿ handle to reposition.');
+      }
+      return;
+    }
+    const del=e.target.closest('[data-del]');
+    if(del){
+      if(!confirm('Remove preset?'))return;
+      const id=del.dataset.del;
+      if(currentId){
+        const{ok,d}=await api('/letterhead/api/templates/'+currentId+'/tables/'+id+'/','DELETE');
+        if(ok){tables=d.tables;renderPresets();toast('Removed');}
+        else toast(d.error||'Failed','err');
+      }else{tables=tables.filter(t=>t.id!==id);renderPresets();}
+    }
+  });
+  const bar=document.getElementById('reset-bar');
+  const tpl=templates.find(t=>t.id===currentId);
+  bar.style.display=(tpl&&tpl.default_tables!=null)?'flex':'none';
+}
+
+document.getElementById('btn-reset-presets').addEventListener('click',async()=>{
+  if(!currentId||!confirm('Reset to defaults?'))return;
+  const{ok,d}=await api('/letterhead/api/templates/'+currentId+'/tables/reset/','POST');
+  if(ok){tables=d.tables;const i=templates.findIndex(t=>t.id===currentId);if(i>=0)templates[i].default_tables=null;renderPresets();toast('Reset to defaults');}
+});
+document.getElementById('btn-add-preset').addEventListener('click',()=>{
+  const f=document.getElementById('add-preset-form');f.style.display=f.style.display==='none'?'flex':'none';
+});
+document.getElementById('btn-cancel-preset').addEventListener('click',()=>document.getElementById('add-preset-form').style.display='none');
+document.getElementById('btn-save-preset').addEventListener('click',async()=>{
+  const label=document.getElementById('ap-l').value.trim();
+  const cols=document.getElementById('ap-c').value;
+  const rows=parseInt(document.getElementById('ap-r').value,10)||4;
+  const style=document.getElementById('ap-s').value;
+  if(!label){toast('Label required','err');return;}
+  const columns=cols.split(',').map(c=>c.trim()).filter(Boolean);
+  if(!columns.length){toast('At least one column required','err');return;}
+  const id=label.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')+'_'+Date.now();
+  if(currentId){
+    const{ok,d}=await api('/letterhead/api/templates/'+currentId+'/tables/','POST',{id,label,columns,rows,style});
+    if(ok){tables=d.tables;const i=templates.findIndex(t=>t.id===currentId);if(i>=0)templates[i].default_tables=d.tables;}
+    else{toast(d.error||'Failed','err');return;}
+  }else{tables.push({id,label,columns,rows,style});}
+  renderPresets();document.getElementById('add-preset-form').style.display='none';
+  document.getElementById('ap-l').value='';document.getElementById('ap-c').value='';
+  document.getElementById('ap-r').value='4';toast('Preset added!');
+});
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ELEMENT TOOLBAR FACTORY
+   ═══════════════════════════════════════════════════════════════════════ */
+function elToolbar(uid, label){
+  return `<div class="el-toolbar" contenteditable="false">
+    <span class="el-drag-handle" title="Drag to reposition">⠿</span>
+    <span class="el-sep"></span>
+    <span style="font-size:10px;color:rgba(255,255,255,.6);padding:0 4px">${label}</span>
+    <span class="el-sep"></span>
+    <button onclick="duplicateElement('${uid}')" title="Duplicate"><i class="bi bi-copy"></i></button>
+    <button onclick="deleteElement('${uid}')" title="Delete" style="color:#f87171"><i class="bi bi-trash3"></i></button>
+  </div>`;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   DRAG & DROP — reorder block elements inside page-body
+   ═══════════════════════════════════════════════════════════════════════ */
+let _dragEl=null, _dragClone=null, _savedEditable=null;
+
+/* Attach mousedown handlers to drag handles. Idempotent — safe to call
+   many times. Also sets up a MutationObserver so that elements added
+   later (e.g. from insertHtml, renderPreview) are wired up automatically. */
+function initDraggables(){
+  const body=document.getElementById('page-body');
+  if(!body)return;
+  _wireHandlesIn(body);
+  if(!body._dragObserver){
+    body._dragObserver=new MutationObserver(()=>_wireHandlesIn(body));
+    body._dragObserver.observe(body,{childList:true,subtree:true});
+  }
+}
+
+function _wireHandlesIn(body){
+  body.querySelectorAll('[data-draggable="true"]').forEach(el=>{
+    if(el._dragInit)return;
+    el._dragInit=true;
+    const handle=el.querySelector('.el-drag-handle');
+    if(handle){
+      // Use mousedown to start drag. preventDefault stops contenteditable
+      // from placing the caret / starting text selection.
+      const onDown=e=>{
+        if(e.button!==0)return;                // left-click only
+        e.preventDefault();e.stopPropagation();
+        startDrag(e,el);
+      };
+      handle.addEventListener('mousedown',onDown);
+      // Touch support (basic): translate touchstart to mousedown-style
+      handle.addEventListener('touchstart',e=>{
+        if(!e.touches||!e.touches.length)return;
+        e.preventDefault();e.stopPropagation();
+        const t=e.touches[0];
+        startDrag({clientY:t.clientY,clientX:t.clientX},el,true);
+      },{passive:false});
+    }
+  });
+}
+
+function startDrag(e, el, isTouch){
+  _dragEl=el;
+  el.classList.add('drag-ghost');
+
+  // Disable contenteditable + text selection while dragging so the
+  // browser doesn't fight us with caret placement / text selection.
+  const body=document.getElementById('page-body');
+  if(body){
+    _savedEditable=body.getAttribute('contenteditable');
+    body.setAttribute('contenteditable','false');
+  }
+  document.body.classList.add('dragging-active');
+
+  const onMove=ev=>{
+    const clientY=ev.touches?ev.touches[0].clientY:ev.clientY;
+    const body=document.getElementById('page-body');
+    if(!body)return;
+    const children=[...body.querySelectorAll('[data-draggable="true"]')].filter(c=>c!==_dragEl);
+    let closest=null,closestDist=Infinity,insertBefore=true;
+    children.forEach(c=>{
+      const r=c.getBoundingClientRect();
+      const mid=r.top+r.height/2;
+      const dist=Math.abs(clientY-mid);
+      if(dist<closestDist){closestDist=dist;closest=c;insertBefore=clientY<mid;}
+    });
+    body.querySelectorAll('.drop-before,.drop-after').forEach(c=>{
+      c.classList.remove('drop-before','drop-after');
+    });
+    if(closest){closest.classList.add(insertBefore?'drop-before':'drop-after');}
+  };
+
+  const cleanup=()=>{
+    document.removeEventListener('mousemove',onMove);
+    document.removeEventListener('mouseup',onUp);
+    document.removeEventListener('touchmove',onMove);
+    document.removeEventListener('touchend',onUp);
+    document.removeEventListener('touchcancel',onUp);
+    document.body.classList.remove('dragging-active');
+    const body=document.getElementById('page-body');
+    if(body){
+      if(_savedEditable===null||_savedEditable===undefined){
+        body.setAttribute('contenteditable','true');
+      } else {
+        body.setAttribute('contenteditable',_savedEditable);
+      }
+      _savedEditable=null;
+    }
+  };
+
+  const onUp=ev=>{
+    cleanup();
+    if(!_dragEl)return;
+    _dragEl.classList.remove('drag-ghost');
+
+    const body=document.getElementById('page-body');
+    const before=body?.querySelector('.drop-before');
+    const after=body?.querySelector('.drop-after');
+    body?.querySelectorAll('.drop-before,.drop-after').forEach(c=>{
+      c.classList.remove('drop-before','drop-after');
+    });
+
+    if(before&&before!==_dragEl){
+      body.insertBefore(_dragEl,before);
+    } else if(after&&after!==_dragEl){
+      after.after(_dragEl);
+    }
+    _dragEl=null;
+  };
+
+  if(isTouch){
+    document.addEventListener('touchmove',onMove,{passive:false});
+    document.addEventListener('touchend',onUp);
+    document.addEventListener('touchcancel',onUp);
+  } else {
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   DELETE / DUPLICATE ELEMENTS
+   ═══════════════════════════════════════════════════════════════════════ */
+function deleteElement(uid){
+  const el=document.querySelector(`[data-uid="${uid}"]`);
+  if(!el)return;
+  if(!confirm('Delete this element?'))return;
+  el.remove();
+  toast('Deleted');
+}
+
+function deleteSelectedElement(){
+  // Delete the draggable element that contains the cursor
+  const sel=window.getSelection();
+  if(!sel||!sel.anchorNode)return;
+  let node=sel.anchorNode;
+  while(node&&node!==document.getElementById('page-body')){
+    if(node.nodeType===1&&node.dataset&&node.dataset.draggable){
+      if(confirm('Delete this element?')){node.remove();toast('Deleted');}
+      return;
+    }
+    node=node.parentNode;
+  }
+  toast('Click inside a table or icon to select it first','warn');
+}
+
+function duplicateElement(uid){
+  const el=document.querySelector(`[data-uid="${uid}"]`);
+  if(!el)return;
+  const clone=el.cloneNode(true);
+  const newUid='el_'+Date.now();
+  clone.dataset.uid=newUid;
+  clone._dragInit=false;
+  // Update uid references inside toolbar
+  clone.querySelectorAll('[onclick]').forEach(b=>{
+    b.setAttribute('onclick',b.getAttribute('onclick').replace(uid,newUid));
+  });
+  el.after(clone);
+  initDraggables();
+  toast('Duplicated');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ICON PICKER
+   ═══════════════════════════════════════════════════════════════════════ */
+const ICON_CATEGORIES={
+  'Business':['bi-briefcase','bi-building','bi-bank','bi-graph-up','bi-pie-chart','bi-currency-dollar',
+    'bi-cash-stack','bi-receipt','bi-clipboard-data','bi-file-earmark-bar-graph',
+    'bi-person-workspace','bi-people','bi-handshake','bi-award','bi-trophy'],
+  'Communication':['bi-envelope','bi-telephone','bi-chat-dots','bi-send','bi-megaphone',
+    'bi-bell','bi-at','bi-globe','bi-wifi','bi-share'],
+  'Documents':['bi-file-earmark','bi-file-earmark-text','bi-file-earmark-pdf',
+    'bi-file-earmark-word','bi-folder','bi-archive','bi-paperclip','bi-printer',
+    'bi-pencil','bi-pen','bi-scissors'],
+  'Arrows':['bi-arrow-right','bi-arrow-left','bi-arrow-up','bi-arrow-down',
+    'bi-arrow-right-circle','bi-chevron-right','bi-chevron-double-right',
+    'bi-box-arrow-up-right','bi-link-45deg'],
+  'Status':['bi-check-circle','bi-check-lg','bi-x-circle','bi-exclamation-triangle',
+    'bi-info-circle','bi-question-circle','bi-shield-check','bi-lock','bi-unlock',
+    'bi-star','bi-star-fill','bi-heart','bi-flag'],
+  'People':['bi-person','bi-person-circle','bi-person-badge','bi-people-fill',
+    'bi-person-check','bi-person-gear','bi-person-lines-fill'],
+  'Technology':['bi-laptop','bi-phone','bi-tablet','bi-server','bi-cpu',
+    'bi-cloud','bi-database','bi-code-slash','bi-terminal','bi-gear'],
+  'Location':['bi-geo-alt','bi-map','bi-house','bi-building','bi-compass',
+    'bi-signpost','bi-pin-map'],
+  'Finance':['bi-wallet','bi-credit-card','bi-piggy-bank','bi-currency-exchange',
+    'bi-bar-chart','bi-graph-up-arrow','bi-graph-down-arrow'],
+  'Media':['bi-image','bi-camera','bi-play-circle','bi-music-note','bi-film',
+    'bi-mic','bi-headphones'],
+};
+
+let _iconSelected='bi-star-fill';
+let _iconColor='#1D9E75';
+let _iconSize=24;
+let _savedRange=null;
+
+function openIconPicker(){
+  // Save selection so we can restore it for insertion
+  const sel=window.getSelection();
+  if(sel&&sel.rangeCount>0)_savedRange=sel.getRangeAt(0).cloneRange();
+
+  _iconSelected='bi-star-fill';
+  document.getElementById('icon-modal').classList.remove('hidden');
+  renderIconGrid('');
+  updateIconPreview();
+}
+
+function renderIconGrid(filter){
+  const grid=document.getElementById('icon-grid');grid.innerHTML='';
+  const q=filter.toLowerCase();
+  let count=0;
+  Object.values(ICON_CATEGORIES).flat().forEach(ic=>{
+    const name=ic.replace('bi-','');
+    if(q&&!name.includes(q))return;
+    if(count>200)return;
+    count++;
+    const btn=document.createElement('div');
+    btn.className='icon-btn'+(ic===_iconSelected?' sel':'');
+    btn.innerHTML=`<i class="bi ${ic}" style="font-size:1.1rem"></i><span>${name}</span>`;
+    btn.addEventListener('click',()=>{
+      _iconSelected=ic;
+      grid.querySelectorAll('.icon-btn').forEach(b=>b.classList.remove('sel'));
+      btn.classList.add('sel');
+      updateIconPreview();
+    });
+    grid.appendChild(btn);
+  });
+  if(!count)grid.innerHTML='<div style="padding:20px;color:var(--muted);font-size:.78rem">No icons found</div>';
+}
+
+function updateIconPreview(){
+  const prev=document.getElementById('icon-preview-el');
+  if(prev){
+    prev.innerHTML=`<i class="bi ${_iconSelected}" style="font-size:${_iconSize}px;color:${_iconColor}"></i>`;
+  }
+}
+
+function insertIcon(){
+  const uid='icon_'+Date.now();
+  const iconHtml=`<span class="dg-el" data-draggable="true" data-uid="${uid}" `
+    +`style="display:inline-block;position:relative;margin:0 4px;vertical-align:middle;cursor:grab">`
+    +elToolbar(uid,'Icon')
+    +`<i class="bi ${_iconSelected}" style="font-size:${_iconSize}px;color:${_iconColor};display:block"></i>`
+    +`</span>`;
+
+  const body=document.getElementById('page-body');
+  if(body){
+    body.focus();
+    if(_savedRange){
+      const sel=window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(_savedRange);
+    }
+    document.execCommand('insertHTML',false,iconHtml);
+    initDraggables();
+  }
+  document.getElementById('icon-modal').classList.add('hidden');
+  toast('Icon inserted! Drag to reposition.');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   RE-INIT DRAGGABLES AFTER PREVIEW RENDERS
+   ═══════════════════════════════════════════════════════════════════════ */
+const _origRenderPreview=renderPreview;
+
+/* ═══════════════════════════════════════════════════════════════════════
+   INIT
+   ═══════════════════════════════════════════════════════════════════════ */
+(async()=>{
+  await loadTemplates();
+  const active=templates.find(t=>t.is_active);
+  if(active)selTpl(active.id);
+  else if(templates.length)selTpl(templates[0].id);
+})();
+
+// Build icon quick colors
+(function(){
+  const qc=document.getElementById('icon-quick-colors');
+  if(!qc)return;
+  ['#1D9E75','#2C2C2A','#e53e3e','#3b82f6','#f59e0b','#7c3aed','#ffffff','#6b7280'].forEach(c=>{
+    const d=document.createElement('div');
+    d.style.cssText=`width:18px;height:18px;background:${c};border-radius:4px;cursor:pointer;border:1px solid rgba(0,0,0,.15)`;
+    d.title=c;
+    d.addEventListener('click',()=>{
+      _iconColor=c;
+      document.getElementById('icon-color-pick').value=c;
+      document.getElementById('icon-color-hex').value=c;
+      updateIconPreview();
+    });
+    qc.appendChild(d);
+  });
+})();
 </script>
-
-{# ── Your project's base JS bundle, then the builder bundle ─────────────── #}
-{% block extra_js %}
-  {# Replace with your real static file paths / webpack chunks #}
-  {# <script src="{% static 'letterhead/builder.bundle.js' %}"></script> #}
-{% endblock %}
-
 </body>
 </html>

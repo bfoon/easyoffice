@@ -2380,11 +2380,18 @@ class CallRingView(LoginRequiredMixin, View):
     """
     POST /messages/call/ring/<room_id>/
     Caller presses the "Call" button in a DM. We look up the other member,
-    stash a ring record in Redis, and ALSO push a websocket event on the
-    room group so if the callee already has the room open they get the
-    incoming-call modal instantly (no poll latency).
+    stash a ring record in Redis, and push a WebSocket event on the room
+    group so an in-room callee rings instantly.
 
-    Body: (nothing needed; room_id identifies the DM)
+    NOTE on presence:
+      We deliberately do NOT pre-check whether the callee is "online" here.
+      Presence in this app is heartbeat-based and the heartbeat only runs
+      on the chat_room page — a callee who is logged in and active on a
+      different page (dashboard, tasks, etc.) will register as "offline"
+      even though they are perfectly reachable. Blocking the call here
+      produced false negatives. Instead we always ring; if the callee is
+      truly absent the ring record TTL expires and the caller's modal
+      eventually times out.
     """
 
     def post(self, request, room_id):
@@ -2398,13 +2405,15 @@ class CallRingView(LoginRequiredMixin, View):
         if not other:
             return JsonResponse({'ok': False, 'error': 'No one to call.'}, status=400)
 
-        # Refuse to ring if callee is not online (available/online/idle are OK;
-        # offline / dnd are not). Tweak as you prefer.
+        # Only DND is a hard block — the user has explicitly asked not to
+        # be disturbed. Everything else (offline, idle, auto, available,
+        # busy, away) still rings.
         callee_status = _user_effective_status(other.pk)
-        if callee_status in ('offline',):
-            return JsonResponse({'ok': False, 'error': f'{_safe_full_name(other)} is offline.'}, status=409)
         if callee_status == 'dnd':
-            return JsonResponse({'ok': False, 'error': f'{_safe_full_name(other)} is on Do Not Disturb.'}, status=409)
+            return JsonResponse({
+                'ok': False,
+                'error': f'{_safe_full_name(other)} is on Do Not Disturb.',
+            }, status=409)
 
         from django.core.cache import cache
         ring = {
@@ -2433,7 +2442,11 @@ class CallRingView(LoginRequiredMixin, View):
         except Exception:
             pass
 
-        return JsonResponse({'ok': True, 'callee_id': str(other.id)})
+        return JsonResponse({
+            'ok': True,
+            'callee_id': str(other.id),
+            'callee_status': callee_status,   # for logging / future UI hints
+        })
 
 
 class CallIncomingView(LoginRequiredMixin, View):

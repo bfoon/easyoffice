@@ -4116,11 +4116,114 @@ if (spellcheckToggleBtn) {
   var _pendingOffer    = null;
   var _pendingRemoteIce = [];
 
+  function callLog(){
+    try {
+      var args = ['[call]'].concat(Array.prototype.slice.call(arguments));
+      console.log.apply(console, args);
+    } catch(_){}
+  }
+
+  /* ── Ring tones (generated in-browser, no audio files needed) ─────────
+     • callerTone  → ringback the CALLER hears while the other side rings
+     • calleeTone  → ringtone the CALLEE hears for incoming call
+     Both are built with WebAudio oscillators so we don't ship any media. */
+  var _toneCtx    = null;
+  var _tonePlaying = null;   // 'caller' | 'callee' | null
+  var _toneTimer   = null;
+  var _toneNodes   = [];
+
+  function _toneGetCtx(){
+    if(!_toneCtx){
+      try {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if(AC) _toneCtx = new AC();
+      } catch(_){}
+    }
+    // Some browsers start the context suspended; resume after user gesture.
+    if(_toneCtx && _toneCtx.state === 'suspended'){
+      try { _toneCtx.resume(); } catch(_){}
+    }
+    return _toneCtx;
+  }
+
+  function _toneStopAll(){
+    if(_toneTimer){ clearInterval(_toneTimer); _toneTimer = null; }
+    _toneNodes.forEach(function(n){
+      try { n.stop && n.stop(); } catch(_){}
+      try { n.disconnect && n.disconnect(); } catch(_){}
+    });
+    _toneNodes = [];
+    _tonePlaying = null;
+  }
+
+  /* One "burst" = a few oscillators playing together for `durationMs` */
+  function _tonePlayBurst(freqs, durationMs, gain){
+    var ctx = _toneGetCtx();
+    if(!ctx) return;
+    var g = ctx.createGain();
+    g.gain.value = 0;
+    g.connect(ctx.destination);
+
+    // Envelope: quick fade in, hold, quick fade out (avoids clicks)
+    var now = ctx.currentTime;
+    var peak = gain || 0.18;
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(peak, now + 0.03);
+    g.gain.setValueAtTime(peak, now + (durationMs/1000) - 0.05);
+    g.gain.linearRampToValueAtTime(0, now + (durationMs/1000));
+
+    freqs.forEach(function(f){
+      var o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = f;
+      o.connect(g);
+      o.start(now);
+      o.stop(now + (durationMs/1000) + 0.02);
+      _toneNodes.push(o);
+    });
+    _toneNodes.push(g);
+  }
+
+  /* CALLER ringback (what the calling side hears): classic telephone
+     dual-tone 440+480 Hz, 2 seconds on, 4 seconds off. */
+  function callStartCallerTone(){
+    if(_tonePlaying === 'caller') return;
+    _toneStopAll();
+    if(!_toneGetCtx()){ callLog('no AudioContext — ringtone unavailable'); return; }
+    _tonePlaying = 'caller';
+    var fire = function(){ _tonePlayBurst([440, 480], 2000, 0.12); };
+    fire();
+    _toneTimer = setInterval(fire, 6000);   // 2s on + 4s off
+    callLog('caller ringback started');
+  }
+
+  /* CALLEE ringtone (what the receiving side hears): two short bursts
+     every ~2.5s, higher and more attention-grabbing. */
+  function callStartCalleeTone(){
+    if(_tonePlaying === 'callee') return;
+    _toneStopAll();
+    if(!_toneGetCtx()){ callLog('no AudioContext — ringtone unavailable'); return; }
+    _tonePlaying = 'callee';
+    var fire = function(){
+      _tonePlayBurst([880, 660], 400, 0.22);
+      setTimeout(function(){ _tonePlayBurst([880, 660], 400, 0.22); }, 600);
+    };
+    fire();
+    _toneTimer = setInterval(fire, 2500);
+    callLog('callee ringtone started');
+  }
+
+  function callStopTones(){
+    if(_tonePlaying){ callLog('tones stopped (was:', _tonePlaying + ')'); }
+    _toneStopAll();
+  }
+
   function callSignal(obj){
     if(!socket || socket.readyState !== WebSocket.OPEN){
       alert('Connection lost. Please refresh.');
       return false;
     }
+    try { callLog('→ send:', obj.type); } catch(_){}
     socket.send(JSON.stringify(obj));
     return true;
   }
@@ -4144,6 +4247,7 @@ if (spellcheckToggleBtn) {
   }
 
   function callTeardown(){
+    callStopTones();
     try { if(callPC){ callPC.ontrack = null; callPC.onicecandidate = null; callPC.close(); } } catch(_){}
     callPC = null;
     if(callLocalStream){
@@ -4169,38 +4273,90 @@ if (spellcheckToggleBtn) {
     }).catch(function(){});
   }
 
+  function callActivateIfNeeded(reason){
+    if(callState === 'active') return;
+    callLog('activating call (reason:', reason + ')');
+    callStopTones();
+    callState = 'active';
+    callHideModal('incomingCallModal');
+    callHideModal('outgoingCallModal');
+    callSetBar(true);
+    var nameEl = byId('callBarName'); if(nameEl) nameEl.textContent = callPeerName || 'In call';
+    callStartedAt = Date.now();
+    if(callTimer){ clearInterval(callTimer); }
+    callTimer = setInterval(function(){
+      var sec = ((Date.now() - callStartedAt)/1000)|0;
+      var t = byId('callBarTimer'); if(t) t.textContent = callFmtDuration(sec);
+    }, 1000);
+  }
+
   function callBuildPC(){
     var pc = new RTCPeerConnection({ iceServers: CALL_ICE_SERVERS });
 
     pc.onicecandidate = function(ev){
       if(ev.candidate){
         callSignal({ type: 'ice_candidate', candidate: ev.candidate });
+      } else {
+        callLog('ICE gathering complete');
       }
     };
 
     pc.ontrack = function(ev){
+      callLog('ontrack fired, streams:', ev.streams && ev.streams.length, 'track kind:', ev.track && ev.track.kind);
       var audio = byId('remoteCallAudio');
-      if(audio && ev.streams && ev.streams[0]){
-        audio.srcObject = ev.streams[0];
+      if(!audio){ callLog('remoteCallAudio element missing'); return; }
+      if(!ev.streams || !ev.streams[0]){ callLog('no stream on ontrack event'); return; }
+
+      audio.srcObject = ev.streams[0];
+
+      // Browsers increasingly block autoplay even with the `autoplay` attr.
+      // Explicitly calling play() surfaces the error so we can see it.
+      var p = audio.play();
+      if(p && typeof p.catch === 'function'){
+        p.then(function(){ callLog('remote audio playing'); })
+         .catch(function(err){
+           callLog('audio.play() rejected:', err && err.name, err && err.message);
+           // Last-resort: briefly mute, play, unmute — works around some
+           // autoplay policies when there was recent user gesture (the
+           // Accept button click).
+           try {
+             audio.muted = true;
+             audio.play().then(function(){ audio.muted = false; callLog('recovered via mute trick'); })
+                         .catch(function(e2){ callLog('mute trick failed too:', e2); });
+           } catch(_){}
+         });
+      }
+
+      // Track arrival is the most reliable "we have media" signal across
+      // browsers. Transition to active UI here instead of waiting for
+      // connectionState, which can take longer or be unreliable.
+      callActivateIfNeeded('ontrack');
+    };
+
+    pc.oniceconnectionstatechange = function(){
+      callLog('iceConnectionState:', pc.iceConnectionState);
+      if(pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed'){
+        callActivateIfNeeded('ice-' + pc.iceConnectionState);
+      }
+      if(pc.iceConnectionState === 'failed'){
+        callLog('ICE failed — likely need a TURN server for this network');
+        alert('Could not establish a voice connection. Your network may require a TURN server.');
+        callTeardown();
       }
     };
 
     pc.onconnectionstatechange = function(){
-      if(pc.connectionState === 'connected' && callState !== 'active'){
-        callState = 'active';
-        callHideModal('incomingCallModal');
-        callHideModal('outgoingCallModal');
-        callSetBar(true);
-        var nameEl = byId('callBarName'); if(nameEl) nameEl.textContent = callPeerName || 'In call';
-        callStartedAt = Date.now();
-        callTimer = setInterval(function(){
-          var sec = ((Date.now() - callStartedAt)/1000)|0;
-          var t = byId('callBarTimer'); if(t) t.textContent = callFmtDuration(sec);
-        }, 1000);
+      callLog('connectionState:', pc.connectionState);
+      if(pc.connectionState === 'connected'){
+        callActivateIfNeeded('connection-connected');
       }
       if(pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed'){
         if(callState === 'active'){ callTeardown(); }
       }
+    };
+
+    pc.onsignalingstatechange = function(){
+      callLog('signalingState:', pc.signalingState);
     };
 
     return pc;
@@ -4252,6 +4408,7 @@ if (spellcheckToggleBtn) {
       var oState= byId('outgoingCallState');  if(oState) oState.textContent = 'Ringing…';
       var oAv   = byId('outgoingCallAvatar'); if(oAv)   oAv.textContent    = (callPeerName.charAt(0) || '?').toUpperCase();
       callShowModal('outgoingCallModal');
+      callStartCallerTone();
 
       return callGetMic();
     })
@@ -4287,6 +4444,7 @@ if (spellcheckToggleBtn) {
     var nEl = byId('incomingCallName');   if(nEl) nEl.textContent   = callPeerName;
     var aEl = byId('incomingCallAvatar'); if(aEl) aEl.textContent   = (callPeerName.charAt(0) || '?').toUpperCase();
     callShowModal('incomingCallModal');
+    callStartCalleeTone();
   }
 
   window.callAccept = function(){
@@ -4364,6 +4522,7 @@ if (spellcheckToggleBtn) {
 
   /* ── Signal dispatcher (called from socket.onmessage above) ─────────── */
   function handleCallSignal(d){
+    callLog('← recv:', d.type, 'from', d.sender_id, 'myState:', callState);
     if(String(d.sender_id || '') === String(USER_ID)) return;   // ignore own echoes
 
     if(d.type === 'call_ring'){
@@ -4446,6 +4605,21 @@ if (spellcheckToggleBtn) {
       try { callSignal({ type: 'call_hangup' }); } catch(_){}
     }
   });
+
+  /* Prime AudioContext on first user gesture so the ringtone can actually
+     sound when an incoming call arrives with no fresh user interaction.
+     Safari/iOS and some Chrome configs refuse to create sound otherwise. */
+  (function primeAudio(){
+    function prime(){
+      _toneGetCtx();   // creates + resumes if suspended
+      document.removeEventListener('click',    prime, true);
+      document.removeEventListener('keydown',  prime, true);
+      document.removeEventListener('touchend', prime, true);
+    }
+    document.addEventListener('click',    prime, true);
+    document.addEventListener('keydown',  prime, true);
+    document.addEventListener('touchend', prime, true);
+  })();
 
 })();
 </script>

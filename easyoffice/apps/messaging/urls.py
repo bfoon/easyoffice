@@ -112,4 +112,10 @@ urlpatterns = [
     path('call/ring/<uuid:room_id>/',   views.CallRingView.as_view(),     name='call_ring'),
     path('call/incoming/',              views.CallIncomingView.as_view(), name='call_incoming'),
     path('call/clear/<uuid:room_id>/',  views.CallClearView.as_view(),    name='call_clear'),
+
+    # ─────────────────────────────────────────────
+    # 🆕 DOCUMENT PRESENTATION (in-call)
+    # ─────────────────────────────────────────────
+    path('present/<uuid:room_id>/upload/', views.PresentUploadView.as_view(),    name='present_upload'),
+    path('present/<uuid:room_id>/files/',  views.PresentListFilesView.as_view(), name='present_files'),
 ]

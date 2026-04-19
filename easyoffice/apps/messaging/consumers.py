@@ -84,6 +84,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if msg_type in (
             'call_offer', 'call_answer', 'ice_candidate',
             'call_hangup', 'call_decline', 'call_cancel',
+            # 🆕 Upgrade an in-progress voice call to video (full
+            # renegotiation — new offer/answer exchange, same peers).
+            'call_upgrade_offer', 'call_upgrade_answer',
+            # 🆕 Document-presentation sync. One presenter at a time;
+            # viewers can request a specific page jump which the
+            # presenter may honour.
+            'present_start', 'present_end', 'present_page',
+            'present_request_page',
         ):
             # Must be a DM room — enforce 1-on-1 scope.
             is_direct = await self.room_is_direct()

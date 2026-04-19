@@ -2557,3 +2557,230 @@ class CallClearView(LoginRequiredMixin, View):
             _broadcast_chat_message(sys_msg)
         except Exception:
             pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🆕 DOCUMENT PRESENTATION (in-call)
+# ═══════════════════════════════════════════════════════════════════════════
+# Architecture
+# ------------
+# A presenter uploads (or references) a document. We render page images:
+#   • PDF   → PDF.js renders client-side (no server work)
+#   • PPTX  → server-side convert to PDF via LibreOffice, then PDF.js client-side
+#   • JPG/PNG → single "page"
+#
+# We deliberately return a *URL to the file* (PDF or image). The client
+# then renders pages on its own. This keeps the server stateless for
+# presentation beyond the one-time conversion for PPTX.
+#
+# Presenter-controlled sync happens over the existing WebSocket:
+#   • present_start   {url, kind, num_pages?, title}
+#   • present_page    {page}
+#   • present_request_page {page}
+#   • present_end
+#
+# Security
+# --------
+# Only room members can upload and fetch. Files are stored under MEDIA_ROOT
+# (same as existing chat uploads).
+# ═══════════════════════════════════════════════════════════════════════════
+
+import os as _os
+import shutil as _shutil
+import subprocess as _subprocess
+import tempfile as _tempfile
+import uuid as _uuid
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile as _ContentFile
+from django.views.decorators.csrf import csrf_exempt  # noqa: F401 (not used; kept for parity)
+
+
+_PRESENT_ALLOWED_IMAGE = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+_PRESENT_ALLOWED_PDF   = {'.pdf'}
+_PRESENT_ALLOWED_PPTX  = {'.ppt', '.pptx'}
+_PRESENT_MAX_BYTES     = 50 * 1024 * 1024   # 50 MB per upload
+
+
+def _libreoffice_binary():
+    """Return the path to libreoffice (or soffice) if installed, else None."""
+    for candidate in ('libreoffice', 'soffice'):
+        path = _shutil.which(candidate)
+        if path:
+            return path
+    return None
+
+
+def _convert_pptx_to_pdf(uploaded_file):
+    """
+    Convert an uploaded PPTX/PPT to PDF using LibreOffice.
+
+    Returns (pdf_bytes, pdf_filename) or (None, error_string).
+
+    Relies on `libreoffice` being installed on the server, which the
+    operator installs once:
+        Ubuntu:  sudo apt-get install libreoffice --no-install-recommends
+        RHEL:    sudo dnf install libreoffice
+        macOS:   brew install --cask libreoffice
+    """
+    binary = _libreoffice_binary()
+    if not binary:
+        return None, 'LibreOffice is not installed on the server.'
+
+    original_name = uploaded_file.name or 'slides.pptx'
+    base_no_ext   = _os.path.splitext(_os.path.basename(original_name))[0] or 'slides'
+
+    with _tempfile.TemporaryDirectory() as tmpdir:
+        in_path = _os.path.join(tmpdir, _os.path.basename(original_name))
+        with open(in_path, 'wb') as f:
+            for chunk in uploaded_file.chunks():
+                f.write(chunk)
+
+        try:
+            result = _subprocess.run(
+                [binary, '--headless', '--norestore', '--nologo',
+                 '--convert-to', 'pdf', '--outdir', tmpdir, in_path],
+                capture_output=True,
+                timeout=90,
+                check=False,
+            )
+        except _subprocess.TimeoutExpired:
+            return None, 'PPTX conversion timed out. Try a smaller file.'
+        except Exception as exc:  # noqa: BLE001
+            return None, f'PPTX conversion failed: {exc}'
+
+        if result.returncode != 0:
+            stderr = (result.stderr or b'').decode('utf-8', errors='replace').strip()
+            return None, f'PPTX conversion failed: {stderr or "unknown LibreOffice error"}'
+
+        out_path = _os.path.join(tmpdir, base_no_ext + '.pdf')
+        if not _os.path.exists(out_path):
+            # LibreOffice sometimes renames; grab the first pdf in the dir
+            candidates = [p for p in _os.listdir(tmpdir) if p.lower().endswith('.pdf')]
+            if not candidates:
+                return None, 'PPTX conversion produced no PDF output.'
+            out_path = _os.path.join(tmpdir, candidates[0])
+
+        with open(out_path, 'rb') as fh:
+            pdf_bytes = fh.read()
+
+        return pdf_bytes, base_no_ext + '.pdf'
+
+
+class PresentUploadView(LoginRequiredMixin, View):
+    """
+    POST /messages/present/<room_id>/upload/
+    Multipart: file=<PDF | PPT | PPTX | IMAGE>
+               [title=<string>]
+
+    Response:
+        { ok: true, url, kind: 'pdf'|'image', filename, title }
+
+    The client (PDF.js) handles rendering & page count itself — we don't
+    rasterize server-side. For PPTX we convert to PDF first, then the
+    client treats it as a PDF.
+    """
+
+    def post(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        f = request.FILES.get('file')
+        if not f:
+            return JsonResponse({'ok': False, 'error': 'No file uploaded.'}, status=400)
+
+        if f.size > _PRESENT_MAX_BYTES:
+            return JsonResponse({
+                'ok': False,
+                'error': f'File too large (max {_PRESENT_MAX_BYTES // (1024*1024)} MB).',
+            }, status=400)
+
+        raw_name = f.name or 'file'
+        ext = _os.path.splitext(raw_name)[1].lower()
+        title = (request.POST.get('title') or _os.path.splitext(_os.path.basename(raw_name))[0]).strip()[:200]
+
+        # Determine kind & get final bytes to store
+        if ext in _PRESENT_ALLOWED_PDF:
+            kind = 'pdf'
+            stored_bytes = f.read()
+            stored_name  = _os.path.basename(raw_name)
+        elif ext in _PRESENT_ALLOWED_PPTX:
+            pdf_bytes, pdf_or_err = _convert_pptx_to_pdf(f)
+            if pdf_bytes is None:
+                return JsonResponse({'ok': False, 'error': pdf_or_err}, status=500)
+            kind = 'pdf'
+            stored_bytes = pdf_bytes
+            stored_name  = pdf_or_err   # <- actually the PDF filename
+        elif ext in _PRESENT_ALLOWED_IMAGE:
+            kind = 'image'
+            stored_bytes = f.read()
+            stored_name  = _os.path.basename(raw_name)
+        else:
+            return JsonResponse({
+                'ok': False,
+                'error': 'Unsupported file type. Allowed: PDF, PPT, PPTX, JPG, PNG, GIF, WEBP.',
+            }, status=400)
+
+        # Store under a unique path so overwrites can't collide or leak.
+        safe_stored_name = stored_name.replace('/', '_').replace('\\', '_')
+        storage_path = f'presentations/{room.id}/{_uuid.uuid4().hex}_{safe_stored_name}'
+        saved_path   = default_storage.save(storage_path, _ContentFile(stored_bytes))
+        try:
+            url = default_storage.url(saved_path)
+        except Exception:
+            url = settings.MEDIA_URL + saved_path
+
+        return JsonResponse({
+            'ok':       True,
+            'url':      url,
+            'kind':     kind,
+            'filename': safe_stored_name,
+            'title':    title or safe_stored_name,
+        })
+
+
+class PresentListFilesView(LoginRequiredMixin, View):
+    """
+    GET /messages/present/<room_id>/files/
+    List room-shared files that can be re-used for presentation
+    (PDF / PPTX / images only). Returns up to 30 most-recent.
+    """
+
+    def get(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        allowed_exts = _PRESENT_ALLOWED_PDF | _PRESENT_ALLOWED_PPTX | _PRESENT_ALLOWED_IMAGE
+        shared_qs = ChatRoomFile.objects.filter(room=room).select_related('file').order_by('-shared_at')[:80]
+
+        results = []
+        for rf in shared_qs:
+            sf = rf.file
+            if not sf or not sf.file:
+                continue
+            try:
+                name = sf.name or _os.path.basename(sf.file.name)
+            except Exception:
+                name = 'file'
+            ext = _os.path.splitext(name)[1].lower()
+            if ext not in allowed_exts:
+                continue
+            try:
+                url = sf.file.url
+            except Exception:
+                continue
+            if ext in _PRESENT_ALLOWED_PDF:
+                kind = 'pdf'
+            elif ext in _PRESENT_ALLOWED_PPTX:
+                kind = 'pptx'   # client will still upload for conversion
+            else:
+                kind = 'image'
+            results.append({
+                'id': str(rf.id),
+                'file_id': str(sf.id),
+                'name': name,
+                'url': url,
+                'kind': kind,
+                'shared_at': rf.shared_at.isoformat() if rf.shared_at else None,
+            })
+            if len(results) >= 30:
+                break
+
+        return JsonResponse({'ok': True, 'files': results})

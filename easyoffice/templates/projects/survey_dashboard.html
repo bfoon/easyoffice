@@ -2,6 +2,8 @@
 {% block title %}Survey Dashboard — {{ survey.title }}{% endblock %}
 
 {% block content %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
 <style>
 .dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
 .stat-card{background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:14px;padding:18px 20px}
@@ -28,9 +30,25 @@
 .share-box{background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px;padding:12px 16px;display:flex;align-items:center;gap:10px;font-size:.82rem;color:var(--eo-text-muted);word-break:break-all}
 .copy-btn{flex-shrink:0;background:var(--eo-primary,#1e3a5f);color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:.78rem;font-weight:600;cursor:pointer}
 .avg-badge{display:inline-block;background:var(--eo-primary,#1e3a5f);color:#fff;border-radius:10px;padding:6px 16px;font-size:1.1rem;font-weight:800;margin-bottom:12px}
-.text-samples{list-style:none;display:flex;flex-direction:column;gap:6px}
+.text-samples{list-style:none;display:flex;flex-direction:column;gap:6px;padding-left:0}
 .text-samples li{background:var(--eo-bg);border-radius:8px;padding:8px 12px;font-size:.82rem;color:var(--eo-text);border-left:3px solid var(--eo-border)}
-@media(max-width:900px){.dash-grid{grid-template-columns:1fr 1fr}}
+.geo-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}
+.geo-map{height:320px;width:100%;border:1px solid var(--eo-border);border-radius:12px;overflow:hidden;background:#e2e8f0}
+.geo-side{display:flex;flex-direction:column;gap:10px}
+.geo-kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.geo-mini{background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px;padding:12px}
+.geo-mini .v{font-size:1.1rem;font-weight:800;color:var(--eo-text);line-height:1}
+.geo-mini .l{font-size:.72rem;color:var(--eo-text-muted);margin-top:4px}
+.geo-list{max-height:228px;overflow:auto;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)}
+.geo-item{padding:10px 12px;border-bottom:1px solid var(--eo-border)}
+.geo-item:last-child{border-bottom:none}
+.geo-name{font-size:.8rem;font-weight:700;color:var(--eo-text)}
+.geo-meta{font-size:.73rem;color:var(--eo-text-muted);margin-top:4px;line-height:1.45}
+.geo-empty{font-size:.82rem;color:var(--eo-text-muted);padding:16px;text-align:center}
+@media(max-width:900px){
+  .dash-grid{grid-template-columns:1fr 1fr}
+  .geo-grid{grid-template-columns:1fr}
+}
 @media(max-width:600px){.dash-grid{grid-template-columns:1fr}}
 </style>
 
@@ -59,7 +77,6 @@
   </div>
 </div>
 
-{# Public share link #}
 {% if public_url %}
 <div class="chart-card mb-3">
   <h3><i class="bi bi-share me-2"></i>Public Share Link</h3>
@@ -73,7 +90,6 @@
 </div>
 {% endif %}
 
-{# KPI strip #}
 <div class="dash-grid" id="kpi-strip">
   <div class="stat-card">
     <div class="val" id="kpi-total">—</div>
@@ -93,16 +109,13 @@
   </div>
 </div>
 
-{# Timeline chart #}
 <div class="chart-card">
   <h3><i class="bi bi-graph-up me-2"></i>Responses Over Time</h3>
   <canvas id="timeline-chart" height="90"></canvas>
 </div>
 
-{# Per-question charts #}
 <div id="q-charts"></div>
 
-{# Recent responses table #}
 <div class="chart-card">
   <h3><i class="bi bi-people me-2"></i>Recent Submissions</h3>
   <div style="overflow-x:auto">
@@ -123,6 +136,7 @@
   </div>
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
 var DATA_URL = "{% url 'survey_dashboard_data' project.pk survey.pk %}";
@@ -131,12 +145,21 @@ var PALETTE = [COVER,'#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4'
 
 var initialData = {{ initial_data_json|safe }};
 var timelineChart = null;
-var qChartInstances = {};
+var geoMaps = {};
 
-// ── Utilities ────────────────────────────────────────────────────────────────
 function hex2rgba(hex, alpha) {
+  if (!hex || hex.length < 7) return 'rgba(30,58,95,' + alpha + ')';
   var r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
   return 'rgba('+r+','+g+','+b+','+alpha+')';
+}
+
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 function copyUrl() {
@@ -146,7 +169,6 @@ function copyUrl() {
   setTimeout(function(){ btn.textContent = 'Copy'; }, 2000);
 }
 
-// ── KPI update ───────────────────────────────────────────────────────────────
 function updateKPIs(d) {
   document.getElementById('kpi-total').textContent = d.total_responses;
   document.getElementById('kpi-internal').textContent = d.internal_responses;
@@ -156,7 +178,6 @@ function updateKPIs(d) {
   s.style.color = d.is_active ? '#10b981' : '#94a3b8';
 }
 
-// ── Timeline chart ───────────────────────────────────────────────────────────
 function buildTimeline(d) {
   var ctx = document.getElementById('timeline-chart').getContext('2d');
   if (timelineChart) {
@@ -190,7 +211,119 @@ function buildTimeline(d) {
   });
 }
 
-// ── Per-question charts ───────────────────────────────────────────────────────
+function renderGeoMap(q) {
+  var mapId = 'geo-map-' + q.id;
+  var mapWrap = document.getElementById(mapId);
+  if (!mapWrap || !window.L) return;
+
+  if (geoMaps[q.id]) {
+    try { geoMaps[q.id].remove(); } catch(e) {}
+    delete geoMaps[q.id];
+  }
+
+  var map = L.map(mapId, { scrollWheelZoom: false, attributionControl: true });
+  geoMaps[q.id] = map;
+
+  L.tileLayer('/projects/surveys/osm-tiles/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '© OpenStreetMap'
+  }).addTo(map);
+
+  var points = q.points || [];
+  if (!points.length) {
+    map.setView([13.4549, -16.5790], 5);
+    setTimeout(function(){ try { map.invalidateSize(); } catch(e){} }, 150);
+    return;
+  }
+
+  var bounds = [];
+  points.forEach(function(p) {
+    var color = p.is_public ? '#2563eb' : '#059669';
+    var marker = L.circleMarker([p.lat, p.lng], {
+      radius: 7,
+      color: color,
+      weight: 2,
+      fillColor: color,
+      fillOpacity: 0.65
+    }).addTo(map);
+
+    if (p.accuracy_m && p.accuracy_m > 0) {
+      L.circle([p.lat, p.lng], {
+        radius: p.accuracy_m,
+        color: color,
+        weight: 1,
+        fillColor: color,
+        fillOpacity: 0.08
+      }).addTo(map);
+    }
+
+    marker.bindPopup(
+      '<div style="min-width:220px">' +
+        '<div style="font-weight:700;margin-bottom:4px">' + escapeHtml(p.respondent_name || 'Anonymous') + '</div>' +
+        '<div style="font-size:.82rem;color:#475569;margin-bottom:4px">' + escapeHtml(p.address || 'No address') + '</div>' +
+        '<div style="font-size:.76rem;color:#64748b">Lat: ' + Number(p.lat).toFixed(5) + ', Lng: ' + Number(p.lng).toFixed(5) + '</div>' +
+        '<div style="font-size:.76rem;color:#64748b">Accuracy: ±' + Math.round(Number(p.accuracy_m || 0)) + ' m</div>' +
+        '<div style="font-size:.76rem;color:#64748b">Source: ' + escapeHtml((p.source || 'gps').toUpperCase()) + '</div>' +
+        '<div style="font-size:.76rem;color:#64748b">Submitted: ' + escapeHtml(p.submitted_at || '') + '</div>' +
+      '</div>'
+    );
+
+    bounds.push([p.lat, p.lng]);
+  });
+
+  if (bounds.length === 1) {
+    map.setView(bounds[0], 15);
+  } else {
+    map.fitBounds(bounds, { padding: [24, 24], maxZoom: 15 });
+  }
+
+  setTimeout(function(){ try { map.invalidateSize(); } catch(e){} }, 150);
+}
+
+function renderGeoQuestion(card, q, qi) {
+  var points = q.points || [];
+  var latest = points.slice(0, 8);
+  var gpsCount = points.filter(function(p){ return (p.source || '').toLowerCase() === 'gps'; }).length;
+  var ipCount = points.filter(function(p){ return (p.source || '').toLowerCase() === 'ip'; }).length;
+
+  var listHtml = latest.length
+    ? latest.map(function(p){
+        return '<div class="geo-item">'
+          + '<div class="geo-name">' + escapeHtml(p.respondent_name || 'Anonymous') + '</div>'
+          + '<div class="geo-meta">'
+          + (p.address ? escapeHtml(p.address) + '<br>' : '')
+          + Number(p.lat).toFixed(5) + ', ' + Number(p.lng).toFixed(5)
+          + ' · ±' + Math.round(Number(p.accuracy_m || 0)) + ' m'
+          + ' · ' + escapeHtml((p.source || 'gps').toUpperCase())
+          + '<br>' + escapeHtml(p.submitted_at || '')
+          + '</div>'
+          + '</div>';
+      }).join('')
+    : '<div class="geo-empty">No valid geolocation responses yet.</div>';
+
+  card.innerHTML =
+    '<h4>Q' + (qi + 1) + '. ' + escapeHtml(q.text) + '</h4>' +
+    '<div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:12px">' +
+      (q.count || 0) + ' response(s) — ' + (q.valid_count || 0) + ' valid location point(s)' +
+    '</div>' +
+    '<div class="geo-grid">' +
+      '<div>' +
+        '<div id="geo-map-' + q.id + '" class="geo-map"></div>' +
+      '</div>' +
+      '<div class="geo-side">' +
+        '<div class="geo-kpis">' +
+          '<div class="geo-mini"><div class="v">' + (q.valid_count || 0) + '</div><div class="l">Valid Points</div></div>' +
+          '<div class="geo-mini"><div class="v">' + (q.count || 0) + '</div><div class="l">All Responses</div></div>' +
+          '<div class="geo-mini"><div class="v">' + gpsCount + '</div><div class="l">GPS Captures</div></div>' +
+          '<div class="geo-mini"><div class="v">' + ipCount + '</div><div class="l">IP Fallback</div></div>' +
+        '</div>' +
+        '<div class="geo-list">' + listHtml + '</div>' +
+      '</div>' +
+    '</div>';
+
+  setTimeout(function(){ renderGeoMap(q); }, 50);
+}
+
 function renderQuestions(data) {
   var container = document.getElementById('q-charts');
   data.question_charts.forEach(function(q, qi) {
@@ -204,50 +337,54 @@ function renderQuestions(data) {
       container.appendChild(card);
     }
 
-    // Bar / donut chart types
     if (q.type === 'single_choice' || q.type === 'multi_choice' || q.type === 'yes_no') {
-      var total = q.total || q.counts.reduce(function(a,b){return a+b},0) || 1;
-      var barsHtml = q.labels.map(function(lbl, i) {
-        var cnt = q.counts[i] || 0;
+      var total = q.total || (q.counts || []).reduce(function(a,b){return a+b},0) || 1;
+      var barsHtml = (q.labels || []).map(function(lbl, i) {
+        var cnt = (q.counts || [])[i] || 0;
         var pct = Math.round(cnt / total * 100);
         var col = PALETTE[i % PALETTE.length];
         return '<div class="bar-row">'
-          + '<div class="bar-label" title="'+lbl+'">'+lbl+'</div>'
+          + '<div class="bar-label" title="'+escapeHtml(lbl)+'">'+escapeHtml(lbl)+'</div>'
           + '<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:'+col+'"></div></div>'
           + '<div class="bar-count">'+cnt+'</div>'
           + '<div class="bar-pct">'+pct+'%</div>'
           + '</div>';
       }).join('');
 
-      card.innerHTML = '<h4>Q'+(qi+1)+'. '+q.text+'</h4>'
+      card.innerHTML = '<h4>Q'+(qi+1)+'. '+escapeHtml(q.text)+'</h4>'
         + '<div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:12px">'+q.count+' response(s)</div>'
         + barsHtml;
 
     } else if (q.type === 'rating') {
       var avgHtml = q.avg !== null ? '<div class="avg-badge">★ '+q.avg+' / 5</div>' : '';
-      var total2 = q.counts.reduce(function(a,b){return a+b},0) || 1;
-      var barsHtml2 = q.labels.map(function(lbl,i){
-        var cnt = q.counts[i]||0;
+      var total2 = (q.counts || []).reduce(function(a,b){return a+b},0) || 1;
+      var barsHtml2 = (q.labels || []).map(function(lbl,i){
+        var cnt = (q.counts || [])[i] || 0;
         var pct = Math.round(cnt/total2*100);
-        return '<div class="bar-row"><div class="bar-label">'+lbl+' star</div>'
+        return '<div class="bar-row"><div class="bar-label">'+escapeHtml(lbl)+' star</div>'
           +'<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:'+PALETTE[i%PALETTE.length]+'"></div></div>'
           +'<div class="bar-count">'+cnt+'</div><div class="bar-pct">'+pct+'%</div></div>';
       }).join('');
-      card.innerHTML = '<h4>Q'+(qi+1)+'. '+q.text+'</h4>'+avgHtml+barsHtml2;
+      card.innerHTML = '<h4>Q'+(qi+1)+'. '+escapeHtml(q.text)+'</h4>'+avgHtml+barsHtml2;
 
     } else if (q.type === 'text' || q.type === 'paragraph' || q.type === 'number') {
       var samples = (q.samples || []).slice(0,10);
       var sHtml = samples.length
-        ? '<ul class="text-samples">'+samples.map(function(s){ return '<li>'+s+'</li>'; }).join('')+'</ul>'
+        ? '<ul class="text-samples">'+samples.map(function(s){ return '<li>'+escapeHtml(s)+'</li>'; }).join('')+'</ul>'
         : '<div style="color:var(--eo-text-muted);font-size:.82rem">No responses yet.</div>';
-      card.innerHTML = '<h4>Q'+(qi+1)+'. '+q.text+'</h4>'
+      card.innerHTML = '<h4>Q'+(qi+1)+'. '+escapeHtml(q.text)+'</h4>'
         +'<div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:10px">'+q.count+' response(s) — showing up to 10 samples</div>'
         + sHtml;
+
+    } else if (q.type === 'geolocation') {
+      renderGeoQuestion(card, q, qi);
+    } else {
+      card.innerHTML = '<h4>Q'+(qi+1)+'. '+escapeHtml(q.text)+'</h4>'
+        + '<div style="color:var(--eo-text-muted);font-size:.82rem">Unsupported question type: ' + escapeHtml(q.type) + '</div>';
     }
   });
 }
 
-// ── Recent responses table ────────────────────────────────────────────────────
 function renderRecent(data) {
   var tbody = document.getElementById('recent-tbody');
   if (!data.recent.length) {
@@ -258,11 +395,10 @@ function renderRecent(data) {
     var badge = r.is_public
       ? '<span class="badge-pub">Public</span>'
       : '<span class="badge-int">Internal</span>';
-    return '<tr><td>'+r.name+'</td><td>'+badge+'</td><td style="font-family:monospace;font-size:.78rem">'+r.ip+'</td><td style="font-family:monospace;font-size:.78rem">'+r.device+'</td><td>'+r.submitted_at+'</td></tr>';
+    return '<tr><td>'+escapeHtml(r.name)+'</td><td>'+badge+'</td><td style="font-family:monospace;font-size:.78rem">'+escapeHtml(r.ip)+'</td><td style="font-family:monospace;font-size:.78rem">'+escapeHtml(r.device)+'</td><td>'+escapeHtml(r.submitted_at)+'</td></tr>';
   }).join('');
 }
 
-// ── Main render ───────────────────────────────────────────────────────────────
 function render(data) {
   updateKPIs(data);
   buildTimeline(data);
@@ -270,7 +406,6 @@ function render(data) {
   renderRecent(data);
 }
 
-// ── Polling ───────────────────────────────────────────────────────────────────
 function poll() {
   fetch(DATA_URL, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
     .then(function(r){ return r.json(); })
@@ -278,7 +413,6 @@ function poll() {
     .catch(function(e){ console.warn('Dashboard poll error:', e); });
 }
 
-// Boot with initial data, then poll every 10 s
 render(initialData);
 setInterval(poll, 10000);
 </script>

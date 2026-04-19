@@ -1737,6 +1737,7 @@
   .call-pip.local video{transform:scaleX(-1);}
   .call-pip-self{display:none;right:18px;bottom:18px;}
   .call-pip-self.active{display:block;}
+  .call-pip-self.sharing{width:280px;height:170px;border-color:#3b82f6;}
   .call-pip-peer{display:none;right:210px;bottom:18px;}   /* shown when a tool hides the peer hero */
   .call-pip-peer.active{display:block;}
 
@@ -4360,1352 +4361,188 @@ if (spellcheckToggleBtn) {
   /* Hard scroll to bottom on load — bypass arrow logic */
   (function(){ var m = byId('chatMessages'); if(m) m.scrollTop = m.scrollHeight; })();
 
+
   /* ═══════════════════════════════════════════════════════════════════════
-     CALL MODULE — 1-on-1 voice/video, WebRTC, NOT recorded.
-
-     Features:
-       • Voice or video start, upgrade voice→video mid-call (renegotiation)
-       • Screen sharing (replaces camera track; auto-ends on source stop)
-       • Tools menu: Present document (PDF + image; PPTX via server convert)
-       • Presenter-controlled sync; viewers can request page jumps
-       • Minimize/expand, mute, camera toggle, connection quality
-       • Ringtones, missed-call system messages, tab-title flash, notifications
-
-     Signaling (all relayed through existing /ws/chat/<room>/ socket):
-       call_ring, call_offer, call_answer, ice_candidate,
-       call_hangup, call_decline, call_cancel,
-       call_upgrade_offer, call_upgrade_answer,
-       present_start {url, kind, title, page, num_pages},
-       present_page {page},
-       present_request_page {page, requester_name},
-       present_end
+     CALL LAUNCHER — The actual call lives in a popup window (call_window).
+     This page is just a launcher + incoming-call handoff.
      ═══════════════════════════════════════════════════════════════════════ */
 
-  var CALL_ICE_SERVERS = [
-    { urls: 'stun:stun.l.google.com:19302' }
-    // Add TURN here if NAT traversal fails, e.g.:
-    // { urls: 'turn:turn.example.com:3478', username: 'u', credential: 'p' }
-  ];
+  var _callPopup = null;
+  var _callBC    = null;
+  try { _callBC = new BroadcastChannel('easyoffice-call-' + ROOM_ID); } catch(_){ _callBC = null; }
 
-  /* ── State ──────────────────────────────────────────────────────────── */
-  var callPC            = null;
-  var callLocalStream   = null;    // mic + (optional) camera
-  var callScreenStream  = null;    // display media when sharing
-  var callState         = 'idle';  // idle | outgoing | incoming | active
-  var callKind          = 'voice'; // 'voice' | 'video'
-  var callIsMuted       = false;
-  var callIsCameraOff   = false;
-  var callIsSharing     = false;
-  var callVideoSender   = null;    // RTCRtpSender for video — used for replaceTrack
-  var callTimer         = null;
-  var callStartedAt     = 0;
-  var callPeerId        = null;
-  var callPeerName      = '';
-  var callKindPending   = null;    // target kind when upgrading
-  var _pendingOffer     = null;
-  var _pendingRemoteIce = [];
-  var _ringTimeoutTimer = null;
-  var _uiMode           = 'stage';
-  var _toolsOpen        = false;
-
-  // Presentation state
-  var presIsActive   = false;
-  var presIsPresenter= false;
-  var presMeta       = null;    // {url, kind, title, num_pages}
-  var presCurrentPage= 1;
-  var presPdfDoc     = null;    // pdf.js document
-  var presRenderBusy = false;
-  var presPendingReq = null;    // {requester_id, requester_name, page}
-
-  /* ── Logging ────────────────────────────────────────────────────────── */
-  function callLog(){
-    try {
-      var args = ['[call]'].concat(Array.prototype.slice.call(arguments));
-      console.log.apply(console, args);
-    } catch(_){}
-  }
-
-  /* ── Signaling ──────────────────────────────────────────────────────── */
-  function callSignal(obj){
-    if(!socket || socket.readyState !== WebSocket.OPEN){
-      alert('Connection lost. Please refresh.');
-      return false;
+  function _showInProgressBar(show){
+    var b = byId('callBar'); if(!b) return;
+    if(show){
+      b.style.display = 'flex';
+      var n = byId('callBarName'); if(n) n.textContent = 'Call in progress';
+      var a = byId('callBarAvatar');
+      // Pull peer name from header
+      try { var peerEl = document.querySelector('.chat-header > div > div'); var peerName = (peerEl ? peerEl.textContent : '').trim().split('\n')[0] || 'Peer'; if(a) a.textContent = (peerName.charAt(0)||'?').toUpperCase(); } catch(_){}
+    } else {
+      b.style.display = 'none';
     }
-    try { callLog('→ send:', obj.type); } catch(_){}
-    socket.send(JSON.stringify(obj));
-    return true;
   }
 
-  /* ── Ring tones (WebAudio, no media files) ──────────────────────────── */
-  var _toneCtx = null, _tonePlaying = null, _toneTimer = null, _toneNodes = [];
-  function _toneGetCtx(){
-    if(!_toneCtx){
-      try { var AC = window.AudioContext || window.webkitAudioContext; if(AC) _toneCtx = new AC(); } catch(_){}
-    }
-    if(_toneCtx && _toneCtx.state === 'suspended'){
-      try { _toneCtx.resume(); } catch(_){}
-    }
-    return _toneCtx;
-  }
-  function _toneStopAll(){
-    if(_toneTimer){ clearInterval(_toneTimer); _toneTimer = null; }
-    _toneNodes.forEach(function(n){
-      try { n.stop && n.stop(); } catch(_){}
-      try { n.disconnect && n.disconnect(); } catch(_){}
-    });
-    _toneNodes = [];
-    _tonePlaying = null;
-  }
-  function _tonePlayBurst(freqs, durationMs, gain){
-    var ctx = _toneGetCtx(); if(!ctx) return;
-    var g = ctx.createGain(); g.connect(ctx.destination);
-    var now = ctx.currentTime, peak = gain || 0.18;
-    g.gain.setValueAtTime(0, now);
-    g.gain.linearRampToValueAtTime(peak, now + 0.03);
-    g.gain.setValueAtTime(peak, now + (durationMs/1000) - 0.05);
-    g.gain.linearRampToValueAtTime(0, now + (durationMs/1000));
-    freqs.forEach(function(f){
-      var o = ctx.createOscillator();
-      o.type = 'sine'; o.frequency.value = f;
-      o.connect(g); o.start(now); o.stop(now + (durationMs/1000) + 0.02);
-      _toneNodes.push(o);
-    });
-    _toneNodes.push(g);
-  }
-  function callStartCallerTone(){
-    if(_tonePlaying === 'caller') return;
-    _toneStopAll(); if(!_toneGetCtx()) return;
-    _tonePlaying = 'caller';
-    var fire = function(){ _tonePlayBurst([440, 480], 2000, 0.12); };
-    fire(); _toneTimer = setInterval(fire, 6000);
-  }
-  function callStartCalleeTone(){
-    if(_tonePlaying === 'callee') return;
-    _toneStopAll(); if(!_toneGetCtx()) return;
-    _tonePlaying = 'callee';
-    var fire = function(){
-      _tonePlayBurst([880, 660], 400, 0.22);
-      setTimeout(function(){ _tonePlayBurst([880, 660], 400, 0.22); }, 600);
-    };
-    fire(); _toneTimer = setInterval(fire, 2500);
-  }
-  function callStopTones(){ _toneStopAll(); }
-
-  /* ── Tab title flash + browser Notification ─────────────────────────── */
-  var _origTitle = document.title, _titleTimer = null, _browserNote = null;
-  function callStartTitleFlash(label){
-    if(_titleTimer) return;
-    var flip = false;
-    _titleTimer = setInterval(function(){
-      flip = !flip;
-      document.title = flip ? ('📞 ' + label) : _origTitle;
-    }, 1000);
-  }
-  function callStopTitleFlash(){
-    if(_titleTimer){ clearInterval(_titleTimer); _titleTimer = null; }
-    document.title = _origTitle;
-  }
-  function callShowBrowserNotification(title, body){
-    if(!('Notification' in window) || Notification.permission !== 'granted') return;
-    try {
-      _browserNote = new Notification(title, {
-        body: body || '',
-        tag: 'incoming-call-' + ROOM_ID,
-        requireInteraction: true,
-        silent: false
-      });
-      _browserNote.onclick = function(){
-        try { window.focus(); } catch(_){}
-        try { _browserNote.close(); } catch(_){}
-      };
-    } catch(_){}
-  }
-  function callCloseBrowserNotification(){
-    if(_browserNote){ try { _browserNote.close(); } catch(_){} _browserNote = null; }
-  }
-  (function requestNotifPermission(){
-    if(!('Notification' in window)) return;
-    if(Notification.permission === 'default'){
-      try { Notification.requestPermission(); } catch(_){}
-    }
-  })();
-
-  /* ── UI helpers ─────────────────────────────────────────────────────── */
-  function callShowModal(id){ var el = byId(id); if(el) el.style.display = 'flex'; }
-  function callHideModal(id){ var el = byId(id); if(el) el.style.display = 'none'; }
-  function callSetStage(show){
-    var s = byId('callStage'); if(s) s.classList.toggle('active', !!show);
-  }
-  function callSetBar(show){
-    var b = byId('callBar'); if(b) b.style.display = show ? 'flex' : 'none';
-  }
-  function callFmtDuration(sec){
-    sec = Math.max(0, sec|0);
-    var m = (sec/60)|0, s = sec%60;
-    return (m<10?'0':'')+m + ':' + (s<10?'0':'')+s;
-  }
-  function callSetNetStatus(level, label){
-    // level = 'good' | 'warn' | 'bad'
-    var dot = byId('callStageNetDot');
-    var lbl = byId('callStageNetLabel');
-    if(dot){
-      dot.classList.remove('warn','bad');
-      if(level === 'warn') dot.classList.add('warn');
-      if(level === 'bad')  dot.classList.add('bad');
-    }
-    if(lbl) lbl.textContent = label || '';
+  // Replace the bar's buttons: in-progress bar's role is only "focus popup" and "hang up"
+  function _rewireCallBar(){
+    var bar = byId('callBar'); if(!bar) return;
+    var btns = bar.querySelectorAll('.call-bar-btn');
+    btns.forEach(function(b){ b.style.display = 'none'; });
+    // Reuse existing expand button as "focus popup"
+    var expand = byId('callBarMute'); // any one — we'll retarget
   }
 
-  function callResetUI(){
-    callHideModal('incomingCallModal');
-    callHideModal('outgoingCallModal');
-    callSetStage(false);
-    callSetBar(false);
-    if(callTimer){ clearInterval(callTimer); callTimer = null; }
-    var t1 = byId('callBarTimer');   if(t1) t1.textContent = '00:00';
-    var t2 = byId('callStageTimer'); if(t2) t2.textContent = '00:00';
-    var rv = byId('callStageRemoteVideo'); if(rv){ try{ rv.srcObject = null; rv.classList.remove('active'); } catch(_){} }
-    var pv = byId('callPipPeerVideo');     if(pv){ try{ pv.srcObject = null; } catch(_){} }
-    var sv = byId('callPipSelfVideo');     if(sv){ try{ sv.srcObject = null; } catch(_){} }
-    var ra = byId('remoteCallAudio');      if(ra){ try{ ra.srcObject = null; } catch(_){} }
-    var pipS = byId('callPipSelf'); if(pipS) pipS.classList.remove('active');
-    var pipP = byId('callPipPeer'); if(pipP) pipP.classList.remove('active');
-    // Tools/presenter UI
-    callCloseToolsMenu();
-    callClosePresentPicker();
-    presentResetUI();
+  function _popupAlive(){
+    return _callPopup && !_callPopup.closed;
   }
 
-  /* ── Teardown ───────────────────────────────────────────────────────── */
-  function callTeardown(serverReason){
-    callStopTones();
-    callStopTitleFlash();
-    callCloseBrowserNotification();
-    if(_ringTimeoutTimer){ clearTimeout(_ringTimeoutTimer); _ringTimeoutTimer = null; }
-    if(_netStatsTimer){ clearInterval(_netStatsTimer); _netStatsTimer = null; }
-
-    try { if(callPC){ callPC.ontrack = null; callPC.onicecandidate = null; callPC.close(); } } catch(_){}
-    callPC = null;
-    callVideoSender = null;
-
-    if(callLocalStream){
-      try { callLocalStream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){}
-      callLocalStream = null;
-    }
-    if(callScreenStream){
-      try { callScreenStream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){}
-      callScreenStream = null;
-    }
-
-    var prevState = callState, prevKind = callKind || 'voice';
-    callState        = 'idle';
-    callIsMuted      = false;
-    callIsCameraOff  = false;
-    callIsSharing    = false;
-    callKind         = 'voice';
-    callKindPending  = null;
-    callPeerId       = null;
-    callPeerName     = '';
-    _pendingOffer    = null;
-    _pendingRemoteIce = [];
-    _uiMode          = 'stage';
-    callResetUI();
-
-    var body = 'reason=' + encodeURIComponent(serverReason || (prevState === 'active' ? 'ended' : 'ended'))
-             + '&call_kind=' + encodeURIComponent(prevKind);
-    fetch('/messages/call/clear/' + ROOM_ID + '/', {
-      method: 'POST',
-      headers: {
-        'X-CSRFToken': getCookie('csrftoken'),
-        'X-Requested-With': 'XMLHttpRequest',
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      credentials: 'same-origin',
-      body: body
-    }).catch(function(){});
-  }
-
-  /* ── Transition to in-call UI ───────────────────────────────────────── */
-  function callActivateIfNeeded(reason){
-    if(callState === 'active') return;
-    callLog('activating call (reason:', reason + ')');
-    callStopTones();
-    callStopTitleFlash();
-    callCloseBrowserNotification();
-    if(_ringTimeoutTimer){ clearTimeout(_ringTimeoutTimer); _ringTimeoutTimer = null; }
-
-    callState = 'active';
-    callHideModal('incomingCallModal');
-    callHideModal('outgoingCallModal');
-
-    var sName = byId('callStageName');     if(sName) sName.textContent = callPeerName || 'In call';
-    var bName = byId('callBarName');       if(bName) bName.textContent = callPeerName || 'In call';
-    var bigN  = byId('callStageBigName');  if(bigN)  bigN.textContent  = callPeerName || 'Contact';
-    var bigA  = byId('callStageBigAvatar'); if(bigA) bigA.textContent  = (callPeerName.charAt(0) || '?').toUpperCase();
-    var barA  = byId('callBarAvatar');     if(barA)  barA.textContent  = (callPeerName.charAt(0) || '?').toUpperCase();
-    var pipL  = byId('callPipPeerLabel');  if(pipL)  pipL.textContent  = callPeerName || 'Peer';
-
-    callRefreshMediaUI();
-
-    _uiMode = 'stage';
-    callSetStage(true);
-    callSetBar(false);
-
-    callStartedAt = Date.now();
-    if(callTimer){ clearInterval(callTimer); }
-    callTimer = setInterval(function(){
-      var sec = ((Date.now() - callStartedAt)/1000)|0;
-      var s = callFmtDuration(sec);
-      var t1 = byId('callBarTimer');   if(t1) t1.textContent = s;
-      var t2 = byId('callStageTimer'); if(t2) t2.textContent = s;
-    }, 1000);
-
-    callStartNetStats();
-  }
-
-  /* Keep the stage's media-related elements in sync with current state */
-  function callRefreshMediaUI(){
-    var voiceCentre = byId('callStageVoiceCentre');
-    var remoteV     = byId('callStageRemoteVideo');
-    var pipSelf     = byId('callPipSelf');
-    var pipSelfV    = byId('callPipSelfVideo');
-    var upgradeGrp  = byId('callStageUpgradeGroup');
-    var videoGrp    = byId('callStageVideoGroup');
-
-    var showRemoteVideo = (callKind === 'video') && !presIsActive;
-    var showVoiceCentre = !showRemoteVideo && !presIsActive;
-    if(voiceCentre) voiceCentre.classList.toggle('hidden', !showVoiceCentre);
-    if(remoteV)     remoteV.classList.toggle('active', showRemoteVideo);
-
-    // Self PIP: shown for video calls OR while screen-sharing
-    var selfHasVideo = callLocalStream && callLocalStream.getVideoTracks().length > 0;
-    var showSelf = (callKind === 'video' || callIsSharing) && selfHasVideo;
-    if(pipSelf) pipSelf.classList.toggle('active', showSelf);
-    if(pipSelfV && callLocalStream && showSelf && pipSelfV.srcObject !== callLocalStream){
-      try { pipSelfV.srcObject = callLocalStream; } catch(_){}
-    }
-
-    // Camera toggle visibility
-    if(videoGrp) videoGrp.classList.toggle('hidden', callKind !== 'video');
-    // Upgrade button: only on voice calls, not during presentation
-    if(upgradeGrp) upgradeGrp.classList.toggle('hidden', callKind === 'video');
-
-    // Share-screen label
-    var shareLabel = byId('callStageShareLabel');
-    if(shareLabel) shareLabel.textContent = callIsSharing ? 'Stop share' : 'Share';
-    var shareBtn = byId('callStageShare');
-    if(shareBtn) shareBtn.classList.toggle('active', callIsSharing);
-    var toolsShareLabel = byId('callToolsShareLabel');
-    if(toolsShareLabel) toolsShareLabel.textContent = callIsSharing ? 'Stop screen share' : 'Share screen';
-  }
-
-  /* ── Connection-quality sampler ─────────────────────────────────────── */
-  var _netStatsTimer = null;
-  var _lastStatsSample = null;
-  function callStartNetStats(){
-    if(_netStatsTimer) return;
-    _netStatsTimer = setInterval(function(){
-      if(!callPC){ return; }
-      try {
-        callPC.getStats(null).then(function(stats){
-          var rtt = 0, packetsLost = 0, packetsRecv = 0;
-          stats.forEach(function(r){
-            if(r.type === 'candidate-pair' && r.state === 'succeeded' && r.currentRoundTripTime != null){
-              rtt = Math.max(rtt, r.currentRoundTripTime);
-            }
-            if(r.type === 'inbound-rtp' && !r.isRemote){
-              if(r.packetsLost != null) packetsLost += r.packetsLost;
-              if(r.packetsReceived != null) packetsRecv += r.packetsReceived;
-            }
-          });
-          var loss = packetsRecv > 0 ? (packetsLost / (packetsLost + packetsRecv)) : 0;
-          var level = 'good', label = '';
-          if(rtt > 0.3 || loss > 0.08){ level = 'bad';  label = 'Poor connection'; }
-          else if(rtt > 0.15 || loss > 0.03){ level = 'warn'; label = 'Fair connection'; }
-          callSetNetStatus(level, label);
-        }).catch(function(){});
-      } catch(_){}
-    }, 3000);
-  }
-
-  /* ── Minimize / Expand ──────────────────────────────────────────────── */
-  window.callMinimize = function(){
-    if(callState !== 'active') return;
-    _uiMode = 'bar';
-    callSetStage(false);
-    callSetBar(true);
-    callCloseToolsMenu();
-  };
-  window.callExpand = function(){
-    if(callState !== 'active') return;
-    _uiMode = 'stage';
-    callSetStage(true);
-    callSetBar(false);
-  };
-
-  /* ── PeerConnection factory ─────────────────────────────────────────── */
-  function callBuildPC(){
-    var pc = new RTCPeerConnection({ iceServers: CALL_ICE_SERVERS });
-
-    pc.onicecandidate = function(ev){
-      if(ev.candidate){
-        callSignal({ type: 'ice_candidate', candidate: ev.candidate });
-      } else {
-        callLog('ICE gathering complete');
-      }
-    };
-
-    pc.ontrack = function(ev){
-      callLog('ontrack:', ev.track && ev.track.kind);
-      if(!ev.streams || !ev.streams[0]) return;
-      var stream = ev.streams[0];
-
-      if(ev.track.kind === 'audio'){
-        // For video calls the <video> also plays the audio; only use the
-        // hidden <audio> if we're in voice-only.
-        if(callKind === 'video'){
-          var rv = byId('callStageRemoteVideo');
-          if(rv && !rv.srcObject){
-            rv.srcObject = stream;
-            var p = rv.play && rv.play();
-            if(p && p.catch) p.catch(function(err){ callLog('rv.play rejected:', err && err.name); });
-          }
-        } else {
-          var ra = byId('remoteCallAudio');
-          if(ra){
-            ra.srcObject = stream;
-            var p2 = ra.play && ra.play();
-            if(p2 && p2.catch){
-              p2.catch(function(err){
-                callLog('audio.play rejected:', err && err.name);
-                try { ra.muted = true; ra.play().then(function(){ ra.muted = false; }); } catch(_){}
-              });
-            }
-          }
-        }
-      }
-
-      if(ev.track.kind === 'video'){
-        var rv = byId('callStageRemoteVideo');
-        if(rv){
-          rv.srcObject = stream;
-          var p3 = rv.play && rv.play();
-          if(p3 && p3.catch) p3.catch(function(err){ callLog('rv.play rejected:', err && err.name); });
-        }
-        var pipV = byId('callPipPeerVideo');
-        if(pipV) pipV.srcObject = stream;
-        callRefreshMediaUI();
-      }
-
-      callActivateIfNeeded('ontrack:' + ev.track.kind);
-    };
-
-    pc.oniceconnectionstatechange = function(){
-      callLog('iceConnectionState:', pc.iceConnectionState);
-      if(pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed'){
-        callActivateIfNeeded('ice-' + pc.iceConnectionState);
-      }
-      if(pc.iceConnectionState === 'failed'){
-        callLog('ICE failed — likely need TURN');
-        alert('Could not establish a connection. Your network may need a TURN server.');
-        callTeardown('ended');
-      }
-    };
-
-    pc.onconnectionstatechange = function(){
-      callLog('connectionState:', pc.connectionState);
-      if(pc.connectionState === 'connected'){
-        callActivateIfNeeded('connection-connected');
-      }
-      if(pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed'){
-        if(callState === 'active'){ callTeardown('ended'); }
-      }
-    };
-
-    pc.onnegotiationneeded = function(){
-      // We handle (re)negotiations explicitly for upgrades. Don't auto-offer.
-      callLog('negotiationneeded (ignored — explicit path)');
-    };
-
-    return pc;
-  }
-
-  /* Add tracks from stream to PC, remembering the video sender for later replaceTrack */
-  function callAddTracksFromStream(stream){
-    if(!callPC || !stream) return;
-    stream.getTracks().forEach(function(t){
-      var sender = callPC.addTrack(t, stream);
-      if(t.kind === 'video') callVideoSender = sender;
-    });
-  }
-
-  /* ── getUserMedia ───────────────────────────────────────────────────── */
-  function callGetMedia(kind){
-    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-      alert('This browser does not support calls.');
-      return Promise.resolve(null);
-    }
-    var constraints = { audio: true, video: (kind === 'video') };
-    return navigator.mediaDevices.getUserMedia(constraints)
-      .catch(function(err){
-        callLog('getUserMedia failed:', err && err.name);
-        alert(kind === 'video'
-          ? 'Camera + microphone access is required for video calls.'
-          : 'Microphone access is required for voice calls.');
-        return null;
-      });
-  }
-
-  function callGetCameraTrackOnly(){
-    if(!navigator.mediaDevices) return Promise.resolve(null);
-    return navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-      .then(function(s){ return s.getVideoTracks()[0] || null; })
-      .catch(function(err){
-        callLog('camera-only failed:', err && err.name);
-        alert('Camera access is required.');
-        return null;
-      });
-  }
-
-  /* ── CALLER ─────────────────────────────────────────────────────────── */
-  window.callStart = function(kind){
-    if(!IS_DIRECT || !DM_OTHER_USER_ID){
-      alert('Calls are only available in direct messages.'); return;
-    }
-    if(callState !== 'idle') return;
+  function _openCallPopup(kind, mode){
     kind = (kind === 'video') ? 'video' : 'voice';
-    callKind = kind;
+    mode = (mode === 'incoming') ? 'incoming' : 'outgoing';
+    // Re-focus existing popup if already open
+    if(_popupAlive()){ try { _callPopup.focus(); } catch(_){} return _callPopup; }
 
-    fetch('/messages/call/ring/' + ROOM_ID + '/', {
-      method: 'POST',
-      headers: {
-        'X-CSRFToken': getCookie('csrftoken'),
-        'X-Requested-With': 'XMLHttpRequest',
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      credentials: 'same-origin',
-      body: 'call_kind=' + encodeURIComponent(kind)
-    })
-    .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, data: d }; }); })
-    .then(function(resp){
-      if(!resp.ok || !resp.data || !resp.data.ok){
-        alert((resp.data && resp.data.error) || 'Could not start call.');
-        return null;
-      }
-      callState  = 'outgoing';
-      callPeerId = DM_OTHER_USER_ID;
-      var nameNode = document.querySelector('.chat-header > div > div');
-      callPeerName = (nameNode ? nameNode.textContent : '').trim().split('\n')[0] || 'Contact';
-
-      var oName  = byId('outgoingCallName');   if(oName)  oName.textContent  = callPeerName;
-      var oState = byId('outgoingCallState');  if(oState) oState.textContent = (kind === 'video' ? 'Video calling…' : 'Ringing…');
-      var oAv    = byId('outgoingCallAvatar'); if(oAv)    oAv.textContent    = (callPeerName.charAt(0) || '?').toUpperCase();
-      callShowModal('outgoingCallModal');
-      callStartCallerTone();
-
-      _ringTimeoutTimer = setTimeout(function(){
-        if(callState === 'outgoing'){
-          try { callSignal({ type: 'call_cancel' }); } catch(_){}
-          callTeardown('cancelled');
-        }
-      }, 40000);
-
-      return callGetMedia(kind);
-    })
-    .then(function(stream){
-      if(!stream){ callTeardown('cancelled'); return; }
-      callLocalStream = stream;
-      callPC = callBuildPC();
-      callAddTracksFromStream(callLocalStream);
-
-      return callPC.createOffer({
-          offerToReceiveAudio: true,
-          offerToReceiveVideo: (callKind === 'video')
-        })
-        .then(function(offer){ return callPC.setLocalDescription(offer); })
-        .then(function(){
-          callSignal({ type: 'call_offer', sdp: callPC.localDescription, call_kind: callKind });
-        });
-    })
-    .catch(function(err){
-      callLog('callStart failed:', err);
-      alert('Could not start call.');
-      callTeardown('cancelled');
-    });
-  };
-
-  window.callCancel = function(){
-    if(callState === 'idle') return;
-    try { callSignal({ type: 'call_cancel' }); } catch(_){}
-    callTeardown('cancelled');
-  };
-
-  /* ── CALLEE ─────────────────────────────────────────────────────────── */
-  function callShowIncoming(fromId, fromName, kind){
-    callPeerId   = fromId;
-    callPeerName = fromName || 'Contact';
-    callKind     = (kind === 'video') ? 'video' : 'voice';
-
-    var nEl  = byId('incomingCallName');   if(nEl)  nEl.textContent  = callPeerName;
-    var aEl  = byId('incomingCallAvatar'); if(aEl)  aEl.textContent  = (callPeerName.charAt(0) || '?').toUpperCase();
-    var stEl = byId('incomingCallState');  if(stEl) stEl.textContent = 'Incoming ' + callKind + ' call…';
-
-    callShowModal('incomingCallModal');
-    callStartCalleeTone();
-    callStartTitleFlash('Incoming ' + callKind + ' call from ' + callPeerName);
-    if(document.visibilityState !== 'visible'){
-      callShowBrowserNotification('Incoming ' + callKind + ' call', callPeerName + ' is calling you');
+    var url = '/messages/call/window/' + ROOM_ID + '/?kind=' + kind + '&mode=' + mode;
+    var features = 'width=960,height=680,menubar=no,toolbar=no,location=no,status=no,resizable=yes';
+    var pop = window.open(url, 'easyoffice-call-' + ROOM_ID, features);
+    if(!pop){
+      alert('Popup blocked. Please allow popups for this site so calls can open.');
+      return null;
     }
+    _callPopup = pop;
+    _showInProgressBar(true);
+    return pop;
+  }
+
+  // Call buttons in the DM header
+  window.callStart = function(kind){
+    if(!IS_DIRECT || !DM_OTHER_USER_ID){ alert('Calls are only available in direct messages.'); return; }
+    _openCallPopup(kind, 'outgoing');
+  };
+
+  // Focus popup button (expand replaces minimize in popup-owns model)
+  window.callExpand = function(){
+    if(_popupAlive()){ try { _callPopup.focus(); } catch(_){} }
+    else { _showInProgressBar(false); }
+  };
+  window.callMinimize = function(){
+    // No-op in launcher; popup has its own lifecycle
+  };
+  window.callHangup = function(){
+    if(_popupAlive()){
+      // Ask the popup to hang up, which will teardown cleanly + close
+      try { _callPopup.postMessage({type:'launcher-hangup'}, '*'); } catch(_){}
+    } else {
+      _showInProgressBar(false);
+    }
+  };
+
+  // Incoming call handling — we detect rings on this page, show a modal,
+  // and open the popup ON the Accept click (user gesture required).
+  var _inPageIncomingRing = null;
+
+  function _showInPageIncoming(ring){
+    _inPageIncomingRing = ring;
+    var m = byId('incomingCallModal'); if(!m) return;
+    var nameEl = byId('incomingCallName');
+    var avEl   = byId('incomingCallAvatar');
+    var stEl   = byId('incomingCallState');
+    if(nameEl) nameEl.textContent = ring.caller_name || 'Someone';
+    if(avEl)   avEl.textContent   = ((ring.caller_name||'?').charAt(0)||'?').toUpperCase();
+    if(stEl)   stEl.textContent   = 'Incoming ' + (ring.call_kind || 'voice') + ' call…';
+    m.style.display = 'flex';
+  }
+  function _hideInPageIncoming(){
+    var m = byId('incomingCallModal'); if(m) m.style.display = 'none';
+    _inPageIncomingRing = null;
   }
 
   window.callAccept = function(){
-    if(callState !== 'incoming' || !_pendingOffer){
-      callHideModal('incomingCallModal'); return;
-    }
-    callGetMedia(callKind).then(function(stream){
-      if(!stream){
-        try { callSignal({ type: 'call_decline' }); } catch(_){}
-        callTeardown('declined');
-        return;
-      }
-      callLocalStream = stream;
-      callPC = callBuildPC();
-      callAddTracksFromStream(callLocalStream);
-
-      return callPC.setRemoteDescription(new RTCSessionDescription(_pendingOffer))
-        .then(function(){
-          var p = Promise.resolve();
-          _pendingRemoteIce.forEach(function(c){
-            p = p.then(function(){ return callPC.addIceCandidate(new RTCIceCandidate(c)).catch(function(){}); });
-          });
-          _pendingRemoteIce = [];
-          return p;
-        })
-        .then(function(){ return callPC.createAnswer(); })
-        .then(function(answer){ return callPC.setLocalDescription(answer); })
-        .then(function(){
-          callSignal({ type: 'call_answer', sdp: callPC.localDescription });
-          _pendingOffer = null;
-          callHideModal('incomingCallModal');
-          callStopTones();
-          callStopTitleFlash();
-          callCloseBrowserNotification();
-          fetch('/messages/call/clear/' + ROOM_ID + '/', {
-            method: 'POST',
-            headers: {
-              'X-CSRFToken': getCookie('csrftoken'),
-              'X-Requested-With': 'XMLHttpRequest',
-              'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            credentials: 'same-origin',
-            body: 'reason=connected&call_kind=' + encodeURIComponent(callKind)
-          }).catch(function(){});
-        });
-    })
-    .catch(function(err){
-      callLog('callAccept failed:', err);
-      alert('Could not accept call.');
-      callTeardown('declined');
-    });
+    if(!_inPageIncomingRing) return;
+    var kind = _inPageIncomingRing.call_kind || 'voice';
+    _hideInPageIncoming();
+    _openCallPopup(kind, 'incoming');
   };
-
   window.callDecline = function(){
-    try { callSignal({ type: 'call_decline' }); } catch(_){}
-    callTeardown('declined');
+    if(!_inPageIncomingRing) return;
+    // We need to tell the server this is declined — send via our own WS,
+    // and also clear the ring record.
+    try { if(socket && socket.readyState === WebSocket.OPEN){ socket.send(JSON.stringify({type:'call_decline'})); } } catch(_){}
+    fetch('/messages/call/clear/' + ROOM_ID + '/', {
+      method:'POST',
+      headers:{'X-CSRFToken':getCookie('csrftoken'),'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'},
+      credentials:'same-origin',
+      body:'reason=declined&call_kind=' + encodeURIComponent(_inPageIncomingRing.call_kind || 'voice')
+    }).catch(function(){});
+    _hideInPageIncoming();
   };
+  window.callCancel = function(){ /* delegated to popup */ };
 
-  /* ── Shared controls ────────────────────────────────────────────────── */
-  window.callHangup = function(){
-    if(callState === 'idle') return;
-    try { callSignal({ type: 'call_hangup' }); } catch(_){}
-    var reason = (callState === 'active') ? 'ended'
-               : (callState === 'outgoing') ? 'cancelled'
-               : 'declined';
-    callTeardown(reason);
-  };
-
-  window.callToggleMute = function(){
-    if(!callLocalStream) return;
-    callIsMuted = !callIsMuted;
-    callLocalStream.getAudioTracks().forEach(function(t){ t.enabled = !callIsMuted; });
-    var icon  = callIsMuted ? '<i class="bi bi-mic-mute-fill"></i>' : '<i class="bi bi-mic-fill"></i>';
-    var label = callIsMuted ? 'Unmute' : 'Mute';
-    var b1 = byId('callBarMute');    if(b1){ b1.classList.toggle('active', callIsMuted); b1.innerHTML = icon; }
-    var b2 = byId('callStageMute');  if(b2){ b2.classList.toggle('active', callIsMuted); b2.innerHTML = icon; }
-    var lbl = byId('callStageMuteLabel'); if(lbl) lbl.textContent = label;
-  };
-
-  window.callToggleVideo = function(){
-    if(!callLocalStream || callKind !== 'video') return;
-    callIsCameraOff = !callIsCameraOff;
-    callLocalStream.getVideoTracks().forEach(function(t){ t.enabled = !callIsCameraOff; });
-    var icon  = callIsCameraOff ? '<i class="bi bi-camera-video-off-fill"></i>' : '<i class="bi bi-camera-video-fill"></i>';
-    var label = callIsCameraOff ? 'Start video' : 'Stop video';
-    var b = byId('callStageVideo'); if(b){ b.classList.toggle('off', callIsCameraOff); b.innerHTML = icon; }
-    var lbl = byId('callStageVideoLabel'); if(lbl) lbl.textContent = label;
-  };
-
-  /* ── Upgrade voice → video mid-call ─────────────────────────────────── */
-  window.callUpgradeToVideo = function(){
-    if(callState !== 'active' || callKind !== 'voice') return;
-    if(!callPC){ alert('Call not connected yet.'); return; }
-    if(callKindPending){ return; }
-    callKindPending = 'video';
-    callLog('upgrading to video…');
-
-    callGetCameraTrackOnly().then(function(camTrack){
-      if(!camTrack){ callKindPending = null; return; }
-
-      // Add the camera to our local stream so self-view & mute-video toggle work
-      try {
-        callLocalStream.addTrack(camTrack);
-      } catch(_){}
-
-      // Add it to the peer connection (either via replaceTrack if sender exists,
-      // or addTrack otherwise).
-      try {
-        if(callVideoSender && callVideoSender.replaceTrack){
-          callVideoSender.replaceTrack(camTrack);
-        } else {
-          callVideoSender = callPC.addTrack(camTrack, callLocalStream);
-        }
-      } catch(err){
-        callLog('addTrack(video) failed:', err);
-        callKindPending = null;
-        return;
-      }
-
-      // Renegotiate
-      callPC.createOffer()
-        .then(function(offer){ return callPC.setLocalDescription(offer); })
-        .then(function(){
-          callSignal({ type: 'call_upgrade_offer', sdp: callPC.localDescription });
-        })
-        .catch(function(err){ callLog('upgrade renegotiation failed:', err); callKindPending = null; });
-    });
-  };
-
-  /* ── Screen share ───────────────────────────────────────────────────── */
-  window.callToggleScreenShare = function(){
-    if(callState !== 'active'){ alert('Screen sharing is available during an active call.'); return; }
-    if(!callIsSharing){ callStartScreenShare(); } else { callStopScreenShare(); }
-    callCloseToolsMenu();
-  };
-
-  function callStartScreenShare(){
-    if(!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia){
-      alert('Screen sharing is not supported in this browser.'); return;
-    }
-    navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: 15, max: 30 } },
-      audio: false
-    })
-    .then(function(stream){
-      callScreenStream = stream;
-      callIsSharing = true;
-      var screenTrack = stream.getVideoTracks()[0];
-      if(!screenTrack){ callStopScreenShare(); return; }
-
-      // If we have a video sender, swap it; otherwise add a new track.
-      try {
-        if(callVideoSender && callVideoSender.replaceTrack){
-          callVideoSender.replaceTrack(screenTrack).catch(function(err){
-            callLog('replaceTrack(screen) failed:', err);
-          });
-        } else {
-          callVideoSender = callPC.addTrack(screenTrack, callScreenStream);
-          // A new m-line was added → renegotiate
-          callPC.createOffer()
-            .then(function(o){ return callPC.setLocalDescription(o); })
-            .then(function(){ callSignal({ type: 'call_upgrade_offer', sdp: callPC.localDescription }); })
-            .catch(function(err){ callLog('screen renegotiation failed:', err); });
-        }
-      } catch(err){ callLog('screen addTrack failed:', err); }
-
-      // End share when user clicks browser's "Stop sharing" UI
-      screenTrack.onended = function(){ callStopScreenShare(); };
-
-      callRefreshMediaUI();
-    })
-    .catch(function(err){
-      callLog('getDisplayMedia failed:', err && err.name);
-      if(err && err.name !== 'NotAllowedError'){
-        alert('Could not start screen sharing: ' + (err && err.message || 'unknown error'));
-      }
-    });
-  }
-
-  function callStopScreenShare(){
-    if(!callIsSharing) return;
-    callIsSharing = false;
-
-    // Swap the sender back to the camera track (if we have one) or leave it null
-    try {
-      if(callVideoSender && callVideoSender.replaceTrack){
-        var camTrack = callLocalStream && callLocalStream.getVideoTracks()[0];
-        callVideoSender.replaceTrack(camTrack || null).catch(function(){});
-      }
-    } catch(_){}
-
-    if(callScreenStream){
-      try { callScreenStream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){}
-      callScreenStream = null;
-    }
-    callRefreshMediaUI();
-  }
-
-  /* ── Tools menu ─────────────────────────────────────────────────────── */
-  window.callToggleToolsMenu = function(){
-    var m = byId('callToolsMenu'); if(!m) return;
-    _toolsOpen = !_toolsOpen;
-    m.classList.toggle('active', _toolsOpen);
-  };
-  function callCloseToolsMenu(){
-    _toolsOpen = false;
-    var m = byId('callToolsMenu'); if(m) m.classList.remove('active');
-  }
-  document.addEventListener('click', function(ev){
-    if(!_toolsOpen) return;
-    var menu   = byId('callToolsMenu');
-    var btn    = byId('callStageTools');
-    if(!menu) return;
-    if(menu.contains(ev.target)) return;
-    if(btn && btn.contains(ev.target)) return;
-    callCloseToolsMenu();
-  }, true);
-
-  /* ── Presentation ───────────────────────────────────────────────────── */
-  function presentResetUI(){
-    presIsActive   = false;
-    presIsPresenter= false;
-    presMeta       = null;
-    presCurrentPage= 1;
-    presPdfDoc     = null;
-    presPendingReq = null;
-    var overlay = byId('callPresentOverlay'); if(overlay) overlay.classList.remove('active');
-    var pipPeer = byId('callPipPeer');        if(pipPeer) pipPeer.classList.remove('active');
-    var title   = byId('callPresentTitle');   if(title) title.textContent = 'Document';
-    var pageLbl = byId('callPresentPageLabel'); if(pageLbl) pageLbl.textContent = '1 / 1';
-    var endBtn  = byId('callPresentEndBtn');  if(endBtn) endBtn.style.display = 'none';
-    var role    = byId('callPresentRole');    if(role) role.textContent = '';
-    var img     = byId('callPresentImg');     if(img){ img.style.display = 'none'; img.src = ''; }
-    var cvs     = byId('callPresentCanvas');  if(cvs){ var ctx = cvs.getContext('2d'); ctx && ctx.clearRect(0,0,cvs.width,cvs.height); cvs.style.display = ''; }
-    var toast   = byId('callStageToast');     if(toast) toast.classList.remove('active');
-  }
-
-  /* Picker — choose a file to present */
-  window.callOpenPresentPicker = function(){
-    if(callState !== 'active'){ alert('Presentation is available during a call.'); return; }
-    if(presIsActive && !presIsPresenter){
-      alert(callPeerName + ' is already presenting.');
-      return;
-    }
-    callCloseToolsMenu();
-    var picker = byId('callPresentPicker'); if(picker) picker.classList.add('active');
-    callPresentLoadRecent();
-  };
-  window.callClosePresentPicker = function(){
-    var picker = byId('callPresentPicker'); if(picker) picker.classList.remove('active');
-  };
-
-  function callPresentLoadRecent(){
-    var container = byId('callPresentRecent');
-    if(!container) return;
-    container.innerHTML = '<div style="color:#64748b;font-size:.8rem;padding:10px 6px">Loading…</div>';
-    fetch('/messages/present/' + ROOM_ID + '/files/', {
-      headers:{'X-Requested-With':'XMLHttpRequest'},
-      credentials:'same-origin'
-    })
-    .then(function(r){ return r.ok ? r.json() : null; })
-    .then(function(d){
-      if(!d || !d.ok){
-        container.innerHTML = '<div style="color:#94a3b8;font-size:.8rem;padding:10px 6px">Could not load shared files.</div>';
-        return;
-      }
-      if(!d.files.length){
-        container.innerHTML = '<div style="color:#64748b;font-size:.8rem;padding:10px 6px">No shared PDFs, slides, or images yet.</div>';
-        return;
-      }
-      var html = '';
-      d.files.forEach(function(f){
-        var icon = f.kind === 'pdf' ? 'bi-file-earmark-pdf'
-                : f.kind === 'pptx' ? 'bi-file-earmark-slides'
-                : 'bi-file-earmark-image';
-        html += '<div class="call-present-recent-item" data-url="' + encodeURI(f.url)
-             + '" data-kind="' + esc(f.kind) + '" data-title="' + esc(f.name) + '">'
-             + '<i class="bi ' + icon + '"></i>'
-             + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis">' + esc(f.name) + '</span>'
-             + '</div>';
-      });
-      container.innerHTML = html;
-      container.querySelectorAll('.call-present-recent-item').forEach(function(el){
-        el.addEventListener('click', function(){
-          var url   = el.getAttribute('data-url');
-          var kind  = el.getAttribute('data-kind');
-          var title = el.getAttribute('data-title');
-          // PPTX needs server-side convert — ask user to re-upload for conversion
-          if(kind === 'pptx'){
-            alert('To present this PowerPoint, please use the Upload button — we convert PPTX to PDF for rendering.');
-            return;
-          }
-          callClosePresentPicker();
-          presentStart(url, kind === 'pdf' ? 'pdf' : 'image', title);
-        });
-      });
-    });
-  }
-
-  window.callPresentUpload = function(){
-    var fileInput = byId('callPresentFile');
-    if(!fileInput || !fileInput.files || !fileInput.files[0]){
-      alert('Choose a file first.'); return;
-    }
-    var file = fileInput.files[0];
-    var btn  = byId('callPresentUploadBtn');
-    if(btn){ btn.disabled = true; btn.textContent = 'Uploading…'; }
-
-    var fd = new FormData();
-    fd.append('file', file);
-    fd.append('title', file.name);
-
-    fetch('/messages/present/' + ROOM_ID + '/upload/', {
-      method: 'POST',
-      headers: { 'X-CSRFToken': getCookie('csrftoken'), 'X-Requested-With': 'XMLHttpRequest' },
-      credentials: 'same-origin',
-      body: fd
-    })
-    .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, data: d }; }); })
-    .then(function(resp){
-      if(btn){ btn.disabled = false; btn.textContent = 'Upload & present'; }
-      if(!resp.ok || !resp.data || !resp.data.ok){
-        alert((resp.data && resp.data.error) || 'Upload failed.');
-        return;
-      }
-      callClosePresentPicker();
-      presentStart(resp.data.url, resp.data.kind, resp.data.title);
-    })
-    .catch(function(){
-      if(btn){ btn.disabled = false; btn.textContent = 'Upload & present'; }
-      alert('Upload failed.');
-    });
-  };
-
-  /* Begin presenting (local side — also broadcasts present_start) */
-  function presentStart(url, kind, title){
-    presIsActive    = true;
-    presIsPresenter = true;
-    presCurrentPage = 1;
-    presMeta = { url: url, kind: kind, title: title || 'Document', num_pages: 1 };
-
-    var role = byId('callPresentRole'); if(role) role.textContent = 'You are presenting';
-    var end  = byId('callPresentEndBtn'); if(end) end.style.display = '';
-
-    // Render locally
-    presentOpenAndRender().then(function(){
-      // Broadcast — include the page count so the viewer shows it in the bar
-      callSignal({
-        type: 'present_start',
-        url: url, kind: kind, title: title || '',
-        page: presCurrentPage,
-        num_pages: presMeta.num_pages || 1
-      });
-    });
-
-    callRefreshMediaUI();
-
-    // Show peer video as a PIP so the presenter can still see them in a video call
-    var pipPeer = byId('callPipPeer');
-    if(pipPeer && callKind === 'video') pipPeer.classList.add('active');
-  }
-
-  /* Callee side: begin viewing someone else's presentation */
-  function presentBeginAsViewer(meta){
-    presIsActive    = true;
-    presIsPresenter = false;
-    presMeta        = { url: meta.url, kind: meta.kind, title: meta.title || 'Document', num_pages: meta.num_pages || 1 };
-    presCurrentPage = meta.page || 1;
-
-    var role = byId('callPresentRole'); if(role) role.textContent = callPeerName + ' is presenting';
-    var end  = byId('callPresentEndBtn'); if(end) end.style.display = 'none';
-    var prev = byId('callPresentPrev'); if(prev) prev.disabled = false;   // viewer may click → request jump
-    var next = byId('callPresentNext'); if(next) next.disabled = false;
-
-    presentOpenAndRender();
-    callRefreshMediaUI();
-
-    var pipPeer = byId('callPipPeer');
-    if(pipPeer && callKind === 'video') pipPeer.classList.add('active');
-  }
-
-  /* Open the document and render the current page */
-  function presentOpenAndRender(){
-    if(!presMeta) return Promise.resolve();
-
-    var overlay = byId('callPresentOverlay'); if(overlay) overlay.classList.add('active');
-    var titleEl = byId('callPresentTitle');   if(titleEl) titleEl.textContent = presMeta.title || 'Document';
-
-    if(presMeta.kind === 'image'){
-      presMeta.num_pages = 1;
-      var img = byId('callPresentImg');
-      var cvs = byId('callPresentCanvas');
-      if(cvs) cvs.style.display = 'none';
-      if(img){ img.style.display = ''; img.src = presMeta.url; }
-      presentUpdatePageLabel();
-      return Promise.resolve();
-    }
-
-    // PDF via pdf.js
-    if(!window.pdfjsLib){
-      alert('PDF viewer failed to load.'); return Promise.resolve();
-    }
-    var img = byId('callPresentImg'); if(img) img.style.display = 'none';
-    var cvs = byId('callPresentCanvas'); if(cvs) cvs.style.display = '';
-
-    return window.pdfjsLib.getDocument({ url: presMeta.url, withCredentials: true }).promise
-      .then(function(pdf){
-        presPdfDoc = pdf;
-        presMeta.num_pages = pdf.numPages;
-        if(presCurrentPage < 1) presCurrentPage = 1;
-        if(presCurrentPage > pdf.numPages) presCurrentPage = pdf.numPages;
-        return presentRenderPage(presCurrentPage);
-      })
-      .catch(function(err){
-        callLog('PDF load failed:', err);
-        alert('Could not load the document for presentation.');
-        presentEnd();
-      });
-  }
-
-  function presentRenderPage(pageNum){
-    if(!presPdfDoc) return Promise.resolve();
-    if(presRenderBusy) return Promise.resolve();
-    presRenderBusy = true;
-
-    return presPdfDoc.getPage(pageNum).then(function(page){
-      var cvs  = byId('callPresentCanvas');
-      var hero = byId('callStageHero');
-      if(!cvs || !hero){ presRenderBusy = false; return; }
-
-      // Fit page to hero height (leaving room for control bars) while keeping aspect ratio
-      var availH = Math.max(200, (hero.clientHeight || 600) - 80);
-      var availW = Math.max(200, (hero.clientWidth  || 800) - 40);
-      var unscaled = page.getViewport({ scale: 1 });
-      var scale = Math.min(availW / unscaled.width, availH / unscaled.height);
-      var viewport = page.getViewport({ scale: scale });
-
-      cvs.width  = viewport.width;
-      cvs.height = viewport.height;
-      cvs.style.width  = viewport.width + 'px';
-      cvs.style.height = viewport.height + 'px';
-
-      var ctx = cvs.getContext('2d');
-      return page.render({ canvasContext: ctx, viewport: viewport }).promise
-        .then(function(){ presRenderBusy = false; presentUpdatePageLabel(); })
-        .catch(function(err){ presRenderBusy = false; callLog('render err:', err); });
-    }).catch(function(err){ presRenderBusy = false; callLog('getPage err:', err); });
-  }
-
-  function presentUpdatePageLabel(){
-    var el = byId('callPresentPageLabel');
-    if(!el || !presMeta) return;
-    el.textContent = presCurrentPage + ' / ' + (presMeta.num_pages || 1);
-  }
-
-  window.presentPrevPage = function(){
-    if(!presIsActive || !presMeta) return;
-    if(presIsPresenter){
-      if(presCurrentPage <= 1) return;
-      presCurrentPage -= 1;
-      if(presMeta.kind === 'pdf') presentRenderPage(presCurrentPage);
-      else presentUpdatePageLabel();
-      callSignal({ type: 'present_page', page: presCurrentPage });
-    } else {
-      // Viewer — request page jump
-      if(presCurrentPage <= 1) return;
-      callSignal({ type: 'present_request_page', page: presCurrentPage - 1 });
-      callFlashToast('Requested previous page');
-    }
-  };
-
-  window.presentNextPage = function(){
-    if(!presIsActive || !presMeta) return;
-    var maxP = presMeta.num_pages || 1;
-    if(presIsPresenter){
-      if(presCurrentPage >= maxP) return;
-      presCurrentPage += 1;
-      if(presMeta.kind === 'pdf') presentRenderPage(presCurrentPage);
-      else presentUpdatePageLabel();
-      callSignal({ type: 'present_page', page: presCurrentPage });
-    } else {
-      if(presCurrentPage >= maxP) return;
-      callSignal({ type: 'present_request_page', page: presCurrentPage + 1 });
-      callFlashToast('Requested next page');
-    }
-  };
-
-  window.presentEnd = function(){
-    if(!presIsActive) return;
-    if(presIsPresenter){
-      callSignal({ type: 'present_end' });
-    }
-    presentResetUI();
-    callRefreshMediaUI();
-  };
-
-  /* ── Toasts (request-page prompts + generic flashes) ─────────────────── */
-  var _toastTimer = null;
-  function callFlashToast(msg){
-    var t  = byId('callStageToast');
-    var m  = byId('callStageToastMsg');
-    var ok = byId('callStageToastOk');
-    var no = byId('callStageToastNo');
-    if(!t || !m) return;
-    if(_toastTimer){ clearTimeout(_toastTimer); _toastTimer = null; }
-    m.textContent = msg;
-    if(ok) ok.style.display = 'none';
-    if(no) no.style.display = 'none';
-    t.classList.add('active');
-    _toastTimer = setTimeout(function(){ t.classList.remove('active'); _toastTimer = null; }, 2200);
-  }
-  function callShowRequestToast(requesterName, page){
-    var t  = byId('callStageToast');
-    var m  = byId('callStageToastMsg');
-    var ok = byId('callStageToastOk');
-    var no = byId('callStageToastNo');
-    if(!t || !m) return;
-    if(_toastTimer){ clearTimeout(_toastTimer); _toastTimer = null; }
-    m.textContent = (requesterName || 'Viewer') + ' wants to go to page ' + page;
-    if(ok){ ok.style.display = ''; ok.textContent = 'Go to page ' + page; }
-    if(no){ no.style.display = ''; }
-    t.classList.add('active');
-  }
-  window.callToastAccept = function(){
-    var t = byId('callStageToast'); if(t) t.classList.remove('active');
-    if(!presPendingReq || !presIsPresenter){ presPendingReq = null; return; }
-    presCurrentPage = presPendingReq.page;
-    if(presMeta && presMeta.kind === 'pdf') presentRenderPage(presCurrentPage);
-    else presentUpdatePageLabel();
-    callSignal({ type: 'present_page', page: presCurrentPage });
-    presPendingReq = null;
-  };
-  window.callToastDeny = function(){
-    var t = byId('callStageToast'); if(t) t.classList.remove('active');
-    presPendingReq = null;
-  };
-
-  /* ── Draggable PIP tiles ────────────────────────────────────────────── */
-  (function enableDraggablePips(){
-    function makeDraggable(el){
-      if(!el) return;
-      var startX = 0, startY = 0, origLeft = 0, origTop = 0, dragging = false;
-      el.addEventListener('pointerdown', function(e){
-        dragging = true;
-        startX = e.clientX; startY = e.clientY;
-        var rect = el.getBoundingClientRect();
-        var parent = el.offsetParent.getBoundingClientRect();
-        origLeft = rect.left - parent.left;
-        origTop  = rect.top  - parent.top;
-        // Switch to absolute positioning from whichever corner the CSS used
-        el.style.right = 'auto'; el.style.bottom = 'auto';
-        el.style.left = origLeft + 'px'; el.style.top = origTop + 'px';
-        el.setPointerCapture(e.pointerId);
-      });
-      el.addEventListener('pointermove', function(e){
-        if(!dragging) return;
-        var dx = e.clientX - startX, dy = e.clientY - startY;
-        el.style.left = (origLeft + dx) + 'px';
-        el.style.top  = (origTop  + dy) + 'px';
-      });
-      el.addEventListener('pointerup', function(e){
-        dragging = false;
-        try { el.releasePointerCapture(e.pointerId); } catch(_){}
-      });
-    }
-    makeDraggable(byId('callPipSelf'));
-    makeDraggable(byId('callPipPeer'));
-  })();
-
-  /* ── Signal dispatcher ──────────────────────────────────────────────── */
+  // Listen for WS ring events on the chat page's own socket
+  // (the main onmessage branch is where these arrive — we read via the
+  // existing dispatch that calls handleCallSignal)
   function handleCallSignal(d){
-    callLog('← recv:', d.type, 'from', d.sender_id, 'state:', callState);
     if(String(d.sender_id || '') === String(USER_ID)) return;
 
     if(d.type === 'call_ring'){
-      if(callState !== 'idle') return;
-      callState = 'incoming';
-      callShowIncoming(d.caller_id, d.caller_name, d.call_kind || 'voice');
-      return;
-    }
-
-    if(d.type === 'call_offer'){
-      var kindFromOffer = d.call_kind || 'voice';
-      if(callState === 'idle'){
-        callState = 'incoming';
-        _pendingOffer = d.sdp;
-        callShowIncoming(d.sender_id, d.sender_name, kindFromOffer);
-      } else if(callState === 'incoming'){
-        _pendingOffer = d.sdp; callKind = kindFromOffer;
-      }
-      return;
-    }
-
-    if(d.type === 'call_answer'){
-      if(!callPC) return;
-      callPC.setRemoteDescription(new RTCSessionDescription(d.sdp))
-        .then(function(){
-          var p = Promise.resolve();
-          _pendingRemoteIce.forEach(function(c){
-            p = p.then(function(){ return callPC.addIceCandidate(new RTCIceCandidate(c)).catch(function(){}); });
-          });
-          _pendingRemoteIce = [];
-          return p;
-        })
-        .catch(function(err){ callLog('setRemoteDescription(answer) failed:', err); });
-      return;
-    }
-
-    if(d.type === 'ice_candidate'){
-      if(!d.candidate) return;
-      if(callPC && callPC.remoteDescription && callPC.remoteDescription.type){
-        callPC.addIceCandidate(new RTCIceCandidate(d.candidate)).catch(function(){});
-      } else {
-        _pendingRemoteIce.push(d.candidate);
-      }
-      return;
-    }
-
-    if(d.type === 'call_hangup' || d.type === 'call_decline' || d.type === 'call_cancel'){
-      var reason = (callState === 'incoming') ? 'missed'
-                 : (callState === 'outgoing') ? 'cancelled'
-                 : 'ended';
-      callTeardown(reason);
-      return;
-    }
-
-    /* ── Upgrade renegotiation ── */
-    if(d.type === 'call_upgrade_offer'){
-      if(!callPC) return;
-      // The peer is adding video (camera or screen). We may need to add our
-      // own video track too if we're still voice-only, so the call becomes
-      // bidirectional video.
-      callKind = 'video';
-      callKindPending = 'video';
-      var needsCamera = !callLocalStream || callLocalStream.getVideoTracks().length === 0;
-      var prep = needsCamera
-        ? callGetCameraTrackOnly().then(function(t){
-            if(t){
-              try { callLocalStream.addTrack(t); } catch(_){}
-              try {
-                if(callVideoSender && callVideoSender.replaceTrack) callVideoSender.replaceTrack(t);
-                else callVideoSender = callPC.addTrack(t, callLocalStream);
-              } catch(e){ callLog('addTrack(upgrade) failed:', e); }
-            }
-          })
-        : Promise.resolve();
-
-      prep
-        .then(function(){ return callPC.setRemoteDescription(new RTCSessionDescription(d.sdp)); })
-        .then(function(){ return callPC.createAnswer(); })
-        .then(function(answer){ return callPC.setLocalDescription(answer); })
-        .then(function(){
-          callSignal({ type: 'call_upgrade_answer', sdp: callPC.localDescription });
-          callKindPending = null;
-          callRefreshMediaUI();
-        })
-        .catch(function(err){ callLog('upgrade-answer failed:', err); callKindPending = null; });
-      return;
-    }
-
-    if(d.type === 'call_upgrade_answer'){
-      if(!callPC) return;
-      callPC.setRemoteDescription(new RTCSessionDescription(d.sdp))
-        .then(function(){
-          callKind = 'video';
-          callKindPending = null;
-          callRefreshMediaUI();
-        })
-        .catch(function(err){ callLog('apply upgrade answer failed:', err); callKindPending = null; });
-      return;
-    }
-
-    /* ── Presentation signals ── */
-    if(d.type === 'present_start'){
-      if(presIsActive && presIsPresenter){
-        // Shouldn't happen (server allows both ends, but our UI gates it)
-        callLog('present_start received while we were presenting — ignoring');
-        return;
-      }
-      presentBeginAsViewer({
-        url: d.url, kind: d.kind, title: d.title,
-        page: d.page || 1, num_pages: d.num_pages || 1
+      if(_popupAlive()) return; // popup will handle it
+      _showInPageIncoming({
+        caller_id: d.caller_id,
+        caller_name: d.caller_name,
+        call_kind: d.call_kind || 'voice'
       });
       return;
     }
-
-    if(d.type === 'present_page'){
-      if(!presIsActive || presIsPresenter) return;
-      var page = d.page || 1;
-      presCurrentPage = page;
-      if(presMeta && presMeta.kind === 'pdf') presentRenderPage(page);
-      else presentUpdatePageLabel();
-      return;
-    }
-
-    if(d.type === 'present_request_page'){
-      if(!presIsActive || !presIsPresenter) return;
-      presPendingReq = { page: d.page || 1, requester_name: d.sender_name || 'Viewer' };
-      callShowRequestToast(presPendingReq.requester_name, presPendingReq.page);
-      return;
-    }
-
-    if(d.type === 'present_end'){
-      if(!presIsActive) return;
-      presentResetUI();
-      callRefreshMediaUI();
-      return;
-    }
+    // All other call_* / present_* signals are handled by the popup.
+    // We ignore them on the launcher page.
   }
   window.__handleCallSignal = handleCallSignal;
 
-  /* ── Cross-page incoming-call poll ──────────────────────────────────── */
-  setInterval(function(){
-    if(callState !== 'idle') return;
-    fetch('/messages/call/incoming/', {
-      headers:{'X-Requested-With':'XMLHttpRequest'},
-      credentials:'same-origin'
-    })
-    .then(function(r){ return r.ok ? r.json() : null; })
-    .then(function(d){
-      if(!d || !d.ok || !d.ring) return;
-      if(String(d.ring.room_id) === String(ROOM_ID)){
-        if(callState === 'idle'){
-          callState = 'incoming';
-          callShowIncoming(d.ring.caller_id, d.ring.caller_name, d.ring.call_kind || 'voice');
-        }
-      } else {
-        window.location.href = '/messages/' + d.ring.room_id + '/';
+  // NOTE: base.html's global incoming-call banner polls /call/incoming/
+  // on every page, so we don't need a page-level poll here anymore.
+  // The WS-triggered _showInPageIncoming() above still fires when a ring
+  // signal arrives on THIS chat room's socket — that's the fast path.
+  // Both the banner and the in-page modal check each other's state so we
+  // never show two rings for the same call.
+
+  // BroadcastChannel from popup
+  if(_callBC){
+    _callBC.onmessage = function(ev){
+      if(!ev || !ev.data) return;
+      var t = ev.data.type;
+      if(t === 'popup-ready')  _showInProgressBar(true);
+      if(t === 'popup-active') _showInProgressBar(true);
+      if(t === 'popup-ended' || t === 'popup-closed'){
+        _showInProgressBar(false);
+        _callPopup = null;
       }
-    }).catch(function(){});
-  }, 4000);
+    };
+  }
 
-  window.addEventListener('beforeunload', function(){
-    if(callState !== 'idle'){
-      try { callSignal({ type: 'call_hangup' }); } catch(_){}
+  // Check periodically whether the popup closed without BC notification
+  setInterval(function(){
+    if(_callPopup && _callPopup.closed){
+      _callPopup = null;
+      _showInProgressBar(false);
     }
-  });
+  }, 1500);
 
-  /* Prime AudioContext on first user gesture (autoplay policy) */
-  (function primeAudio(){
-    function prime(){
-      _toneGetCtx();
-      document.removeEventListener('click',    prime, true);
-      document.removeEventListener('keydown',  prime, true);
-      document.removeEventListener('touchend', prime, true);
-    }
-    document.addEventListener('click',    prime, true);
-    document.addEventListener('keydown',  prime, true);
-    document.addEventListener('touchend', prime, true);
-  })();
+  // Legacy APIs kept as no-ops so existing onclick handlers don't throw.
+  // These are all operations that only make sense inside the popup now.
+  window.callToggleMute = function(){ if(_popupAlive()) _callPopup.focus(); };
+  window.callToggleVideo = function(){ if(_popupAlive()) _callPopup.focus(); };
+  window.callUpgradeToVideo = function(){ if(_popupAlive()) _callPopup.focus(); };
+  window.callToggleScreenShare = function(){ if(_popupAlive()) _callPopup.focus(); };
+  window.callToggleToolsMenu = function(){ if(_popupAlive()) _callPopup.focus(); };
+  window.callOpenPresentPicker = function(){ if(_popupAlive()) _callPopup.focus(); };
+  window.callClosePresentPicker = function(){};
+  window.callPresentUpload = function(){};
+  window.presentPrevPage = function(){};
+  window.presentNextPage = function(){};
+  window.presentEnd = function(){};
+  window.callToastAccept = function(){};
+  window.callToastDeny = function(){};
 
 })();
 </script>

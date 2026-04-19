@@ -19,8 +19,12 @@ from apps.finance.models import PurchaseRequest, Payment, EmployeeFinanceRequest
 from django.http import JsonResponse
 from apps.files.models import SharedFile
 import io
+import requests
 from datetime import date, timedelta
 from django.http import HttpResponse, HttpResponseForbidden
+from django.views.decorators.http import require_GET
+from apps.projects.geo_utils import parse_geo_answer
+from apps.projects.geo_utils import lookup_ip_location, reverse_geocode
 
 def _is_project_member(user, project):
     return (
@@ -29,6 +33,43 @@ def _is_project_member(user, project):
         project.team_members.filter(id=user.id).exists()
     )
 
+# --------------------------Helper ---------------------------------
+
+class OSMTileProxyView(View):
+    """
+    Proxy OSM raster tiles through Django so the browser no longer talks
+    directly to the tile server.
+    """
+
+    TILE_TIMEOUT = 10
+
+    def get(self, request, z, x, y):
+        tile_url = f"https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+
+        try:
+            r = requests.get(
+                tile_url,
+                headers={
+                    "User-Agent": "EasyOffice-Surveys/1.0",
+                    "Referer": request.build_absolute_uri("/"),
+                },
+                timeout=self.TILE_TIMEOUT,
+                stream=True,
+            )
+        except requests.RequestException:
+            return HttpResponse(status=502)
+
+        if r.status_code != 200:
+            return HttpResponse(status=r.status_code)
+
+        resp = HttpResponse(
+            r.content,
+            content_type=r.headers.get("Content-Type", "image/png")
+        )
+
+        # cache tiles lightly
+        resp["Cache-Control"] = "public, max-age=86400"
+        return resp
 
 # ---------------------------------------------------------------------------
 # Project List
@@ -2352,12 +2393,17 @@ class PublicSurveyView(View):
 
 def _build_survey_chart_data(survey):
     """
-    Return a JSON-serialisable dict with per-question chart data,
-    response timeline, and respondent breakdown.
-    Used by both the dashboard page and the polling API.
+    Returns a JSON-serialisable payload for the survey live dashboard.
+    Supports:
+      - single_choice / multi_choice
+      - rating
+      - yes_no
+      - text / paragraph / number
+      - geolocation
     """
-    from collections import Counter
+    from collections import Counter, defaultdict
     from django.utils import timezone as tz
+    from django.utils.timezone import localtime
 
     questions = list(survey.questions.order_by('order'))
     responses = list(
@@ -2368,15 +2414,21 @@ def _build_survey_chart_data(survey):
     )
     total = len(responses)
 
-    # ── Per-question data ─────────────────────────────────────────────────────
+    # Map answers by question
+    answers_by_q = {str(q.pk): [] for q in questions}
+    for resp in responses:
+        for ans in resp.answers.all():
+            answers_by_q.setdefault(str(ans.question_id), []).append(ans.value or '')
+
     question_charts = []
+
     for q in questions:
-        raw = list(SurveyAnswer.objects.filter(question=q).values_list('value', flat=True))
+        raw = answers_by_q.get(str(q.pk), [])
         entry = {
             'id': str(q.pk),
             'text': q.text,
             'type': q.q_type,
-            'count': len(raw),
+            'count': len([v for v in raw if str(v).strip()]),
         }
 
         if q.q_type in ('single_choice', 'multi_choice'):
@@ -2384,21 +2436,26 @@ def _build_survey_chart_data(survey):
             for a in raw:
                 all_vals.extend([v.strip() for v in a.split(',') if v.strip()])
             tally = Counter(all_vals)
-            tot = sum(tally.values()) or 1
             opts = q.get_options_list()
             labels, counts = [], []
+
             for opt in opts:
                 labels.append(opt)
                 counts.append(tally.get(opt, 0))
-            # write-ins
+
             for k, v in tally.items():
                 if k not in opts:
                     labels.append(k + ' *')
                     counts.append(v)
-            entry.update({'labels': labels, 'counts': counts, 'total': sum(tally.values())})
+
+            entry.update({
+                'labels': labels,
+                'counts': counts,
+                'total': sum(tally.values()),
+            })
 
         elif q.q_type == 'rating':
-            nums = [int(a) for a in raw if a.strip().isdigit()]
+            nums = [int(a) for a in raw if str(a).strip().isdigit()]
             tally = Counter(nums)
             entry.update({
                 'labels': ['1', '2', '3', '4', '5'],
@@ -2408,40 +2465,72 @@ def _build_survey_chart_data(survey):
 
         elif q.q_type == 'yes_no':
             tally = Counter(raw)
-            tot = sum(tally.values()) or 1
             entry.update({
                 'labels': ['Yes', 'No'],
                 'counts': [tally.get('Yes', 0), tally.get('No', 0)],
-                'total': tot,
+                'total': sum(tally.values()) or 0,
             })
 
         elif q.q_type in ('text', 'paragraph', 'number'):
-            entry['samples'] = [v for v in raw if v][:20]
+            entry['samples'] = [v for v in raw if str(v).strip()][:20]
+
+        elif q.q_type == 'geolocation':
+            points = []
+            answer_rows = (
+                SurveyAnswer.objects
+                .filter(question=q)
+                .select_related('response', 'response__respondent')
+                .order_by('-response__submitted_at')[:500]
+            )
+
+            for ans in answer_rows:
+                parsed = parse_geo_answer(ans.value)
+                if not parsed:
+                    continue
+
+                resp = ans.response
+                resp_name = (
+                    resp.respondent_name
+                    or (resp.respondent.get_full_name() if resp.respondent else 'Anonymous')
+                )
+
+                points.append({
+                    'lat': parsed['lat'],
+                    'lng': parsed['lng'],
+                    'accuracy_m': parsed.get('accuracy_m', 0),
+                    'source': parsed.get('source', 'gps'),
+                    'address': parsed.get('address', ''),
+                    'respondent_name': resp_name,
+                    'submitted_at': localtime(resp.submitted_at).strftime('%d %b %Y %H:%M'),
+                    'is_public': resp.is_public_response,
+                })
+
+            entry['points'] = points
+            entry['valid_count'] = len(points)
 
         question_charts.append(entry)
 
-    # ── Response timeline (responses per day) ─────────────────────────────────
-    from collections import defaultdict
-    from django.utils.timezone import localtime
+    # Timeline
     day_counts = defaultdict(int)
     for r in responses:
         day = localtime(r.submitted_at).strftime('%Y-%m-%d')
         day_counts[day] += 1
+
     timeline_labels = sorted(day_counts.keys())
     timeline_counts = [day_counts[d] for d in timeline_labels]
 
-    # ── Respondent breakdown: internal vs public ──────────────────────────────
+    # Internal/public split
     internal = sum(1 for r in responses if not r.is_public_response)
     public = sum(1 for r in responses if r.is_public_response)
 
-    # ── Recent responses list ─────────────────────────────────────────────────
+    # Recent responses
     recent = []
     for r in reversed(responses[-20:]):
         recent.append({
             'id': str(r.pk),
             'name': r.respondent_name or (r.respondent.get_full_name() if r.respondent else 'Anonymous'),
             'ip': r.ip_address or '—',
-            'device': r.device_id[:12] + '…' if len(r.device_id) > 12 else r.device_id or '—',
+            'device': (r.device_id[:12] + '…') if r.device_id and len(r.device_id) > 12 else (r.device_id or '—'),
             'is_public': r.is_public_response,
             'submitted_at': localtime(r.submitted_at).strftime('%d %b %Y %H:%M'),
         })
@@ -2454,11 +2543,13 @@ def _build_survey_chart_data(survey):
         'public_responses': public,
         'is_active': survey.is_active,
         'question_charts': question_charts,
-        'timeline': {'labels': timeline_labels, 'counts': timeline_counts},
+        'timeline': {
+            'labels': timeline_labels,
+            'counts': timeline_counts,
+        },
         'recent': recent,
         'generated_at': tz.now().isoformat(),
     }
-
 
 class SurveyDashboardDataView(LoginRequiredMixin, View):
     """
@@ -2880,3 +2971,56 @@ class ProjectLocationBulkZoneView(LoginRequiredMixin, View):
             messages.success(request, f'{updated} location(s) removed from their zone.')
 
         return redirect('project_locations', pk=pk)
+
+
+class IPLocateView(View):
+    """
+    GET /projects/surveys/ip-locate/
+    Returns approximate location for the requester's IP using ipapi.co
+    (with ip-api.com fallback). No auth required — public surveys need it.
+    """
+    http_method_names = ['get']
+
+    def get(self, request):
+        # Trust X-Forwarded-For if behind a proxy (same pattern your survey
+        # submission endpoint uses to capture ip_address on SurveyResponse).
+        xff = request.META.get('HTTP_X_FORWARDED_FOR', '')
+        if xff:
+            ip = xff.split(',')[0].strip()
+        else:
+            ip = request.META.get('REMOTE_ADDR', '')
+
+        result = lookup_ip_location(ip)
+        if result is None:
+            return JsonResponse(
+                {'ok': False, 'error': 'IP location lookup failed or unavailable.'},
+                status=503,
+            )
+        return JsonResponse({'ok': True, **result})
+
+
+class ReverseGeocodeView(View):
+    """
+    GET /projects/surveys/reverse-geocode/?lat=..&lng=..
+    Turns coordinates into a human-readable address (OSM Nominatim).
+    Rate-limited server-side.
+    """
+    http_method_names = ['get']
+
+    def get(self, request):
+        try:
+            lat = float(request.GET.get('lat'))
+            lng = float(request.GET.get('lng'))
+        except (TypeError, ValueError):
+            return JsonResponse(
+                {'ok': False, 'error': 'lat and lng are required floats'},
+                status=400,
+            )
+        if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+            return JsonResponse(
+                {'ok': False, 'error': 'coordinates out of range'},
+                status=400,
+            )
+
+        address = reverse_geocode(lat, lng)
+        return JsonResponse({'ok': True, 'address': address or ''})

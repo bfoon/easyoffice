@@ -113,6 +113,9 @@ urlpatterns = [
     path('call/incoming/',              views.CallIncomingView.as_view(), name='call_incoming'),
     path('call/clear/<uuid:room_id>/',  views.CallClearView.as_view(),    name='call_clear'),
 
+    # 🆕 Popup window that OWNS the call (persists across main-window navigation)
+    path('call/window/<uuid:room_id>/', views.CallWindowView.as_view(),   name='call_window'),
+
     # ─────────────────────────────────────────────
     # 🆕 DOCUMENT PRESENTATION (in-call)
     # ─────────────────────────────────────────────

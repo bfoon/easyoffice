@@ -20,6 +20,14 @@ urlpatterns = [
     path('<uuid:pk>/surveys/<uuid:sid>/submit/', views.SurveySubmitView.as_view(), name='survey_submit'),
     path('<uuid:pk>/surveys/<uuid:sid>/toggle/', views.SurveyToggleView.as_view(), name='survey_toggle'),
     path('<uuid:pk>/surveys/<uuid:sid>/delete/', views.SurveyDeleteView.as_view(), name='survey_delete'),
+    path('surveys/ip-locate/', views.IPLocateView.as_view(), name='survey_ip_locate'),
+    path('surveys/reverse-geocode/', views.ReverseGeocodeView.as_view(), name='survey_reverse_geocode'),
+    path(
+        "surveys/osm-tiles/<int:z>/<int:x>/<int:y>.png",
+        views.OSMTileProxyView.as_view(),
+        name="survey_osm_tile_proxy",
+    ),
+
 
     # Public survey — no login required (token-based)
     path('surveys/public/<uuid:token>/', views.PublicSurveyView.as_view(), name='survey_public'),

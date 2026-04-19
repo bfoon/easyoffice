@@ -1,0 +1,234 @@
+<script>
+(function(global){
+
+  const IP_LOCATE_URL       = "{% url 'survey_ip_locate' %}";
+  const REVERSE_GEOCODE_URL = "{% url 'survey_reverse_geocode' %}";
+  const DEFAULT_VIEW        = { lat: 13.4549, lng: -16.5790, zoom: 5 };
+
+  const state = {};
+
+  function initMap(qid) {
+    const el = document.getElementById('geo-map-' + qid);
+    if (!el || !global.L) return null;
+
+    if (state[qid] && state[qid].map) {
+      return state[qid].map;
+    }
+
+    const map = L.map(el, {
+      scrollWheelZoom: false,
+      attributionControl: true
+    }).setView([DEFAULT_VIEW.lat, DEFAULT_VIEW.lng], DEFAULT_VIEW.zoom);
+
+    L.tileLayer('/projects/surveys/osm-tiles/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    state[qid] = {
+      map: map,
+      marker: null,
+      circle: null
+    };
+
+    setTimeout(function () {
+      try { map.invalidateSize(); } catch (e) {}
+    }, 200);
+
+    return map;
+  }
+
+  function setStatus(qid, msg, tone) {
+    const el = document.getElementById('geo-status-' + qid);
+    if (!el) return;
+
+    el.textContent = msg;
+    el.style.color = tone === 'err' ? '#dc2626'
+                   : tone === 'ok'  ? '#059669'
+                   : tone === 'warn'? '#b45309'
+                                     : '#64748b';
+  }
+
+  function paintMap(qid, lat, lng, accuracy) {
+    const s = state[qid];
+    if (!s || !s.map) return;
+
+    if (s.marker) s.map.removeLayer(s.marker);
+    if (s.circle) s.map.removeLayer(s.circle);
+
+    s.marker = L.marker([lat, lng]).addTo(s.map);
+
+    if (accuracy && accuracy > 0) {
+      s.circle = L.circle([lat, lng], {
+        radius: accuracy,
+        color: '#2563eb',
+        fillColor: '#3b82f6',
+        fillOpacity: 0.12,
+        weight: 1
+      }).addTo(s.map);
+
+      try {
+        s.map.fitBounds(s.circle.getBounds(), {
+          maxZoom: 17,
+          padding: [20, 20]
+        });
+      } catch (e) {
+        s.map.setView([lat, lng], 15);
+      }
+    } else {
+      s.map.setView([lat, lng], 15);
+    }
+  }
+
+  function paintResult(qid, data) {
+    const box  = document.getElementById('geo-result-' + qid);
+    const card = document.getElementById('geo-result-card-' + qid);
+    if (!box || !card) return;
+
+    box.style.display = '';
+
+    const coordsEl = card.querySelector('.geo-coords');
+    const addrEl   = card.querySelector('.geo-address');
+    const sourceEl = card.querySelector('.geo-source-label');
+    const isGps    = data.source === 'gps';
+
+    if (isGps) {
+      card.style.background  = '#d1fae5';
+      card.style.borderColor = '#6ee7b7';
+      card.style.color       = '#065f46';
+      sourceEl.textContent   = 'GPS location captured';
+    } else {
+      card.style.background  = '#fef3c7';
+      card.style.borderColor = '#fde68a';
+      card.style.color       = '#78350f';
+      sourceEl.textContent   = 'Approximate location from IP';
+    }
+
+    coordsEl.textContent =
+      data.lat.toFixed(5) + ', ' + data.lng.toFixed(5) +
+      (data.accuracy_m ? ' (±' + Math.round(data.accuracy_m) + 'm)' : '');
+
+    addrEl.textContent = data.address || '';
+  }
+
+  function writeInput(qid, data) {
+    const inp = document.getElementById('geo-input-' + qid);
+    if (!inp) return;
+
+    inp.value = JSON.stringify({
+      lat: data.lat,
+      lng: data.lng,
+      accuracy_m: data.accuracy_m || 0,
+      source: data.source,
+      address: data.address || '',
+      captured_at: new Date().toISOString()
+    });
+  }
+
+  async function reverseGeocode(lat, lng) {
+    try {
+      const r = await fetch(REVERSE_GEOCODE_URL + '?lat=' + encodeURIComponent(lat) + '&lng=' + encodeURIComponent(lng));
+      const j = await r.json();
+      return (j.ok && j.address) ? j.address : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  async function ipFallback(qid) {
+    setStatus(qid, 'Falling back to IP-based location…', 'warn');
+
+    try {
+      const r = await fetch(IP_LOCATE_URL);
+      const j = await r.json();
+
+      if (!j.ok) {
+        throw new Error(j.error || 'IP lookup failed');
+      }
+
+      let addr = j.address || '';
+      if (!addr) {
+        addr = await reverseGeocode(j.lat, j.lng);
+      }
+
+      const data = {
+        lat: j.lat,
+        lng: j.lng,
+        accuracy_m: j.accuracy_m || 20000,
+        source: 'ip',
+        address: addr
+      };
+
+      writeInput(qid, data);
+      paintResult(qid, data);
+      paintMap(qid, data.lat, data.lng, data.accuracy_m);
+      setStatus(qid, 'Captured via IP (approximate).', 'warn');
+    } catch (e) {
+      setStatus(qid, 'Could not determine location: ' + e.message, 'err');
+    }
+  }
+
+  function start(qid) {
+    initMap(qid);
+    setStatus(qid, 'Requesting GPS permission…', 'ok');
+
+    if (!navigator.geolocation) {
+      ipFallback(qid);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async function(pos) {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const acc = pos.coords.accuracy || 0;
+
+        setStatus(qid, 'GPS locked — looking up address…', 'ok');
+
+        const address = await reverseGeocode(lat, lng);
+
+        const data = {
+          lat: lat,
+          lng: lng,
+          accuracy_m: acc,
+          source: 'gps',
+          address: address
+        };
+
+        writeInput(qid, data);
+        paintResult(qid, data);
+        paintMap(qid, lat, lng, acc);
+        setStatus(qid, 'GPS location captured (±' + Math.round(acc) + 'm).', 'ok');
+      },
+      function(err) {
+        console.warn('Geolocation error:', err);
+        ipFallback(qid);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0
+      }
+    );
+  }
+
+  function initAll() {
+    document.querySelectorAll('.geo-capture').forEach(function(el) {
+      const qid = el.getAttribute('data-qid');
+      if (qid) initMap(qid);
+    });
+  }
+
+  global.GeoCapture = {
+    start: start,
+    initAll: initAll
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initAll);
+  } else {
+    initAll();
+  }
+
+})(window);
+</script>

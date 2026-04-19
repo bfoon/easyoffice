@@ -177,6 +177,7 @@ class SurveyQuestion(models.Model):
         RATING = 'rating', _('Rating 1–5')
         YES_NO = 'yes_no', _('Yes / No')
         NUMBER = 'number', _('Number')
+        GEOLOCATION = 'geolocation', _('Geolocation (GPS)')
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     survey = models.ForeignKey(Survey, on_delete=models.CASCADE, related_name='questions')

@@ -1,0 +1,1229 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Call — {{ peer.full_name }}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext x='0' y='14'%3E📞%3C/text%3E%3C/svg%3E"/>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css"/>
+<style>
+  :root {
+    --bg:#0b1220; --surface:#0f172a; --border:#1e293b; --text:#e2e8f0;
+    --text-muted:#94a3b8; --accent:#3b82f6; --success:#10b981;
+    --warning:#f59e0b; --danger:#ef4444; --slate:#334155;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;overflow:hidden;}
+
+  /* Layout */
+  .w-top{padding:10px 16px;display:flex;align-items:center;gap:12px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;}
+  .w-peer{flex:1;min-width:0;}
+  .w-peer-name{font-size:.95rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .w-peer-state{font-size:.7rem;color:var(--text-muted);font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:8px;}
+  .w-netdot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--success);}
+  .w-netdot.warn{background:var(--warning);}
+  .w-netdot.bad{background:var(--danger);}
+
+  body{display:flex;flex-direction:column;}
+  .w-hero{flex:1;min-height:0;position:relative;display:flex;align-items:center;justify-content:center;background:#020617;overflow:hidden;}
+  .w-remote{width:100%;height:100%;object-fit:contain;display:none;background:#000;}
+  .w-remote.active{display:block;}
+  .w-voice-centre{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;}
+  .w-voice-centre.hidden{display:none;}
+  .w-big-avatar{width:120px;height:120px;border-radius:50%;background:#6366f1;color:#fff;font-size:2.6rem;font-weight:700;display:flex;align-items:center;justify-content:center;overflow:hidden;animation:wPulse 1.8s ease-in-out infinite;}
+  @keyframes wPulse{0%,100%{box-shadow:0 0 0 0 rgba(99,102,241,.6);}50%{box-shadow:0 0 0 14px rgba(99,102,241,0);}}
+  .w-big-name{font-size:1.1rem;font-weight:700;}
+
+  /* Outgoing / incoming full-screen overlays (pre-answer) */
+  .w-modal{position:absolute;inset:0;background:rgba(2,6,23,.92);display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:30;color:var(--text);text-align:center;}
+  .w-modal.active{display:flex;}
+  .w-modal-state{color:var(--text-muted);font-size:.9rem;}
+  .w-modal-btns{display:flex;gap:14px;margin-top:20px;}
+  .w-ctl{border:none;border-radius:999px;width:54px;height:54px;font-size:1.15rem;cursor:pointer;color:#fff;display:inline-flex;align-items:center;justify-content:center;transition:transform .15s,filter .15s;}
+  .w-ctl:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.1);}
+  .w-ctl:disabled{opacity:.4;cursor:not-allowed;}
+  .w-ctl.accept{background:var(--success);}
+  .w-ctl.decline,.w-ctl.hang{background:var(--danger);}
+
+  /* Presentation overlay */
+  .w-present-overlay{position:absolute;inset:0;display:none;background:#111827;align-items:center;justify-content:center;flex-direction:column;z-index:2;}
+  .w-present-overlay.active{display:flex;}
+  .w-present-canvas{max-width:100%;max-height:calc(100% - 60px);background:#fff;box-shadow:0 8px 40px rgba(0,0,0,.5);}
+  .w-present-img{max-width:100%;max-height:calc(100% - 60px);object-fit:contain;background:#fff;box-shadow:0 8px 40px rgba(0,0,0,.5);}
+  .w-present-bar{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:inline-flex;align-items:center;gap:10px;background:rgba(15,23,42,.9);border:1px solid var(--border);border-radius:999px;padding:6px 10px;font-size:.78rem;}
+  .w-present-bar button{background:var(--slate);border:none;color:var(--text);width:30px;height:30px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;}
+  .w-present-bar button:hover{background:#475569;}
+  .w-present-bar button:disabled{opacity:.35;cursor:not-allowed;}
+  .w-present-bar button.end{background:var(--danger);}
+  .w-present-title{position:absolute;top:14px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.85);border:1px solid var(--border);padding:6px 12px;border-radius:999px;font-size:.75rem;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+  /* PIP tiles */
+  .w-pip{position:absolute;width:180px;height:120px;background:#020617;border:2px solid var(--slate);border-radius:12px;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.45);cursor:grab;z-index:3;}
+  .w-pip:active{cursor:grabbing;}
+  .w-pip video{width:100%;height:100%;object-fit:cover;}
+  .w-pip-label{position:absolute;bottom:6px;left:8px;background:rgba(0,0,0,.55);padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600;color:#fff;pointer-events:none;}
+  .w-pip.local video{transform:scaleX(-1);}
+  .w-pip-self{display:none;right:14px;bottom:14px;}
+  .w-pip-self.active{display:block;}
+  .w-pip-self.sharing{width:260px;height:160px;border-color:var(--accent);}
+  .w-pip-peer{display:none;right:200px;bottom:14px;}
+  .w-pip-peer.active{display:block;}
+
+  /* Control bar */
+  .w-controls{padding:12px 16px 14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;background:var(--surface);border-top:1px solid var(--border);flex-shrink:0;position:relative;}
+  .w-grp{display:inline-flex;flex-direction:column;align-items:center;gap:3px;min-width:56px;}
+  .w-grp.hidden{display:none;}
+  .w-btn{border:none;width:44px;height:44px;border-radius:999px;cursor:pointer;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:1rem;transition:transform .15s,filter .15s,background .15s;}
+  .w-btn:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.1);}
+  .w-btn:disabled{opacity:.4;cursor:not-allowed;}
+  .w-btn.neutral{background:var(--slate);}
+  .w-btn.neutral.active{background:var(--warning);}
+  .w-btn.neutral.off{background:#64748b;}
+  .w-btn.primary{background:var(--accent);}
+  .w-btn.primary.active{background:var(--success);}
+  .w-btn.hang{background:var(--danger);}
+  .w-lbl{font-size:.65rem;color:#cbd5e1;font-weight:600;white-space:nowrap;}
+
+  /* Tools menu */
+  .w-tools-menu{position:absolute;bottom:78px;left:50%;transform:translateX(-50%);background:#1e293b;border:1px solid var(--slate);border-radius:12px;padding:6px;min-width:240px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:none;z-index:10;}
+  .w-tools-menu.active{display:block;}
+  .w-tools-item{display:flex;align-items:center;gap:12px;width:100%;background:transparent;border:none;color:var(--text);padding:9px 12px;border-radius:8px;cursor:pointer;text-align:left;font-size:.82rem;}
+  .w-tools-item:hover:not(:disabled){background:var(--slate);}
+  .w-tools-item:disabled{opacity:.45;cursor:not-allowed;}
+  .w-tools-item i{font-size:1rem;width:22px;text-align:center;}
+  .w-tools-item .sub{font-size:.65rem;color:var(--text-muted);margin-left:auto;}
+
+  /* Toast */
+  .w-toast{position:absolute;top:14px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.92);border:1px solid var(--slate);color:var(--text);padding:8px 14px;border-radius:999px;font-size:.78rem;z-index:4;display:none;gap:10px;align-items:center;}
+  .w-toast.active{display:inline-flex;}
+  .w-toast button{background:var(--accent);border:none;color:#fff;padding:4px 10px;border-radius:999px;font-size:.7rem;cursor:pointer;}
+  .w-toast button.deny{background:var(--slate);}
+
+  /* Present picker */
+  .w-present-picker{position:absolute;inset:0;background:rgba(2,6,23,.88);display:none;align-items:center;justify-content:center;z-index:12;}
+  .w-present-picker.active{display:flex;}
+  .w-present-picker-inner{background:var(--surface);border:1px solid var(--border);border-radius:14px;width:min(520px, 92%);max-height:82vh;overflow:hidden;display:flex;flex-direction:column;}
+  .w-present-picker-head{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;}
+  .w-present-picker-head h4{margin:0;font-size:.95rem;font-weight:700;flex:1;}
+  .w-present-picker-head .close-btn{background:transparent;border:none;color:var(--text-muted);cursor:pointer;font-size:1rem;}
+  .w-present-picker-body{flex:1;overflow:auto;padding:12px;}
+  .w-present-upload{display:flex;gap:8px;margin-bottom:12px;align-items:center;}
+  .w-present-upload input[type=file]{flex:1;color:#cbd5e1;font-size:.78rem;}
+  .w-present-upload button{background:var(--accent);border:none;color:#fff;padding:8px 12px;border-radius:8px;font-size:.78rem;cursor:pointer;}
+  .w-present-upload button:disabled{opacity:.5;cursor:not-allowed;}
+  .w-recent-title{color:var(--text-muted);font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;margin:10px 4px 6px;}
+  .w-recent-item{display:flex;align-items:center;gap:10px;padding:8px;border-radius:8px;cursor:pointer;font-size:.8rem;}
+  .w-recent-item:hover{background:#1e293b;}
+  .w-recent-item i{font-size:.95rem;width:22px;text-align:center;color:var(--text-muted);}
+</style>
+</head>
+<body>
+  <div class="w-top">
+    <div class="w-peer">
+      <div class="w-peer-name" id="wPeerName">{{ peer.full_name }}</div>
+      <div class="w-peer-state">
+        <span class="w-netdot" id="wNetDot"></span>
+        <span id="wTimer">00:00</span>
+        <span id="wNetLabel" style="color:var(--text-muted)"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="w-hero" id="wHero">
+    <div class="w-voice-centre" id="wVoiceCentre">
+      <div class="w-big-avatar" id="wBigAvatar">{% if peer.avatar %}<img src="{{ peer.avatar.url }}" alt="" style="width:100%;height:100%;object-fit:cover"/>{% else %}{{ peer.full_name|first|upper }}{% endif %}</div>
+      <div class="w-big-name">{{ peer.full_name }}</div>
+    </div>
+    <video class="w-remote" id="wRemote" autoplay playsinline></video>
+
+    <div class="w-present-overlay" id="wPresentOverlay">
+      <div class="w-present-title" id="wPresentTitle">Document</div>
+      <canvas class="w-present-canvas" id="wPresentCanvas"></canvas>
+      <img class="w-present-img" id="wPresentImg" style="display:none" alt=""/>
+      <div class="w-present-bar" id="wPresentBar">
+        <button id="wPresentPrev" onclick="presentPrevPage()" title="Previous"><i class="bi bi-chevron-left"></i></button>
+        <span id="wPresentPageLabel">1 / 1</span>
+        <button id="wPresentNext" onclick="presentNextPage()" title="Next"><i class="bi bi-chevron-right"></i></button>
+        <span style="width:1px;height:18px;background:var(--slate);margin:0 4px"></span>
+        <span id="wPresentRole" style="font-size:.7rem;color:var(--text-muted)">Presenting</span>
+        <button class="end" id="wPresentEndBtn" onclick="presentEnd()" title="Stop" style="display:none"><i class="bi bi-x-lg"></i></button>
+      </div>
+    </div>
+
+    <div class="w-toast" id="wToast">
+      <span id="wToastMsg">…</span>
+      <button id="wToastOk" onclick="callToastAccept()">Accept</button>
+      <button id="wToastNo" class="deny" onclick="callToastDeny()">Dismiss</button>
+    </div>
+
+    <div class="w-pip w-pip-self local" id="wPipSelf">
+      <video id="wPipSelfVideo" autoplay playsinline muted></video>
+      <div class="w-pip-label" id="wPipSelfLabel">You</div>
+    </div>
+    <div class="w-pip w-pip-peer" id="wPipPeer">
+      <video id="wPipPeerVideo" autoplay playsinline></video>
+      <div class="w-pip-label">{{ peer.full_name }}</div>
+    </div>
+
+    {# Pre-answer overlay — outgoing ringing / incoming ring #}
+    <div class="w-modal" id="wPreAnswer">
+      <div class="w-big-avatar">{% if peer.avatar %}<img src="{{ peer.avatar.url }}" alt="" style="width:100%;height:100%;object-fit:cover"/>{% else %}{{ peer.full_name|first|upper }}{% endif %}</div>
+      <div style="font-size:1.1rem;font-weight:700">{{ peer.full_name }}</div>
+      <div class="w-modal-state" id="wPreAnswerState">Ringing…</div>
+      <div class="w-modal-btns" id="wPreAnswerBtns">
+        <button class="w-ctl hang" onclick="callCancel()" title="Cancel"><i class="bi bi-telephone-x-fill"></i></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="w-controls">
+    <div class="w-grp">
+      <button class="w-btn neutral" id="wMute" onclick="callToggleMute()" title="Mute / unmute">
+        <i class="bi bi-mic-fill"></i>
+      </button>
+      <span class="w-lbl" id="wMuteLabel">Mute</span>
+    </div>
+    <div class="w-grp" id="wVideoGroup">
+      <button class="w-btn neutral" id="wVideo" onclick="callToggleVideo()" title="Camera on / off">
+        <i class="bi bi-camera-video-fill"></i>
+      </button>
+      <span class="w-lbl" id="wVideoLabel">Camera</span>
+    </div>
+    <div class="w-grp" id="wUpgradeGroup">
+      <button class="w-btn primary" id="wUpgrade" onclick="callUpgradeToVideo()" title="Start video">
+        <i class="bi bi-camera-video-fill"></i>
+      </button>
+      <span class="w-lbl">Start video</span>
+    </div>
+    <div class="w-grp">
+      <button class="w-btn primary" id="wShare" onclick="callToggleScreenShare()" title="Share screen">
+        <i class="bi bi-display-fill"></i>
+      </button>
+      <span class="w-lbl" id="wShareLabel">Share</span>
+    </div>
+    <div class="w-grp">
+      <button class="w-btn primary" id="wTools" onclick="callToggleToolsMenu()" title="Tools">
+        <i class="bi bi-grid-fill"></i>
+      </button>
+      <span class="w-lbl">Tools</span>
+    </div>
+    <div class="w-grp">
+      <button class="w-btn hang" onclick="callHangup()" title="Hang up">
+        <i class="bi bi-telephone-x-fill"></i>
+      </button>
+      <span class="w-lbl">End</span>
+    </div>
+
+    <div class="w-tools-menu" id="wToolsMenu">
+      <button class="w-tools-item" onclick="callOpenPresentPicker()">
+        <i class="bi bi-file-earmark-slides-fill"></i><span>Present document</span><span class="sub">PDF · PPTX · Image</span>
+      </button>
+      <button class="w-tools-item" disabled>
+        <i class="bi bi-pencil-square"></i><span>Whiteboard</span><span class="sub">Coming soon</span>
+      </button>
+      <button class="w-tools-item" onclick="callToggleScreenShare()">
+        <i class="bi bi-display-fill"></i><span id="wToolsShareLabel">Share screen</span>
+      </button>
+    </div>
+
+    <div class="w-present-picker" id="wPresentPicker">
+      <div class="w-present-picker-inner">
+        <div class="w-present-picker-head">
+          <h4>Present a document</h4>
+          <button class="close-btn" onclick="callClosePresentPicker()"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div class="w-present-picker-body">
+          <div class="w-present-upload">
+            <input type="file" id="wPresentFile" accept=".pdf,.ppt,.pptx,.jpg,.jpeg,.png,.gif,.webp"/>
+            <button id="wPresentUploadBtn" onclick="callPresentUpload()">Upload &amp; present</button>
+          </div>
+          <div class="w-recent-title">Recently shared in this chat</div>
+          <div id="wPresentRecent">
+            <div style="color:#64748b;font-size:.78rem;padding:10px 6px">Loading…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <audio id="wRemoteAudio" autoplay playsinline style="display:none"></audio>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    if(window.pdfjsLib){
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+  </script>
+
+<script>
+/* ════════════════════════════════════════════════════════════════════════
+   CALL POPUP — owns the call. Standalone document, no IIFE (already
+   isolated by window scope). Survives main-window navigation + refresh.
+   ════════════════════════════════════════════════════════════════════════ */
+
+// Context from Django
+var ROOM_ID       = {{ room.id|stringformat:"'%s'" }};
+var PEER_ID       = {{ peer.id|stringformat:"'%s'" }};
+var PEER_NAME     = {{ peer.full_name|stringformat:"'%s'"|escapejs }};
+var USER_ID       = {{ request.user.id|stringformat:"'%s'" }};
+var INITIAL_KIND  = '{{ initial_kind|escapejs }}';
+var INITIAL_MODE  = '{{ initial_mode|escapejs }}';
+var WS_SCHEME     = window.location.protocol === 'https:' ? 'wss' : 'ws';
+var CSRF_TOKEN    = '{{ csrf_token }}';
+
+var CALL_ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' }
+  // Paste TURN here when you have it, e.g. Metered openrelay
+];
+
+// Helper shims (no IIFE, no existing byId/getCookie here)
+function byId(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function callLog(){
+  try { var a = ['[call-popup]'].concat(Array.prototype.slice.call(arguments)); console.log.apply(console,a); } catch(_){}
+}
+
+// State
+var socket = null;
+var socketReconnectDelay = 1000;
+
+var callPC           = null;
+var callLocalStream  = null;
+var callScreenStream = null;
+var callState        = 'idle';
+var callKind         = INITIAL_KIND || 'voice';
+var callIsMuted      = false;
+var callIsCameraOff  = false;
+var callIsSharing    = false;
+var callVideoSender  = null;
+var callTimer        = null;
+var callStartedAt    = 0;
+var callKindPending  = null;
+var _pendingOffer    = null;
+var _pendingRemoteIce= [];
+var _ringTimeoutTimer= null;
+var _toolsOpen       = false;
+
+// Reconnect
+var _iAmOriginalCaller   = (INITIAL_MODE === 'outgoing');
+var _disconnectGraceTimer= null;
+var _reconnectAttempt    = 0;
+var _reconnectMaxAttempts= 4;
+var _reconnectInFlight   = false;
+
+// Presentation state
+var presIsActive    = false;
+var presIsPresenter = false;
+var presMeta        = null;
+var presCurrentPage = 1;
+var presPdfDoc      = null;
+var presRenderBusy  = false;
+var presPendingReq  = null;
+
+// Cross-document BroadcastChannel (communicate with chat_room.html launcher)
+var _bc = null;
+try { _bc = new BroadcastChannel('easyoffice-call-' + ROOM_ID); } catch(_){ _bc = null; }
+function bcSend(type, payload){
+  if(!_bc) return;
+  try { _bc.postMessage({type: type, payload: payload || null}); } catch(_){}
+}
+
+// Let the launcher know we're live
+bcSend('popup-ready', { kind: callKind, mode: INITIAL_MODE });
+
+/* ── WebSocket ──────────────────────────────────────────────────────── */
+function connectWS(){
+  try {
+    socket = new WebSocket(WS_SCHEME + '://' + window.location.host + '/ws/chat/' + ROOM_ID + '/');
+  } catch(_){ return; }
+
+  socket.onopen = function(){
+    socketReconnectDelay = 1000;
+    callLog('WS open');
+    // On outgoing: once socket is up, start the call flow.
+    if(INITIAL_MODE === 'outgoing' && callState === 'idle'){
+      startOutgoingCall();
+    } else if(INITIAL_MODE === 'incoming' && callState === 'idle'){
+      // Incoming mode: the ring record is already on the server (placed by
+      // the caller). We sit and wait for the call_offer from the peer,
+      // OR the caller might already have sent it — either way handleCallSignal
+      // picks it up when it arrives. Show the incoming overlay immediately.
+      callState = 'incoming';
+      showPreAnswer('incoming');
+    }
+  };
+
+  socket.onmessage = function(e){
+    var d;
+    try { d = JSON.parse(e.data); } catch(_){ return; }
+    handleCallSignal(d);
+  };
+
+  socket.onclose = function(){
+    callLog('WS closed, reconnecting in', socketReconnectDelay);
+    setTimeout(connectWS, socketReconnectDelay);
+    socketReconnectDelay = Math.min(socketReconnectDelay * 1.5, 15000);
+  };
+  socket.onerror = function(){ try { socket.close(); } catch(_){} };
+}
+
+function callSignal(obj){
+  if(!socket || socket.readyState !== WebSocket.OPEN){
+    callLog('WS not open, queue/skip:', obj.type);
+    return false;
+  }
+  try { callLog('→', obj.type); } catch(_){}
+  socket.send(JSON.stringify(obj));
+  return true;
+}
+
+/* ── Pre-answer overlay (ringing / incoming) ────────────────────────── */
+function showPreAnswer(mode){
+  var el = byId('wPreAnswer');
+  var state = byId('wPreAnswerState');
+  var btns  = byId('wPreAnswerBtns');
+  if(!el) return;
+  el.classList.add('active');
+  if(mode === 'outgoing'){
+    if(state) state.textContent = (callKind === 'video' ? 'Video calling…' : 'Ringing…');
+    if(btns){
+      btns.innerHTML = '<button class="w-ctl hang" onclick="callCancel()" title="Cancel"><i class="bi bi-telephone-x-fill"></i></button>';
+    }
+  } else {
+    if(state) state.textContent = 'Incoming ' + callKind + ' call…';
+    if(btns){
+      btns.innerHTML =
+        '<button class="w-ctl decline" onclick="callDecline()" title="Decline"><i class="bi bi-telephone-x-fill"></i></button>' +
+        '<button class="w-ctl accept"  onclick="callAccept()"  title="Accept"><i class="bi bi-telephone-fill"></i></button>';
+    }
+  }
+}
+function hidePreAnswer(){
+  var el = byId('wPreAnswer'); if(el) el.classList.remove('active');
+}
+
+/* ── Ring tones (WebAudio) ──────────────────────────────────────────── */
+var _toneCtx=null,_tonePlaying=null,_toneTimer=null,_toneNodes=[];
+function _toneGetCtx(){
+  if(!_toneCtx){ try { var AC = window.AudioContext||window.webkitAudioContext; if(AC) _toneCtx = new AC(); } catch(_){} }
+  if(_toneCtx && _toneCtx.state === 'suspended'){ try { _toneCtx.resume(); } catch(_){} }
+  return _toneCtx;
+}
+function _toneStopAll(){
+  if(_toneTimer){ clearInterval(_toneTimer); _toneTimer=null; }
+  _toneNodes.forEach(function(n){ try { n.stop && n.stop(); } catch(_){} try { n.disconnect && n.disconnect(); } catch(_){} });
+  _toneNodes=[]; _tonePlaying=null;
+}
+function _tonePlayBurst(freqs,durMs,gain){
+  var ctx=_toneGetCtx(); if(!ctx) return;
+  var g=ctx.createGain(); g.connect(ctx.destination);
+  var now=ctx.currentTime, peak=gain||0.18;
+  g.gain.setValueAtTime(0,now);
+  g.gain.linearRampToValueAtTime(peak,now+0.03);
+  g.gain.setValueAtTime(peak,now+(durMs/1000)-0.05);
+  g.gain.linearRampToValueAtTime(0,now+(durMs/1000));
+  freqs.forEach(function(f){
+    var o=ctx.createOscillator(); o.type='sine'; o.frequency.value=f;
+    o.connect(g); o.start(now); o.stop(now+(durMs/1000)+0.02);
+    _toneNodes.push(o);
+  });
+  _toneNodes.push(g);
+}
+function callStartCallerTone(){
+  if(_tonePlaying==='caller') return; _toneStopAll(); if(!_toneGetCtx()) return;
+  _tonePlaying='caller';
+  var fire=function(){ _tonePlayBurst([440,480],2000,0.12); }; fire();
+  _toneTimer=setInterval(fire,6000);
+}
+function callStartCalleeTone(){
+  if(_tonePlaying==='callee') return; _toneStopAll(); if(!_toneGetCtx()) return;
+  _tonePlaying='callee';
+  var fire=function(){ _tonePlayBurst([880,660],400,0.22); setTimeout(function(){ _tonePlayBurst([880,660],400,0.22); },600); };
+  fire(); _toneTimer=setInterval(fire,2500);
+}
+function callStopTones(){ _toneStopAll(); }
+
+/* ── Network status ─────────────────────────────────────────────────── */
+function callSetNetStatus(level,label){
+  var dot = byId('wNetDot'), lbl = byId('wNetLabel');
+  if(dot){ dot.classList.remove('warn','bad'); if(level==='warn') dot.classList.add('warn'); if(level==='bad') dot.classList.add('bad'); }
+  if(lbl) lbl.textContent = label || '';
+}
+var _netStatsTimer = null;
+function callStartNetStats(){
+  if(_netStatsTimer) return;
+  _netStatsTimer = setInterval(function(){
+    if(!callPC) return;
+    try {
+      callPC.getStats(null).then(function(stats){
+        var rtt=0, lost=0, rcv=0;
+        stats.forEach(function(r){
+          if(r.type==='candidate-pair' && r.state==='succeeded' && r.currentRoundTripTime!=null){ rtt = Math.max(rtt,r.currentRoundTripTime); }
+          if(r.type==='inbound-rtp' && !r.isRemote){
+            if(r.packetsLost!=null) lost += r.packetsLost;
+            if(r.packetsReceived!=null) rcv += r.packetsReceived;
+          }
+        });
+        var loss = rcv>0 ? lost/(lost+rcv) : 0;
+        if(rtt>0.3 || loss>0.08) callSetNetStatus('bad','Poor connection');
+        else if(rtt>0.15 || loss>0.03) callSetNetStatus('warn','Fair connection');
+        else if(!_reconnectInFlight) callSetNetStatus('good','');
+      }).catch(function(){});
+    } catch(_){}
+  }, 3000);
+}
+
+/* ── Time display ───────────────────────────────────────────────────── */
+function fmtDuration(sec){ sec=Math.max(0,sec|0); var m=(sec/60)|0, s=sec%60; return (m<10?'0':'')+m+':'+(s<10?'0':'')+s; }
+
+/* ── Teardown ───────────────────────────────────────────────────────── */
+function callTeardown(serverReason){
+  callStopTones();
+  if(_ringTimeoutTimer){ clearTimeout(_ringTimeoutTimer); _ringTimeoutTimer=null; }
+  if(_netStatsTimer){ clearInterval(_netStatsTimer); _netStatsTimer=null; }
+  if(_disconnectGraceTimer){ clearTimeout(_disconnectGraceTimer); _disconnectGraceTimer=null; }
+
+  try { if(callPC){ callPC.ontrack=null; callPC.onicecandidate=null; callPC.close(); } } catch(_){}
+  callPC = null; callVideoSender = null;
+
+  if(callLocalStream){ try { callLocalStream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){} callLocalStream=null; }
+  if(callScreenStream){ try { callScreenStream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){} callScreenStream=null; }
+
+  var prevKind = callKind || 'voice';
+  callState='idle'; callIsMuted=false; callIsCameraOff=false; callIsSharing=false;
+  callKind='voice'; callKindPending=null; _pendingOffer=null; _pendingRemoteIce=[];
+  _reconnectAttempt=0; _reconnectInFlight=false;
+
+  hidePreAnswer();
+  if(callTimer){ clearInterval(callTimer); callTimer=null; }
+
+  var body = 'reason=' + encodeURIComponent(serverReason||'ended') + '&call_kind=' + encodeURIComponent(prevKind);
+  fetch('/messages/call/clear/' + ROOM_ID + '/', {
+    method:'POST',
+    headers:{'X-CSRFToken':CSRF_TOKEN,'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'},
+    credentials:'same-origin',
+    body: body
+  }).catch(function(){});
+
+  bcSend('popup-ended', { reason: serverReason || 'ended' });
+
+  // Close the popup window after a short delay so user sees the state change
+  setTimeout(function(){ try { window.close(); } catch(_){} }, 400);
+}
+
+/* ── Transition to active ───────────────────────────────────────────── */
+function callActivateIfNeeded(reason){
+  if(callState === 'active') return;
+  callLog('activate:', reason);
+  callStopTones();
+  if(_ringTimeoutTimer){ clearTimeout(_ringTimeoutTimer); _ringTimeoutTimer=null; }
+  callState = 'active';
+  hidePreAnswer();
+  refreshMediaUI();
+  callStartedAt = Date.now();
+  if(callTimer) clearInterval(callTimer);
+  callTimer = setInterval(function(){
+    var sec = ((Date.now()-callStartedAt)/1000)|0;
+    var t = byId('wTimer'); if(t) t.textContent = fmtDuration(sec);
+  }, 1000);
+  callStartNetStats();
+  bcSend('popup-active', {});
+}
+
+/* ── Refresh media UI ───────────────────────────────────────────────── */
+function refreshMediaUI(){
+  var voice = byId('wVoiceCentre');
+  var remote= byId('wRemote');
+  var pipSelf = byId('wPipSelf');
+  var pipSelfV= byId('wPipSelfVideo');
+  var pipSelfLbl = byId('wPipSelfLabel');
+  var upgGrp = byId('wUpgradeGroup');
+  var vidGrp = byId('wVideoGroup');
+
+  var showRemote = (callKind === 'video') && !presIsActive;
+  var showVoice  = !showRemote && !presIsActive;
+  if(voice)  voice.classList.toggle('hidden', !showVoice);
+  if(remote) remote.classList.toggle('active', showRemote);
+
+  var selfHasVideo = callLocalStream && callLocalStream.getVideoTracks().length > 0;
+  var showSelf = (callKind === 'video' || callIsSharing) && (selfHasVideo || callIsSharing);
+  if(pipSelf) pipSelf.classList.toggle('active', showSelf);
+
+  if(pipSelfV && showSelf){
+    var want = (callIsSharing && callScreenStream) ? callScreenStream : callLocalStream;
+    if(want && pipSelfV.srcObject !== want){ try { pipSelfV.srcObject = want; } catch(_){} }
+  }
+  if(pipSelf){
+    if(callIsSharing){ pipSelf.classList.remove('local'); pipSelf.classList.add('sharing'); }
+    else { pipSelf.classList.remove('sharing'); if(!pipSelf.classList.contains('local')) pipSelf.classList.add('local'); }
+  }
+  if(pipSelfLbl) pipSelfLbl.textContent = callIsSharing ? 'You are sharing · visible to peer' : 'You';
+
+  if(vidGrp) vidGrp.classList.toggle('hidden', callKind !== 'video');
+  if(upgGrp) upgGrp.classList.toggle('hidden', callKind === 'video');
+
+  var shareLbl = byId('wShareLabel'); if(shareLbl) shareLbl.textContent = callIsSharing ? 'Stop share' : 'Share';
+  var shareBtn = byId('wShare');      if(shareBtn) shareBtn.classList.toggle('active', callIsSharing);
+  var toolsShareLbl = byId('wToolsShareLabel'); if(toolsShareLbl) toolsShareLbl.textContent = callIsSharing ? 'Stop screen share' : 'Share screen';
+}
+
+/* ── ICE restart ────────────────────────────────────────────────────── */
+function callTryIceRestart(){
+  if(!callPC || callState !== 'active') return;
+  if(_reconnectInFlight) return;
+  if(!_iAmOriginalCaller){ callSetNetStatus('warn','Reconnecting…'); return; }
+  if(_reconnectAttempt >= _reconnectMaxAttempts){
+    callSetNetStatus('bad','Connection lost');
+    alert('Could not re-establish the connection.');
+    callTeardown('ended'); return;
+  }
+  _reconnectAttempt += 1;
+  _reconnectInFlight = true;
+  callSetNetStatus('warn','Reconnecting ('+_reconnectAttempt+'/'+_reconnectMaxAttempts+')…');
+
+  try { if(callPC.restartIce) callPC.restartIce(); } catch(_){}
+  callPC.createOffer({iceRestart:true})
+    .then(function(o){ return callPC.setLocalDescription(o); })
+    .then(function(){
+      callSignal({type:'call_upgrade_offer', sdp:callPC.localDescription, ice_restart:true});
+      var backoff = Math.min(8000 * Math.pow(1.5, _reconnectAttempt-1), 30000);
+      setTimeout(function(){
+        _reconnectInFlight = false;
+        if(!callPC) return;
+        var st = callPC.iceConnectionState;
+        if(st !== 'connected' && st !== 'completed') callTryIceRestart();
+      }, backoff);
+    })
+    .catch(function(err){ callLog('restart failed:', err); _reconnectInFlight=false; setTimeout(callTryIceRestart,3000); });
+}
+
+/* ── PeerConnection ─────────────────────────────────────────────────── */
+function buildPC(){
+  var pc = new RTCPeerConnection({iceServers: CALL_ICE_SERVERS});
+  pc.onicecandidate = function(ev){ if(ev.candidate) callSignal({type:'ice_candidate', candidate:ev.candidate}); };
+  pc.ontrack = function(ev){
+    if(!ev.streams || !ev.streams[0]) return;
+    var stream = ev.streams[0];
+    if(ev.track.kind === 'audio'){
+      if(callKind === 'video'){
+        var rv = byId('wRemote'); if(rv && !rv.srcObject){ rv.srcObject = stream; var p = rv.play && rv.play(); if(p && p.catch) p.catch(function(){}); }
+      } else {
+        var ra = byId('wRemoteAudio');
+        if(ra){ ra.srcObject = stream; var p2 = ra.play && ra.play(); if(p2 && p2.catch) p2.catch(function(){ try { ra.muted=true; ra.play().then(function(){ ra.muted=false; }); } catch(_){} }); }
+      }
+    }
+    if(ev.track.kind === 'video'){
+      var rv = byId('wRemote'); if(rv){ rv.srcObject = stream; var p3 = rv.play && rv.play(); if(p3 && p3.catch) p3.catch(function(){}); }
+      var pipV = byId('wPipPeerVideo'); if(pipV) pipV.srcObject = stream;
+      refreshMediaUI();
+    }
+    callActivateIfNeeded('ontrack:'+ev.track.kind);
+  };
+  pc.oniceconnectionstatechange = function(){
+    callLog('ice:', pc.iceConnectionState);
+    if(pc.iceConnectionState==='connected'||pc.iceConnectionState==='completed'){
+      if(_disconnectGraceTimer){ clearTimeout(_disconnectGraceTimer); _disconnectGraceTimer=null; }
+      _reconnectAttempt=0; _reconnectInFlight=false;
+      callSetNetStatus('good','');
+      callActivateIfNeeded('ice-'+pc.iceConnectionState);
+      return;
+    }
+    if(pc.iceConnectionState==='disconnected'){
+      callSetNetStatus('warn','Reconnecting…');
+      if(!_disconnectGraceTimer){
+        _disconnectGraceTimer = setTimeout(function(){
+          _disconnectGraceTimer = null;
+          if(!callPC) return;
+          if(callPC.iceConnectionState==='connected'||callPC.iceConnectionState==='completed') return;
+          callTryIceRestart();
+        }, 5000);
+      }
+      return;
+    }
+    if(pc.iceConnectionState==='failed'){ callSetNetStatus('bad','Reconnecting…'); callTryIceRestart(); }
+  };
+  pc.onconnectionstatechange = function(){
+    if(pc.connectionState==='connected') callActivateIfNeeded('connection-connected');
+    if(pc.connectionState==='closed' && callState==='active') callTeardown('ended');
+  };
+  return pc;
+}
+
+function addTracksFromStream(stream){
+  if(!callPC || !stream) return;
+  stream.getTracks().forEach(function(t){
+    var s = callPC.addTrack(t, stream);
+    if(t.kind === 'video') callVideoSender = s;
+  });
+}
+
+function getMedia(kind){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ alert('Browser does not support calls.'); return Promise.resolve(null); }
+  return navigator.mediaDevices.getUserMedia({audio:true, video: kind==='video'})
+    .catch(function(err){ callLog('getUserMedia:', err && err.name); alert(kind==='video' ? 'Camera + microphone required.' : 'Microphone required.'); return null; });
+}
+
+function getCameraTrackOnly(){
+  if(!navigator.mediaDevices) return Promise.resolve(null);
+  return navigator.mediaDevices.getUserMedia({video:true, audio:false})
+    .then(function(s){ return s.getVideoTracks()[0]||null; })
+    .catch(function(err){ callLog('camera:', err && err.name); alert('Camera access required.'); return null; });
+}
+
+/* ── Outgoing flow ──────────────────────────────────────────────────── */
+function startOutgoingCall(){
+  callState = 'outgoing';
+  callStartCallerTone();
+  showPreAnswer('outgoing');
+
+  fetch('/messages/call/ring/' + ROOM_ID + '/', {
+    method:'POST',
+    headers:{'X-CSRFToken':CSRF_TOKEN,'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'},
+    credentials:'same-origin',
+    body: 'call_kind=' + encodeURIComponent(callKind)
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+  .then(function(resp){
+    if(!resp.ok || !resp.data || !resp.data.ok){
+      alert((resp.data && resp.data.error) || 'Could not start call.');
+      callTeardown('cancelled'); return null;
+    }
+    _ringTimeoutTimer = setTimeout(function(){
+      if(callState === 'outgoing'){ try{ callSignal({type:'call_cancel'}); }catch(_){} callTeardown('cancelled'); }
+    }, 40000);
+    return getMedia(callKind);
+  })
+  .then(function(stream){
+    if(!stream){ callTeardown('cancelled'); return; }
+    callLocalStream = stream;
+    callPC = buildPC();
+    addTracksFromStream(callLocalStream);
+    return callPC.createOffer({offerToReceiveAudio:true, offerToReceiveVideo: callKind==='video'})
+      .then(function(o){ return callPC.setLocalDescription(o); })
+      .then(function(){ callSignal({type:'call_offer', sdp:callPC.localDescription, call_kind:callKind}); });
+  })
+  .catch(function(err){ callLog('startOutgoing:', err); alert('Could not start call.'); callTeardown('cancelled'); });
+}
+
+window.callCancel = function(){
+  if(callState === 'idle') return;
+  try { callSignal({type:'call_cancel'}); } catch(_){}
+  callTeardown('cancelled');
+};
+
+/* ── Incoming answer ────────────────────────────────────────────────── */
+window.callAccept = function(){
+  if(callState !== 'incoming' || !_pendingOffer){ return; }
+  getMedia(callKind).then(function(stream){
+    if(!stream){ try{ callSignal({type:'call_decline'}); }catch(_){} callTeardown('declined'); return; }
+    callLocalStream = stream;
+    callPC = buildPC();
+    addTracksFromStream(callLocalStream);
+    return callPC.setRemoteDescription(new RTCSessionDescription(_pendingOffer))
+      .then(function(){
+        var p = Promise.resolve();
+        _pendingRemoteIce.forEach(function(c){ p = p.then(function(){ return callPC.addIceCandidate(new RTCIceCandidate(c)).catch(function(){}); }); });
+        _pendingRemoteIce = [];
+        return p;
+      })
+      .then(function(){ return callPC.createAnswer(); })
+      .then(function(a){ return callPC.setLocalDescription(a); })
+      .then(function(){
+        callSignal({type:'call_answer', sdp:callPC.localDescription});
+        _pendingOffer = null;
+        hidePreAnswer();
+        callStopTones();
+        fetch('/messages/call/clear/'+ROOM_ID+'/', {
+          method:'POST',
+          headers:{'X-CSRFToken':CSRF_TOKEN,'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'},
+          credentials:'same-origin',
+          body:'reason=connected&call_kind='+encodeURIComponent(callKind)
+        }).catch(function(){});
+      });
+  })
+  .catch(function(err){ callLog('accept:', err); alert('Could not accept call.'); callTeardown('declined'); });
+};
+
+window.callDecline = function(){
+  try { callSignal({type:'call_decline'}); } catch(_){}
+  callTeardown('declined');
+};
+
+window.callHangup = function(){
+  if(callState === 'idle') return;
+  try { callSignal({type:'call_hangup'}); } catch(_){}
+  var reason = (callState === 'active') ? 'ended' : (callState === 'outgoing' ? 'cancelled' : 'declined');
+  callTeardown(reason);
+};
+
+/* ── Mute / camera ──────────────────────────────────────────────────── */
+window.callToggleMute = function(){
+  if(!callLocalStream) return;
+  callIsMuted = !callIsMuted;
+  callLocalStream.getAudioTracks().forEach(function(t){ t.enabled = !callIsMuted; });
+  var b = byId('wMute'); var l = byId('wMuteLabel');
+  var icon = callIsMuted ? '<i class="bi bi-mic-mute-fill"></i>' : '<i class="bi bi-mic-fill"></i>';
+  if(b){ b.classList.toggle('active', callIsMuted); b.innerHTML = icon; }
+  if(l) l.textContent = callIsMuted ? 'Unmute' : 'Mute';
+};
+window.callToggleVideo = function(){
+  if(!callLocalStream || callKind !== 'video') return;
+  callIsCameraOff = !callIsCameraOff;
+  callLocalStream.getVideoTracks().forEach(function(t){ t.enabled = !callIsCameraOff; });
+  var b = byId('wVideo'); var l = byId('wVideoLabel');
+  var icon = callIsCameraOff ? '<i class="bi bi-camera-video-off-fill"></i>' : '<i class="bi bi-camera-video-fill"></i>';
+  if(b){ b.classList.toggle('off', callIsCameraOff); b.innerHTML = icon; }
+  if(l) l.textContent = callIsCameraOff ? 'Start video' : 'Stop video';
+};
+
+/* ── Upgrade voice → video ──────────────────────────────────────────── */
+window.callUpgradeToVideo = function(){
+  if(callState !== 'active' || callKind !== 'voice') return;
+  if(!callPC){ alert('Call not connected yet.'); return; }
+  if(callKindPending) return;
+  callKindPending = 'video';
+  getCameraTrackOnly().then(function(cam){
+    if(!cam){ callKindPending = null; return; }
+    try { callLocalStream.addTrack(cam); } catch(_){}
+    try {
+      if(callVideoSender && callVideoSender.replaceTrack) callVideoSender.replaceTrack(cam);
+      else callVideoSender = callPC.addTrack(cam, callLocalStream);
+    } catch(e){ callLog('upgrade add:', e); callKindPending = null; return; }
+    callPC.createOffer()
+      .then(function(o){ return callPC.setLocalDescription(o); })
+      .then(function(){ callSignal({type:'call_upgrade_offer', sdp:callPC.localDescription}); })
+      .catch(function(err){ callLog('upgrade renegotiate:', err); callKindPending = null; });
+  });
+};
+
+/* ── Screen share ───────────────────────────────────────────────────── */
+window.callToggleScreenShare = function(){
+  if(callState !== 'active'){ alert('Screen sharing requires an active call.'); return; }
+  if(!callIsSharing){ startScreenShare(); } else { stopScreenShare(); }
+  closeToolsMenu();
+};
+function startScreenShare(){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia){ alert('Screen sharing not supported.'); return; }
+  navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:15,max:30}}, audio:false})
+    .then(function(stream){
+      callScreenStream = stream; callIsSharing = true;
+      var st = stream.getVideoTracks()[0];
+      if(!st){ stopScreenShare(); return; }
+      try {
+        if(callVideoSender && callVideoSender.replaceTrack){
+          callVideoSender.replaceTrack(st).catch(function(e){ callLog('replaceTrack:',e); });
+        } else {
+          callVideoSender = callPC.addTrack(st, callScreenStream);
+          callPC.createOffer()
+            .then(function(o){ return callPC.setLocalDescription(o); })
+            .then(function(){ callSignal({type:'call_upgrade_offer', sdp:callPC.localDescription}); })
+            .catch(function(err){ callLog('share renegotiate:', err); });
+        }
+      } catch(err){ callLog('share addTrack:', err); }
+      st.onended = function(){ stopScreenShare(); };
+      refreshMediaUI();
+    })
+    .catch(function(err){ if(err && err.name !== 'NotAllowedError') alert('Could not share: ' + (err && err.message || 'unknown')); });
+}
+function stopScreenShare(){
+  if(!callIsSharing) return;
+  callIsSharing = false;
+  try {
+    if(callVideoSender && callVideoSender.replaceTrack){
+      var cam = callLocalStream && callLocalStream.getVideoTracks()[0];
+      callVideoSender.replaceTrack(cam || null).catch(function(){});
+    }
+  } catch(_){}
+  if(callScreenStream){ try { callScreenStream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){} callScreenStream = null; }
+  refreshMediaUI();
+}
+
+/* ── Tools menu ─────────────────────────────────────────────────────── */
+window.callToggleToolsMenu = function(){
+  var m = byId('wToolsMenu'); if(!m) return;
+  _toolsOpen = !_toolsOpen;
+  m.classList.toggle('active', _toolsOpen);
+};
+function closeToolsMenu(){ _toolsOpen = false; var m = byId('wToolsMenu'); if(m) m.classList.remove('active'); }
+document.addEventListener('click', function(ev){
+  if(!_toolsOpen) return;
+  var menu = byId('wToolsMenu'), btn = byId('wTools');
+  if(!menu) return;
+  if(menu.contains(ev.target)) return;
+  if(btn && btn.contains(ev.target)) return;
+  closeToolsMenu();
+}, true);
+
+/* ── Presentation ───────────────────────────────────────────────────── */
+function presentResetUI(){
+  presIsActive=false; presIsPresenter=false; presMeta=null; presCurrentPage=1; presPdfDoc=null; presPendingReq=null;
+  var overlay=byId('wPresentOverlay'); if(overlay) overlay.classList.remove('active');
+  var pipPeer=byId('wPipPeer'); if(pipPeer) pipPeer.classList.remove('active');
+  var t=byId('wPresentTitle'); if(t) t.textContent='Document';
+  var pl=byId('wPresentPageLabel'); if(pl) pl.textContent='1 / 1';
+  var e=byId('wPresentEndBtn'); if(e) e.style.display='none';
+  var r=byId('wPresentRole'); if(r) r.textContent='';
+  var img=byId('wPresentImg'); if(img){ img.style.display='none'; img.src=''; }
+  var cvs=byId('wPresentCanvas'); if(cvs){ var c=cvs.getContext('2d'); c&&c.clearRect(0,0,cvs.width,cvs.height); cvs.style.display=''; }
+  var toast=byId('wToast'); if(toast) toast.classList.remove('active');
+}
+
+window.callOpenPresentPicker = function(){
+  if(callState !== 'active'){ alert('Presentation needs an active call.'); return; }
+  if(presIsActive && !presIsPresenter){ alert(PEER_NAME + ' is already presenting.'); return; }
+  closeToolsMenu();
+  var p = byId('wPresentPicker'); if(p) p.classList.add('active');
+  loadPresentRecent();
+};
+window.callClosePresentPicker = function(){ var p = byId('wPresentPicker'); if(p) p.classList.remove('active'); };
+
+function loadPresentRecent(){
+  var c = byId('wPresentRecent'); if(!c) return;
+  c.innerHTML = '<div style="color:#64748b;font-size:.78rem;padding:10px 6px">Loading…</div>';
+  fetch('/messages/present/'+ROOM_ID+'/files/', {headers:{'X-Requested-With':'XMLHttpRequest'}, credentials:'same-origin'})
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if(!d || !d.ok){ c.innerHTML = '<div style="color:#94a3b8;font-size:.78rem;padding:10px 6px">Could not load files.</div>'; return; }
+      if(!d.files.length){ c.innerHTML = '<div style="color:#64748b;font-size:.78rem;padding:10px 6px">No shared PDFs, slides, or images yet.</div>'; return; }
+      var html = '';
+      d.files.forEach(function(f){
+        var icon = f.kind==='pdf' ? 'bi-file-earmark-pdf' : f.kind==='pptx' ? 'bi-file-earmark-slides' : 'bi-file-earmark-image';
+        html += '<div class="w-recent-item" data-url="'+encodeURI(f.url)+'" data-kind="'+esc(f.kind)+'" data-title="'+esc(f.name)+'"><i class="bi '+icon+'"></i><span style="flex:1;overflow:hidden;text-overflow:ellipsis">'+esc(f.name)+'</span></div>';
+      });
+      c.innerHTML = html;
+      c.querySelectorAll('.w-recent-item').forEach(function(el){
+        el.addEventListener('click', function(){
+          var kind = el.getAttribute('data-kind');
+          if(kind === 'pptx'){ alert('For PowerPoint, please use the Upload button — we convert PPTX to PDF.'); return; }
+          callClosePresentPicker();
+          presentStart(el.getAttribute('data-url'), kind === 'pdf' ? 'pdf' : 'image', el.getAttribute('data-title'));
+        });
+      });
+    });
+}
+
+window.callPresentUpload = function(){
+  var fi = byId('wPresentFile'); if(!fi || !fi.files || !fi.files[0]){ alert('Choose a file.'); return; }
+  var file = fi.files[0];
+  var btn = byId('wPresentUploadBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Uploading…'; }
+  var fd = new FormData(); fd.append('file', file); fd.append('title', file.name);
+  fetch('/messages/present/'+ROOM_ID+'/upload/', {
+    method:'POST',
+    headers:{'X-CSRFToken':CSRF_TOKEN,'X-Requested-With':'XMLHttpRequest'},
+    credentials:'same-origin',
+    body: fd
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+  .then(function(resp){
+    if(btn){ btn.disabled = false; btn.textContent = 'Upload & present'; }
+    if(!resp.ok || !resp.data || !resp.data.ok){ alert((resp.data && resp.data.error) || 'Upload failed.'); return; }
+    callClosePresentPicker();
+    presentStart(resp.data.url, resp.data.kind, resp.data.title);
+  })
+  .catch(function(){ if(btn){ btn.disabled = false; btn.textContent = 'Upload & present'; } alert('Upload failed.'); });
+};
+
+function presentStart(url, kind, title){
+  presIsActive = true; presIsPresenter = true; presCurrentPage = 1;
+  presMeta = {url:url, kind:kind, title:title||'Document', num_pages:1};
+  var r = byId('wPresentRole'); if(r) r.textContent = 'You are presenting';
+  var e = byId('wPresentEndBtn'); if(e) e.style.display = '';
+  presentOpenAndRender().then(function(){
+    callSignal({type:'present_start', url:url, kind:kind, title:title||'', page:presCurrentPage, num_pages:presMeta.num_pages || 1});
+  });
+  refreshMediaUI();
+  var pipPeer = byId('wPipPeer'); if(pipPeer && callKind === 'video') pipPeer.classList.add('active');
+}
+
+function presentBeginAsViewer(meta){
+  presIsActive = true; presIsPresenter = false;
+  presMeta = {url:meta.url, kind:meta.kind, title:meta.title||'Document', num_pages:meta.num_pages||1};
+  presCurrentPage = meta.page || 1;
+  var r = byId('wPresentRole'); if(r) r.textContent = PEER_NAME + ' is presenting';
+  var e = byId('wPresentEndBtn'); if(e) e.style.display = 'none';
+  presentOpenAndRender();
+  refreshMediaUI();
+  var pipPeer = byId('wPipPeer'); if(pipPeer && callKind === 'video') pipPeer.classList.add('active');
+}
+
+function presentOpenAndRender(){
+  if(!presMeta) return Promise.resolve();
+  var overlay = byId('wPresentOverlay'); if(overlay) overlay.classList.add('active');
+  var t = byId('wPresentTitle'); if(t) t.textContent = presMeta.title || 'Document';
+
+  if(presMeta.kind === 'image'){
+    presMeta.num_pages = 1;
+    var img = byId('wPresentImg'); var cvs = byId('wPresentCanvas');
+    if(cvs) cvs.style.display = 'none';
+    if(img){ img.style.display = ''; img.src = presMeta.url; }
+    presentUpdatePageLabel();
+    return Promise.resolve();
+  }
+
+  if(!window.pdfjsLib){ alert('PDF viewer failed to load.'); return Promise.resolve(); }
+  var img = byId('wPresentImg'); if(img) img.style.display = 'none';
+  var cvs = byId('wPresentCanvas'); if(cvs) cvs.style.display = '';
+
+  return window.pdfjsLib.getDocument({url:presMeta.url, withCredentials:true}).promise
+    .then(function(pdf){
+      presPdfDoc = pdf; presMeta.num_pages = pdf.numPages;
+      if(presCurrentPage < 1) presCurrentPage = 1;
+      if(presCurrentPage > pdf.numPages) presCurrentPage = pdf.numPages;
+      return presentRenderPage(presCurrentPage);
+    })
+    .catch(function(err){ callLog('pdf load:', err); alert('Could not load document.'); presentEnd(); });
+}
+
+function presentRenderPage(pageNum){
+  if(!presPdfDoc) return Promise.resolve();
+  if(presRenderBusy) return Promise.resolve();
+  presRenderBusy = true;
+  return presPdfDoc.getPage(pageNum).then(function(page){
+    var cvs = byId('wPresentCanvas'); var hero = byId('wHero');
+    if(!cvs || !hero){ presRenderBusy = false; return; }
+    var availH = Math.max(200, (hero.clientHeight||600) - 80);
+    var availW = Math.max(200, (hero.clientWidth||800) - 40);
+    var un = page.getViewport({scale:1});
+    var scale = Math.min(availW/un.width, availH/un.height);
+    var vp = page.getViewport({scale:scale});
+    cvs.width = vp.width; cvs.height = vp.height;
+    cvs.style.width = vp.width+'px'; cvs.style.height = vp.height+'px';
+    var ctx = cvs.getContext('2d');
+    return page.render({canvasContext:ctx, viewport:vp}).promise
+      .then(function(){ presRenderBusy = false; presentUpdatePageLabel(); })
+      .catch(function(){ presRenderBusy = false; });
+  }).catch(function(){ presRenderBusy = false; });
+}
+
+function presentUpdatePageLabel(){
+  var el = byId('wPresentPageLabel'); if(!el || !presMeta) return;
+  el.textContent = presCurrentPage + ' / ' + (presMeta.num_pages || 1);
+}
+
+window.presentPrevPage = function(){
+  if(!presIsActive || !presMeta) return;
+  if(presIsPresenter){
+    if(presCurrentPage <= 1) return;
+    presCurrentPage -= 1;
+    if(presMeta.kind === 'pdf') presentRenderPage(presCurrentPage); else presentUpdatePageLabel();
+    callSignal({type:'present_page', page:presCurrentPage});
+  } else {
+    if(presCurrentPage <= 1) return;
+    callSignal({type:'present_request_page', page:presCurrentPage - 1});
+    flashToast('Requested previous page');
+  }
+};
+window.presentNextPage = function(){
+  if(!presIsActive || !presMeta) return;
+  var max = presMeta.num_pages || 1;
+  if(presIsPresenter){
+    if(presCurrentPage >= max) return;
+    presCurrentPage += 1;
+    if(presMeta.kind === 'pdf') presentRenderPage(presCurrentPage); else presentUpdatePageLabel();
+    callSignal({type:'present_page', page:presCurrentPage});
+  } else {
+    if(presCurrentPage >= max) return;
+    callSignal({type:'present_request_page', page:presCurrentPage + 1});
+    flashToast('Requested next page');
+  }
+};
+window.presentEnd = function(){
+  if(!presIsActive) return;
+  if(presIsPresenter) callSignal({type:'present_end'});
+  presentResetUI(); refreshMediaUI();
+};
+
+/* ── Toasts ─────────────────────────────────────────────────────────── */
+var _toastTimer = null;
+function flashToast(msg){
+  var t = byId('wToast'), m = byId('wToastMsg'), ok = byId('wToastOk'), no = byId('wToastNo');
+  if(!t || !m) return;
+  if(_toastTimer){ clearTimeout(_toastTimer); _toastTimer = null; }
+  m.textContent = msg;
+  if(ok) ok.style.display = 'none';
+  if(no) no.style.display = 'none';
+  t.classList.add('active');
+  _toastTimer = setTimeout(function(){ t.classList.remove('active'); _toastTimer = null; }, 2200);
+}
+function showRequestToast(name, page){
+  var t = byId('wToast'), m = byId('wToastMsg'), ok = byId('wToastOk'), no = byId('wToastNo');
+  if(!t || !m) return;
+  if(_toastTimer){ clearTimeout(_toastTimer); _toastTimer = null; }
+  m.textContent = (name || 'Viewer') + ' wants to go to page ' + page;
+  if(ok){ ok.style.display = ''; ok.textContent = 'Go to page ' + page; }
+  if(no){ no.style.display = ''; }
+  t.classList.add('active');
+}
+window.callToastAccept = function(){
+  var t = byId('wToast'); if(t) t.classList.remove('active');
+  if(!presPendingReq || !presIsPresenter){ presPendingReq = null; return; }
+  presCurrentPage = presPendingReq.page;
+  if(presMeta && presMeta.kind === 'pdf') presentRenderPage(presCurrentPage); else presentUpdatePageLabel();
+  callSignal({type:'present_page', page:presCurrentPage});
+  presPendingReq = null;
+};
+window.callToastDeny = function(){
+  var t = byId('wToast'); if(t) t.classList.remove('active');
+  presPendingReq = null;
+};
+
+/* ── Draggable PIPs ─────────────────────────────────────────────────── */
+(function enableDraggable(){
+  function mk(el){
+    if(!el) return;
+    var sx=0,sy=0,ol=0,ot=0,drag=false;
+    el.addEventListener('pointerdown', function(e){
+      drag = true; sx = e.clientX; sy = e.clientY;
+      var rect = el.getBoundingClientRect(), par = el.offsetParent.getBoundingClientRect();
+      ol = rect.left - par.left; ot = rect.top - par.top;
+      el.style.right='auto'; el.style.bottom='auto'; el.style.left = ol+'px'; el.style.top = ot+'px';
+      el.setPointerCapture(e.pointerId);
+    });
+    el.addEventListener('pointermove', function(e){
+      if(!drag) return;
+      el.style.left = (ol + e.clientX - sx)+'px';
+      el.style.top  = (ot + e.clientY - sy)+'px';
+    });
+    el.addEventListener('pointerup', function(e){ drag = false; try { el.releasePointerCapture(e.pointerId); } catch(_){} });
+  }
+  mk(byId('wPipSelf')); mk(byId('wPipPeer'));
+})();
+
+/* ── Signal dispatcher ──────────────────────────────────────────────── */
+function handleCallSignal(d){
+  callLog('←', d.type);
+  if(String(d.sender_id||'') === String(USER_ID)) return;
+
+  if(d.type === 'call_ring'){
+    // Someone else calling — but we're already in a call, ignore.
+    return;
+  }
+
+  if(d.type === 'call_offer'){
+    var kind = d.call_kind || 'voice';
+    if(callState === 'idle' || callState === 'incoming'){
+      callState = 'incoming';
+      callKind = kind;
+      _pendingOffer = d.sdp;
+      callStartCalleeTone();
+      showPreAnswer('incoming');
+    }
+    return;
+  }
+
+  if(d.type === 'call_answer'){
+    if(!callPC) return;
+    callPC.setRemoteDescription(new RTCSessionDescription(d.sdp))
+      .then(function(){
+        var p = Promise.resolve();
+        _pendingRemoteIce.forEach(function(c){ p = p.then(function(){ return callPC.addIceCandidate(new RTCIceCandidate(c)).catch(function(){}); }); });
+        _pendingRemoteIce = [];
+        return p;
+      })
+      .catch(function(err){ callLog('setRemoteDescription(answer):', err); });
+    return;
+  }
+
+  if(d.type === 'ice_candidate'){
+    if(!d.candidate) return;
+    if(callPC && callPC.remoteDescription && callPC.remoteDescription.type){
+      callPC.addIceCandidate(new RTCIceCandidate(d.candidate)).catch(function(){});
+    } else {
+      _pendingRemoteIce.push(d.candidate);
+    }
+    return;
+  }
+
+  if(d.type === 'call_hangup' || d.type === 'call_decline' || d.type === 'call_cancel'){
+    var reason = (callState === 'incoming') ? 'missed' : (callState === 'outgoing' ? 'cancelled' : 'ended');
+    callTeardown(reason);
+    return;
+  }
+
+  if(d.type === 'call_upgrade_offer'){
+    if(!callPC) return;
+    var isIceRestart = !!d.ice_restart;
+    var prep;
+    if(isIceRestart){ callSetNetStatus('warn','Reconnecting…'); prep = Promise.resolve(); }
+    else {
+      callKind = 'video'; callKindPending = 'video';
+      var needs = !callLocalStream || callLocalStream.getVideoTracks().length === 0;
+      prep = needs
+        ? getCameraTrackOnly().then(function(t){
+            if(t){ try { callLocalStream.addTrack(t); } catch(_){}
+              try { if(callVideoSender && callVideoSender.replaceTrack) callVideoSender.replaceTrack(t); else callVideoSender = callPC.addTrack(t, callLocalStream); } catch(e){ callLog('upgrade add:',e); }
+            }
+          })
+        : Promise.resolve();
+    }
+    prep
+      .then(function(){ return callPC.setRemoteDescription(new RTCSessionDescription(d.sdp)); })
+      .then(function(){ return callPC.createAnswer(); })
+      .then(function(a){ return callPC.setLocalDescription(a); })
+      .then(function(){ callSignal({type:'call_upgrade_answer', sdp:callPC.localDescription}); callKindPending = null; if(!isIceRestart) refreshMediaUI(); })
+      .catch(function(err){ callLog('upgrade-answer failed:', err); callKindPending = null; });
+    return;
+  }
+
+  if(d.type === 'call_upgrade_answer'){
+    if(!callPC) return;
+    callPC.setRemoteDescription(new RTCSessionDescription(d.sdp))
+      .then(function(){
+        if(callKindPending === 'video'){ callKind = 'video'; }
+        callKindPending = null;
+        _reconnectInFlight = false;
+        refreshMediaUI();
+      })
+      .catch(function(err){ callLog('apply upgrade answer:', err); callKindPending = null; });
+    return;
+  }
+
+  if(d.type === 'present_start'){
+    if(presIsActive && presIsPresenter){ return; }
+    presentBeginAsViewer({url:d.url, kind:d.kind, title:d.title, page:d.page || 1, num_pages:d.num_pages || 1});
+    return;
+  }
+  if(d.type === 'present_page'){
+    if(!presIsActive || presIsPresenter) return;
+    presCurrentPage = d.page || 1;
+    if(presMeta && presMeta.kind === 'pdf') presentRenderPage(presCurrentPage); else presentUpdatePageLabel();
+    return;
+  }
+  if(d.type === 'present_request_page'){
+    if(!presIsActive || !presIsPresenter) return;
+    presPendingReq = {page:d.page || 1, requester_name:d.sender_name || 'Viewer'};
+    showRequestToast(presPendingReq.requester_name, presPendingReq.page);
+    return;
+  }
+  if(d.type === 'present_end'){
+    if(!presIsActive) return;
+    presentResetUI(); refreshMediaUI();
+    return;
+  }
+}
+
+/* ── Cleanup on close ───────────────────────────────────────────────── */
+window.addEventListener('beforeunload', function(){
+  if(callState !== 'idle'){ try { callSignal({type:'call_hangup'}); } catch(_){} }
+  bcSend('popup-closed', {});
+});
+
+// Prime AudioContext on first gesture
+(function prime(){
+  function go(){
+    _toneGetCtx();
+    document.removeEventListener('click', go, true);
+    document.removeEventListener('keydown', go, true);
+    document.removeEventListener('touchend', go, true);
+  }
+  document.addEventListener('click', go, true);
+  document.addEventListener('keydown', go, true);
+  document.addEventListener('touchend', go, true);
+})();
+
+// Kick things off
+connectWS();
+</script>
+</body>
+</html>

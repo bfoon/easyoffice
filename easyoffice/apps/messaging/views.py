@@ -2784,3 +2784,65 @@ class PresentListFilesView(LoginRequiredMixin, View):
                 break
 
         return JsonResponse({'ok': True, 'files': results})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🆕 CALL POPUP WINDOW
+# ═══════════════════════════════════════════════════════════════════════════
+# Architecture
+# ------------
+# The call UI runs inside a popup window (opened via window.open() from the
+# chat page). The popup owns the RTCPeerConnection, the WebSocket, and the
+# media streams. The main EasyOffice pages are just launchers/notifiers —
+# they never hold the call themselves. This is the ONLY architecture that
+# lets the call survive when the user navigates the main window.
+#
+# Flow for OUTGOING:
+#   1. User clicks Call/Video on chat_room.html
+#   2. chat_room.html does window.open('/messages/call/window/<room>/?kind=..&mode=outgoing')
+#   3. Popup loads, does /call/ring/, handshakes, runs the call
+#   4. When popup closes, BroadcastChannel tells chat_room so it can clear
+#      the "call in progress" indicator.
+#
+# Flow for INCOMING:
+#   1. chat_room.html (or any page) polls /call/incoming/ and detects a ring
+#   2. A ring modal is shown on the current page (cannot open popup without
+#      a user gesture — browser popup blockers)
+#   3. On Accept click, popup is opened in mode=incoming&ring_id=... and
+#      delegates accept to the popup's WebSocket handler.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class CallWindowView(LoginRequiredMixin, View):
+    """
+    GET /messages/call/window/<room_id>/?kind=voice|video&mode=outgoing|incoming
+    Renders the standalone call popup window.
+
+    No AJAX here — just a full HTML page with its own WebSocket + WebRTC.
+    """
+
+    def get(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        if room.room_type != 'direct':
+            return HttpResponse('Calls are only supported in direct messages.', status=400)
+
+        kind = (request.GET.get('kind') or 'voice').strip().lower()
+        if kind not in ('voice', 'video'):
+            kind = 'voice'
+
+        mode = (request.GET.get('mode') or 'outgoing').strip().lower()
+        if mode not in ('outgoing', 'incoming'):
+            mode = 'outgoing'
+
+        other = room.members.exclude(id=request.user.id).first()
+        if not other:
+            return HttpResponse('No peer to call.', status=400)
+
+        ctx = {
+            'room':         room,
+            'peer':         other,
+            'initial_kind': kind,
+            'initial_mode': mode,
+        }
+        return render(request, 'messaging/call_window.html', ctx)

@@ -1,419 +1,1645 @@
 {% extends "base.html" %}
-{% block title %}Survey Dashboard — {{ survey.title }}{% endblock %}
+{% load humanize %}
+{% block title %}Dashboard — {{ survey.title }}{% endblock %}
+
+{% block breadcrumb %}
+  <a href="{% url 'project_list' %}">Projects</a> /
+  <a href="{% url 'project_detail' project.pk %}">{{ project.name }}</a> /
+  <a href="{% url 'project_surveys' project.pk %}">Surveys</a> /
+  {{ survey.title|truncatechars:30 }} / Dashboard
+{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v10.6.1/ol.css">
+{% endblock %}
 
 {% block content %}
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-
 <style>
-.dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
-.stat-card{background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:14px;padding:18px 20px}
-.stat-card .val{font-size:2rem;font-weight:800;color:var(--eo-text);line-height:1}
-.stat-card .lbl{font-size:.78rem;color:var(--eo-text-muted);margin-top:5px}
-.chart-card{background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:14px;padding:20px 24px;margin-bottom:20px}
-.chart-card h3{font-size:.9rem;font-weight:700;color:var(--eo-text);margin-bottom:16px}
-.q-card{background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:14px;padding:20px 24px;margin-bottom:16px}
-.q-card h4{font-size:.88rem;font-weight:700;color:var(--eo-text);margin-bottom:14px;line-height:1.4}
-.bar-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:.82rem}
-.bar-track{flex:1;background:var(--eo-border);border-radius:999px;height:10px;overflow:hidden}
-.bar-fill{height:100%;border-radius:999px;transition:width .5s}
-.bar-label{min-width:120px;color:var(--eo-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bar-count{min-width:30px;text-align:right;color:var(--eo-text);font-weight:600}
-.bar-pct{min-width:36px;text-align:right;color:var(--eo-text-muted)}
-.resp-table{width:100%;border-collapse:collapse;font-size:.82rem}
-.resp-table th{text-align:left;padding:8px 12px;border-bottom:1px solid var(--eo-border);font-weight:600;color:var(--eo-text-muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.04em}
-.resp-table td{padding:9px 12px;border-bottom:1px solid var(--eo-border);color:var(--eo-text)}
-.resp-table tr:last-child td{border-bottom:none}
-.badge-pub{background:#dbeafe;color:#1d4ed8;border-radius:999px;padding:2px 8px;font-size:.7rem;font-weight:700}
-.badge-int{background:#d1fae5;color:#065f46;border-radius:999px;padding:2px 8px;font-size:.7rem;font-weight:700}
-.live-dot{width:8px;height:8px;background:#10b981;border-radius:50%;display:inline-block;animation:pulse 2s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-.share-box{background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px;padding:12px 16px;display:flex;align-items:center;gap:10px;font-size:.82rem;color:var(--eo-text-muted);word-break:break-all}
-.copy-btn{flex-shrink:0;background:var(--eo-primary,#1e3a5f);color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:.78rem;font-weight:600;cursor:pointer}
-.avg-badge{display:inline-block;background:var(--eo-primary,#1e3a5f);color:#fff;border-radius:10px;padding:6px 16px;font-size:1.1rem;font-weight:800;margin-bottom:12px}
-.text-samples{list-style:none;display:flex;flex-direction:column;gap:6px;padding-left:0}
-.text-samples li{background:var(--eo-bg);border-radius:8px;padding:8px 12px;font-size:.82rem;color:var(--eo-text);border-left:3px solid var(--eo-border)}
-.geo-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}
-.geo-map{height:320px;width:100%;border:1px solid var(--eo-border);border-radius:12px;overflow:hidden;background:#e2e8f0}
-.geo-side{display:flex;flex-direction:column;gap:10px}
-.geo-kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.geo-mini{background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px;padding:12px}
-.geo-mini .v{font-size:1.1rem;font-weight:800;color:var(--eo-text);line-height:1}
-.geo-mini .l{font-size:.72rem;color:var(--eo-text-muted);margin-top:4px}
-.geo-list{max-height:228px;overflow:auto;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)}
-.geo-item{padding:10px 12px;border-bottom:1px solid var(--eo-border)}
-.geo-item:last-child{border-bottom:none}
-.geo-name{font-size:.8rem;font-weight:700;color:var(--eo-text)}
-.geo-meta{font-size:.73rem;color:var(--eo-text-muted);margin-top:4px;line-height:1.45}
-.geo-empty{font-size:.82rem;color:var(--eo-text-muted);padding:16px;text-align:center}
-@media(max-width:900px){
-  .dash-grid{grid-template-columns:1fr 1fr}
-  .geo-grid{grid-template-columns:1fr}
+:root {
+  --proj:        {{ project.cover_color|default:"#1e3a5f" }};
+  --proj-dark:   color-mix(in srgb, var(--proj) 82%, #000000);
+  --proj-darker: color-mix(in srgb, var(--proj) 65%, #000000);
+  --proj-light:  color-mix(in srgb, var(--proj) 14%, #ffffff);
+  --proj-soft:   color-mix(in srgb, var(--proj) 7%,  #ffffff);
+  --proj-tint:   color-mix(in srgb, var(--proj) 22%, #ffffff);
+  --proj-ink:    #ffffff;
+  --proj-on:     color-mix(in srgb, var(--proj) 75%, #000000);
 }
-@media(max-width:600px){.dash-grid{grid-template-columns:1fr}}
+
+/* ── Dashboard-specific helpers (EO palette) ───────────────────────────── */
+.dash-hero {
+  background: linear-gradient(135deg,var(--proj-dark) 0%,var(--proj) 50%,var(--proj-tint) 100%);
+  color:#fff; border-radius:var(--eo-radius);
+  padding:22px 26px; margin-bottom:16px; position:relative; overflow:hidden;
+}
+.dash-hero::before {
+  content:''; position:absolute; right:-40px; top:-40px; width:180px; height:180px;
+  background:rgba(255,255,255,.08); border-radius:50%;
+}
+.dash-hero::after {
+  content:''; position:absolute; right:40px; bottom:-60px; width:120px; height:120px;
+  background:rgba(255,255,255,.05); border-radius:50%;
+}
+.dash-hero-inner {
+  position:relative; z-index:1; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+}
+.live-pulse {
+  display:inline-flex; align-items:center; gap:6px; font-size:.72rem; font-weight:700;
+  background:rgba(255,255,255,.18); padding:4px 10px; border-radius:20px; letter-spacing:.04em;
+}
+.live-pulse.off { background:rgba(0,0,0,.2); opacity:.7; }
+.live-dot {
+  width:7px; height:7px; background:#4ade80; border-radius:50%;
+  box-shadow:0 0 8px #4ade80; animation:pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0%,100%{opacity:1;transform:scale(1)}
+  50%{opacity:.35;transform:scale(1.4)}
+}
+
+/* ── KPI row ────────────────────────────────────────────────────────────── */
+.kpi-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:18px; }
+@media(max-width:1100px){ .kpi-grid{grid-template-columns:repeat(3,1fr)} }
+@media(max-width:700px){ .kpi-grid{grid-template-columns:repeat(2,1fr)} }
+
+.kpi {
+  background:var(--eo-surface); border:1px solid var(--eo-border); border-radius:var(--eo-radius);
+  padding:16px 18px; position:relative; overflow:hidden;
+}
+.kpi::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--proj); }
+.kpi.g::before { background:#10b981; }
+.kpi.b::before { background:#0ea5e9; }
+.kpi.a::before { background:#f59e0b; }
+.kpi.r::before { background:#ef4444; }
+.kpi-lbl { font-size:.68rem; font-weight:700; color:var(--eo-text-muted); letter-spacing:.06em; text-transform:uppercase; margin-bottom:6px; }
+.kpi-val { font-size:1.8rem; font-weight:800; color:var(--eo-text); line-height:1; font-variant-numeric:tabular-nums; }
+.kpi-sub { font-size:.72rem; color:var(--eo-text-muted); margin-top:4px; }
+.kpi-sub .up { color:#10b981; font-weight:700; }
+.kpi-sub .dn { color:#ef4444; font-weight:700; }
+
+/* ── Ticker strip ───────────────────────────────────────────────────────── */
+.ticker {
+  background:var(--eo-surface); border:1px solid var(--eo-border); border-radius:var(--eo-radius);
+  margin-bottom:16px; overflow:hidden; display:flex; align-items:center;
+}
+.ticker-lbl {
+  background:var(--proj); color:#fff; font-size:.68rem; font-weight:800; letter-spacing:.1em;
+  padding:8px 14px; flex-shrink:0;
+}
+.ticker-track { flex:1; overflow:hidden; padding:8px 0; white-space:nowrap; }
+.ticker-stream { display:inline-block; animation:tick 60s linear infinite; padding-left:100%; }
+.ticker-track:hover .ticker-stream { animation-play-state:paused; }
+@keyframes tick { from{transform:translateX(0)} to{transform:translateX(-100%)} }
+.ticker-item { display:inline-block; font-size:.78rem; color:var(--eo-text-muted); margin-right:28px; }
+.ticker-item b { color:var(--eo-text); font-weight:700; }
+.ticker-item::before { content:'▸ '; color:var(--proj); }
+.ticker-item.pub::before { content:'◆ '; color:#0ea5e9; }
+
+/* ── Toolbar / Filters ─────────────────────────────────────────────────── */
+.toolbar {
+  display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+  background:var(--eo-surface); border:1px solid var(--eo-border); border-radius:var(--eo-radius);
+  padding:10px 14px; margin-bottom:16px;
+}
+.toolbar-label { font-size:.7rem; color:var(--eo-text-muted); font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+.toolbar-chip {
+  background:var(--eo-bg); border:1px solid var(--eo-border); color:var(--eo-text);
+  font-size:.76rem; font-weight:600; padding:5px 11px; border-radius:20px; cursor:pointer; transition:.12s;
+}
+.toolbar-chip:hover { border-color:var(--proj-tint); color:var(--proj-dark); }
+.toolbar-chip.active { background:var(--proj-light); border-color:var(--proj-tint); color:var(--proj-dark); }
+
+/* ── Panels ─────────────────────────────────────────────────────────────── */
+.panel {
+  background:var(--eo-surface); border:1px solid var(--eo-border); border-radius:var(--eo-radius);
+  overflow:hidden; display:flex; flex-direction:column;
+}
+.panel-head {
+  display:flex; align-items:center; gap:10px;
+  padding:12px 16px; border-bottom:1px solid var(--eo-border);
+}
+.panel-title { font-size:.85rem; font-weight:700; color:var(--eo-text); }
+.panel-tag {
+  font-size:.65rem; font-weight:700; padding:2px 8px; border-radius:20px;
+  background:var(--proj-light); color:var(--proj-dark); letter-spacing:.04em; text-transform:uppercase;
+}
+.panel-tag.live {
+  background:#dcfce7; color:#166534; display:inline-flex; align-items:center; gap:4px;
+}
+.panel-tag.live::before {
+  content:''; width:6px; height:6px; background:#10b981; border-radius:50%; animation:pulse 1.5s infinite;
+}
+.panel-spacer { flex:1; }
+.panel-tool {
+  font-size:.72rem; color:var(--eo-text-muted); cursor:pointer; padding:3px 8px;
+  border:1px solid var(--eo-border); border-radius:6px; background:transparent;
+}
+.panel-tool:hover { color:var(--proj-dark); border-color:var(--proj-tint); }
+.panel-tool.active { background:var(--proj-light); color:var(--proj-dark); border-color:var(--proj-tint); }
+.panel-body { padding:18px; }
+.panel-body.flush { padding:0; }
+
+/* ── Grid layouts ───────────────────────────────────────────────────────── */
+.grid-main { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px; }
+@media(max-width:1050px){ .grid-main{grid-template-columns:1fr} }
+.span-2 { grid-column:1/-1; }
+
+/* ── Question cards ─────────────────────────────────────────────────────── */
+.q-card {
+  background:var(--eo-surface); border:1px solid var(--eo-border); border-radius:var(--eo-radius);
+  margin-bottom:14px; overflow:hidden;
+}
+.q-card-head {
+  padding:14px 18px; border-bottom:1px solid var(--eo-border);
+  display:flex; align-items:flex-start; gap:12px;
+}
+.q-num {
+  width:30px; height:30px; border-radius:9px; flex-shrink:0;
+  background:var(--proj-light); color:var(--proj-dark);
+  font-size:.82rem; font-weight:800;
+  display:flex; align-items:center; justify-content:center;
+}
+.q-title { flex:1; min-width:0; font-size:.92rem; font-weight:700; color:var(--eo-text); line-height:1.4; }
+.q-type-badge {
+  font-size:.65rem; font-weight:700; padding:2px 8px; border-radius:4px;
+  background:var(--eo-bg); color:var(--eo-text-muted); letter-spacing:.04em; text-transform:uppercase;
+  white-space:nowrap;
+}
+.q-type-badge.t-rating { background:#fef3c7; color:#92400e; }
+.q-type-badge.t-yn     { background:#dbeafe; color:#1d4ed8; }
+.q-type-badge.t-text   { background:#e0e7ff; color:#4338ca; }
+.q-type-badge.t-geo    { background:#fce7f3; color:#9f1239; }
+.q-type-badge.t-num    { background:#d1fae5; color:#065f46; }
+.q-type-badge.t-choice { background:var(--proj-light); color:var(--proj-dark); }
+.q-stat {
+  font-size:.78rem; color:var(--eo-text-muted); font-variant-numeric:tabular-nums;
+  margin-left:auto; white-space:nowrap;
+}
+.q-stat b { color:var(--proj); font-weight:700; }
+
+/* ── Rating block ───────────────────────────────────────────────────────── */
+.rating-hero {
+  display:grid; grid-template-columns:200px 1fr; gap:24px; align-items:center;
+  padding:18px 20px; background:var(--eo-bg); border-radius:10px;
+}
+.rating-hero .big {
+  font-size:3.4rem; font-weight:800; color:#f59e0b; line-height:1; font-variant-numeric:tabular-nums; text-align:center;
+}
+.rating-hero .lbl { font-size:.72rem; color:var(--eo-text-muted); margin-top:4px; text-align:center; font-weight:600; }
+.rating-hero .stars { font-size:1.7rem; color:#f59e0b; text-align:center; margin-top:6px; letter-spacing:2px; }
+.rating-hero .stars .off { color:var(--eo-border); }
+
+.rb-row { display:grid; grid-template-columns:36px 1fr 80px; gap:10px; align-items:center; margin-bottom:7px; font-size:.78rem; }
+.rb-stars { color:#f59e0b; font-weight:700; }
+.rb-track { height:10px; background:var(--eo-bg); border-radius:5px; overflow:hidden; border:1px solid var(--eo-border); }
+.rb-fill  { height:100%; background:linear-gradient(90deg,#fbbf24,#f97316); transition:width .7s cubic-bezier(.2,.8,.2,1); }
+.rb-meta  { text-align:right; color:var(--eo-text-muted); font-variant-numeric:tabular-nums; }
+.rb-meta b { color:var(--eo-text); font-weight:700; }
+
+/* ── Yes / No ───────────────────────────────────────────────────────────── */
+.yn-dual { display:flex; gap:12px; }
+.yn-bar {
+  flex:1; height:58px; background:var(--eo-bg); border:1px solid var(--eo-border);
+  border-radius:10px; overflow:hidden; position:relative;
+}
+.yn-bar .fill {
+  position:absolute; top:0; bottom:0; left:0;
+  display:flex; align-items:center; padding:0 16px; color:#fff;
+  font-size:1.25rem; font-weight:800;
+  transition:width .7s cubic-bezier(.2,.8,.2,1);
+}
+.yn-bar .fill.y { background:linear-gradient(90deg,#10b981,#059669); }
+.yn-bar .fill.n { background:linear-gradient(90deg,#ef4444,#b91c1c); }
+.yn-bar .fill .tag { margin-left:auto; font-size:.7rem; letter-spacing:.06em; opacity:.9; font-weight:600; }
+
+/* ── Word cloud ─────────────────────────────────────────────────────────── */
+.cloud-wrap { display:grid; grid-template-columns:1fr 280px; gap:16px; }
+@media(max-width:800px){ .cloud-wrap{grid-template-columns:1fr} }
+.cloud-canvas {
+  background:linear-gradient(135deg,var(--proj-soft) 0%,var(--proj-light) 100%);
+  border:1px solid var(--eo-border); border-radius:10px; min-height:260px;
+  position:relative; overflow:hidden;
+}
+.cloud-canvas svg { width:100%; height:260px; }
+.cloud-canvas text { font-family:system-ui,-apple-system,sans-serif; font-weight:700; cursor:pointer; transition:opacity .15s; }
+.cloud-canvas text:hover { opacity:.6; }
+.cloud-samples { font-size:.78rem; max-height:260px; overflow-y:auto; padding-right:4px; }
+.cloud-samples .lbl {
+  font-size:.7rem; font-weight:700; color:var(--eo-text-muted);
+  text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px;
+}
+.cloud-sample {
+  background:var(--eo-bg); border-left:3px solid var(--proj); padding:8px 10px; margin-bottom:5px;
+  border-radius:0 6px 6px 0; color:var(--eo-text); line-height:1.5;
+}
+
+/* ── Feed ───────────────────────────────────────────────────────────────── */
+.feed { max-height:420px; overflow-y:auto; }
+.feed-row {
+  display:grid; grid-template-columns:72px 1fr 72px; gap:10px;
+  padding:10px 16px; border-bottom:1px solid var(--eo-border); align-items:center;
+  transition:background .25s;
+}
+.feed-row:hover { background:var(--eo-bg); }
+.feed-row.new { background:#ecfdf5; animation:flashNew 2.5s ease-out; }
+@keyframes flashNew { 0%{background:#a7f3d0} 100%{background:#ecfdf5} }
+.feed-time { font-size:.72rem; color:var(--eo-text-muted); font-variant-numeric:tabular-nums; }
+.feed-name { font-size:.85rem; font-weight:600; color:var(--eo-text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.feed-meta { font-size:.7rem; color:var(--eo-text-muted); }
+.feed-chan { font-size:.65rem; font-weight:700; text-align:center; padding:4px 8px; border-radius:20px; }
+.feed-chan.int { background:#dcfce7; color:#166534; }
+.feed-chan.pub { background:#dbeafe; color:#1d4ed8; }
+
+/* ── Map ────────────────────────────────────────────────────────────────── */
+.map-el {
+  height: 520px;
+  min-height: 520px;
+  width: 100%;
+  display: block;
+  position: relative;
+  overflow: hidden;
+  background: #e2e8f0;
+}
+
+.map-el .ol-viewport,
+.map-el canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.ol-popup {
+  position: absolute;
+  background: #fff;
+  box-shadow: 0 10px 25px rgba(0,0,0,.18);
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  min-width: 220px;
+  max-width: 280px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.map-tools {
+  display:flex;
+  gap:6px;
+  align-items:center;
+  padding:10px 14px;
+  border-top:1px solid var(--eo-border);
+  background:var(--eo-bg);
+  font-size:.74rem;
+  color:var(--eo-text-muted);
+  flex-wrap:wrap;
+}
+
+.map-tools .btn {
+  font-size:.7rem;
+  padding:4px 10px;
+  background:#fff;
+  border:1px solid var(--eo-border);
+  border-radius:20px;
+  cursor:pointer;
+  color:var(--eo-text);
+  font-weight:600;
+}
+
+.map-tools .btn:hover {
+  border-color:var(--proj-tint);
+  color:var(--proj-dark);
+}
+.marker-cluster-small, .marker-cluster-medium, .marker-cluster-large {
+  background-color: rgba(139,92,246,.25) !important;
+}
+.marker-cluster-small div, .marker-cluster-medium div, .marker-cluster-large div {
+  background-color:var(--proj) !important; color:#fff !important; font-weight:800 !important;
+}
+
+/* ── Share box ──────────────────────────────────────────────────────────── */
+.share-box {
+  background:linear-gradient(135deg,var(--proj-soft),var(--proj-light));
+  border:1px solid var(--proj-tint); border-radius:var(--eo-radius);
+  padding:14px 18px; margin-bottom:16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+}
+.share-box label { font-size:.7rem; font-weight:700; color:var(--proj-dark); text-transform:uppercase; letter-spacing:.04em; }
+.share-box input {
+  flex:1; min-width:240px; background:#fff; border:1px solid var(--proj-tint);
+  border-radius:8px; padding:8px 12px; font-size:.82rem; color:var(--eo-text);
+}
+.share-box input:focus { outline:none; border-color:var(--proj); box-shadow:0 0 0 3px rgba(124,58,237,.15); }
+
+/* ── Empty ──────────────────────────────────────────────────────────────── */
+.empty { text-align:center; padding:40px 20px; color:var(--eo-text-muted); font-size:.85rem; }
+.empty .big { font-size:2.5rem; opacity:.35; display:block; margin-bottom:8px; }
+
+/* ── Tooltip theming for ApexCharts ─────────────────────────────────────── */
+.apexcharts-tooltip {
+  background:#fff !important; border:1px solid var(--eo-border) !important;
+  box-shadow:0 6px 20px rgba(0,0,0,.08) !important; border-radius:8px !important;
+}
+.apexcharts-tooltip-title {
+  background:var(--eo-bg) !important; border-bottom:1px solid var(--eo-border) !important;
+  font-weight:700 !important;
+}
+
+/* ── Print ──────────────────────────────────────────────────────────────── */
+@media print {
+  .no-print, .toolbar, .ticker, .dash-hero, .share-box,
+  .feed, .map-tools, .panel-tool { display:none !important; }
+  body { background:#fff !important; }
+  .panel, .kpi, .q-card {
+    border:1px solid #cbd5e1 !important; box-shadow:none !important; break-inside:avoid;
+  }
+  .grid-main { grid-template-columns:1fr 1fr !important; }
+  .rating-hero { break-inside:avoid; }
+  .cloud-samples { display:none !important; }
+  .cloud-wrap { grid-template-columns:1fr !important; }
+  @page { margin:12mm; }
+}
 </style>
 
-<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-  <div>
-    <div class="d-flex align-items-center gap-2 mb-1">
-      <span class="live-dot"></span>
-      <span style="font-size:.78rem;color:var(--eo-text-muted)">Live — refreshing every 10 s</span>
+<div class="dash-hero">
+  <div class="dash-hero-inner">
+    <div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
+        <span class="live-pulse" id="livePulse">
+          <span class="live-dot"></span> <span id="liveText">LIVE · auto-refresh 10s</span>
+        </span>
+        <span style="font-size:.7rem;font-weight:700;opacity:.8;letter-spacing:.06em">
+          {{ project.code }} · SURVEY DASHBOARD
+        </span>
+        {% if survey.is_anonymous %}
+          <span class="live-pulse" style="background:rgba(255,255,255,.15)"><i class="bi bi-eye-slash"></i> Anonymous</span>
+        {% endif %}
+        {% if survey.is_public %}
+          <span class="live-pulse" style="background:rgba(255,255,255,.15)"><i class="bi bi-globe"></i> Public</span>
+        {% endif %}
+      </div>
+      <h1 style="font-size:1.5rem;font-weight:800;margin:0 0 4px;line-height:1.2">{{ survey.title }}</h1>
+      <div style="font-size:.84rem;opacity:.85">{{ project.name }} · Last sync <b id="lastSync">—</b></div>
     </div>
-    <h2 style="font-size:1.2rem;font-weight:800;color:var(--eo-text);margin:0">{{ survey.title }}</h2>
-    <div style="font-size:.8rem;color:var(--eo-text-muted)">{{ project.name }}</div>
-  </div>
-  <div class="d-flex gap-2 flex-wrap">
-    <a href="{% url 'survey_detail' project.pk survey.pk %}" class="eo-btn eo-btn-sm eo-btn-secondary">
-      <i class="bi bi-arrow-left"></i> Back to Survey
-    </a>
-    {% if is_manager %}
-    <form method="post" action="{% url 'survey_toggle' project.pk survey.pk %}">
-      {% csrf_token %}
-      <input type="hidden" name="action" value="toggle_active">
-      <button class="eo-btn eo-btn-sm {% if survey.is_active %}eo-btn-danger{% else %}eo-btn-success{% endif %}">
-        {% if survey.is_active %}<i class="bi bi-stop-circle"></i> Close Survey{% else %}<i class="bi bi-play-circle"></i> Reopen{% endif %}
-      </button>
-    </form>
-    {% endif %}
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap" class="no-print">
+      <a href="{% url 'survey_detail' project.pk survey.pk %}" class="eo-btn eo-btn-sm" style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3)">
+        <i class="bi bi-arrow-left"></i> Back to Survey
+      </a>
+
+      {% if is_manager %}
+      <form method="post" action="{% url 'survey_toggle' project.pk survey.pk %}" style="margin:0">
+        {% csrf_token %}
+        <button class="eo-btn eo-btn-sm" style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3)">
+          {% if survey.is_active %}<i class="bi bi-stop-circle"></i> Close Survey{% else %}<i class="bi bi-play-circle"></i> Reopen{% endif %}
+        </button>
+      </form>
+      {% endif %}
+    </div>
   </div>
 </div>
 
 {% if public_url %}
-<div class="chart-card mb-3">
-  <h3><i class="bi bi-share me-2"></i>Public Share Link</h3>
-  <div class="share-box">
-    <span id="pub-url">{{ public_url }}</span>
-    <button class="copy-btn" onclick="copyUrl()">Copy</button>
-  </div>
-  <div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:8px">
-    Anyone with this link can respond without logging in.
-  </div>
+<div class="share-box no-print">
+  <label><i class="bi bi-link-45deg"></i> Public link</label>
+  <input type="text" id="publicUrl" value="{{ public_url }}" readonly onclick="this.select()">
+  <button class="eo-btn eo-btn-sm eo-btn-primary" onclick="copyPublicUrl(event)">
+    <i class="bi bi-clipboard"></i> Copy
+  </button>
 </div>
 {% endif %}
 
-<div class="dash-grid" id="kpi-strip">
-  <div class="stat-card">
-    <div class="val" id="kpi-total">—</div>
-    <div class="lbl">Total Responses</div>
+<div class="ticker no-print">
+  <div class="ticker-lbl"><i class="bi bi-broadcast"></i> FEED</div>
+  <div class="ticker-track"><div class="ticker-stream" id="tickerStream">Loading stream…</div></div>
+</div>
+
+<div class="kpi-grid">
+  <div class="kpi">
+    <div class="kpi-lbl">Total Responses</div>
+    <div class="kpi-val" id="kpiTotal">0</div>
+    <div class="kpi-sub"><span class="up" id="kpiDelta">+0</span> this session</div>
   </div>
-  <div class="stat-card">
-    <div class="val" id="kpi-internal">—</div>
-    <div class="lbl">Internal</div>
+  <div class="kpi a">
+    <div class="kpi-lbl">Completion Rate</div>
+    <div class="kpi-val" id="kpiComp">0%</div>
+    <div class="kpi-sub">avg questions answered</div>
   </div>
-  <div class="stat-card">
-    <div class="val" id="kpi-public">—</div>
-    <div class="lbl">Public / External</div>
+  <div class="kpi b">
+    <div class="kpi-lbl">Public Channel</div>
+    <div class="kpi-val" id="kpiPub">0</div>
+    <div class="kpi-sub"><span id="kpiPubPct">0%</span> of total</div>
   </div>
-  <div class="stat-card">
-    <div class="val" id="kpi-status">—</div>
-    <div class="lbl">Status</div>
+  <div class="kpi g">
+    <div class="kpi-lbl">Internal</div>
+    <div class="kpi-val" id="kpiInt">0</div>
+    <div class="kpi-sub"><span id="kpiIntPct">0%</span> of total</div>
+  </div>
+  <div class="kpi r">
+    <div class="kpi-lbl">Velocity / hour</div>
+    <div class="kpi-val" id="kpiVel">0.0</div>
+    <div class="kpi-sub">rolling today</div>
   </div>
 </div>
 
-<div class="chart-card">
-  <h3><i class="bi bi-graph-up me-2"></i>Responses Over Time</h3>
-  <canvas id="timeline-chart" height="90"></canvas>
+<div class="toolbar no-print">
+  <span class="toolbar-label">Channel:</span>
+  <button class="toolbar-chip active" data-filter-chan="all">All</button>
+  <button class="toolbar-chip" data-filter-chan="internal"><i class="bi bi-building"></i> Internal</button>
+  <button class="toolbar-chip" data-filter-chan="public"><i class="bi bi-globe"></i> Public</button>
+
+  <span class="toolbar-label" style="margin-left:10px">Window:</span>
+  <button class="toolbar-chip active" data-filter-win="all">All time</button>
+  <button class="toolbar-chip" data-filter-win="24h">24h</button>
+  <button class="toolbar-chip" data-filter-win="7d">7 days</button>
+  <button class="toolbar-chip" data-filter-win="30d">30 days</button>
+
+  <div style="flex:1"></div>
+
+  <button class="eo-btn eo-btn-sm eo-btn-secondary" onclick="refreshNow()">
+    <i class="bi bi-arrow-clockwise"></i> Refresh
+  </button>
+
+  <button class="eo-btn eo-btn-sm eo-btn-secondary" id="pollBtn" onclick="togglePoll()">
+    <i class="bi bi-pause-fill"></i> Pause
+  </button>
+
+  <a href="{% url 'project_surveys' project.pk %}?export={{ survey.pk }}" class="eo-btn eo-btn-sm eo-btn-secondary">
+    <i class="bi bi-download"></i> CSV
+  </a>
+
+  <button class="eo-btn eo-btn-sm eo-btn-primary" onclick="window.print()">
+    <i class="bi bi-printer"></i> Print / PDF
+  </button>
 </div>
 
-<div id="q-charts"></div>
+<div class="grid-main">
+  <div class="panel span-2">
+    <div class="panel-head">
+      <span class="panel-title"><i class="bi bi-graph-up"></i> Response Timeline</span>
+      <span class="panel-tag live">LIVE</span>
+      <div class="panel-spacer"></div>
+      <button class="panel-tool active" id="tlArea" onclick="setTimelineView('area')">Area</button>
+      <button class="panel-tool" id="tlBar" onclick="setTimelineView('bar')">Bar</button>
+    </div>
+    <div class="panel-body">
+      <div id="chart-timeline" style="min-height:280px"></div>
+    </div>
+  </div>
 
-<div class="chart-card">
-  <h3><i class="bi bi-people me-2"></i>Recent Submissions</h3>
-  <div style="overflow-x:auto">
-    <table class="resp-table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Source</th>
-          <th>IP Address</th>
-          <th>Device ID</th>
-          <th>Submitted</th>
-        </tr>
-      </thead>
-      <tbody id="recent-tbody">
-        <tr><td colspan="5" style="text-align:center;color:var(--eo-text-muted);padding:24px">Loading…</td></tr>
-      </tbody>
-    </table>
+  <div class="panel">
+    <div class="panel-head">
+      <span class="panel-title"><i class="bi bi-pie-chart"></i> Channel Split</span>
+      <span class="panel-tag">Internal vs Public</span>
+    </div>
+    <div class="panel-body">
+      <div id="chart-channel" style="min-height:240px"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <span class="panel-title"><i class="bi bi-activity"></i> Response Stream</span>
+      <span class="panel-tag live">LIVE</span>
+      <div class="panel-spacer"></div>
+      <span style="font-size:.72rem;color:var(--eo-text-muted)" id="feedCount">0 rows</span>
+    </div>
+    <div class="panel-body flush">
+      <div class="feed" id="liveFeed">
+        <div class="empty"><span class="big"><i class="bi bi-inbox"></i></span>Waiting for responses…</div>
+      </div>
+    </div>
   </div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<h2 style="font-size:1rem;font-weight:700;color:var(--eo-text);margin:20px 0 12px">
+  <i class="bi bi-bar-chart-line" style="color:var(--proj)"></i> Results by Question
+</h2>
+
+<div id="questionPanels"></div>
+
+<div style="text-align:center;color:var(--eo-text-muted);font-size:.72rem;margin-top:24px">
+  Generated {{ "now"|date:"j M Y · H:i" }} · Report ID <code>{{ survey.pk|slice:":8" }}</code>
+</div>
+
+<script id="initialData" type="application/json">{{ initial_data_json|safe }}</script>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/ol@v10.6.1/dist/ol.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/apexcharts@3.45.2/dist/apexcharts.min.js"></script>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://unpkg.com/d3-cloud@1.2.7/build/d3.layout.cloud.js"></script>
 <script>
-var DATA_URL = "{% url 'survey_dashboard_data' project.pk survey.pk %}";
-var COVER = "{{ project.cover_color|default:'#1e3a5f' }}";
-var PALETTE = [COVER,'#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316'];
+/* ══════════════════════════════════════════════════════════════════
+   Survey Dashboard — project-themed palette, advanced interactive charts
+   Fixed map rendering + safer polling
+   ══════════════════════════════════════════════════════════════════ */
 
-var initialData = {{ initial_data_json|safe }};
-var timelineChart = null;
-var geoMaps = {};
+/* ── Theme and other helpers ──────────────────────────────────────────────── */
+const _cssVar = (name, fallback) => {
+  try {
+    const v = getComputedStyle(document.documentElement)
+      .getPropertyValue(name)
+      .trim();
+    return v || fallback;
+  } catch (e) {
+    return fallback;
+  }
+};
 
-function hex2rgba(hex, alpha) {
-  if (!hex || hex.length < 7) return 'rgba(30,58,95,' + alpha + ')';
-  var r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
-  return 'rgba('+r+','+g+','+b+','+alpha+')';
+function _toHex(color) {
+  if (!color) return color;
+  color = color.trim();
+  if (color.startsWith('#')) return color;
+  try {
+    const c = document.createElement('canvas').getContext('2d');
+    c.fillStyle = '#000';
+    c.fillStyle = color;
+    return c.fillStyle;
+  } catch (e) {
+    return color;
+  }
 }
 
-function escapeHtml(str) {
-  return String(str || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+const PROJ = _toHex(_cssVar('--proj', '#1e3a5f'));
+const PROJ_DARK = _toHex(_cssVar('--proj-dark', '#17304d'));
+const PROJ_TINT = _toHex(_cssVar('--proj-tint', '#a78bfa'));
+const PROJ_LIGHT = _toHex(_cssVar('--proj-light', '#ede9fe'));
+
+const PAL = {
+  purple: PROJ,
+  purple2: PROJ_TINT,
+  purpleL: PROJ_LIGHT,
+  green: '#10b981',
+  greenL: '#dcfce7',
+  blue: '#0ea5e9',
+  blueL: '#dbeafe',
+  amber: '#f59e0b',
+  amberL: '#fef3c7',
+  red: '#ef4444',
+  pink: '#ec4899',
+  gray: '#64748b',
+  border: '#e2e8f0',
+  bg: '#f8fafc',
+  text: '#0f172a',
+  textDim: '#64748b',
+};
+
+const PALETTE = [
+  PAL.purple,
+  PAL.blue,
+  PAL.green,
+  PAL.amber,
+  PAL.pink,
+  PAL.red,
+  '#14b8a6',
+  PROJ_TINT,
+  '#f97316',
+  '#06b6d4'
+];
+
+function isAnyMapBusy() {
+  return Object.values(MAPS).some(m => m && m.interactionPause);
 }
 
-function copyUrl() {
-  navigator.clipboard.writeText(document.getElementById('pub-url').textContent.trim());
-  var btn = document.querySelector('.copy-btn');
-  btn.textContent = 'Copied!';
-  setTimeout(function(){ btn.textContent = 'Copy'; }, 2000);
+async function poll() {
+  try {
+    if (isAnyMapBusy()) return;
+
+    const r = await fetch(POLL_URL, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    });
+
+    if (!r.ok) throw new Error(r.status);
+
+    const next = await r.json();
+    next._delta = Math.max(0, (next.total_responses || 0) - (DATA.total_responses || 0));
+    DATA = next;
+    renderAll();
+  } catch (e) {
+    console.warn('poll fail', e);
+  }
+}
+/* ── State ──────────────────────────────────────────────────────── */
+let DATA = JSON.parse(document.getElementById('initialData').textContent);
+const CHARTS = {};
+const MAPS = {};
+const GEO_STATE = {};
+let KNOWN_IDS = new Set();
+let POLLING = true;
+let POLL_TIMER = null;
+let FILTER_CHAN = 'all';
+let FILTER_WIN = 'all';
+let TIMELINE_TYPE = 'area';
+const POLL_URL = "{% url 'survey_dashboard_data' project.pk survey.pk %}";
+
+/* ── Utils ──────────────────────────────────────────────────────── */
+const $ = (id) => document.getElementById(id);
+
+const esc = (s) => String(s || '').replace(/[&<>"']/g, c => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;'
+}[c]));
+
+const fmtNum = (n) => (n || 0).toLocaleString();
+const pct = (a, b) => b ? Math.round((a / b) * 100) : 0;
+
+const nowHMS = () => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+
+const STOPWORDS = new Set((
+  "a an the and or but if then so of to in on at for by with from up down over under into out " +
+  "about as is are was were be been being have has had do does did will would could should may might must can shall " +
+  "am no not yes it its it's this that these those there their they them his her he she we our us you your my me " +
+  "mine ours yours also just only very more most some any all each every other than too such same while because here " +
+  "where when why how what who whom which whose i i'm i've don't doesn't didn't won't can't isn't aren't wasn't weren't " +
+  "haven't hasn't hadn't"
+).split(' '));
+
+/* ── Filters ────────────────────────────────────────────────────── */
+function setFilter(kind, val) {
+  if (kind === 'chan') FILTER_CHAN = val;
+  if (kind === 'win') FILTER_WIN = val;
+
+  document.querySelectorAll(`[data-filter-${kind}]`).forEach((b) => {
+    const attr = b.getAttribute(`data-filter-${kind}`);
+    b.classList.toggle('active', attr === val);
+  });
+
+  renderAll();
 }
 
-function updateKPIs(d) {
-  document.getElementById('kpi-total').textContent = d.total_responses;
-  document.getElementById('kpi-internal').textContent = d.internal_responses;
-  document.getElementById('kpi-public').textContent = d.public_responses;
-  var s = document.getElementById('kpi-status');
-  s.textContent = d.is_active ? 'Active' : 'Closed';
-  s.style.color = d.is_active ? '#10b981' : '#94a3b8';
+document.querySelectorAll('[data-filter-chan]').forEach((b) => {
+  b.onclick = () => setFilter('chan', b.getAttribute('data-filter-chan'));
+});
+
+document.querySelectorAll('[data-filter-win]').forEach((b) => {
+  b.onclick = () => setFilter('win', b.getAttribute('data-filter-win'));
+});
+
+function filteredRecent() {
+  let arr = DATA.recent || [];
+  if (FILTER_CHAN === 'internal') arr = arr.filter(r => !r.is_public);
+  if (FILTER_CHAN === 'public') arr = arr.filter(r => r.is_public);
+  return arr;
 }
 
-function buildTimeline(d) {
-  var ctx = document.getElementById('timeline-chart').getContext('2d');
-  if (timelineChart) {
-    timelineChart.data.labels = d.timeline.labels;
-    timelineChart.data.datasets[0].data = d.timeline.counts;
-    timelineChart.update('none');
+/* ── KPIs ───────────────────────────────────────────────────────── */
+function renderKPIs() {
+  const t = DATA.total_responses || 0;
+  const p = DATA.public_responses || 0;
+  const i = DATA.internal_responses || 0;
+
+  $('kpiTotal').textContent = fmtNum(t);
+  $('kpiPub').textContent = fmtNum(p);
+  $('kpiInt').textContent = fmtNum(i);
+  $('kpiPubPct').textContent = pct(p, t) + '%';
+  $('kpiIntPct').textContent = pct(i, t) + '%';
+
+  const tl = DATA.timeline || {};
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const idx = (tl.labels || []).indexOf(todayKey);
+  const todayCount = idx >= 0 ? (tl.counts || [])[idx] : 0;
+  const hrs = Math.max(1, new Date().getHours() + 1);
+
+  $('kpiVel').textContent = (todayCount / hrs).toFixed(1);
+
+  const qs = DATA.question_charts || [];
+  if (qs.length && t) {
+    const avg = qs.reduce((s, q) => s + (q.count || 0), 0) / qs.length;
+    $('kpiComp').textContent = pct(avg, t) + '%';
+  } else {
+    $('kpiComp').textContent = '—';
+  }
+
+  $('kpiDelta').textContent = DATA._delta ? `+${DATA._delta}` : '+0';
+}
+
+/* ── Timeline ───────────────────────────────────────────────────── */
+function renderTimeline() {
+  const tl = DATA.timeline || { labels: [], counts: [] };
+  const labels = tl.labels.map((d) => {
+    const [y, m, dd] = d.split('-');
+    return `${dd}/${m}`;
+  });
+
+  const opts = {
+    chart: {
+      type: TIMELINE_TYPE,
+      height: 280,
+      background: 'transparent',
+      fontFamily: 'system-ui,-apple-system,sans-serif',
+      toolbar: { show: false },
+      animations: { enabled: true, easing: 'easeout', speed: 700 },
+      events: {
+        dataPointSelection: (ev, chart, o) => {
+          const day = tl.labels[o.dataPointIndex];
+          const cnt = tl.counts[o.dataPointIndex];
+          showDrill(`📅 ${day}`, `${cnt} response${cnt === 1 ? '' : 's'} on this day.`);
+        }
+      }
+    },
+    series: [{ name: 'Responses', data: tl.counts }],
+    xaxis: {
+      categories: labels,
+      labels: { style: { colors: PAL.textDim, fontSize: '11px' } },
+      axisBorder: { color: PAL.border },
+      axisTicks: { color: PAL.border }
+    },
+    yaxis: {
+      labels: { style: { colors: PAL.textDim, fontSize: '11px' } }
+    },
+    grid: { borderColor: PAL.border, strokeDashArray: 4 },
+    colors: [PAL.purple],
+    stroke: { curve: 'smooth', width: 3 },
+    fill: TIMELINE_TYPE === 'area'
+      ? {
+          type: 'gradient',
+          gradient: { shade: 'light', shadeIntensity: 1, opacityFrom: .5, opacityTo: .05, stops: [0, 90, 100] }
+        }
+      : { opacity: .9 },
+    dataLabels: { enabled: false },
+    markers: { size: 5, strokeColors: '#fff', strokeWidth: 2, fillOpacity: 1, hover: { size: 8 } },
+    tooltip: { theme: 'light', x: { show: true }, y: { formatter: v => v + ' response' + (v === 1 ? '' : 's') } },
+  };
+
+  if (CHARTS.timeline) {
+    CHARTS.timeline.updateOptions(opts);
     return;
   }
-  timelineChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: d.timeline.labels,
-      datasets: [{
-        label: 'Responses',
-        data: d.timeline.counts,
-        borderColor: COVER,
-        backgroundColor: hex2rgba(COVER, 0.1),
-        fill: true,
-        tension: 0.4,
-        pointRadius: 4,
-        pointBackgroundColor: COVER,
-      }]
+
+  CHARTS.timeline = new ApexCharts($('chart-timeline'), opts);
+  CHARTS.timeline.render();
+}
+
+window.setTimelineView = (t) => {
+  TIMELINE_TYPE = t;
+  $('tlArea').classList.toggle('active', t === 'area');
+  $('tlBar').classList.toggle('active', t === 'bar');
+
+  if (CHARTS.timeline) {
+    CHARTS.timeline.destroy();
+    delete CHARTS.timeline;
+  }
+
+  renderTimeline();
+};
+
+/* ── Channel donut ──────────────────────────────────────────────── */
+function renderChannel() {
+  const int = DATA.internal_responses || 0;
+  const pub = DATA.public_responses || 0;
+
+  const opts = {
+    chart: { type: 'donut', height: 240, background: 'transparent', fontFamily: 'system-ui', animations: { enabled: true, speed: 500 } },
+    series: [int, pub],
+    labels: ['Internal', 'Public'],
+    colors: [PAL.purple, PAL.blue],
+    stroke: { colors: ['#fff'], width: 3 },
+    legend: { position: 'bottom', fontSize: '12px', fontWeight: 600, markers: { width: 10, height: 10 } },
+    dataLabels: { enabled: true, style: { fontSize: '12px', fontWeight: 700, colors: ['#fff'] }, dropShadow: { enabled: false } },
+    plotOptions: {
+      pie: {
+        donut: {
+          size: '72%',
+          labels: {
+            show: true,
+            name: { fontSize: '12px', fontWeight: 600, color: PAL.textDim },
+            value: { fontSize: '28px', fontWeight: 800, color: PAL.text },
+            total: {
+              show: true,
+              label: 'Total',
+              color: PAL.textDim,
+              fontSize: '12px',
+              formatter: () => fmtNum(int + pub)
+            }
+          }
+        }
+      }
     },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: false } },
-      scales: {
-        y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } }
+    tooltip: { theme: 'light' }
+  };
+
+  if (CHARTS.channel) {
+    CHARTS.channel.updateOptions(opts);
+    return;
+  }
+
+  CHARTS.channel = new ApexCharts($('chart-channel'), opts);
+  CHARTS.channel.render();
+}
+
+/* ── Feed ───────────────────────────────────────────────────────── */
+function renderFeed() {
+  const arr = filteredRecent();
+  $('feedCount').textContent = arr.length + ' row' + (arr.length === 1 ? '' : 's');
+  const box = $('liveFeed');
+
+  if (!arr.length) {
+    box.innerHTML = '<div class="empty"><span class="big"><i class="bi bi-inbox"></i></span>No responses in this view</div>';
+    return;
+  }
+
+  box.innerHTML = arr.map((r) => {
+    const isNew = !KNOWN_IDS.has(r.id);
+    if (isNew) KNOWN_IDS.add(r.id);
+    const time = (r.submitted_at || '').split(' ').slice(-1)[0] || r.submitted_at;
+
+    return `<div class="feed-row ${isNew ? 'new' : ''}">
+      <div class="feed-time">${esc(time)}</div>
+      <div>
+        <div class="feed-name">${esc(r.name)}</div>
+        <div class="feed-meta">${esc(r.ip)} · ${esc(r.device)}</div>
+      </div>
+      <span class="feed-chan ${r.is_public ? 'pub' : 'int'}">${r.is_public ? 'PUB' : 'INT'}</span>
+    </div>`;
+  }).join('');
+
+  setTimeout(() => {
+    document.querySelectorAll('.feed-row.new').forEach((r) => r.classList.remove('new'));
+  }, 2500);
+}
+
+/* ── Ticker ─────────────────────────────────────────────────────── */
+function renderTicker() {
+  const arr = DATA.recent || [];
+
+  if (!arr.length) {
+    $('tickerStream').innerHTML = '<span class="ticker-item">Waiting for first response…</span>';
+    return;
+  }
+
+  const items = arr.slice(0, 30).map((r) => {
+    const cls = r.is_public ? 'pub' : '';
+    const chan = r.is_public ? '[PUB]' : '[INT]';
+    return `<span class="ticker-item ${cls}">${esc(r.submitted_at)} ${chan} <b>${esc(r.name)}</b> · ${esc(r.ip)}</span>`;
+  }).join('');
+
+  $('tickerStream').innerHTML = items + items;
+}
+
+/* ── Question panels ────────────────────────────────────────────── */
+function renderQuestionPanels() {
+  const container = $('questionPanels');
+  const qs = DATA.question_charts || [];
+
+  if (!qs.length) {
+    container.innerHTML = `<div class="panel"><div class="panel-body"><div class="empty">
+      <span class="big"><i class="bi bi-patch-question"></i></span>No questions in this survey</div></div></div>`;
+    return;
+  }
+
+  const seenIds = new Set();
+
+  qs.forEach((q, i) => {
+    seenIds.add(String(q.id));
+
+    let card = document.getElementById('qcard-' + q.id);
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'qcard-' + q.id;
+      card.className = 'q-card';
+      card.innerHTML = qCardShell(q, i);
+      container.appendChild(card);
+    }
+
+    const stat = document.getElementById('qstat-' + q.id);
+    if (stat) {
+      stat.innerHTML = `<b>${fmtNum(q.count || q.valid_count || 0)}</b> response${(q.count || q.valid_count) === 1 ? '' : 's'}`;
+    }
+
+    renderQuestionBody(q);
+  });
+
+  Array.from(container.children).forEach((card) => {
+    if (!card.id || !card.id.startsWith('qcard-')) return;
+    const id = card.id.replace('qcard-', '');
+    if (!seenIds.has(id)) {
+      card.remove();
+      if (MAPS[id]) {
+        try {
+          if (MAPS[id].resizeObserver) MAPS[id].resizeObserver.disconnect();
+        } catch (e) {}
+        try {
+          if (MAPS[id].intersectionObserver) MAPS[id].intersectionObserver.disconnect();
+        } catch (e) {}
+        try {
+          MAPS[id].map.remove();
+        } catch (e) {}
+        delete MAPS[id];
+        delete GEO_STATE[id];
       }
     }
   });
 }
 
-function renderGeoMap(q) {
-  var mapId = 'geo-map-' + q.id;
-  var mapWrap = document.getElementById(mapId);
-  if (!mapWrap || !window.L) return;
+function qCardShell(q, i) {
+  const tagClass = {
+    rating: 't-rating',
+    yes_no: 't-yn',
+    text: 't-text',
+    paragraph: 't-text',
+    number: 't-num',
+    geolocation: 't-geo',
+    single_choice: 't-choice',
+    multi_choice: 't-choice'
+  }[q.type] || 't-choice';
 
-  if (geoMaps[q.id]) {
-    try { geoMaps[q.id].remove(); } catch(e) {}
-    delete geoMaps[q.id];
-  }
+  const tagLabel = {
+    single_choice: 'Single Choice',
+    multi_choice: 'Multi Choice',
+    rating: 'Rating',
+    yes_no: 'Yes / No',
+    text: 'Short Text',
+    paragraph: 'Paragraph',
+    number: 'Number',
+    geolocation: 'Geolocation'
+  }[q.type] || q.type;
 
-  var map = L.map(mapId, { scrollWheelZoom: false, attributionControl: true });
-  geoMaps[q.id] = map;
+  const body = {
+    single_choice: `<div id="chart-q-${q.id}" style="min-height:220px"></div>`,
+    multi_choice: `<div id="chart-q-${q.id}" style="min-height:220px"></div>`,
+    rating: `<div class="rating-hero">
+                <div>
+                  <div class="big" id="avg-${q.id}">—</div>
+                  <div class="lbl">AVERAGE</div>
+                  <div class="stars" id="stars-${q.id}">☆☆☆☆☆</div>
+                </div>
+                <div id="bars-${q.id}"></div>
+              </div>`,
+    yes_no: `<div id="yn-${q.id}"></div>`,
+    text: `<div class="cloud-wrap">
+            <div class="cloud-canvas" id="cloud-${q.id}"></div>
+            <div class="cloud-samples" id="samples-${q.id}"></div>
+          </div>`,
+    paragraph: `<div class="cloud-wrap">
+                  <div class="cloud-canvas" id="cloud-${q.id}"></div>
+                  <div class="cloud-samples" id="samples-${q.id}"></div>
+                </div>`,
+    number: `<div id="chart-q-${q.id}" style="min-height:220px"></div>
+             <div id="numstats-${q.id}" style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;font-size:.78rem;color:var(--eo-text-muted)"></div>`,
+    geolocation: `
+      <div id="map-${q.id}" class="map-el"></div>
+      <div class="map-tools">
+        <span>📍 <b id="mapcount-${q.id}">0</b> pins</span>
+        <span style="margin:0 4px">·</span>
+        <button class="btn" onclick="resetMapView('${q.id}')">Reset View</button>
+        <span style="margin-left:auto;font-size:.7rem;opacity:.8">Click pin for details</span>
+      </div>
+    `
+  }[q.type] || '<div class="empty">Unsupported question type</div>';
 
-  L.tileLayer('/projects/surveys/osm-tiles/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '© OpenStreetMap'
-  }).addTo(map);
+  return `
+    <div class="q-card-head">
+      <div class="q-num">${i + 1}</div>
+      <div style="flex:1;min-width:0">
+        <div class="q-title">${esc(q.text)}</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
+          <span class="q-type-badge ${tagClass}">${tagLabel}</span>
+          <span class="q-stat" id="qstat-${q.id}"><b>0</b> responses</span>
+        </div>
+      </div>
+    </div>
+    <div class="panel-body ${q.type === 'geolocation' ? 'flush' : ''}">${body}</div>
+  `;
+}
 
-  var points = q.points || [];
-  if (!points.length) {
-    map.setView([13.4549, -16.5790], 5);
-    setTimeout(function(){ try { map.invalidateSize(); } catch(e){} }, 150);
+function renderQuestionBody(q) {
+  if (q.type === 'single_choice' || q.type === 'multi_choice') renderChoice(q);
+  else if (q.type === 'rating') renderRating(q);
+  else if (q.type === 'yes_no') renderYN(q);
+  else if (q.type === 'text' || q.type === 'paragraph') renderCloud(q);
+  else if (q.type === 'number') renderNumber(q);
+  else if (q.type === 'geolocation') renderGeo(q);
+}
+
+/* ── Choice ─────────────────────────────────────────────────────── */
+function renderChoice(q) {
+  const labels = q.labels || [];
+  const counts = q.counts || [];
+  const total = q.total || 0;
+
+  const opts = {
+    chart: {
+      type: 'bar',
+      height: Math.max(220, labels.length * 44 + 60),
+      background: 'transparent',
+      fontFamily: 'system-ui',
+      toolbar: { show: false },
+      animations: { enabled: true, speed: 500 },
+      events: {
+        dataPointSelection: (ev, chart, o) => {
+          const lbl = labels[o.dataPointIndex];
+          const cnt = counts[o.dataPointIndex];
+          showDrill(`"${lbl}"`, `${cnt} response${cnt === 1 ? '' : 's'} · ${pct(cnt, total)}% of the vote`);
+        }
+      }
+    },
+    series: [{ name: 'Responses', data: counts }],
+    plotOptions: { bar: { horizontal: true, borderRadius: 6, barHeight: '70%', distributed: true, dataLabels: { position: 'bottom' } } },
+    xaxis: { categories: labels, labels: { style: { colors: PAL.textDim, fontSize: '11px' } } },
+    yaxis: { labels: { style: { colors: PAL.text, fontSize: '12px', fontWeight: 600 }, maxWidth: 260 } },
+    grid: { borderColor: PAL.border, strokeDashArray: 4, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } },
+    colors: labels.map((_, i) => PALETTE[i % PALETTE.length]),
+    dataLabels: {
+      enabled: true,
+      textAnchor: 'start',
+      offsetX: 6,
+      style: { fontSize: '12px', fontWeight: 700, colors: ['#fff'] },
+      formatter: (v) => total ? `${v}  ·  ${pct(v, total)}%` : v
+    },
+    legend: { show: false },
+    tooltip: { theme: 'light', y: { formatter: (v) => `${v} (${pct(v, total)}%)` } }
+  };
+
+  const key = 'q-' + q.id;
+  if (CHARTS[key]) {
+    CHARTS[key].updateOptions(opts);
     return;
   }
 
-  var bounds = [];
-  points.forEach(function(p) {
-    var color = p.is_public ? '#2563eb' : '#059669';
-    var marker = L.circleMarker([p.lat, p.lng], {
-      radius: 7,
-      color: color,
-      weight: 2,
-      fillColor: color,
-      fillOpacity: 0.65
-    }).addTo(map);
+  CHARTS[key] = new ApexCharts(document.getElementById('chart-q-' + q.id), opts);
+  CHARTS[key].render();
+}
 
-    if (p.accuracy_m && p.accuracy_m > 0) {
-      L.circle([p.lat, p.lng], {
-        radius: p.accuracy_m,
-        color: color,
-        weight: 1,
-        fillColor: color,
-        fillOpacity: 0.08
-      }).addTo(map);
-    }
+/* ── Rating ─────────────────────────────────────────────────────── */
+function renderRating(q) {
+  const counts = q.counts || [0, 0, 0, 0, 0];
+  const total = counts.reduce((a, b) => a + b, 0);
+  const avg = q.avg;
 
-    marker.bindPopup(
-      '<div style="min-width:220px">' +
-        '<div style="font-weight:700;margin-bottom:4px">' + escapeHtml(p.respondent_name || 'Anonymous') + '</div>' +
-        '<div style="font-size:.82rem;color:#475569;margin-bottom:4px">' + escapeHtml(p.address || 'No address') + '</div>' +
-        '<div style="font-size:.76rem;color:#64748b">Lat: ' + Number(p.lat).toFixed(5) + ', Lng: ' + Number(p.lng).toFixed(5) + '</div>' +
-        '<div style="font-size:.76rem;color:#64748b">Accuracy: ±' + Math.round(Number(p.accuracy_m || 0)) + ' m</div>' +
-        '<div style="font-size:.76rem;color:#64748b">Source: ' + escapeHtml((p.source || 'gps').toUpperCase()) + '</div>' +
-        '<div style="font-size:.76rem;color:#64748b">Submitted: ' + escapeHtml(p.submitted_at || '') + '</div>' +
-      '</div>'
+  const avgEl = $('avg-' + q.id);
+  if (avgEl) avgEl.textContent = avg != null ? avg.toFixed(1) : '—';
+
+  const starEl = $('stars-' + q.id);
+  if (starEl) {
+    const full = Math.round(avg || 0);
+    starEl.innerHTML = Array.from({ length: 5 }, (_, i) => `<span class="${i < full ? '' : 'off'}">★</span>`).join('');
+  }
+
+  const bars = $('bars-' + q.id);
+  if (bars) {
+    bars.innerHTML = [1, 2, 3, 4, 5].map((score) => {
+      const c = counts[score - 1];
+      const p = total ? Math.round((c / total) * 100) : 0;
+      return `<div class="rb-row">
+        <div class="rb-stars">${'★'.repeat(score)}</div>
+        <div class="rb-track"><div class="rb-fill" style="width:${p}%"></div></div>
+        <div class="rb-meta"><b>${c}</b> · ${p}%</div>
+      </div>`;
+    }).join('');
+  }
+}
+
+/* ── Yes / No ───────────────────────────────────────────────────── */
+function renderYN(q) {
+  const counts = q.counts || [0, 0];
+  const y = counts[0];
+  const n = counts[1];
+  const t = y + n || 1;
+  const yp = Math.round((y / t) * 100);
+  const np = Math.round((n / t) * 100);
+
+  const el = $('yn-' + q.id);
+  if (!el) return;
+
+  el.innerHTML = `
+    <div class="yn-dual">
+      <div class="yn-bar"><div class="fill y" style="width:${yp}%"><i class="bi bi-hand-thumbs-up"></i>&nbsp;${y}<span class="tag">&nbsp;Yes · ${yp}%</span></div></div>
+      <div class="yn-bar"><div class="fill n" style="width:${np}%"><i class="bi bi-hand-thumbs-down"></i>&nbsp;${n}<span class="tag">&nbsp;No · ${np}%</span></div></div>
+    </div>
+    <div style="margin-top:10px;font-size:.78rem;color:var(--eo-text-muted);display:flex;gap:18px;flex-wrap:wrap">
+      <span>Total: <b style="color:var(--eo-text)">${t}</b></span>
+      <span>Sentiment: <b style="color:${yp >= np ? PAL.green : PAL.red}">${yp >= np ? 'POSITIVE' : 'NEGATIVE'}</b></span>
+    </div>
+  `;
+}
+
+/* ── Number ─────────────────────────────────────────────────────── */
+function renderNumber(q) {
+  const nums = (q.samples || []).map(v => parseFloat(v)).filter(v => !isNaN(v));
+  const target = document.getElementById('chart-q-' + q.id);
+  const stats = $('numstats-' + q.id);
+
+  if (!nums.length) {
+    target.innerHTML = '<div class="empty"><span class="big"><i class="bi bi-hash"></i></span>No numeric data yet</div>';
+    if (stats) stats.innerHTML = '';
+    return;
+  }
+
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+  const sum = nums.reduce((a, b) => a + b, 0);
+  const mean = sum / nums.length;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const median = sorted.length % 2
+    ? sorted[(sorted.length - 1) / 2]
+    : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
+
+  if (stats) {
+    stats.innerHTML = [
+      ['Mean', mean.toFixed(2)],
+      ['Median', median.toFixed(2)],
+      ['Min', min.toFixed(2)],
+      ['Max', max.toFixed(2)],
+      ['Count', nums.length]
+    ].map(([l, v]) => `<span>${l}: <b style="color:var(--eo-text)">${v}</b></span>`).join('');
+  }
+
+  const bins = 10;
+  const step = (max - min) / bins || 1;
+  const histo = new Array(bins).fill(0);
+
+  nums.forEach((n) => {
+    let idx = Math.min(bins - 1, Math.floor((n - min) / step));
+    histo[idx]++;
+  });
+
+  const labels = histo.map((_, i) => (min + i * step).toFixed(1));
+
+  const opts = {
+    chart: { type: 'bar', height: 220, background: 'transparent', fontFamily: 'system-ui', toolbar: { show: false }, animations: { enabled: true, speed: 500 } },
+    series: [{ name: 'Count', data: histo }],
+    plotOptions: { bar: { borderRadius: 4, columnWidth: '85%' } },
+    xaxis: { categories: labels, labels: { style: { colors: PAL.textDim, fontSize: '10px' } } },
+    yaxis: { labels: { style: { colors: PAL.textDim, fontSize: '11px' } } },
+    grid: { borderColor: PAL.border, strokeDashArray: 4 },
+    colors: [PAL.blue],
+    dataLabels: { enabled: false },
+    tooltip: { theme: 'light' }
+  };
+
+  const key = 'q-' + q.id;
+  if (CHARTS[key]) {
+    CHARTS[key].updateOptions(opts);
+    return;
+  }
+
+  CHARTS[key] = new ApexCharts(target, opts);
+  CHARTS[key].render();
+}
+
+/* ── Cloud ──────────────────────────────────────────────────────── */
+function renderCloud(q) {
+  const samples = q.samples || [];
+  const sbox = $('samples-' + q.id);
+
+  if (sbox) {
+    sbox.innerHTML = '<div class="lbl">Recent answers</div>' + (
+      samples.length
+        ? samples.slice(0, 10).map(s => `<div class="cloud-sample">${esc((s || '').slice(0, 220))}${s && s.length > 220 ? '…' : ''}</div>`).join('')
+        : '<div class="empty" style="padding:20px"><span class="big"><i class="bi bi-chat-left-text"></i></span>No text yet</div>'
     );
-
-    bounds.push([p.lat, p.lng]);
-  });
-
-  if (bounds.length === 1) {
-    map.setView(bounds[0], 15);
-  } else {
-    map.fitBounds(bounds, { padding: [24, 24], maxZoom: 15 });
   }
 
-  setTimeout(function(){ try { map.invalidateSize(); } catch(e){} }, 150);
-}
+  const el = $('cloud-' + q.id);
+  if (!el) return;
 
-function renderGeoQuestion(card, q, qi) {
-  var points = q.points || [];
-  var latest = points.slice(0, 8);
-  var gpsCount = points.filter(function(p){ return (p.source || '').toLowerCase() === 'gps'; }).length;
-  var ipCount = points.filter(function(p){ return (p.source || '').toLowerCase() === 'ip'; }).length;
-
-  var listHtml = latest.length
-    ? latest.map(function(p){
-        return '<div class="geo-item">'
-          + '<div class="geo-name">' + escapeHtml(p.respondent_name || 'Anonymous') + '</div>'
-          + '<div class="geo-meta">'
-          + (p.address ? escapeHtml(p.address) + '<br>' : '')
-          + Number(p.lat).toFixed(5) + ', ' + Number(p.lng).toFixed(5)
-          + ' · ±' + Math.round(Number(p.accuracy_m || 0)) + ' m'
-          + ' · ' + escapeHtml((p.source || 'gps').toUpperCase())
-          + '<br>' + escapeHtml(p.submitted_at || '')
-          + '</div>'
-          + '</div>';
-      }).join('')
-    : '<div class="geo-empty">No valid geolocation responses yet.</div>';
-
-  card.innerHTML =
-    '<h4>Q' + (qi + 1) + '. ' + escapeHtml(q.text) + '</h4>' +
-    '<div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:12px">' +
-      (q.count || 0) + ' response(s) — ' + (q.valid_count || 0) + ' valid location point(s)' +
-    '</div>' +
-    '<div class="geo-grid">' +
-      '<div>' +
-        '<div id="geo-map-' + q.id + '" class="geo-map"></div>' +
-      '</div>' +
-      '<div class="geo-side">' +
-        '<div class="geo-kpis">' +
-          '<div class="geo-mini"><div class="v">' + (q.valid_count || 0) + '</div><div class="l">Valid Points</div></div>' +
-          '<div class="geo-mini"><div class="v">' + (q.count || 0) + '</div><div class="l">All Responses</div></div>' +
-          '<div class="geo-mini"><div class="v">' + gpsCount + '</div><div class="l">GPS Captures</div></div>' +
-          '<div class="geo-mini"><div class="v">' + ipCount + '</div><div class="l">IP Fallback</div></div>' +
-        '</div>' +
-        '<div class="geo-list">' + listHtml + '</div>' +
-      '</div>' +
-    '</div>';
-
-  setTimeout(function(){ renderGeoMap(q); }, 50);
-}
-
-function renderQuestions(data) {
-  var container = document.getElementById('q-charts');
-  data.question_charts.forEach(function(q, qi) {
-    var cardId = 'qcard-' + q.id;
-    var card = document.getElementById(cardId);
-
-    if (!card) {
-      card = document.createElement('div');
-      card.className = 'q-card';
-      card.id = cardId;
-      container.appendChild(card);
-    }
-
-    if (q.type === 'single_choice' || q.type === 'multi_choice' || q.type === 'yes_no') {
-      var total = q.total || (q.counts || []).reduce(function(a,b){return a+b},0) || 1;
-      var barsHtml = (q.labels || []).map(function(lbl, i) {
-        var cnt = (q.counts || [])[i] || 0;
-        var pct = Math.round(cnt / total * 100);
-        var col = PALETTE[i % PALETTE.length];
-        return '<div class="bar-row">'
-          + '<div class="bar-label" title="'+escapeHtml(lbl)+'">'+escapeHtml(lbl)+'</div>'
-          + '<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:'+col+'"></div></div>'
-          + '<div class="bar-count">'+cnt+'</div>'
-          + '<div class="bar-pct">'+pct+'%</div>'
-          + '</div>';
-      }).join('');
-
-      card.innerHTML = '<h4>Q'+(qi+1)+'. '+escapeHtml(q.text)+'</h4>'
-        + '<div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:12px">'+q.count+' response(s)</div>'
-        + barsHtml;
-
-    } else if (q.type === 'rating') {
-      var avgHtml = q.avg !== null ? '<div class="avg-badge">★ '+q.avg+' / 5</div>' : '';
-      var total2 = (q.counts || []).reduce(function(a,b){return a+b},0) || 1;
-      var barsHtml2 = (q.labels || []).map(function(lbl,i){
-        var cnt = (q.counts || [])[i] || 0;
-        var pct = Math.round(cnt/total2*100);
-        return '<div class="bar-row"><div class="bar-label">'+escapeHtml(lbl)+' star</div>'
-          +'<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:'+PALETTE[i%PALETTE.length]+'"></div></div>'
-          +'<div class="bar-count">'+cnt+'</div><div class="bar-pct">'+pct+'%</div></div>';
-      }).join('');
-      card.innerHTML = '<h4>Q'+(qi+1)+'. '+escapeHtml(q.text)+'</h4>'+avgHtml+barsHtml2;
-
-    } else if (q.type === 'text' || q.type === 'paragraph' || q.type === 'number') {
-      var samples = (q.samples || []).slice(0,10);
-      var sHtml = samples.length
-        ? '<ul class="text-samples">'+samples.map(function(s){ return '<li>'+escapeHtml(s)+'</li>'; }).join('')+'</ul>'
-        : '<div style="color:var(--eo-text-muted);font-size:.82rem">No responses yet.</div>';
-      card.innerHTML = '<h4>Q'+(qi+1)+'. '+escapeHtml(q.text)+'</h4>'
-        +'<div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:10px">'+q.count+' response(s) — showing up to 10 samples</div>'
-        + sHtml;
-
-    } else if (q.type === 'geolocation') {
-      renderGeoQuestion(card, q, qi);
-    } else {
-      card.innerHTML = '<h4>Q'+(qi+1)+'. '+escapeHtml(q.text)+'</h4>'
-        + '<div style="color:var(--eo-text-muted);font-size:.82rem">Unsupported question type: ' + escapeHtml(q.type) + '</div>';
-    }
+  const counts = {};
+  samples.forEach((s) => {
+    (String(s || '').toLowerCase().match(/[a-zà-ÿ']{3,}/gi) || []).forEach((w) => {
+      if (STOPWORDS.has(w)) return;
+      counts[w] = (counts[w] || 0) + 1;
+    });
   });
-}
 
-function renderRecent(data) {
-  var tbody = document.getElementById('recent-tbody');
-  if (!data.recent.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--eo-text-muted);padding:24px">No responses yet.</td></tr>';
+  const words = Object.entries(counts)
+    .map(([text, size]) => ({ text, size }))
+    .sort((a, b) => b.size - a.size)
+    .slice(0, 60);
+
+  if (!words.length) {
+    el.innerHTML = '<div class="empty" style="padding:90px 20px"><span class="big"><i class="bi bi-cloud"></i></span>Not enough text for a word cloud yet</div>';
     return;
   }
-  tbody.innerHTML = data.recent.map(function(r) {
-    var badge = r.is_public
-      ? '<span class="badge-pub">Public</span>'
-      : '<span class="badge-int">Internal</span>';
-    return '<tr><td>'+escapeHtml(r.name)+'</td><td>'+badge+'</td><td style="font-family:monospace;font-size:.78rem">'+escapeHtml(r.ip)+'</td><td style="font-family:monospace;font-size:.78rem">'+escapeHtml(r.device)+'</td><td>'+escapeHtml(r.submitted_at)+'</td></tr>';
-  }).join('');
+
+  const w = el.clientWidth || 500;
+  const h = 260;
+  const maxC = words[0].size;
+  el.innerHTML = '';
+
+  d3.layout.cloud()
+    .size([w, h])
+    .words(words.map(d => ({ text: d.text, size: 12 + (d.size / maxC) * 38 })))
+    .padding(3)
+    .rotate(() => (Math.random() < .25 ? 90 : 0))
+    .font('system-ui')
+    .fontSize(d => d.size)
+    .on('end', (ws) => {
+      const svg = d3.select(el).append('svg').attr('viewBox', `0 0 ${w} ${h}`);
+      svg.append('g')
+        .attr('transform', `translate(${w/2},${h/2})`)
+        .selectAll('text')
+        .data(ws)
+        .enter()
+        .append('text')
+        .style('font-size', d => d.size + 'px')
+        .style('font-family', 'system-ui, -apple-system, sans-serif')
+        .style('font-weight', d => d.size > 26 ? 800 : 600)
+        .attr('fill', (d, i) => PALETTE[i % PALETTE.length])
+        .attr('text-anchor', 'middle')
+        .attr('transform', d => `translate(${d.x},${d.y}) rotate(${d.rotate})`)
+        .text(d => d.text)
+        .append('title')
+        .text(d => `${d.text} — ${counts[d.text]}×`);
+    })
+    .start();
 }
 
-function render(data) {
-  updateKPIs(data);
-  buildTimeline(data);
-  renderQuestions(data);
-  renderRecent(data);
+/* ── Geo map (OpenLayers + OpenStreetMap) ──────────────────────── */
+function getGeoSignature(points) {
+  return (points || [])
+    .map(p => [
+      p.lat ?? '',
+      p.lng ?? '',
+      p.respondent_name || '',
+      p.submitted_at || '',
+      p.address || '',
+      p.is_public ? '1' : '0'
+    ].join(','))
+    .join('|');
 }
 
-function poll() {
-  fetch(DATA_URL, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
-    .then(function(r){ return r.json(); })
-    .then(render)
-    .catch(function(e){ console.warn('Dashboard poll error:', e); });
+function buildPopupHtml(p) {
+  const lat = parseFloat(p.lat);
+  const lng = parseFloat(p.lng);
+
+  return `
+    <div>
+      <div style="color:${PAL.purple};font-weight:800;margin-bottom:6px;font-size:13px">
+        ${esc(p.respondent_name || 'Respondent')}
+      </div>
+      ${p.address ? `<div style="color:${PAL.text};margin-bottom:4px">${esc(p.address)}</div>` : ''}
+      <div style="color:${PAL.textDim};font-family:ui-monospace,monospace">
+        ${isNaN(lat) ? '' : lat.toFixed(5)}, ${isNaN(lng) ? '' : lng.toFixed(5)}
+      </div>
+      <div style="color:${PAL.textDim};margin-top:2px">
+        ±${Math.round(p.accuracy_m || 0)}m · ${esc(String(p.source || '').toUpperCase())}
+      </div>
+      <div style="color:${PAL.textDim};margin-top:4px;font-size:11px">
+        ${esc(p.submitted_at || '')}
+      </div>
+    </div>
+  `;
 }
 
-render(initialData);
-setInterval(poll, 10000);
+function createGeoMap(qid, el) {
+  const vectorSource = new ol.source.Vector();
+
+  const vectorLayer = new ol.layer.Vector({
+    source: vectorSource,
+    style: function(feature) {
+      const isPublic = !!feature.get('is_public');
+      return new ol.style.Style({
+        image: new ol.style.Circle({
+          radius: 8,
+          fill: new ol.style.Fill({
+            color: isPublic ? PAL.blue : PAL.purple
+          }),
+          stroke: new ol.style.Stroke({
+            color: '#ffffff',
+            width: 3
+          })
+        })
+      });
+    }
+  });
+
+  const rasterLayer = new ol.layer.Tile({
+    source: new ol.source.OSM()
+  });
+
+  const popupEl = document.createElement('div');
+  popupEl.className = 'ol-popup';
+  popupEl.style.display = 'none';
+  document.body.appendChild(popupEl);
+
+  const popupOverlay = new ol.Overlay({
+    element: popupEl,
+    positioning: 'bottom-center',
+    stopEvent: false,
+    offset: [0, -14]
+  });
+
+  const map = new ol.Map({
+    target: el,
+    layers: [rasterLayer, vectorLayer],
+    overlays: [popupOverlay],
+    view: new ol.View({
+      center: ol.proj.fromLonLat([-16.5790, 13.4549]),
+      zoom: 7
+    }),
+    controls: ol.control.defaults.defaults({
+      attribution: true,
+      zoom: true,
+      rotate: false
+    })
+  });
+
+  MAPS[qid] = {
+    map,
+    vectorSource,
+    vectorLayer,
+    popupEl,
+    popupOverlay,
+    initialized: false,
+    resizeObserver: null,
+    interactionPause: false,
+    lastExtent: null
+  };
+
+  GEO_STATE[qid] = GEO_STATE[qid] || {
+    signature: null,
+    userMoved: false
+  };
+
+  map.on('movestart', () => {
+    GEO_STATE[qid].userMoved = true;
+    MAPS[qid].interactionPause = true;
+  });
+
+  map.on('moveend', () => {
+    setTimeout(() => {
+      if (MAPS[qid]) {
+        MAPS[qid].interactionPause = false;
+        map.updateSize();
+      }
+    }, 250);
+  });
+
+  map.on('singleclick', function(evt) {
+    const feature = map.forEachFeatureAtPixel(evt.pixel, f => f);
+
+    if (!feature) {
+      popupEl.style.display = 'none';
+      popupOverlay.setPosition(undefined);
+      return;
+    }
+
+    popupEl.innerHTML = buildPopupHtml(feature.get('row') || {});
+    popupEl.style.display = 'block';
+    popupOverlay.setPosition(evt.coordinate);
+  });
+
+  if ('ResizeObserver' in window) {
+    const ro = new ResizeObserver(() => {
+      clearTimeout(MAPS[qid]._resizeT);
+      MAPS[qid]._resizeT = setTimeout(() => {
+        try { map.updateSize(); } catch (e) {}
+      }, 120);
+    });
+    ro.observe(el);
+    MAPS[qid].resizeObserver = ro;
+  }
+
+  [60, 220, 500, 1000].forEach(delay => {
+    setTimeout(() => {
+      try { map.updateSize(); } catch (e) {}
+    }, delay);
+  });
+
+  return MAPS[qid];
+}
+
+function renderGeo(q) {
+  const el = $('map-' + q.id);
+  if (!el) return;
+
+  const pts = q.points || [];
+  const countEl = $('mapcount-' + q.id);
+  if (countEl) countEl.textContent = pts.length;
+
+  const signature = getGeoSignature(pts);
+  let m = MAPS[q.id];
+
+  if (!m) {
+    if (el.offsetWidth < 100 || el.offsetHeight < 100) {
+      requestAnimationFrame(() => renderGeo(q));
+      return;
+    }
+    m = createGeoMap(q.id, el);
+  }
+
+  GEO_STATE[q.id] = GEO_STATE[q.id] || {
+    signature: null,
+    userMoved: false
+  };
+
+  if (GEO_STATE[q.id].signature === signature && m.initialized) {
+    setTimeout(() => {
+      try { m.map.updateSize(); } catch (e) {}
+    }, 60);
+    return;
+  }
+
+  GEO_STATE[q.id].signature = signature;
+
+  m.vectorSource.clear();
+
+  const features = [];
+  const lonLatBounds = [];
+
+  pts.forEach(p => {
+    if (p.lat == null || p.lng == null) return;
+
+    const lat = parseFloat(p.lat);
+    const lng = parseFloat(p.lng);
+    if (isNaN(lat) || isNaN(lng)) return;
+
+    const feature = new ol.Feature({
+      geometry: new ol.geom.Point(ol.proj.fromLonLat([lng, lat])),
+      row: p,
+      is_public: !!p.is_public
+    });
+
+    features.push(feature);
+    lonLatBounds.push([lng, lat]);
+  });
+
+  if (features.length) {
+    m.vectorSource.addFeatures(features);
+  }
+
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      try {
+        m.map.updateSize();
+
+        if (!GEO_STATE[q.id].userMoved) {
+          const view = m.map.getView();
+
+          if (lonLatBounds.length === 1) {
+            view.setCenter(ol.proj.fromLonLat(lonLatBounds[0]));
+            view.setZoom(14);
+          } else if (lonLatBounds.length > 1) {
+            const extent = ol.extent.createEmpty();
+            lonLatBounds.forEach(ll => {
+              ol.extent.extend(extent, ol.proj.transformExtent(
+                [ll[0], ll[1], ll[0], ll[1]],
+                'EPSG:4326',
+                'EPSG:3857'
+              ));
+            });
+
+            view.fit(extent, {
+              padding: [30, 30, 30, 30],
+              maxZoom: 15,
+              duration: 250
+            });
+
+            m.lastExtent = extent;
+          } else {
+            view.setCenter(ol.proj.fromLonLat([-16.5790, 13.4549]));
+            view.setZoom(7);
+          }
+        }
+
+        m.initialized = true;
+
+        setTimeout(() => {
+          try { m.map.updateSize(); } catch (e) {}
+        }, 350);
+      } catch (e) {}
+    }, 220);
+  });
+}
+
+window.resetMapView = (qid) => {
+  const m = MAPS[qid];
+  if (!m) return;
+
+  const q = (DATA.question_charts || []).find(item => String(item.id) === String(qid));
+  if (!q) return;
+
+  GEO_STATE[qid].userMoved = false;
+  renderGeo(q);
+};
+
+/* ── Drill-down popup ───────────────────────────────────────────── */
+function showDrill(title, body) {
+  let d = document.getElementById('drillModal');
+
+  if (!d) {
+    d = document.createElement('div');
+    d.id = 'drillModal';
+    d.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .18s;pointer-events:none';
+    d.innerHTML = `<div style="background:#fff;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.3);max-width:420px;width:92vw;padding:24px 26px;transform:translateY(10px);transition:transform .18s">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div id="drillT" style="font-size:1rem;font-weight:800;color:#0f172a"></div>
+        <button onclick="closeDrill()" style="background:none;border:none;font-size:1.3rem;color:#64748b;cursor:pointer">&times;</button>
+      </div>
+      <div id="drillB" style="font-size:.88rem;color:#334155;line-height:1.6"></div>
+    </div>`;
+    document.body.appendChild(d);
+    d.addEventListener('click', (e) => {
+      if (e.target === d) closeDrill();
+    });
+  }
+
+  document.getElementById('drillT').textContent = title;
+  document.getElementById('drillB').textContent = body;
+  d.style.opacity = '1';
+  d.style.pointerEvents = 'all';
+  d.firstElementChild.style.transform = 'translateY(0)';
+}
+
+window.closeDrill = () => {
+  const d = document.getElementById('drillModal');
+  if (!d) return;
+  d.style.opacity = '0';
+  d.style.pointerEvents = 'none';
+};
+
+/* ── Polling ────────────────────────────────────────────────────── */
+function isAnyMapBusy() {
+  return Object.values(MAPS).some((m) => m && m.interactionPause);
+}
+
+async function poll() {
+  try {
+    if (isAnyMapBusy()) return;
+
+    const r = await fetch(POLL_URL, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    });
+
+    if (!r.ok) throw new Error(r.status);
+
+    const next = await r.json();
+    next._delta = Math.max(0, (next.total_responses || 0) - (DATA.total_responses || 0));
+    DATA = next;
+    renderAll();
+  } catch (e) {
+    console.warn('poll fail', e);
+  }
+}
+
+function schedule() {
+  if (POLL_TIMER) clearTimeout(POLL_TIMER);
+  if (!POLLING) return;
+
+  POLL_TIMER = setTimeout(async () => {
+    await poll();
+    schedule();
+  }, 10000);
+}
+
+window.refreshNow = () => poll();
+
+window.togglePoll = () => {
+  POLLING = !POLLING;
+  const btn = $('pollBtn');
+  btn.innerHTML = POLLING
+    ? '<i class="bi bi-pause-fill"></i> Pause'
+    : '<i class="bi bi-play-fill"></i> Resume';
+
+  $('livePulse').classList.toggle('off', !POLLING);
+  $('liveText').textContent = POLLING ? 'LIVE · auto-refresh 10s' : 'PAUSED';
+
+  if (POLLING) schedule();
+  else if (POLL_TIMER) clearTimeout(POLL_TIMER);
+};
+
+/* ── Copy public url ────────────────────────────────────────────── */
+window.copyPublicUrl = (ev) => {
+  const el = $('publicUrl');
+  if (!el) return;
+
+  el.select();
+
+  try {
+    navigator.clipboard.writeText(el.value);
+  } catch (e) {
+    document.execCommand('copy');
+  }
+
+  const btn = ev?.currentTarget;
+  if (!btn) return;
+
+  const prev = btn.innerHTML;
+  btn.innerHTML = '<i class="bi bi-check"></i> Copied!';
+  setTimeout(() => {
+    btn.innerHTML = prev;
+  }, 1800);
+};
+
+/* ── Render all ─────────────────────────────────────────────────── */
+function renderAll() {
+  renderKPIs();
+  renderTimeline();
+  renderChannel();
+  renderTicker();
+  renderFeed();
+  renderQuestionPanels();
+  $('lastSync').textContent = nowHMS();
+}
+
+/* ── Boot ───────────────────────────────────────────────────────── */
+(DATA.recent || []).forEach((r) => KNOWN_IDS.add(r.id));
+renderAll();
+schedule();
 </script>
 {% endblock %}

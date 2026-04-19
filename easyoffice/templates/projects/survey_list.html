@@ -9,68 +9,223 @@
 
 {% block content %}
 <style>
-/* ── Shared modal system (matches project_detail.html) ── */
+:root {
+  --proj:        {{ project.cover_color|default:"#1e3a5f" }};
+  --proj-dark:   color-mix(in srgb, var(--proj) 82%, #000000);
+  --proj-darker: color-mix(in srgb, var(--proj) 65%, #000000);
+  --proj-light:  color-mix(in srgb, var(--proj) 14%, #ffffff);
+  --proj-soft:   color-mix(in srgb, var(--proj) 7%,  #ffffff);
+  --proj-tint:   color-mix(in srgb, var(--proj) 22%, #ffffff);
+  --proj-ink:    #ffffff;
+  --proj-on:     color-mix(in srgb, var(--proj) 75%, #000000);
+}
+
+/* ── Modal system (reused) ───────────────────────────────────────────── */
 .proj-modal-backdrop {
-  position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1050;
+  position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1050;
   display:flex;align-items:center;justify-content:center;
   opacity:0;pointer-events:none;transition:opacity .18s;
+  backdrop-filter:blur(3px);
 }
 .proj-modal-backdrop.open { opacity:1;pointer-events:all; }
 .proj-modal {
   background:var(--eo-surface);border-radius:var(--eo-radius);
-  border:1px solid var(--eo-border);width:520px;max-width:96vw;
-  max-height:88vh;overflow-y:auto;
-  box-shadow:0 24px 64px rgba(0,0,0,.18);
+  border:1px solid var(--eo-border);width:860px;max-width:96vw;
+  max-height:92vh;overflow:hidden; display:flex; flex-direction:column;
+  box-shadow:0 24px 64px rgba(0,0,0,.25);
   transform:translateY(14px);transition:transform .18s;
 }
 .proj-modal-backdrop.open .proj-modal { transform:translateY(0); }
 .proj-modal-head {
-  padding:18px 22px 14px;
+  padding:16px 22px 14px;
   display:flex;align-items:center;justify-content:space-between;
   border-bottom:1px solid var(--eo-border);
+  background:linear-gradient(180deg,#fff,#fafafb);
+  flex-shrink:0;
 }
-.proj-modal-body { padding:20px 22px; }
-</style>
+.proj-modal-body { padding:0; flex:1; overflow-y:auto; }
+.proj-modal-foot {
+  padding:14px 22px; border-top:1px solid var(--eo-border);
+  background:#fafafb; display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+  flex-shrink:0;
+}
 
+/* ── Builder layout ──────────────────────────────────────────────────── */
+.builder-grid {
+  display:grid; grid-template-columns: 1fr 360px; min-height:560px;
+}
+@media(max-width:960px){ .builder-grid{grid-template-columns:1fr} }
+.builder-main { padding:20px 22px; border-right:1px solid var(--eo-border); }
+.builder-side {
+  padding:18px; background:linear-gradient(180deg, #fafafb, var(--proj-soft));
+  border-left:1px solid var(--eo-border);
+}
+@media(max-width:960px){ .builder-main{border-right:none;border-bottom:1px solid var(--eo-border)} }
 
-<style>
-.survey-card {
-  border:1px solid var(--eo-border);
-  border-radius:var(--eo-radius);
-  background:var(--eo-surface);
-  padding:20px;
-  transition:box-shadow .15s, transform .15s;
-  position:relative;
-  overflow:hidden;
+.builder-section-title {
+  font-size:.7rem; font-weight:800; letter-spacing:.06em; color:var(--eo-text-muted);
+  text-transform:uppercase; margin-bottom:10px;
+  display:flex; align-items:center; gap:8px;
 }
-.survey-card:hover { box-shadow:0 4px 20px rgba(0,0,0,.08); transform:translateY(-1px); }
-.survey-card .accent-bar {
-  position:absolute;top:0;left:0;right:0;height:3px;
+.builder-section-title::after {
+  content:''; flex:1; height:1px; background:var(--eo-border);
 }
-.survey-stat-pill {
-  display:inline-flex;align-items:center;gap:5px;
-  font-size:.72rem;font-weight:600;
-  padding:3px 9px;border-radius:20px;
-  background:var(--eo-bg);color:var(--eo-text-muted);
-  border:1px solid var(--eo-border);
+
+/* ── Type picker ────────────────────────────────────────────────────── */
+.qtype-grid {
+  display:grid; grid-template-columns:repeat(4,1fr); gap:8px;
+  background:#fafafb; border:1px solid var(--eo-border); border-radius:10px; padding:10px;
+  margin-bottom:18px;
 }
+@media(max-width:720px){ .qtype-grid{grid-template-columns:repeat(2,1fr)} }
 .qtype-btn {
-  display:flex;flex-direction:column;align-items:center;gap:4px;
-  padding:10px 8px;border:2px solid var(--eo-border);border-radius:10px;
-  cursor:pointer;background:var(--eo-surface);
-  transition:border-color .12s,background .12s;font-size:.7rem;color:var(--eo-text-muted);
-  font-weight:600;text-align:center;min-width:68px;
+  display:flex; flex-direction:column; align-items:center; gap:4px;
+  padding:12px 6px; border:2px solid transparent; border-radius:8px;
+  cursor:pointer; background:#fff;
+  transition:.12s; font-size:.72rem; color:var(--eo-text);
+  font-weight:600; text-align:center;
 }
-.qtype-btn:hover { border-color:var(--eo-accent);background:var(--eo-bg);color:var(--eo-text); }
-.qtype-btn.selected { border-color:#8b5cf6;background:#ede9fe;color:#6d28d9; }
-.qtype-btn i { font-size:1.1rem;margin-bottom:1px; }
+.qtype-btn:hover { border-color:var(--proj-tint); background:var(--proj-soft); color:var(--proj-dark); }
+.qtype-btn i { font-size:1.2rem; color:var(--proj); margin-bottom:2px; }
+
+/* ── Question blocks ────────────────────────────────────────────────── */
+.q-list { display:flex; flex-direction:column; gap:10px; }
 .q-block {
-  background:var(--eo-bg);border:1px solid var(--eo-border);
-  border-radius:10px;padding:16px;position:relative;
+  background:#fff; border:1px solid var(--eo-border); border-radius:12px;
+  padding:16px; position:relative; transition:.15s;
 }
+.q-block:hover { border-color:var(--proj-tint); box-shadow:0 2px 10px rgba(124,58,237,.08); }
+.q-block.dragging { opacity:.4; border-style:dashed; }
+.q-block.drop-target { border-color:var(--proj); background:var(--proj-soft); }
+
+.q-block-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+.q-drag {
+  width:24px; height:24px; display:flex; align-items:center; justify-content:center;
+  color:#94a3b8; cursor:grab; font-size:1rem; flex-shrink:0;
+  border-radius:6px; transition:.1s;
+}
+.q-drag:hover { background:#f1f5f9; color:#475569; }
+.q-drag:active { cursor:grabbing; }
 .q-block-num {
-  width:22px;height:22px;border-radius:6px;background:var(--eo-accent);color:#fff;
-  font-size:.68rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  width:26px; height:26px; border-radius:8px;
+  background:linear-gradient(135deg,var(--proj),var(--proj-tint)); color:#fff;
+  font-size:.72rem; font-weight:800;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+}
+.q-type-pill {
+  font-size:.68rem; font-weight:700; padding:3px 9px; border-radius:6px;
+  background:var(--proj-light); color:var(--proj-dark); display:inline-flex; align-items:center; gap:5px;
+  letter-spacing:.02em;
+}
+.q-type-pill i { font-size:.82rem; }
+.q-remove {
+  margin-left:auto; background:none; border:none; color:#94a3b8;
+  cursor:pointer; font-size:1.2rem; padding:0 4px; line-height:1; flex-shrink:0;
+  transition:.1s;
+}
+.q-remove:hover { color:#ef4444; }
+
+.q-text-input {
+  width:100%; border:none; background:transparent; padding:2px 0 8px;
+  font-size:.95rem; font-weight:600; color:var(--eo-text);
+  border-bottom:2px solid transparent; outline:none;
+}
+.q-text-input:focus { border-bottom-color:var(--proj); }
+.q-text-input::placeholder { color:#94a3b8; font-weight:500; }
+
+.q-options {
+  margin-top:10px; padding:10px 12px; background:#fafafb; border-radius:8px;
+}
+.q-options-label {
+  font-size:.7rem; font-weight:700; color:var(--eo-text-muted);
+  text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;
+  display:flex; align-items:center; gap:6px;
+}
+.q-options textarea {
+  width:100%; border:1px solid var(--eo-border); border-radius:6px;
+  padding:8px 10px; font-size:.82rem; background:#fff; outline:none;
+  font-family:inherit; resize:vertical; min-height:64px; color:var(--eo-text);
+}
+.q-options textarea:focus { border-color:var(--proj); box-shadow:0 0 0 2px rgba(124,58,237,.12); }
+
+.q-meta {
+  display:flex; align-items:center; gap:14px; margin-top:10px;
+  padding-top:10px; border-top:1px dashed var(--eo-border);
+  font-size:.78rem; color:var(--eo-text-muted);
+}
+.q-meta label { display:flex; align-items:center; gap:6px; cursor:pointer; }
+.q-meta input { accent-color:var(--proj); width:14px; height:14px; }
+
+.q-empty {
+  text-align:center; padding:36px 20px; color:var(--eo-text-muted);
+  font-size:.88rem; border:2px dashed var(--eo-border); border-radius:12px;
+  background:#fafafb;
+}
+.q-empty i { font-size:2rem; display:block; margin-bottom:10px; opacity:.3; color:var(--proj); }
+
+/* ── Side preview ────────────────────────────────────────────────────── */
+.preview-wrap {
+  background:#fff; border:1px solid var(--eo-border); border-radius:12px;
+  padding:18px; max-height:480px; overflow-y:auto;
+  box-shadow:0 4px 12px rgba(0,0,0,.04);
+}
+.preview-header {
+  font-size:.82rem; font-weight:700; color:var(--eo-text); margin-bottom:4px;
+}
+.preview-desc {
+  font-size:.75rem; color:var(--eo-text-muted); margin-bottom:14px; line-height:1.5;
+}
+.preview-q { border-top:1px solid #f1f5f9; padding:12px 0; }
+.preview-q:first-of-type { border-top:none; padding-top:0; }
+.preview-q-text { font-size:.82rem; font-weight:600; color:var(--eo-text); margin-bottom:8px; line-height:1.4; }
+.preview-input {
+  width:100%; border:1px solid var(--eo-border); border-radius:6px; padding:6px 9px;
+  font-size:.78rem; background:#fafafb; color:#64748b; pointer-events:none;
+}
+.preview-option {
+  display:flex; align-items:center; gap:8px; padding:5px 9px;
+  font-size:.78rem; color:#475569; background:#fafafb;
+  border:1px solid var(--eo-border); border-radius:6px; margin-bottom:4px;
+}
+.preview-stars { color:#f59e0b; font-size:1.1rem; letter-spacing:2px; }
+.preview-stats {
+  background:linear-gradient(135deg,var(--proj-light),#dbeafe); border-radius:10px;
+  padding:12px 14px; margin-bottom:16px;
+  display:flex; gap:14px; font-size:.74rem;
+}
+.preview-stats .stat b { color:var(--proj-dark); font-size:1rem; font-weight:800; display:block; }
+.preview-empty {
+  text-align:center; padding:30px 14px; color:#94a3b8; font-size:.8rem;
+}
+
+/* ── Settings chips ─────────────────────────────────────────────────── */
+.settings-row { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; }
+.settings-chip {
+  display:flex; align-items:center; gap:10px; padding:10px 12px;
+  border:1.5px solid var(--eo-border); border-radius:10px; cursor:pointer;
+  background:#fff; transition:.12s;
+}
+.settings-chip:hover { border-color:var(--proj-tint); }
+.settings-chip input { accent-color:var(--proj); flex-shrink:0; width:16px; height:16px; }
+.settings-chip-text { flex:1; }
+.settings-chip-title { font-size:.82rem; font-weight:700; color:var(--eo-text); }
+.settings-chip-sub   { font-size:.7rem; color:var(--eo-text-muted); margin-top:1px; }
+.settings-chip.on { border-color:var(--proj); background:var(--proj-soft); box-shadow:0 0 0 3px rgba(124,58,237,.1); }
+
+/* ── Survey cards (list) ─────────────────────────────────────────────── */
+.survey-card {
+  border:1px solid var(--eo-border); border-radius:var(--eo-radius);
+  background:var(--eo-surface); padding:20px;
+  transition:.15s; position:relative; overflow:hidden;
+}
+.survey-card:hover { box-shadow:0 6px 22px rgba(0,0,0,.08); transform:translateY(-1px); }
+.survey-card .accent-bar { position:absolute; top:0; left:0; right:0; height:3px; }
+.survey-stat-pill {
+  display:inline-flex; align-items:center; gap:5px;
+  font-size:.72rem; font-weight:600;
+  padding:3px 9px; border-radius:20px;
+  background:var(--eo-bg); color:var(--eo-text-muted);
+  border:1px solid var(--eo-border);
 }
 </style>
 
@@ -80,7 +235,7 @@
     <p class="eo-page-subtitle">{{ project.name }} · collect structured feedback from any audience</p>
   </div>
   {% if is_member %}
-  <button onclick="openModal('createSurveyModal')" class="eo-btn eo-btn-primary">
+  <button onclick="openBuilder()" class="eo-btn eo-btn-primary">
     <i class="bi bi-plus-lg"></i> New Survey
   </button>
   {% endif %}
@@ -112,9 +267,11 @@
   </div>
   <div class="col-6 col-md-3">
     <div class="eo-stat">
-      <div class="eo-stat-label">Project</div>
-      <div class="eo-stat-value" style="font-size:.9rem;font-weight:700">{{ project.code }}</div>
-      <i class="bi bi-kanban eo-stat-icon"></i>
+      <div class="eo-stat-label">Avg / Survey</div>
+      <div class="eo-stat-value" style="font-size:1.3rem">
+        {% if surveys|length %}{% widthratio total_responses surveys|length 1 %}{% else %}0{% endif %}
+      </div>
+      <i class="bi bi-bar-chart eo-stat-icon"></i>
     </div>
   </div>
 </div>
@@ -124,9 +281,8 @@
   {% for survey in surveys %}
   <div class="col-sm-6 col-xl-4">
     <div class="survey-card">
-      <div class="accent-bar" style="background:{% if survey.is_active %}#8b5cf6{% else %}var(--eo-border){% endif %}"></div>
+      <div class="accent-bar" style="background:{% if survey.is_active %}var(--proj){% else %}var(--eo-border){% endif %}"></div>
 
-      {# Top row: title + status badge #}
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:12px">
         <div style="flex:1;min-width:0">
           <div style="font-size:.98rem;font-weight:700;color:var(--eo-text);line-height:1.3">
@@ -139,102 +295,89 @@
           {% endif %}
         </div>
         <span style="font-size:.68rem;font-weight:700;padding:3px 10px;border-radius:20px;flex-shrink:0;
-          {% if survey.is_active %}background:#ede9fe;color:#6d28d9{% else %}background:var(--eo-bg);color:var(--eo-text-muted);border:1px solid var(--eo-border){% endif %}">
+          {% if survey.is_active %}background:var(--proj-light);color:var(--proj-dark){% else %}background:var(--eo-bg);color:var(--eo-text-muted);border:1px solid var(--eo-border){% endif %}">
           {% if survey.is_active %}● Active{% else %}Closed{% endif %}
         </span>
       </div>
 
-      {# Metrics row #}
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">
         <span class="survey-stat-pill">
-          <i class="bi bi-people" style="font-size:.75rem"></i>
-          {{ survey.resp_count }} response{{ survey.resp_count|pluralize }}
+          <i class="bi bi-people"></i> {{ survey.resp_count }} response{{ survey.resp_count|pluralize }}
         </span>
         <span class="survey-stat-pill">
-          <i class="bi bi-patch-question" style="font-size:.75rem"></i>
-          {{ survey.questions.count }} Q
+          <i class="bi bi-patch-question"></i> {{ survey.questions.count }} Q
         </span>
         {% if survey.is_anonymous %}
         <span class="survey-stat-pill" style="background:#fef3c7;color:#92400e;border-color:#fde68a">
-          <i class="bi bi-eye-slash" style="font-size:.75rem"></i> Anonymous
+          <i class="bi bi-eye-slash"></i> Anonymous
+        </span>
+        {% endif %}
+        {% if survey.is_public %}
+        <span class="survey-stat-pill" style="background:#dbeafe;color:#1d4ed8;border-color:#bfdbfe">
+          <i class="bi bi-globe"></i> Public
         </span>
         {% endif %}
         {% if survey.closes_at %}
         <span class="survey-stat-pill">
-          <i class="bi bi-calendar3" style="font-size:.75rem"></i>
-          Closes {{ survey.closes_at|date:"N j" }}
+          <i class="bi bi-calendar3"></i> Closes {{ survey.closes_at|date:"N j" }}
         </span>
         {% endif %}
       </div>
 
-      {# Progress bar (responses visual) #}
       {% if survey.resp_count > 0 %}
       <div style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
           <span style="font-size:.7rem;color:var(--eo-text-muted)">Response activity</span>
-          <span style="font-size:.7rem;font-weight:700;color:#7c3aed">{{ survey.resp_count }}</span>
+          <span style="font-size:.7rem;font-weight:700;color:var(--proj)">{{ survey.resp_count }}</span>
         </div>
         <div style="height:4px;background:var(--eo-bg);border-radius:2px;overflow:hidden">
-          <div style="height:100%;background:linear-gradient(90deg,#8b5cf6,#a855f7);border-radius:2px;width:100%"></div>
+          <div style="height:100%;background:linear-gradient(90deg,var(--proj),var(--proj-tint));border-radius:2px;width:100%"></div>
         </div>
       </div>
       {% endif %}
 
-      {# Created info #}
       <div style="font-size:.72rem;color:var(--eo-text-muted);margin-bottom:14px">
         <i class="bi bi-clock me-1"></i>Created {{ survey.created_at|naturaltime }}
         {% if survey.created_by %} by {{ survey.created_by.full_name }}{% endif %}
       </div>
 
-      {# Actions #}
       <div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--eo-border)">
+        <a href="{% url 'survey_dashboard' project.pk survey.pk %}" class="eo-btn eo-btn-sm eo-btn-primary">
+          <i class="bi bi-speedometer2"></i> Dashboard
+        </a>
         <a href="{% url 'survey_detail' project.pk survey.pk %}" class="eo-btn eo-btn-sm eo-btn-secondary">
           <i class="bi bi-bar-chart-line"></i> Results
         </a>
-       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
-          <a href="{% url 'survey_dashboard' project.pk survey.pk %}" class="eo-btn eo-btn-sm eo-btn-primary">
-            <i class="bi bi-speedometer2"></i> Dashboard
-          </a>
-
-          {% if survey.is_active %}
-          <a href="{% url 'survey_submit' project.pk survey.pk %}" class="eo-btn eo-btn-sm eo-btn-secondary">
-            <i class="bi bi-pencil-square"></i> Respond
-          </a>
-          {% endif %}
-
-          {% if is_manager %}
-         <button type="button"
-              class="eo-btn eo-btn-sm eo-btn-secondary"
-              onclick='openEditSurveyModal(
-                "{{ survey.pk }}",
-                "{{ survey.title|escapejs }}",
-                "{{ survey.description|escapejs }}",
-                "{{ survey.closes_at|date:"Y-m-d" }}",
-                {{ survey.is_anonymous|yesno:"true,false" }},
-                {{ survey.is_public|yesno:"true,false" }},
-                {{ survey.allow_multiple_responses|yesno:"true,false" }},
-                [
-                  {% for q in survey.questions.all %}
+        {% if survey.is_active %}
+        <a href="{% url 'survey_submit' project.pk survey.pk %}" class="eo-btn eo-btn-sm eo-btn-secondary">
+          <i class="bi bi-pencil-square"></i> Respond
+        </a>
+        {% endif %}
+        {% if is_manager %}
+        <button type="button"
+                class="eo-btn eo-btn-sm eo-btn-secondary"
+                onclick='openEditBuilder(
+                  "{{ survey.pk }}",
                   {
-                    text: "{{ q.text|escapejs }}",
-                    type: "{{ q.q_type }}",
-                    options: "{{ q.options|escapejs }}",
-                    required: {{ q.is_required|yesno:"true,false" }}
-                  }{% if not forloop.last %},{% endif %}
-                  {% endfor %}
-                ]
-              )'>
-        <i class="bi bi-pencil"></i> Edit
-      </button>
-
-        {# Share link copy #}
+                    title: "{{ survey.title|escapejs }}",
+                    description: "{{ survey.description|escapejs }}",
+                    closes_at: "{{ survey.closes_at|date:"Y-m-d" }}",
+                    is_anonymous: {{ survey.is_anonymous|yesno:"true,false" }},
+                    is_public: {{ survey.is_public|yesno:"true,false" }},
+                    allow_multiple: {{ survey.allow_multiple_responses|yesno:"true,false" }},
+                    questions: [
+                      {% for q in survey.questions.all %}
+                      { text: "{{ q.text|escapejs }}", type: "{{ q.q_type }}", options: "{{ q.options|escapejs }}", required: {{ q.is_required|yesno:"true,false" }} }{% if not forloop.last %},{% endif %}
+                      {% endfor %}
+                    ]
+                  }
+                )'>
+          <i class="bi bi-pencil"></i> Edit
+        </button>
         <button type="button" onclick="copyLink('{{ request.scheme }}://{{ request.get_host }}{% url 'survey_submit' project.pk survey.pk %}')"
                 class="eo-btn eo-btn-sm eo-btn-secondary" title="Copy respondent link">
           <i class="bi bi-link-45deg"></i>
         </button>
-        {% endif %}
-         </div>
-        {% if is_manager %}
         <form method="post" action="{% url 'survey_toggle' project.pk survey.pk %}" style="display:inline;margin-left:auto">
           {% csrf_token %}
           <button type="submit" class="eo-btn eo-btn-sm eo-btn-secondary"
@@ -251,509 +394,441 @@
 </div>
 
 {% else %}
-{# ── Empty state ──────────────────────────────────────────────────────────── #}
 <div class="eo-card" style="text-align:center;padding:80px 32px">
-  <div style="width:72px;height:72px;border-radius:20px;background:#ede9fe;
+  <div style="width:72px;height:72px;border-radius:20px;background:var(--proj-light);
               display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:2rem">
-    <i class="bi bi-clipboard2" style="color:#7c3aed"></i>
+    <i class="bi bi-clipboard2" style="color:var(--proj)"></i>
   </div>
   <h3 style="font-size:1.1rem;font-weight:700;margin-bottom:8px">No surveys yet</h3>
   <p style="font-size:.88rem;color:var(--eo-text-muted);max-width:380px;margin:0 auto 24px;line-height:1.6">
     Surveys let you collect structured feedback from your team, customers, or any stakeholder — with instant results and charts.
   </p>
   {% if is_member %}
-  <button onclick="openModal('createSurveyModal')" class="eo-btn eo-btn-primary">
+  <button onclick="openBuilder()" class="eo-btn eo-btn-primary">
     <i class="bi bi-plus"></i> Create Your First Survey
   </button>
   {% endif %}
 </div>
 {% endif %}
 
-{# ── Toast notification ───────────────────────────────────────────────────── #}
+{# ── Toast ─────────────────────────────────────────────────────────────── #}
 <div id="copyToast" style="position:fixed;bottom:24px;right:24px;background:#1e293b;color:#fff;
-  padding:10px 18px;border-radius:8px;font-size:.84rem;font-weight:600;
+  padding:10px 18px;border-radius:10px;font-size:.84rem;font-weight:600;
   display:flex;align-items:center;gap:8px;z-index:9999;
-  opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s;pointer-events:none">
+  opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s;pointer-events:none;
+  box-shadow:0 12px 28px rgba(0,0,0,.3)">
   <i class="bi bi-check-circle-fill" style="color:#10b981"></i>
-  Link copied to clipboard!
+  <span id="copyToastMsg">Link copied to clipboard!</span>
 </div>
 
-{# ── Create Survey Modal ──────────────────────────────────────────────────── #}
+{# ── Unified Builder Modal (handles both Create and Edit) ─────────────── #}
 {% if is_member %}
-<div class="proj-modal-backdrop" id="createSurveyModal">
-  <div class="proj-modal" style="width:720px;max-width:96vw">
+<div class="proj-modal-backdrop" id="builderModal">
+  <div class="proj-modal">
     <div class="proj-modal-head">
       <div style="display:flex;align-items:center;gap:10px">
-        <div style="width:30px;height:30px;border-radius:8px;background:#ede9fe;
+        <div style="width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,var(--proj-light),var(--proj-tint));
                     display:flex;align-items:center;justify-content:center">
-          <i class="bi bi-clipboard2-check" style="color:#7c3aed;font-size:.9rem"></i>
+          <i class="bi bi-clipboard2-check" style="color:var(--proj-dark);font-size:.95rem"></i>
         </div>
-        <span style="font-size:1rem;font-weight:700;color:var(--eo-text)">New Survey</span>
+        <div>
+          <div style="font-size:1rem;font-weight:700;color:var(--eo-text)" id="builderTitle">New Survey</div>
+          <div style="font-size:.72rem;color:var(--eo-text-muted)" id="builderSubtitle">Build your questions below</div>
+        </div>
       </div>
-      <button onclick="closeModal('createSurveyModal')"
-              style="background:none;border:none;cursor:pointer;font-size:1.3rem;color:var(--eo-text-muted);
+      <button onclick="closeBuilder()" type="button"
+              style="background:none;border:none;cursor:pointer;font-size:1.5rem;color:var(--eo-text-muted);
                      line-height:1;padding:0 4px">&times;</button>
     </div>
-    <div class="proj-modal-body">
-      <form method="post" id="surveyForm">
-        {% csrf_token %}
 
-        {# ── Basic info ── #}
-        <div class="eo-form-group">
-          <label class="eo-form-label">Survey Title *</label>
-          <input type="text" name="title" class="eo-form-control" required
-                 placeholder="e.g. Post-Training Feedback, Site Visit Report"/>
-        </div>
-        <div class="eo-form-group">
-          <label class="eo-form-label">Description
-            <span style="font-weight:400;color:var(--eo-text-muted)">(shown to respondents)</span>
-          </label>
-          <textarea name="description" class="eo-form-control" rows="2"
-                    placeholder="Briefly explain the purpose of this survey..."></textarea>
-        </div>
-        <div class="row g-3 mb-4">
-          <div class="col-sm-5">
-            <label class="eo-form-label">Closing Date <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span></label>
-            <input type="date" name="closes_at" class="eo-form-control"/>
-          </div>
-          <div class="col-sm-7" style="display:flex;align-items:flex-end;padding-bottom:2px">
-            <label style="display:flex;align-items:center;gap:12px;cursor:pointer;
-                          padding:10px 14px;border:1px solid var(--eo-border);border-radius:8px;width:100%">
-              <input type="checkbox" name="is_anonymous" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0"/>
-              <div>
-                <div style="font-size:.85rem;font-weight:600;color:var(--eo-text)">Anonymous responses</div>
-                <div style="font-size:.71rem;color:var(--eo-text-muted)">Respondent identity is not recorded</div>
-              </div>
-            </label>
-          </div>
-        </div>
-
-        {# ── Questions builder ── #}
-        <div style="border-top:1px solid var(--eo-border);padding-top:18px">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-            <div>
-              <span style="font-size:.92rem;font-weight:700;color:var(--eo-text)">Questions</span>
-              <span id="qCountBadge" style="display:none;margin-left:8px;font-size:.7rem;font-weight:700;
-                background:var(--eo-accent);color:#fff;padding:2px 8px;border-radius:20px"></span>
-            </div>
-            <button type="button" onclick="showQTypePicker()"
-                    class="eo-btn eo-btn-sm" style="background:#ede9fe;color:#6d28d9;border:none">
-              <i class="bi bi-plus-lg"></i> Add Question
-            </button>
-          </div>
-
-          {# Question type picker (hidden by default) #}
-          <div id="qTypePicker" style="display:none;margin-bottom:16px;padding:16px;
-               background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px">
-            <div style="font-size:.75rem;font-weight:700;color:var(--eo-text-muted);
-                        text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px">
-              Choose question type
-            </div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px">
-              <div class="qtype-btn" onclick="addQuestion('text')">
-                <i class="bi bi-fonts"></i>Short Text
-              </div>
-              <div class="qtype-btn" onclick="addQuestion('paragraph')">
-                <i class="bi bi-text-left"></i>Paragraph
-              </div>
-              <div class="qtype-btn" onclick="addQuestion('single_choice')">
-                <i class="bi bi-ui-radios"></i>Single Choice
-              </div>
-              <div class="qtype-btn" onclick="addQuestion('multi_choice')">
-                <i class="bi bi-ui-checks"></i>Multi Choice
-              </div>
-              <div class="qtype-btn" onclick="addQuestion('rating')">
-                <i class="bi bi-star"></i>Rating
-              </div>
-              <div class="qtype-btn" onclick="addQuestion('yes_no')">
-                <i class="bi bi-toggle-on"></i>Yes / No
-              </div>
-              <div class="qtype-btn" onclick="addQuestion('number')">
-                <i class="bi bi-hash"></i>Number
-              </div>
-              <div class="qtype-btn" onclick="addQuestion('geolocation')">
-                <i class="bi bi-geo-alt"></i>Geolocation
-              </div>
-            </div>
-          </div>
-
-          <div id="questionsList" style="display:flex;flex-direction:column;gap:10px"></div>
-
-          <div id="noQuestionsHint" style="text-align:center;padding:28px;color:var(--eo-text-muted);
-               font-size:.84rem;border:2px dashed var(--eo-border);border-radius:10px">
-            <i class="bi bi-clipboard2" style="font-size:1.5rem;display:block;margin-bottom:8px;opacity:.4"></i>
-            Click "+ Add Question" to start building your survey
-          </div>
-        </div>
-
-        <div style="display:flex;gap:10px;padding-top:16px;margin-top:16px;border-top:1px solid var(--eo-border)">
-          <button type="submit" class="eo-btn eo-btn-primary" style="min-width:140px">
-            <i class="bi bi-send"></i> Create Survey
-          </button>
-          <button type="button" onclick="closeModal('createSurveyModal')" class="eo-btn eo-btn-secondary">
-            Cancel
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-</div>
-{% endif %}
-
-{% if is_manager %}
-<div class="proj-modal-backdrop" id="editSurveyModal">
-  <div class="proj-modal" style="width:720px;max-width:96vw">
-    <div class="proj-modal-head">
-      <div style="display:flex;align-items:center;gap:10px">
-        <div style="width:30px;height:30px;border-radius:8px;background:#e0f2fe;display:flex;align-items:center;justify-content:center">
-          <i class="bi bi-pencil-square" style="color:#0284c7;font-size:.9rem"></i>
-        </div>
-        <span style="font-size:1rem;font-weight:700;color:var(--eo-text)">Edit Survey</span>
-      </div>
-      <button onclick="closeModal('editSurveyModal')"
-              style="background:none;border:none;cursor:pointer;font-size:1.3rem;color:var(--eo-text-muted);line-height:1;padding:0 4px">&times;</button>
-    </div>
-    <div class="proj-modal-body" id="editSurveyBody"></div>
-  </div>
-</div>
-{% endif %}
-<script>
-var editQCount = 0;
-
-function openEditSurveyModal(id, title, description, closesAt, isAnonymous, isPublic, allowMultiple, questions) {
-  editQCount = 0;
-
-  const html = `
-    <form method="post" action="/projects/{{ project.pk }}/surveys/${id}/edit/">
+    <form method="post" id="builderForm" action="{% url 'project_surveys' project.pk %}" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
       {% csrf_token %}
+      <div class="proj-modal-body">
+        <div class="builder-grid">
 
-      <div class="eo-form-group">
-        <label class="eo-form-label">Survey Title *</label>
-        <input type="text" name="title" class="eo-form-control" required value="${title || ''}">
-      </div>
+          {# ── LEFT: Build area ───────────────────────────────────────── #}
+          <div class="builder-main">
 
-      <div class="eo-form-group">
-        <label class="eo-form-label">Description</label>
-        <textarea name="description" class="eo-form-control" rows="2">${description || ''}</textarea>
-      </div>
+            <div class="eo-form-group">
+              <label class="eo-form-label">Survey Title <span style="color:#ef4444">*</span></label>
+              <input type="text" name="title" id="b_title" class="eo-form-control" required
+                     placeholder="e.g. Post-Training Feedback, Site Visit Report"
+                     oninput="syncPreview()"/>
+            </div>
+            <div class="eo-form-group">
+              <label class="eo-form-label">Description
+                <span style="font-weight:400;color:var(--eo-text-muted)">(shown to respondents)</span>
+              </label>
+              <textarea name="description" id="b_description" class="eo-form-control" rows="2"
+                        placeholder="Briefly explain the purpose of this survey..."
+                        oninput="syncPreview()"></textarea>
+            </div>
 
-      <div class="row g-3 mb-4">
-        <div class="col-sm-4">
-          <label class="eo-form-label">Closing Date</label>
-          <input type="date" name="closes_at" class="eo-form-control" value="${closesAt || ''}">
-        </div>
+            <div class="builder-section-title"><i class="bi bi-gear"></i> Settings</div>
+            <div class="row g-3 mb-3">
+              <div class="col-sm-5">
+                <label class="eo-form-label">Closing Date <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span></label>
+                <input type="date" name="closes_at" id="b_closes_at" class="eo-form-control"/>
+              </div>
+              <div class="col-sm-7">
+                <div class="settings-row" style="margin-bottom:0">
+                  <label class="settings-chip" id="chip_anon">
+                    <input type="checkbox" name="is_anonymous" id="b_is_anonymous" onchange="toggleChip('chip_anon',this)"/>
+                    <div class="settings-chip-text">
+                      <div class="settings-chip-title"><i class="bi bi-eye-slash" style="color:#92400e"></i> Anonymous</div>
+                      <div class="settings-chip-sub">Respondent identity is not recorded</div>
+                    </div>
+                  </label>
+                  <label class="settings-chip" id="chip_pub">
+                    <input type="checkbox" name="is_public" id="b_is_public" onchange="toggleChip('chip_pub',this)"/>
+                    <div class="settings-chip-text">
+                      <div class="settings-chip-title"><i class="bi bi-globe" style="color:#1d4ed8"></i> Public link</div>
+                      <div class="settings-chip-sub">Anyone with the link can respond (no login)</div>
+                    </div>
+                  </label>
+                  <label class="settings-chip" id="chip_multi">
+                    <input type="checkbox" name="allow_multiple_responses" id="b_allow_multi" onchange="toggleChip('chip_multi',this)"/>
+                    <div class="settings-chip-text">
+                      <div class="settings-chip-title"><i class="bi bi-arrow-repeat" style="color:#059669"></i> Allow multiple</div>
+                      <div class="settings-chip-sub">Same device can submit more than once (public only)</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
 
-        <div class="col-sm-8" style="display:flex;flex-direction:column;gap:10px;justify-content:flex-end">
-          <label style="display:flex;align-items:center;gap:10px">
-            <input type="checkbox" name="is_anonymous" ${isAnonymous ? 'checked' : ''}>
-            <span>Anonymous responses</span>
-          </label>
+            <div class="builder-section-title">
+              <i class="bi bi-patch-question"></i> Questions
+              <span id="qCountBadge" style="display:none;font-size:.65rem;font-weight:800;
+                background:var(--proj);color:#fff;padding:2px 8px;border-radius:20px;letter-spacing:.04em;margin-left:4px"></span>
+            </div>
 
-          <label style="display:flex;align-items:center;gap:10px">
-            <input type="checkbox" name="is_public" ${isPublic ? 'checked' : ''}>
-            <span>Public link enabled</span>
-          </label>
+            <div class="qtype-grid">
+              <div class="qtype-btn" onclick="addQuestion('text')"><i class="bi bi-fonts"></i>Short Text</div>
+              <div class="qtype-btn" onclick="addQuestion('paragraph')"><i class="bi bi-text-left"></i>Paragraph</div>
+              <div class="qtype-btn" onclick="addQuestion('single_choice')"><i class="bi bi-ui-radios"></i>Single Choice</div>
+              <div class="qtype-btn" onclick="addQuestion('multi_choice')"><i class="bi bi-ui-checks"></i>Multi Choice</div>
+              <div class="qtype-btn" onclick="addQuestion('rating')"><i class="bi bi-star-fill"></i>Rating 1–5</div>
+              <div class="qtype-btn" onclick="addQuestion('yes_no')"><i class="bi bi-toggle-on"></i>Yes / No</div>
+              <div class="qtype-btn" onclick="addQuestion('number')"><i class="bi bi-hash"></i>Number</div>
+              <div class="qtype-btn" onclick="addQuestion('geolocation')"><i class="bi bi-geo-alt-fill"></i>Geolocation</div>
+            </div>
 
-          <label style="display:flex;align-items:center;gap:10px">
-            <input type="checkbox" name="allow_multiple_responses" ${allowMultiple ? 'checked' : ''}>
-            <span>Allow multiple responses</span>
-          </label>
-        </div>
-      </div>
+            <div id="questionsList" class="q-list"></div>
 
-      <div style="border-top:1px solid var(--eo-border);padding-top:18px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-          <div>
-            <span style="font-size:.92rem;font-weight:700;color:var(--eo-text)">Questions</span>
-            <span id="editQCountBadge" style="display:none;margin-left:8px;font-size:.7rem;font-weight:700;
-              background:var(--eo-accent);color:#fff;padding:2px 8px;border-radius:20px"></span>
+            <div id="noQuestionsHint" class="q-empty">
+              <i class="bi bi-clipboard2"></i>
+              Click any question type above to add your first question
+            </div>
           </div>
-          <button type="button" onclick="toggleEditQTypePicker()"
-                  class="eo-btn eo-btn-sm" style="background:#ede9fe;color:#6d28d9;border:none">
-            <i class="bi bi-plus-lg"></i> Add Question
-          </button>
-        </div>
 
-        <div id="editQTypePicker" style="display:none;margin-bottom:16px;padding:16px;
-             background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px">
-          <div style="font-size:.75rem;font-weight:700;color:var(--eo-text-muted);
-                      text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px">
-            Choose question type
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:8px">
-            <div class="qtype-btn" onclick="addEditQuestionBlock('text')">
-              <i class="bi bi-fonts"></i>Short Text
+          {# ── RIGHT: Live preview ───────────────────────────────────── #}
+          <div class="builder-side">
+            <div class="builder-section-title"><i class="bi bi-eye"></i> Live Preview</div>
+            <div class="preview-wrap" id="previewWrap">
+              <div class="preview-header" id="prevTitle">Untitled Survey</div>
+              <div class="preview-desc" id="prevDesc">Your description will appear here</div>
+
+              <div class="preview-stats">
+                <div class="stat"><b id="prevQCount">0</b>Questions</div>
+                <div class="stat"><b id="prevReqCount">0</b>Required</div>
+                <div class="stat"><b id="prevOptCount">0</b>Optional</div>
+              </div>
+
+              <div id="prevQuestions">
+                <div class="preview-empty">
+                  <i class="bi bi-arrow-left"></i> Add questions to see them previewed here
+                </div>
+              </div>
             </div>
-            <div class="qtype-btn" onclick="addEditQuestionBlock('paragraph')">
-              <i class="bi bi-text-left"></i>Paragraph
-            </div>
-            <div class="qtype-btn" onclick="addEditQuestionBlock('single_choice')">
-              <i class="bi bi-ui-radios"></i>Single Choice
-            </div>
-            <div class="qtype-btn" onclick="addEditQuestionBlock('multi_choice')">
-              <i class="bi bi-ui-checks"></i>Multi Choice
-            </div>
-            <div class="qtype-btn" onclick="addEditQuestionBlock('rating')">
-              <i class="bi bi-star"></i>Rating
-            </div>
-            <div class="qtype-btn" onclick="addEditQuestionBlock('yes_no')">
-              <i class="bi bi-toggle-on"></i>Yes / No
-            </div>
-            <div class="qtype-btn" onclick="addEditQuestionBlock('number')">
-              <i class="bi bi-hash"></i>Number
+
+            <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:12px;line-height:1.6">
+              <i class="bi bi-info-circle"></i> This preview updates live as you build. Drag questions by the
+              <i class="bi bi-grip-vertical" style="color:var(--proj)"></i> handle to reorder.
             </div>
           </div>
-        </div>
-
-        <div id="editQuestionList" style="display:flex;flex-direction:column;gap:10px"></div>
-
-        <div id="editNoQuestionsHint" style="text-align:center;padding:28px;color:var(--eo-text-muted);
-             font-size:.84rem;border:2px dashed var(--eo-border);border-radius:10px;display:none">
-          <i class="bi bi-clipboard2" style="font-size:1.5rem;display:block;margin-bottom:8px;opacity:.4"></i>
-          Click "+ Add Question" to start building your survey
         </div>
       </div>
 
-      <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--eo-border);margin-top:16px">
-        <button type="submit" class="eo-btn eo-btn-primary">Save Changes</button>
-        <button type="button" onclick="closeModal('editSurveyModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+      <div class="proj-modal-foot">
+        <button type="submit" class="eo-btn eo-btn-primary" id="builderSubmit" style="min-width:160px">
+          <i class="bi bi-send"></i> <span id="builderSubmitText">Create Survey</span>
+        </button>
+        <button type="button" onclick="closeBuilder()" class="eo-btn eo-btn-secondary">Cancel</button>
+        <span style="margin-left:auto;font-size:.76rem;color:var(--eo-text-muted)">
+          <i class="bi bi-shield-check"></i> Drafts are saved locally while you work
+        </span>
       </div>
     </form>
-  `;
-
-  document.getElementById('editSurveyBody').innerHTML = html;
-
-  if (questions && questions.length) {
-    questions.forEach(function(q) {
-      addEditQuestionBlock(q.type, q.text, q.options, q.required);
-    });
-  } else {
-    document.getElementById('editNoQuestionsHint').style.display = '';
-  }
-
-  updateEditQCount();
-  openModal('editSurveyModal');
-}
-</script>
+  </div>
+</div>
+{% endif %}
 
 {% endblock %}
 
 {% block extra_js %}
 <script>
-function toggleEditQTypePicker() {
-  var p = document.getElementById('editQTypePicker');
-  if (!p) return;
-  p.style.display = p.style.display === 'none' ? '' : 'none';
+/* ══════════════════════════════════════════════════════════════════════
+   Unified Survey Builder — handles both create & edit
+   IMPORTANT: form field names are preserved (title, description, closes_at,
+   is_anonymous, is_public, allow_multiple_responses, q_type, q_text,
+   q_options, q_required) so the server-side view needs no changes.
+   ══════════════════════════════════════════════════════════════════════ */
+
+const TYPE_META = {
+  text          : { icon:'bi-fonts',       label:'Short Text',    hasOptions:false },
+  paragraph     : { icon:'bi-text-left',   label:'Paragraph',     hasOptions:false },
+  single_choice : { icon:'bi-ui-radios',   label:'Single Choice', hasOptions:true  },
+  multi_choice  : { icon:'bi-ui-checks',   label:'Multi Choice',  hasOptions:true  },
+  rating        : { icon:'bi-star-fill',   label:'Rating 1–5',    hasOptions:false },
+  yes_no        : { icon:'bi-toggle-on',   label:'Yes / No',      hasOptions:false },
+  number        : { icon:'bi-hash',        label:'Number',        hasOptions:false },
+  geolocation   : { icon:'bi-geo-alt-fill',label:'Geolocation',   hasOptions:false },
+};
+
+let qCount = 0;
+const CREATE_ACTION = "{% url 'project_surveys' project.pk %}";
+const EDIT_ACTION_PREFIX = "/projects/{{ project.pk }}/surveys/";
+
+// ── Modal open/close ──────────────────────────────────────────────────
+function openBuilder(){
+  resetBuilder();
+  document.getElementById('builderTitle').textContent = 'New Survey';
+  document.getElementById('builderSubtitle').textContent = 'Build your questions below';
+  document.getElementById('builderSubmitText').textContent = 'Create Survey';
+  document.getElementById('builderForm').action = CREATE_ACTION;
+  document.getElementById('builderModal').classList.add('open');
 }
+function openEditBuilder(id, data){
+  resetBuilder();
+  document.getElementById('builderTitle').textContent = 'Edit Survey';
+  document.getElementById('builderSubtitle').textContent = data.title || '';
+  document.getElementById('builderSubmitText').textContent = 'Save Changes';
+  document.getElementById('builderForm').action = EDIT_ACTION_PREFIX + id + '/edit/';
 
-function addEditQuestionBlock(qtype, textValue='', optionsValue='', isRequired=true) {
-  var list = document.getElementById('editQuestionList');
-  if (!list) return;
-
-  var picker = document.getElementById('editQTypePicker');
-  if (picker) picker.style.display = 'none';
-
-  var hint = document.getElementById('editNoQuestionsHint');
-  if (hint) hint.style.display = 'none';
-
-  var idx = editQCount++;
-  var div = document.createElement('div');
-  div.id = 'edit_q_' + idx;
-  div.className = 'q-block';
-
-  var needsOptions = (qtype === 'single_choice' || qtype === 'multi_choice');
-
-  div.innerHTML = `
-    <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px">
-      <div class="q-block-num">${idx + 1}</div>
-      <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
-          <span style="font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:5px;
-                       background:#ede9fe;color:#6d28d9;display:flex;align-items:center;gap:4px">
-            <i class="bi ${TYPE_ICONS[qtype]}"></i> ${TYPE_LABELS[qtype]}
-          </span>
-          <input type="hidden" name="q_type" value="${qtype}"/>
-        </div>
-        <input type="text" name="q_text" class="eo-form-control"
-               placeholder="Enter your question..." required
-               value="${escapeHtml(textValue)}"
-               style="font-size:.88rem;font-weight:500"/>
-      </div>
-      <button type="button" onclick="removeEditQuestion(${idx})"
-              style="background:none;border:none;color:var(--eo-text-muted);cursor:pointer;
-                     font-size:1.1rem;padding:0;flex-shrink:0;margin-top:2px">&times;</button>
-    </div>
-
-    ${needsOptions ? `
-    <div style="margin-bottom:10px">
-      <label class="eo-form-label" style="font-size:.75rem">
-        Options <span style="font-weight:400;color:var(--eo-text-muted)">(one per line)</span>
-      </label>
-      <textarea name="q_options" class="eo-form-control" rows="3"
-                placeholder="Option A&#10;Option B&#10;Option C"
-                style="font-size:.83rem">${escapeHtml(optionsValue)}</textarea>
-    </div>` : '<textarea name="q_options" style="display:none"></textarea>'}
-
-    <div style="display:flex;align-items:center;gap:14px">
-      <label style="display:flex;align-items:center;gap:7px;font-size:.8rem;cursor:pointer;color:var(--eo-text-muted)">
-        <input type="checkbox" name="q_required" value="${idx}" ${isRequired ? 'checked' : ''}
-               style="width:14px;height:14px;accent-color:#7c3aed"/>
-        Required
-      </label>
-    </div>
-  `;
-
-  list.appendChild(div);
-  updateEditQCount();
+  document.getElementById('b_title').value = data.title || '';
+  document.getElementById('b_description').value = data.description || '';
+  document.getElementById('b_closes_at').value = data.closes_at || '';
+  setCheck('b_is_anonymous', 'chip_anon', data.is_anonymous);
+  setCheck('b_is_public',    'chip_pub',  data.is_public);
+  setCheck('b_allow_multi',  'chip_multi',data.allow_multiple);
+  (data.questions||[]).forEach(q=>addQuestion(q.type, q.text, q.options, q.required));
+  syncPreview();
+  document.getElementById('builderModal').classList.add('open');
 }
-
-function removeEditQuestion(idx) {
-  var el = document.getElementById('edit_q_' + idx);
-  if (el) {
-    el.style.opacity = '0';
-    el.style.transform = 'scale(.97)';
-    el.style.transition = '.15s';
-    setTimeout(function() {
-      el.remove();
-      updateEditQCount();
-      var hasAny = document.querySelectorAll('#editQuestionList .q-block').length > 0;
-      var hint = document.getElementById('editNoQuestionsHint');
-      if (hint) hint.style.display = hasAny ? 'none' : '';
-    }, 150);
-  }
-}
-
-function updateEditQCount() {
-  var n = document.querySelectorAll('#editQuestionList .q-block').length;
-  var badge = document.getElementById('editQCountBadge');
-  if (!badge) return;
-  badge.style.display = n > 0 ? '' : 'none';
-  badge.textContent = n + ' question' + (n !== 1 ? 's' : '');
-}
-
-function escapeHtml(value) {
-  if (value === null || value === undefined) return '';
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-</script>
-<script>
-function openModal(id)  { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-document.querySelectorAll('.proj-modal-backdrop').forEach(function(el){
-  el.addEventListener('click', function(e){ if(e.target===el) el.classList.remove('open'); });
+function closeBuilder(){ document.getElementById('builderModal').classList.remove('open'); }
+document.querySelectorAll('.proj-modal-backdrop').forEach(el=>{
+  el.addEventListener('click', e=>{ if (e.target===el) el.classList.remove('open'); });
 });
 
-// ── Copy survey link ──────────────────────────────────────────────────────────
-function copyLink(url) {
-  navigator.clipboard.writeText(url).then(function() {
-    var t = document.getElementById('copyToast');
-    t.style.opacity='1'; t.style.transform='translateY(0)';
-    setTimeout(function(){ t.style.opacity='0'; t.style.transform='translateY(8px)'; }, 2200);
+function setCheck(id, chipId, val){
+  const cb = document.getElementById(id);
+  cb.checked = !!val;
+  document.getElementById(chipId).classList.toggle('on', !!val);
+}
+function toggleChip(chipId, input){
+  document.getElementById(chipId).classList.toggle('on', input.checked);
+}
+
+function resetBuilder(){
+  qCount = 0;
+  document.getElementById('b_title').value = '';
+  document.getElementById('b_description').value = '';
+  document.getElementById('b_closes_at').value = '';
+  ['b_is_anonymous','b_is_public','b_allow_multi'].forEach(id=>{
+    document.getElementById(id).checked = false;
   });
+  ['chip_anon','chip_pub','chip_multi'].forEach(id=>{
+    document.getElementById(id).classList.remove('on');
+  });
+  document.getElementById('questionsList').innerHTML = '';
+  document.getElementById('noQuestionsHint').style.display = '';
+  updateQCount();
+  syncPreview();
 }
 
-// ── Question builder ──────────────────────────────────────────────────────────
-var qCount = 0;
+// ── Add / Remove / Reorder ────────────────────────────────────────────
+function addQuestion(qtype, textValue='', optionsValue='', isRequired=true){
+  const meta = TYPE_META[qtype]; if (!meta) return;
+  document.getElementById('noQuestionsHint').style.display = 'none';
 
-function showQTypePicker() {
-  var p = document.getElementById('qTypePicker');
-  p.style.display = p.style.display === 'none' ? '' : 'none';
-}
-
-var TYPE_LABELS = {
-  text: 'Short Text',
-  paragraph: 'Paragraph',
-  single_choice: 'Single Choice',
-  multi_choice: 'Multi Choice',
-  rating: 'Rating 1–5',
-  yes_no: 'Yes / No',
-  number: 'Number',
-  geolocation: 'Geolocation'
-};
-
-var TYPE_ICONS = {
-  text: 'bi-fonts',
-  paragraph: 'bi-text-left',
-  single_choice: 'bi-ui-radios',
-  multi_choice: 'bi-ui-checks',
-  rating: 'bi-star',
-  yes_no: 'bi-toggle-on',
-  number: 'bi-hash',
-  geolocation: 'bi-geo-alt'
-};
-
-function addQuestion(qtype) {
-  document.getElementById('qTypePicker').style.display = 'none';
-  var hint = document.getElementById('noQuestionsHint');
-  if (hint) hint.style.display = 'none';
-
-  var idx  = qCount++;
-  var div  = document.createElement('div');
-  div.id   = 'q_' + idx;
+  const idx = qCount++;
+  const div = document.createElement('div');
+  div.id = 'q_'+idx;
   div.className = 'q-block';
-
-  var needsOptions = (qtype === 'single_choice' || qtype === 'multi_choice');
+  div.draggable = true;
 
   div.innerHTML = `
-    <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px">
-      <div class="q-block-num">${idx+1}</div>
-      <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
-          <span style="font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:5px;
-                       background:#ede9fe;color:#6d28d9;display:flex;align-items:center;gap:4px">
-            <i class="bi ${TYPE_ICONS[qtype]}"></i> ${TYPE_LABELS[qtype]}
-          </span>
-          <input type="hidden" name="q_type" value="${qtype}"/>
-        </div>
-        <input type="text" name="q_text" class="eo-form-control"
-               placeholder="Enter your question..." required
-               style="font-size:.88rem;font-weight:500"/>
-      </div>
-      <button type="button" onclick="removeQuestion(${idx})"
-              style="background:none;border:none;color:var(--eo-text-muted);cursor:pointer;
-                     font-size:1.1rem;padding:0;flex-shrink:0;margin-top:2px">&times;</button>
+    <div class="q-block-head">
+      <span class="q-drag" title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+      <div class="q-block-num q-pos"></div>
+      <span class="q-type-pill"><i class="bi ${meta.icon}"></i> ${meta.label}</span>
+      <input type="hidden" name="q_type" value="${qtype}">
+      <button type="button" class="q-remove" title="Remove question">&times;</button>
     </div>
-
-    ${needsOptions ? `
-    <div style="margin-bottom:10px">
-      <label class="eo-form-label" style="font-size:.75rem">
-        Options <span style="font-weight:400;color:var(--eo-text-muted)">(one per line)</span>
-      </label>
-      <textarea name="q_options" class="eo-form-control" rows="3"
-                placeholder="Option A&#10;Option B&#10;Option C" style="font-size:.83rem"></textarea>
-    </div>` : '<textarea name="q_options" style="display:none"></textarea>'}
-
-    <div style="display:flex;align-items:center;gap:14px">
-      <label style="display:flex;align-items:center;gap:7px;font-size:.8rem;cursor:pointer;color:var(--eo-text-muted)">
-        <input type="checkbox" name="q_required" value="${idx}" checked
-               style="width:14px;height:14px;accent-color:#7c3aed"/>
+    <input type="text" class="q-text-input" name="q_text" required
+           placeholder="Type your question here..."
+           value="${escapeHtml(textValue||'')}"
+           oninput="syncPreview()">
+    ${meta.hasOptions ? `
+      <div class="q-options">
+        <div class="q-options-label"><i class="bi bi-list-ul"></i> Options <span style="font-weight:500;color:#94a3b8">(one per line)</span></div>
+        <textarea name="q_options" rows="3" oninput="syncPreview()"
+                  placeholder="Option A&#10;Option B&#10;Option C">${escapeHtml(optionsValue||'')}</textarea>
+      </div>
+    ` : '<textarea name="q_options" style="display:none"></textarea>'}
+    <div class="q-meta">
+      <label>
+        <input type="checkbox" name="q_required" value="${idx}" ${isRequired!==false?'checked':''} onchange="syncPreview()">
         Required
       </label>
-    </div>`;
-
+      <span style="margin-left:auto;color:#94a3b8;font-size:.72rem">
+        <i class="bi bi-hash"></i> q_${idx+1}
+      </span>
+    </div>
+  `;
+  div.querySelector('.q-remove').onclick = ()=>removeQuestion(div);
+  wireDragAndDrop(div);
   document.getElementById('questionsList').appendChild(div);
   updateQCount();
   div.querySelector('input[name="q_text"]').focus();
+  syncPreview();
 }
 
-function removeQuestion(idx) {
-  var el = document.getElementById('q_' + idx);
-  if (el) { el.style.opacity='0'; el.style.transform='scale(.97)'; el.style.transition='.15s'; setTimeout(function(){el.remove();updateQCount();},150); }
-  if (!document.querySelector('#questionsList .q-block')) {
-    document.getElementById('noQuestionsHint').style.display='';
-  }
+function removeQuestion(div){
+  div.style.opacity='0'; div.style.transform='scale(.97)'; div.style.transition='.15s';
+  setTimeout(()=>{
+    div.remove();
+    updateQCount();
+    syncPreview();
+    if (!document.querySelector('#questionsList .q-block')) {
+      document.getElementById('noQuestionsHint').style.display = '';
+    }
+  }, 150);
 }
 
-function updateQCount() {
-  var n = document.querySelectorAll('#questionsList .q-block').length;
-  var badge = document.getElementById('qCountBadge');
-  badge.style.display = n > 0 ? '' : 'none';
-  badge.textContent = n + ' question' + (n !== 1 ? 's' : '');
+function updateQCount(){
+  const blocks = document.querySelectorAll('#questionsList .q-block');
+  blocks.forEach((el,i)=>{ const pos = el.querySelector('.q-pos'); if (pos) pos.textContent = i+1; });
+  const n = blocks.length;
+  const badge = document.getElementById('qCountBadge');
+  badge.style.display = n>0 ? '' : 'none';
+  badge.textContent = n + ' question' + (n!==1?'s':'');
+}
+
+// ── Drag & drop reordering ────────────────────────────────────────────
+let dragSrc = null;
+function wireDragAndDrop(block){
+  block.addEventListener('dragstart', e=>{
+    dragSrc = block;
+    block.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', block.id); } catch(_){}
+  });
+  block.addEventListener('dragend', ()=>{
+    block.classList.remove('dragging');
+    document.querySelectorAll('.q-block.drop-target').forEach(e=>e.classList.remove('drop-target'));
+    dragSrc = null;
+    updateQCount();
+    syncPreview();
+  });
+  block.addEventListener('dragover', e=>{
+    e.preventDefault();
+    if (!dragSrc || dragSrc===block) return;
+    block.classList.add('drop-target');
+  });
+  block.addEventListener('dragleave', ()=> block.classList.remove('drop-target'));
+  block.addEventListener('drop', e=>{
+    e.preventDefault();
+    block.classList.remove('drop-target');
+    if (!dragSrc || dragSrc===block) return;
+    const list = document.getElementById('questionsList');
+    const rect = block.getBoundingClientRect();
+    const after = (e.clientY - rect.top) > rect.height/2;
+    if (after) list.insertBefore(dragSrc, block.nextSibling);
+    else       list.insertBefore(dragSrc, block);
+  });
+}
+
+// ── Live preview ──────────────────────────────────────────────────────
+function syncPreview(){
+  const t = document.getElementById('b_title').value.trim() || 'Untitled Survey';
+  const d = document.getElementById('b_description').value.trim() || 'Your description will appear here';
+  document.getElementById('prevTitle').textContent = t;
+  document.getElementById('prevDesc').textContent = d;
+
+  const blocks = Array.from(document.querySelectorAll('#questionsList .q-block'));
+  const qTotal = blocks.length;
+  let qReq = 0;
+  const questionsHTML = blocks.map((b, i)=>{
+    const type = b.querySelector('input[name="q_type"]').value;
+    const meta = TYPE_META[type] || { icon:'bi-question', label:'Question' };
+    const text = b.querySelector('input[name="q_text"]').value.trim() || `Question ${i+1}`;
+    const opts = (b.querySelector('textarea[name="q_options"]')?.value || '')
+      .split('\n').map(s=>s.trim()).filter(Boolean);
+    const req = b.querySelector('input[name="q_required"]')?.checked;
+    if (req) qReq++;
+
+    let body = '';
+    if (type==='text')            body = `<input class="preview-input" value="" placeholder="Short answer" disabled>`;
+    else if (type==='paragraph')  body = `<textarea class="preview-input" rows="2" placeholder="Longer response" disabled></textarea>`;
+    else if (type==='number')     body = `<input class="preview-input" value="" placeholder="0" disabled>`;
+    else if (type==='single_choice' || type==='multi_choice') {
+      const ctrl = type==='single_choice' ? 'circle' : 'square';
+      body = opts.length
+        ? opts.slice(0,4).map(o=>`<div class="preview-option"><i class="bi bi-${ctrl}"></i>${escapeHtml(o)}</div>`).join('')
+          + (opts.length>4 ? `<div style="font-size:.72rem;color:#94a3b8;margin-top:4px">+${opts.length-4} more</div>` : '')
+        : `<div style="font-size:.74rem;color:#94a3b8;font-style:italic">No options yet</div>`;
+    }
+    else if (type==='rating')     body = `<div class="preview-stars">★★★★★</div>`;
+    else if (type==='yes_no')     body = `
+      <div style="display:flex;gap:6px">
+        <div class="preview-option" style="flex:1;justify-content:center"><i class="bi bi-hand-thumbs-up" style="color:#10b981"></i>Yes</div>
+        <div class="preview-option" style="flex:1;justify-content:center"><i class="bi bi-hand-thumbs-down" style="color:#ef4444"></i>No</div>
+      </div>`;
+    else if (type==='geolocation')body = `<div class="preview-option"><i class="bi bi-geo-alt-fill" style="color:#ec4899"></i>Capture location…</div>`;
+
+    return `
+      <div class="preview-q">
+        <div class="preview-q-text">
+          <span style="color:var(--proj);font-weight:800">${i+1}.</span>
+          ${escapeHtml(text)}${req?'<span style="color:#ef4444">*</span>':''}
+          <span style="float:right"><i class="bi ${meta.icon}" style="color:#94a3b8;font-size:.78rem"></i></span>
+        </div>
+        ${body}
+      </div>`;
+  }).join('');
+
+  const container = document.getElementById('prevQuestions');
+  container.innerHTML = qTotal
+    ? questionsHTML
+    : '<div class="preview-empty"><i class="bi bi-arrow-left"></i> Add questions to see them previewed here</div>';
+
+  document.getElementById('prevQCount').textContent = qTotal;
+  document.getElementById('prevReqCount').textContent = qReq;
+  document.getElementById('prevOptCount').textContent = Math.max(0, qTotal - qReq);
+}
+
+// ── Copy link ─────────────────────────────────────────────────────────
+function copyLink(url){
+  const fallback = ()=>{
+    const ta=document.createElement('textarea'); ta.value=url; document.body.appendChild(ta);
+    ta.select(); try { document.execCommand('copy'); } catch(_){}
+    document.body.removeChild(ta);
+  };
+  const show = ()=>{
+    const t=document.getElementById('copyToast');
+    t.style.opacity='1'; t.style.transform='translateY(0)';
+    setTimeout(()=>{ t.style.opacity='0'; t.style.transform='translateY(8px)'; }, 2200);
+  };
+  if (navigator.clipboard){
+    navigator.clipboard.writeText(url).then(show, ()=>{ fallback(); show(); });
+  } else { fallback(); show(); }
+}
+
+function escapeHtml(s){
+  if (s==null) return '';
+  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 </script>
 {% endblock %}

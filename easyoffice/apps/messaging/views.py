@@ -2415,12 +2415,17 @@ class CallRingView(LoginRequiredMixin, View):
                 'error': f'{_safe_full_name(other)} is on Do Not Disturb.',
             }, status=409)
 
+        call_kind = (request.POST.get('call_kind') or 'voice').strip().lower()
+        if call_kind not in ('voice', 'video'):
+            call_kind = 'voice'
+
         from django.core.cache import cache
         ring = {
             'room_id': str(room.id),
             'caller_id': str(request.user.id),
             'caller_name': _safe_full_name(request.user),
             'caller_avatar': (request.user.avatar.url if getattr(request.user, 'avatar', None) else ''),
+            'call_kind': call_kind,
             'started_at': timezone.now().isoformat(),
         }
         cache.set(_call_ring_key(other.pk), _json.dumps(ring), timeout=_CALL_RING_TTL)
@@ -2446,6 +2451,7 @@ class CallRingView(LoginRequiredMixin, View):
             'ok': True,
             'callee_id': str(other.id),
             'callee_status': callee_status,   # for logging / future UI hints
+            'call_kind': call_kind,
         })
 
 
@@ -2472,17 +2478,82 @@ class CallClearView(LoginRequiredMixin, View):
     """
     POST /messages/call/clear/<room_id>/
     Clears any ring record for the OTHER member of this DM.
-    Called by both sides when the call is accepted / declined / ended.
+    Called by both sides when the call is accepted / declined / ended /
+    cancelled / times-out.
+
+    Body (optional):
+        reason = connected | declined | cancelled | missed | ended
+        call_kind = voice | video   (for the system message wording)
+
+    If reason is one of {'declined', 'cancelled', 'missed'} we post a
+    system message to the DM so the conversation shows "Missed call from X".
     """
 
     def post(self, request, room_id):
         room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
         other = room.members.exclude(id=request.user.id).first()
-        if not other:
-            return JsonResponse({'ok': True})
+
+        reason    = (request.POST.get('reason') or '').strip().lower()
+        call_kind = (request.POST.get('call_kind') or 'voice').strip().lower()
+        if call_kind not in ('voice', 'video'):
+            call_kind = 'voice'
 
         from django.core.cache import cache
-        cache.delete(_call_ring_key(other.pk))
-        # Also clear a ring pointed at self (e.g. caller cancelling their own ring)
-        cache.delete(_call_ring_key(request.user.pk))
+
+        # Was there actually a pending ring? (If already cleared, don't
+        # post a duplicate missed-call message.)
+        ring_key_for_other = _call_ring_key(other.pk) if other else None
+        ring_key_for_self  = _call_ring_key(request.user.pk)
+
+        had_ring_for_other = bool(cache.get(ring_key_for_other)) if ring_key_for_other else False
+        had_ring_for_self  = bool(cache.get(ring_key_for_self))
+
+        if ring_key_for_other:
+            cache.delete(ring_key_for_other)
+        cache.delete(ring_key_for_self)
+
+        # Post a system message only for outcomes where the call DIDN'T happen.
+        # 'connected' and 'ended' are post-call cleanups, not missed calls.
+        if other and reason in ('declined', 'cancelled', 'missed') and (had_ring_for_other or had_ring_for_self):
+            try:
+                self._post_missed_call_message(room, request.user, other, reason, call_kind)
+            except Exception:
+                _presence_log.exception('Failed to post missed-call system message')
+
         return JsonResponse({'ok': True})
+
+    @staticmethod
+    def _post_missed_call_message(room, actor, other, reason, call_kind):
+        """
+        `actor` is whoever hit /clear/. Depending on `reason`, that's either
+        the caller (cancelled) or the callee (declined / missed).
+        """
+        icon = '📹' if call_kind == 'video' else '📞'
+        kind_word = 'video call' if call_kind == 'video' else 'voice call'
+
+        # Figure out caller vs callee from the reason
+        if reason == 'cancelled':
+            # Actor was the CALLER, they hung up before callee answered.
+            caller_name = _safe_full_name(actor)
+            text = f'{icon} Missed {kind_word} from {caller_name}'
+            sender = actor   # attribute to caller (matches real-world call logs)
+        elif reason in ('declined', 'missed'):
+            # Actor was the CALLEE (or timed out). The OTHER user called them.
+            caller_name = _safe_full_name(other)
+            text = f'{icon} Missed {kind_word} from {caller_name}'
+            sender = other
+        else:
+            return
+
+        sys_msg = ChatMessage.objects.create(
+            room=room,
+            sender=sender,
+            message_type='system',
+            content=text,
+        )
+        room.updated_at = timezone.now()
+        room.save(update_fields=['updated_at'])
+        try:
+            _broadcast_chat_message(sys_msg)
+        except Exception:
+            pass

@@ -758,11 +758,17 @@
           {% for m in members %}{% if m.id != request.user.id %}
           <div style="font-weight:700;font-size:.95rem;color:var(--eo-text);display:flex;align-items:center;gap:8px">
             {{ m.full_name }}
-               <button id="btnStartCall" onclick="callStart()" title="Voice call"
+               <button id="btnStartVoiceCall" onclick="callStart('voice')" title="Voice call"
            class="eo-btn eo-btn-secondary eo-btn-sm"
            style="gap:5px;display:inline-flex;align-items:center">
            <i class="bi bi-telephone-fill"></i>
            <span style="font-size:.75rem">Call</span>
+         </button>
+               <button id="btnStartVideoCall" onclick="callStart('video')" title="Video call"
+           class="eo-btn eo-btn-secondary eo-btn-sm"
+           style="gap:5px;display:inline-flex;align-items:center">
+           <i class="bi bi-camera-video-fill"></i>
+           <span style="font-size:.75rem">Video</span>
          </button>
             <span id="dmPresenceBadge" style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0">
               <span id="dmPresenceDot" style="width:7px;height:7px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
@@ -1670,6 +1676,7 @@
 
 {% if room.room_type == 'direct' %}
 <style>
+  /* ─── Ringing / incoming modals ──────────────────────────────────────── */
   .call-modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:10000;display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px);}
   .call-modal{background:var(--eo-surface);border-radius:16px;padding:28px 26px;box-shadow:0 20px 60px rgba(0,0,0,.3);min-width:320px;max-width:380px;text-align:center;}
   .call-avatar{width:84px;height:84px;border-radius:50%;margin:0 auto 14px;background:#6366f1;color:#fff;font-size:1.9rem;font-weight:700;display:flex;align-items:center;justify-content:center;overflow:hidden;}
@@ -1683,10 +1690,37 @@
   .call-btn:hover{transform:translateY(-1px);filter:brightness(1.08);}
   .call-btn.accept{background:#10b981;}
   .call-btn.decline,.call-btn.hangup{background:#ef4444;}
-  .call-btn.mute{background:#64748b;}
-  .call-btn.mute.active{background:#f59e0b;}
 
-  /* In-call floating panel */
+  /* ─── In-call expanded view (fullscreen-ish) ─────────────────────────── */
+  .call-stage-backdrop{position:fixed;inset:0;background:#0f172a;z-index:9998;display:none;flex-direction:column;}
+  .call-stage-backdrop.active{display:flex;}
+  .call-stage-top{padding:14px 20px;display:flex;align-items:center;gap:14px;color:#e2e8f0;}
+  .call-stage-peer{flex:1;min-width:0;}
+  .call-stage-peer-name{font-size:1rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .call-stage-peer-state{font-size:.75rem;color:#94a3b8;font-variant-numeric:tabular-nums;}
+  .call-stage-minimize{background:rgba(255,255,255,.08);border:none;color:#e2e8f0;width:36px;height:36px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:.95rem;}
+  .call-stage-minimize:hover{background:rgba(255,255,255,.15);}
+
+  .call-stage-media{flex:1;min-height:0;position:relative;display:flex;align-items:center;justify-content:center;background:#020617;overflow:hidden;}
+  .call-stage-remote-video{width:100%;height:100%;object-fit:cover;display:none;}
+  .call-stage-remote-video.active{display:block;}
+  .call-stage-voice-centre{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#e2e8f0;gap:14px;}
+  .call-stage-big-avatar{width:140px;height:140px;border-radius:50%;background:#6366f1;color:#fff;font-size:3rem;font-weight:700;display:flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:0 0 0 0 rgba(99,102,241,.5);animation:callPulse 1.8s ease-in-out infinite;}
+  .call-stage-big-avatar img{width:100%;height:100%;object-fit:cover;}
+  .call-stage-big-name{font-size:1.25rem;font-weight:700;}
+
+  .call-stage-local-video{position:absolute;right:18px;bottom:18px;width:180px;height:120px;background:#020617;border:2px solid #334155;border-radius:12px;object-fit:cover;display:none;transform:scaleX(-1);}
+  .call-stage-local-video.active{display:block;}
+
+  .call-stage-controls{padding:18px 20px 22px;display:flex;gap:14px;justify-content:center;background:#020617;border-top:1px solid #1e293b;}
+  .call-ctl{border:none;width:52px;height:52px;border-radius:50%;cursor:pointer;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:1.1rem;transition:transform .15s,filter .15s,background .15s;}
+  .call-ctl:hover{transform:translateY(-1px);filter:brightness(1.1);}
+  .call-ctl.neutral{background:#334155;}
+  .call-ctl.neutral.active{background:#f59e0b;}
+  .call-ctl.neutral.off{background:#64748b;}
+  .call-ctl.hang{background:#ef4444;width:64px;}
+
+  /* ─── Minimized floating bar (existing style, now with Expand) ───────── */
   .call-bar{position:fixed;bottom:18px;right:18px;z-index:9999;display:none;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:14px;padding:10px 14px;box-shadow:0 8px 24px rgba(0,0,0,.15);align-items:center;gap:12px;min-width:240px;}
   .call-bar-avatar{width:34px;height:34px;border-radius:50%;background:#6366f1;color:#fff;font-size:.78rem;font-weight:700;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;}
   .call-bar-avatar img{width:100%;height:100%;object-fit:cover;}
@@ -1696,15 +1730,16 @@
   .call-bar-btn{border:none;border-radius:50%;width:32px;height:32px;cursor:pointer;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.85rem;}
   .call-bar-btn.mute{background:#64748b;}
   .call-bar-btn.mute.active{background:#f59e0b;}
+  .call-bar-btn.expand{background:#3b82f6;}
   .call-bar-btn.hangup{background:#ef4444;}
 </style>
 
-{# Incoming call modal (shown to callee) #}
+{# Incoming call modal #}
 <div class="call-modal-backdrop" id="incomingCallModal">
   <div class="call-modal">
     <div class="call-avatar call-ring-pulse" id="incomingCallAvatar">?</div>
     <div class="call-name" id="incomingCallName">Someone</div>
-    <div class="call-state">Incoming voice call…</div>
+    <div class="call-state" id="incomingCallState">Incoming voice call…</div>
     <div class="call-btn-row">
       <button class="call-btn decline" onclick="callDecline()" title="Decline">
         <i class="bi bi-telephone-x-fill"></i>
@@ -1716,7 +1751,7 @@
   </div>
 </div>
 
-{# Outgoing/ringing modal (shown to caller before answer) #}
+{# Outgoing (ringing) modal #}
 <div class="call-modal-backdrop" id="outgoingCallModal">
   <div class="call-modal">
     <div class="call-avatar call-ring-pulse" id="outgoingCallAvatar">?</div>
@@ -1730,7 +1765,44 @@
   </div>
 </div>
 
-{# In-call mini bar (shown after connect) #}
+{# In-call EXPANDED stage — fullscreen view during the call #}
+<div class="call-stage-backdrop" id="callStage">
+  <div class="call-stage-top">
+    <div class="call-stage-peer">
+      <div class="call-stage-peer-name" id="callStageName">In call</div>
+      <div class="call-stage-peer-state" id="callStageTimer">00:00</div>
+    </div>
+    <button class="call-stage-minimize" onclick="callMinimize()" title="Minimize">
+      <i class="bi bi-dash-lg"></i>
+    </button>
+  </div>
+
+  <div class="call-stage-media">
+    {# Voice-only centre #}
+    <div class="call-stage-voice-centre" id="callStageVoiceCentre">
+      <div class="call-stage-big-avatar" id="callStageBigAvatar">?</div>
+      <div class="call-stage-big-name" id="callStageBigName">Contact</div>
+    </div>
+    {# Remote video — hidden for voice calls, shown for video #}
+    <video class="call-stage-remote-video" id="callStageRemoteVideo" autoplay playsinline></video>
+    {# Local self-view (video calls only) #}
+    <video class="call-stage-local-video" id="callStageLocalVideo" autoplay playsinline muted></video>
+  </div>
+
+  <div class="call-stage-controls">
+    <button class="call-ctl neutral" id="callStageMute" onclick="callToggleMute()" title="Mute">
+      <i class="bi bi-mic-fill"></i>
+    </button>
+    <button class="call-ctl neutral" id="callStageVideo" onclick="callToggleVideo()" title="Camera" style="display:none">
+      <i class="bi bi-camera-video-fill"></i>
+    </button>
+    <button class="call-ctl hang" onclick="callHangup()" title="Hang up">
+      <i class="bi bi-telephone-x-fill"></i>
+    </button>
+  </div>
+</div>
+
+{# In-call MINIMIZED bar #}
 <div class="call-bar" id="callBar">
   <div class="call-bar-avatar" id="callBarAvatar">?</div>
   <div class="call-bar-meta">
@@ -1740,12 +1812,15 @@
   <button class="call-bar-btn mute" id="callBarMute" onclick="callToggleMute()" title="Mute">
     <i class="bi bi-mic-fill"></i>
   </button>
+  <button class="call-bar-btn expand" onclick="callExpand()" title="Expand">
+    <i class="bi bi-arrows-angle-expand"></i>
+  </button>
   <button class="call-bar-btn hangup" onclick="callHangup()" title="Hang up">
     <i class="bi bi-telephone-x-fill"></i>
   </button>
 </div>
 
-{# Remote audio — autoplay, no controls, NOT a MediaRecorder target #}
+{# Remote audio (for voice-only calls). For video calls the <video> element plays the audio too. #}
 <audio id="remoteCallAudio" autoplay playsinline style="display:none"></audio>
 
 {% endif %}
@@ -4094,28 +4169,55 @@ if (spellcheckToggleBtn) {
   animatePollBars(byId('chatMessages'));
   /* Hard scroll to bottom on load — bypass arrow logic */
   (function(){ var m = byId('chatMessages'); if(m) m.scrollTop = m.scrollHeight; })();
+
   /* ═══════════════════════════════════════════════════════════════════════
-     VOICE CALL MODULE (1-on-1, WebRTC, not recorded)
-     Lives INSIDE the main IIFE so it can access socket, ROOM_ID, USER_ID,
-     IS_DIRECT, DM_OTHER_USER_ID, byId, getCookie.
+     CALL MODULE — 1-on-1 voice OR video, WebRTC, not recorded.
+
+     Public API (all window-scoped so onclick= handlers can reach them):
+       callStart(kind)      kind = 'voice' | 'video'
+       callAccept()
+       callDecline()
+       callCancel()
+       callHangup()
+       callToggleMute()
+       callToggleVideo()    only meaningful on video calls
+       callMinimize()       active call: expanded stage → floating bar
+       callExpand()         active call: floating bar  → expanded stage
+
+     Design:
+       • Signaling via the existing /ws/chat/<room>/ WebSocket.
+       • Media is peer-to-peer WebRTC. Server never touches audio/video bytes.
+       • Every call type is 'voice' or 'video'. The `call_kind` field rides
+         on the ring record and the call_offer so the callee knows which
+         kind of media to expect before accepting.
+       • Missed-call system messages are posted server-side when /clear/
+         is hit with reason=declined|cancelled|missed.
+       • Tab-title flash + Notification API alert the callee when the chat
+         tab is backgrounded.
      ═══════════════════════════════════════════════════════════════════════ */
+
   var CALL_ICE_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' }
-    // Add TURN here if needed, e.g.:
+    // Add TURN later if NAT traversal fails, e.g.:
     // { urls: 'turn:turn.example.com:3478', username: 'u', credential: 'p' }
   ];
 
-  var callPC           = null;
-  var callLocalStream  = null;
-  var callState        = 'idle';    // idle | outgoing | incoming | active
-  var callIsMuted      = false;
-  var callTimer        = null;
-  var callStartedAt    = 0;
-  var callPeerId       = null;
-  var callPeerName     = '';
-  var _pendingOffer    = null;
+  var callPC            = null;
+  var callLocalStream   = null;
+  var callState         = 'idle';    // idle | outgoing | incoming | active
+  var callKind          = 'voice';   // 'voice' | 'video'
+  var callIsMuted       = false;
+  var callIsCameraOff   = false;
+  var callTimer         = null;
+  var callStartedAt     = 0;
+  var callPeerId        = null;
+  var callPeerName      = '';
+  var _pendingOffer     = null;
   var _pendingRemoteIce = [];
+  var _ringTimeoutTimer = null;    // caller-side "no answer" fuse
+  var _uiMode           = 'stage'; // 'stage' (expanded) or 'bar' (minimized)
 
+  /* ── Logging ────────────────────────────────────────────────────────── */
   function callLog(){
     try {
       var args = ['[call]'].concat(Array.prototype.slice.call(arguments));
@@ -4123,23 +4225,24 @@ if (spellcheckToggleBtn) {
     } catch(_){}
   }
 
-  /* ── Ring tones (generated in-browser, no audio files needed) ─────────
-     • callerTone  → ringback the CALLER hears while the other side rings
-     • calleeTone  → ringtone the CALLEE hears for incoming call
-     Both are built with WebAudio oscillators so we don't ship any media. */
-  var _toneCtx    = null;
-  var _tonePlaying = null;   // 'caller' | 'callee' | null
-  var _toneTimer   = null;
-  var _toneNodes   = [];
+  /* ── WebSocket signal helper ────────────────────────────────────────── */
+  function callSignal(obj){
+    if(!socket || socket.readyState !== WebSocket.OPEN){
+      alert('Connection lost. Please refresh.');
+      return false;
+    }
+    try { callLog('→ send:', obj.type); } catch(_){}
+    socket.send(JSON.stringify(obj));
+    return true;
+  }
+
+  /* ── Ring tones (WebAudio, no media files) ──────────────────────────── */
+  var _toneCtx = null, _tonePlaying = null, _toneTimer = null, _toneNodes = [];
 
   function _toneGetCtx(){
     if(!_toneCtx){
-      try {
-        var AC = window.AudioContext || window.webkitAudioContext;
-        if(AC) _toneCtx = new AC();
-      } catch(_){}
+      try { var AC = window.AudioContext || window.webkitAudioContext; if(AC) _toneCtx = new AC(); } catch(_){}
     }
-    // Some browsers start the context suspended; resume after user gesture.
     if(_toneCtx && _toneCtx.state === 'suspended'){
       try { _toneCtx.resume(); } catch(_){}
     }
@@ -4156,22 +4259,17 @@ if (spellcheckToggleBtn) {
     _tonePlaying = null;
   }
 
-  /* One "burst" = a few oscillators playing together for `durationMs` */
   function _tonePlayBurst(freqs, durationMs, gain){
     var ctx = _toneGetCtx();
     if(!ctx) return;
     var g = ctx.createGain();
-    g.gain.value = 0;
     g.connect(ctx.destination);
-
-    // Envelope: quick fade in, hold, quick fade out (avoids clicks)
     var now = ctx.currentTime;
     var peak = gain || 0.18;
     g.gain.setValueAtTime(0, now);
     g.gain.linearRampToValueAtTime(peak, now + 0.03);
     g.gain.setValueAtTime(peak, now + (durationMs/1000) - 0.05);
     g.gain.linearRampToValueAtTime(0, now + (durationMs/1000));
-
     freqs.forEach(function(f){
       var o = ctx.createOscillator();
       o.type = 'sine';
@@ -4184,25 +4282,20 @@ if (spellcheckToggleBtn) {
     _toneNodes.push(g);
   }
 
-  /* CALLER ringback (what the calling side hears): classic telephone
-     dual-tone 440+480 Hz, 2 seconds on, 4 seconds off. */
   function callStartCallerTone(){
     if(_tonePlaying === 'caller') return;
     _toneStopAll();
-    if(!_toneGetCtx()){ callLog('no AudioContext — ringtone unavailable'); return; }
+    if(!_toneGetCtx()) return;
     _tonePlaying = 'caller';
     var fire = function(){ _tonePlayBurst([440, 480], 2000, 0.12); };
     fire();
-    _toneTimer = setInterval(fire, 6000);   // 2s on + 4s off
-    callLog('caller ringback started');
+    _toneTimer = setInterval(fire, 6000);
   }
 
-  /* CALLEE ringtone (what the receiving side hears): two short bursts
-     every ~2.5s, higher and more attention-grabbing. */
   function callStartCalleeTone(){
     if(_tonePlaying === 'callee') return;
     _toneStopAll();
-    if(!_toneGetCtx()){ callLog('no AudioContext — ringtone unavailable'); return; }
+    if(!_toneGetCtx()) return;
     _tonePlaying = 'callee';
     var fire = function(){
       _tonePlayBurst([880, 660], 400, 0.22);
@@ -4210,22 +4303,181 @@ if (spellcheckToggleBtn) {
     };
     fire();
     _toneTimer = setInterval(fire, 2500);
-    callLog('callee ringtone started');
   }
 
-  function callStopTones(){
-    if(_tonePlaying){ callLog('tones stopped (was:', _tonePlaying + ')'); }
-    _toneStopAll();
+  function callStopTones(){ _toneStopAll(); }
+
+  /* ── Tab title flash + browser Notification (for backgrounded ringing) ─ */
+  var _origTitle   = document.title;
+  var _titleTimer  = null;
+  var _browserNote = null;
+
+  function callStartTitleFlash(label){
+    if(_titleTimer) return;
+    var flip = false;
+    _titleTimer = setInterval(function(){
+      flip = !flip;
+      document.title = flip ? ('📞 ' + label) : _origTitle;
+    }, 1000);
+  }
+  function callStopTitleFlash(){
+    if(_titleTimer){ clearInterval(_titleTimer); _titleTimer = null; }
+    document.title = _origTitle;
   }
 
-  function callSignal(obj){
-    if(!socket || socket.readyState !== WebSocket.OPEN){
-      alert('Connection lost. Please refresh.');
-      return false;
+  function callShowBrowserNotification(title, body){
+    if(!('Notification' in window)) return;
+    if(Notification.permission !== 'granted') return;
+    try {
+      _browserNote = new Notification(title, {
+        body: body || '',
+        tag: 'incoming-call-' + ROOM_ID,    // replace, don't stack
+        requireInteraction: true,
+        silent: false
+      });
+      _browserNote.onclick = function(){
+        try { window.focus(); } catch(_){}
+        try { _browserNote.close(); } catch(_){}
+      };
+    } catch(_){}
+  }
+  function callCloseBrowserNotification(){
+    if(_browserNote){ try { _browserNote.close(); } catch(_){} _browserNote = null; }
+  }
+
+  // Politely request permission once, the first time it could matter.
+  (function requestNotifPermission(){
+    if(!('Notification' in window)) return;
+    if(Notification.permission === 'default'){
+      try { Notification.requestPermission(); } catch(_){}
     }
-    try { callLog('→ send:', obj.type); } catch(_){}
-    socket.send(JSON.stringify(obj));
-    return true;
+  })();
+
+  /* ── Modal / stage / bar helpers ────────────────────────────────────── */
+  function callShowModal(id){ var el = byId(id); if(el) el.style.display = 'flex'; }
+  function callHideModal(id){ var el = byId(id); if(el) el.style.display = 'none'; }
+  function callSetStage(show){
+    var s = byId('callStage'); if(!s) return;
+    s.classList.toggle('active', !!show);
+  }
+  function callSetBar(show){
+    var b = byId('callBar'); if(!b) return;
+    b.style.display = show ? 'flex' : 'none';
+  }
+
+  function callResetUI(){
+    callHideModal('incomingCallModal');
+    callHideModal('outgoingCallModal');
+    callSetStage(false);
+    callSetBar(false);
+    if(callTimer){ clearInterval(callTimer); callTimer = null; }
+    var t1 = byId('callBarTimer');   if(t1) t1.textContent = '00:00';
+    var t2 = byId('callStageTimer'); if(t2) t2.textContent = '00:00';
+    // Clear any media sinks
+    var rv = byId('callStageRemoteVideo'); if(rv){ try { rv.srcObject = null; rv.classList.remove('active'); } catch(_){} }
+    var lv = byId('callStageLocalVideo');  if(lv){ try { lv.srcObject = null; lv.classList.remove('active'); } catch(_){} }
+    var ra = byId('remoteCallAudio');      if(ra){ try { ra.srcObject = null; } catch(_){} }
+    // Hide the video-toggle control by default
+    var vbtn = byId('callStageVideo'); if(vbtn) vbtn.style.display = 'none';
+    var voiceCentre = byId('callStageVoiceCentre'); if(voiceCentre) voiceCentre.style.display = '';
+  }
+
+  /* ── Teardown ───────────────────────────────────────────────────────── */
+  function callTeardown(serverReason){
+    /*
+      serverReason: 'declined' | 'cancelled' | 'missed' | 'connected' | 'ended' | null
+      When provided, sent to /call/clear/ so the server can decide whether
+      to post a missed-call system message.
+    */
+    callStopTones();
+    callStopTitleFlash();
+    callCloseBrowserNotification();
+    if(_ringTimeoutTimer){ clearTimeout(_ringTimeoutTimer); _ringTimeoutTimer = null; }
+
+    try { if(callPC){ callPC.ontrack = null; callPC.onicecandidate = null; callPC.close(); } } catch(_){}
+    callPC = null;
+
+    if(callLocalStream){
+      try { callLocalStream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){}
+      callLocalStream = null;
+    }
+
+    var prevState = callState;
+    callState         = 'idle';
+    callIsMuted       = false;
+    callIsCameraOff   = false;
+    callKind          = 'voice';
+    callPeerId        = null;
+    callPeerName      = '';
+    _pendingOffer     = null;
+    _pendingRemoteIce = [];
+    _uiMode           = 'stage';
+    callResetUI();
+
+    // Inform server with reason so it can post a missed-call message if warranted.
+    var body = 'reason=' + encodeURIComponent(serverReason || (prevState === 'active' ? 'ended' : 'ended'))
+             + '&call_kind=' + encodeURIComponent(callKind || 'voice');
+    fetch('/messages/call/clear/' + ROOM_ID + '/', {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': getCookie('csrftoken'),
+        'X-Requested-With': 'XMLHttpRequest',
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      credentials: 'same-origin',
+      body: body
+    }).catch(function(){});
+  }
+
+  /* ── Activate (transition to in-call UI) ────────────────────────────── */
+  function callActivateIfNeeded(reason){
+    if(callState === 'active') return;
+    callLog('activating call (reason:', reason + ')');
+    callStopTones();
+    callStopTitleFlash();
+    callCloseBrowserNotification();
+    if(_ringTimeoutTimer){ clearTimeout(_ringTimeoutTimer); _ringTimeoutTimer = null; }
+
+    callState = 'active';
+    callHideModal('incomingCallModal');
+    callHideModal('outgoingCallModal');
+
+    // Populate names
+    var sName = byId('callStageName');    if(sName) sName.textContent    = callPeerName || 'In call';
+    var bName = byId('callBarName');      if(bName) bName.textContent    = callPeerName || 'In call';
+    var bigN  = byId('callStageBigName'); if(bigN)  bigN.textContent     = callPeerName || 'Contact';
+    var bigA  = byId('callStageBigAvatar'); if(bigA) bigA.textContent    = (callPeerName.charAt(0) || '?').toUpperCase();
+    var barA  = byId('callBarAvatar');    if(barA)  barA.textContent     = (callPeerName.charAt(0) || '?').toUpperCase();
+
+    // Video-specific UI
+    var vbtn        = byId('callStageVideo');
+    var voiceCentre = byId('callStageVoiceCentre');
+    var localVideo  = byId('callStageLocalVideo');
+    if(callKind === 'video'){
+      if(vbtn) vbtn.style.display = '';
+      if(voiceCentre) voiceCentre.style.display = 'none'; // the <video> covers the area
+      if(localVideo && callLocalStream){
+        try { localVideo.srcObject = callLocalStream; localVideo.classList.add('active'); } catch(_){}
+      }
+    } else {
+      if(vbtn) vbtn.style.display = 'none';
+      if(voiceCentre) voiceCentre.style.display = '';
+      if(localVideo){ localVideo.classList.remove('active'); try { localVideo.srcObject = null; } catch(_){} }
+    }
+
+    // Start on the expanded stage by default
+    _uiMode = 'stage';
+    callSetStage(true);
+    callSetBar(false);
+
+    callStartedAt = Date.now();
+    if(callTimer){ clearInterval(callTimer); }
+    callTimer = setInterval(function(){
+      var sec = ((Date.now() - callStartedAt)/1000)|0;
+      var s = callFmtDuration(sec);
+      var t1 = byId('callBarTimer');   if(t1) t1.textContent = s;
+      var t2 = byId('callStageTimer'); if(t2) t2.textContent = s;
+    }, 1000);
   }
 
   function callFmtDuration(sec){
@@ -4234,62 +4486,21 @@ if (spellcheckToggleBtn) {
     return (m<10?'0':'')+m + ':' + (s<10?'0':'')+s;
   }
 
-  function callShowModal(id){ var el = byId(id); if(el) el.style.display = 'flex'; }
-  function callHideModal(id){ var el = byId(id); if(el) el.style.display = 'none'; }
-  function callSetBar(show){ var bar = byId('callBar'); if(bar) bar.style.display = show ? 'flex' : 'none'; }
-
-  function callResetUI(){
-    callHideModal('incomingCallModal');
-    callHideModal('outgoingCallModal');
-    callSetBar(false);
-    if(callTimer){ clearInterval(callTimer); callTimer = null; }
-    var t = byId('callBarTimer'); if(t) t.textContent = '00:00';
-  }
-
-  function callTeardown(){
-    callStopTones();
-    try { if(callPC){ callPC.ontrack = null; callPC.onicecandidate = null; callPC.close(); } } catch(_){}
-    callPC = null;
-    if(callLocalStream){
-      try { callLocalStream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){}
-      callLocalStream = null;
-    }
-    var audio = byId('remoteCallAudio');
-    if(audio){ try { audio.srcObject = null; } catch(_){} }
-
-    callState         = 'idle';
-    callIsMuted       = false;
-    callPeerId        = null;
-    callPeerName      = '';
-    _pendingOffer     = null;
-    _pendingRemoteIce = [];
-    callResetUI();
-
-    // Clear any server-side ring record for this room.
-    fetch('/messages/call/clear/' + ROOM_ID + '/', {
-      method: 'POST',
-      headers: { 'X-CSRFToken': getCookie('csrftoken'), 'X-Requested-With': 'XMLHttpRequest' },
-      credentials: 'same-origin'
-    }).catch(function(){});
-  }
-
-  function callActivateIfNeeded(reason){
-    if(callState === 'active') return;
-    callLog('activating call (reason:', reason + ')');
-    callStopTones();
-    callState = 'active';
-    callHideModal('incomingCallModal');
-    callHideModal('outgoingCallModal');
+  /* ── Minimize / Expand ──────────────────────────────────────────────── */
+  window.callMinimize = function(){
+    if(callState !== 'active') return;
+    _uiMode = 'bar';
+    callSetStage(false);
     callSetBar(true);
-    var nameEl = byId('callBarName'); if(nameEl) nameEl.textContent = callPeerName || 'In call';
-    callStartedAt = Date.now();
-    if(callTimer){ clearInterval(callTimer); }
-    callTimer = setInterval(function(){
-      var sec = ((Date.now() - callStartedAt)/1000)|0;
-      var t = byId('callBarTimer'); if(t) t.textContent = callFmtDuration(sec);
-    }, 1000);
-  }
+  };
+  window.callExpand = function(){
+    if(callState !== 'active') return;
+    _uiMode = 'stage';
+    callSetStage(true);
+    callSetBar(false);
+  };
 
+  /* ── PeerConnection factory ─────────────────────────────────────────── */
   function callBuildPC(){
     var pc = new RTCPeerConnection({ iceServers: CALL_ICE_SERVERS });
 
@@ -4302,35 +4513,37 @@ if (spellcheckToggleBtn) {
     };
 
     pc.ontrack = function(ev){
-      callLog('ontrack fired, streams:', ev.streams && ev.streams.length, 'track kind:', ev.track && ev.track.kind);
-      var audio = byId('remoteCallAudio');
-      if(!audio){ callLog('remoteCallAudio element missing'); return; }
-      if(!ev.streams || !ev.streams[0]){ callLog('no stream on ontrack event'); return; }
+      callLog('ontrack fired, kind:', ev.track && ev.track.kind);
+      if(!ev.streams || !ev.streams[0]) return;
+      var stream = ev.streams[0];
 
-      audio.srcObject = ev.streams[0];
-
-      // Browsers increasingly block autoplay even with the `autoplay` attr.
-      // Explicitly calling play() surfaces the error so we can see it.
-      var p = audio.play();
-      if(p && typeof p.catch === 'function'){
-        p.then(function(){ callLog('remote audio playing'); })
-         .catch(function(err){
-           callLog('audio.play() rejected:', err && err.name, err && err.message);
-           // Last-resort: briefly mute, play, unmute — works around some
-           // autoplay policies when there was recent user gesture (the
-           // Accept button click).
-           try {
-             audio.muted = true;
-             audio.play().then(function(){ audio.muted = false; callLog('recovered via mute trick'); })
-                         .catch(function(e2){ callLog('mute trick failed too:', e2); });
-           } catch(_){}
-         });
+      // Audio track → hidden <audio> (voice) or the <video> (video)
+      if(ev.track.kind === 'audio'){
+        if(callKind === 'video'){
+          // The <video> element plays attached audio; don't duplicate to <audio>
+          var rv = byId('callStageRemoteVideo');
+          if(rv && !rv.srcObject){ rv.srcObject = stream; rv.classList.add('active'); }
+        } else {
+          var ra = byId('remoteCallAudio');
+          if(ra){
+            ra.srcObject = stream;
+            var p = ra.play();
+            if(p && p.catch){
+              p.catch(function(err){
+                callLog('audio.play() rejected:', err && err.name);
+                try { ra.muted = true; ra.play().then(function(){ ra.muted = false; }); } catch(_){}
+              });
+            }
+          }
+        }
       }
 
-      // Track arrival is the most reliable "we have media" signal across
-      // browsers. Transition to active UI here instead of waiting for
-      // connectionState, which can take longer or be unreliable.
-      callActivateIfNeeded('ontrack');
+      if(ev.track.kind === 'video'){
+        var rv = byId('callStageRemoteVideo');
+        if(rv){ rv.srcObject = stream; rv.classList.add('active'); }
+      }
+
+      callActivateIfNeeded('ontrack:' + ev.track.kind);
     };
 
     pc.oniceconnectionstatechange = function(){
@@ -4339,9 +4552,9 @@ if (spellcheckToggleBtn) {
         callActivateIfNeeded('ice-' + pc.iceConnectionState);
       }
       if(pc.iceConnectionState === 'failed'){
-        callLog('ICE failed — likely need a TURN server for this network');
-        alert('Could not establish a voice connection. Your network may require a TURN server.');
-        callTeardown();
+        callLog('ICE failed — network likely needs a TURN server');
+        alert('Could not establish a connection. Your network may need a TURN server.');
+        callTeardown('ended');
       }
     };
 
@@ -4351,46 +4564,51 @@ if (spellcheckToggleBtn) {
         callActivateIfNeeded('connection-connected');
       }
       if(pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed'){
-        if(callState === 'active'){ callTeardown(); }
+        if(callState === 'active'){ callTeardown('ended'); }
       }
-    };
-
-    pc.onsignalingstatechange = function(){
-      callLog('signalingState:', pc.signalingState);
     };
 
     return pc;
   }
 
-  function callGetMic(){
+  /* ── getUserMedia — respects call kind ──────────────────────────────── */
+  function callGetMedia(kind){
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-      alert('This browser does not support voice calls.');
+      alert('This browser does not support calls.');
       return Promise.resolve(null);
     }
-    return navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-      .catch(function(){
-        alert('Microphone access is required for voice calls.');
+    var constraints = { audio: true, video: (kind === 'video') };
+    return navigator.mediaDevices.getUserMedia(constraints)
+      .catch(function(err){
+        callLog('getUserMedia failed:', err && err.name);
+        alert(kind === 'video'
+          ? 'Camera + microphone access is required for video calls.'
+          : 'Microphone access is required for voice calls.');
         return null;
       });
   }
 
   /* ── CALLER ─────────────────────────────────────────────────────────── */
-  window.callStart = function(){
+  window.callStart = function(kind){
     if(!IS_DIRECT || !DM_OTHER_USER_ID){
-      alert('Voice calls are only available in direct messages.');
+      alert('Calls are only available in direct messages.');
       return;
     }
-    if(callState !== 'idle'){ return; }
+    if(callState !== 'idle') return;
+    kind = (kind === 'video') ? 'video' : 'voice';
+    callKind = kind;
 
-    // 1. Ring via HTTP (stashes Redis record + broadcasts WS call_ring).
     fetch('/messages/call/ring/' + ROOM_ID + '/', {
       method: 'POST',
-      headers: { 'X-CSRFToken': getCookie('csrftoken'), 'X-Requested-With': 'XMLHttpRequest' },
-      credentials: 'same-origin'
+      headers: {
+        'X-CSRFToken': getCookie('csrftoken'),
+        'X-Requested-With': 'XMLHttpRequest',
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      credentials: 'same-origin',
+      body: 'call_kind=' + encodeURIComponent(kind)
     })
-    .then(function(r){
-      return r.json().then(function(d){ return { ok: r.ok, data: d }; });
-    })
+    .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, data: d }; }); })
     .then(function(resp){
       if(!resp.ok || !resp.data || !resp.data.ok){
         alert((resp.data && resp.data.error) || 'Could not start call.');
@@ -4399,52 +4617,74 @@ if (spellcheckToggleBtn) {
 
       callState  = 'outgoing';
       callPeerId = DM_OTHER_USER_ID;
-
-      // Grab the DM contact's display name from the header
       var nameNode = document.querySelector('.chat-header > div > div');
       callPeerName = (nameNode ? nameNode.textContent : '').trim().split('\n')[0] || 'Contact';
 
-      var oName = byId('outgoingCallName');   if(oName) oName.textContent   = callPeerName;
-      var oState= byId('outgoingCallState');  if(oState) oState.textContent = 'Ringing…';
-      var oAv   = byId('outgoingCallAvatar'); if(oAv)   oAv.textContent    = (callPeerName.charAt(0) || '?').toUpperCase();
+      var oName  = byId('outgoingCallName');   if(oName)  oName.textContent  = callPeerName;
+      var oState = byId('outgoingCallState');  if(oState) oState.textContent = (kind === 'video' ? 'Video calling…' : 'Ringing…');
+      var oAv    = byId('outgoingCallAvatar'); if(oAv)    oAv.textContent    = (callPeerName.charAt(0) || '?').toUpperCase();
       callShowModal('outgoingCallModal');
       callStartCallerTone();
 
-      return callGetMic();
+      // Auto-cancel ring after ~40s of no answer → post "missed call"
+      _ringTimeoutTimer = setTimeout(function(){
+        if(callState === 'outgoing'){
+          callLog('ring timed out — treating as missed');
+          try { callSignal({ type: 'call_cancel' }); } catch(_){}
+          callTeardown('cancelled');
+        }
+      }, 40000);
+
+      return callGetMedia(kind);
     })
     .then(function(stream){
-      if(!stream){ callTeardown(); return; }
+      if(!stream){ callTeardown('cancelled'); return; }
       callLocalStream = stream;
       callPC = callBuildPC();
       callLocalStream.getTracks().forEach(function(t){ callPC.addTrack(t, callLocalStream); });
-
-      return callPC.createOffer({ offerToReceiveAudio: true })
-        .then(function(offer){ return callPC.setLocalDescription(offer).then(function(){ return offer; }); })
+      return callPC.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: (callKind === 'video')
+        })
+        .then(function(offer){ return callPC.setLocalDescription(offer); })
         .then(function(){
-          callSignal({ type: 'call_offer', sdp: callPC.localDescription });
+          callSignal({ type: 'call_offer', sdp: callPC.localDescription, call_kind: callKind });
         });
     })
     .catch(function(err){
-      console.error('callStart failed:', err);
+      callLog('callStart failed:', err);
       alert('Could not start call.');
-      callTeardown();
+      callTeardown('cancelled');
     });
   };
 
   window.callCancel = function(){
     if(callState === 'idle') return;
-    callSignal({ type: 'call_cancel' });
-    callTeardown();
+    try { callSignal({ type: 'call_cancel' }); } catch(_){}
+    callTeardown('cancelled');
   };
 
   /* ── CALLEE ─────────────────────────────────────────────────────────── */
-  function callShowIncoming(fromId, fromName){
+  function callShowIncoming(fromId, fromName, kind){
     callPeerId   = fromId;
     callPeerName = fromName || 'Contact';
-    var nEl = byId('incomingCallName');   if(nEl) nEl.textContent   = callPeerName;
-    var aEl = byId('incomingCallAvatar'); if(aEl) aEl.textContent   = (callPeerName.charAt(0) || '?').toUpperCase();
+    callKind     = (kind === 'video') ? 'video' : 'voice';
+
+    var nEl  = byId('incomingCallName');   if(nEl)  nEl.textContent  = callPeerName;
+    var aEl  = byId('incomingCallAvatar'); if(aEl)  aEl.textContent  = (callPeerName.charAt(0) || '?').toUpperCase();
+    var stEl = byId('incomingCallState');  if(stEl) stEl.textContent = 'Incoming ' + callKind + ' call…';
+
     callShowModal('incomingCallModal');
     callStartCalleeTone();
+
+    // Background-tab attention-grabbers
+    callStartTitleFlash('Incoming ' + callKind + ' call from ' + callPeerName);
+    if(document.visibilityState !== 'visible'){
+      callShowBrowserNotification(
+        'Incoming ' + callKind + ' call',
+        callPeerName + ' is calling you'
+      );
+    }
   }
 
   window.callAccept = function(){
@@ -4452,10 +4692,10 @@ if (spellcheckToggleBtn) {
       callHideModal('incomingCallModal');
       return;
     }
-    callGetMic().then(function(stream){
+    callGetMedia(callKind).then(function(stream){
       if(!stream){
-        callSignal({ type: 'call_decline' });
-        callTeardown();
+        try { callSignal({ type: 'call_decline' }); } catch(_){}
+        callTeardown('declined');
         return;
       }
       callLocalStream = stream;
@@ -4464,7 +4704,6 @@ if (spellcheckToggleBtn) {
 
       return callPC.setRemoteDescription(new RTCSessionDescription(_pendingOffer))
         .then(function(){
-          // Flush any ICE queued before setRemoteDescription
           var p = Promise.resolve();
           _pendingRemoteIce.forEach(function(c){
             p = p.then(function(){
@@ -4480,67 +4719,84 @@ if (spellcheckToggleBtn) {
           callSignal({ type: 'call_answer', sdp: callPC.localDescription });
           _pendingOffer = null;
           callHideModal('incomingCallModal');
-          // Clear ring on server
+          callStopTones();
+          callStopTitleFlash();
+          callCloseBrowserNotification();
+          // Confirm connection on the server (clears ring record, no missed-call msg)
           fetch('/messages/call/clear/' + ROOM_ID + '/', {
             method: 'POST',
-            headers: { 'X-CSRFToken': getCookie('csrftoken'), 'X-Requested-With': 'XMLHttpRequest' },
-            credentials: 'same-origin'
+            headers: {
+              'X-CSRFToken': getCookie('csrftoken'),
+              'X-Requested-With': 'XMLHttpRequest',
+              'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            credentials: 'same-origin',
+            body: 'reason=connected&call_kind=' + encodeURIComponent(callKind)
           }).catch(function(){});
         });
     })
     .catch(function(err){
-      console.error('callAccept failed:', err);
+      callLog('callAccept failed:', err);
       alert('Could not accept call.');
-      callTeardown();
+      callTeardown('declined');
     });
   };
 
   window.callDecline = function(){
-    callSignal({ type: 'call_decline' });
-    callTeardown();
+    try { callSignal({ type: 'call_decline' }); } catch(_){}
+    callTeardown('declined');
   };
 
-  /* ── Shared ─────────────────────────────────────────────────────────── */
+  /* ── Shared controls ────────────────────────────────────────────────── */
   window.callHangup = function(){
     if(callState === 'idle') return;
-    callSignal({ type: 'call_hangup' });
-    callTeardown();
+    try { callSignal({ type: 'call_hangup' }); } catch(_){}
+    // If we're hanging up while still ringing → missed, else ended
+    var reason = (callState === 'active') ? 'ended'
+               : (callState === 'outgoing') ? 'cancelled'
+               : 'declined';
+    callTeardown(reason);
   };
 
   window.callToggleMute = function(){
     if(!callLocalStream) return;
     callIsMuted = !callIsMuted;
     callLocalStream.getAudioTracks().forEach(function(t){ t.enabled = !callIsMuted; });
-    var btn = byId('callBarMute');
-    if(btn){
-      btn.classList.toggle('active', callIsMuted);
-      btn.innerHTML = callIsMuted
-        ? '<i class="bi bi-mic-mute-fill"></i>'
-        : '<i class="bi bi-mic-fill"></i>';
-    }
+    var icon = callIsMuted ? '<i class="bi bi-mic-mute-fill"></i>' : '<i class="bi bi-mic-fill"></i>';
+    var b1 = byId('callBarMute');    if(b1){ b1.classList.toggle('active', callIsMuted); b1.innerHTML = icon; }
+    var b2 = byId('callStageMute');  if(b2){ b2.classList.toggle('active', callIsMuted); b2.innerHTML = icon; }
   };
 
-  /* ── Signal dispatcher (called from socket.onmessage above) ─────────── */
+  window.callToggleVideo = function(){
+    if(!callLocalStream || callKind !== 'video') return;
+    callIsCameraOff = !callIsCameraOff;
+    callLocalStream.getVideoTracks().forEach(function(t){ t.enabled = !callIsCameraOff; });
+    var icon = callIsCameraOff ? '<i class="bi bi-camera-video-off-fill"></i>' : '<i class="bi bi-camera-video-fill"></i>';
+    var b = byId('callStageVideo'); if(b){ b.classList.toggle('off', callIsCameraOff); b.innerHTML = icon; }
+  };
+
+  /* ── Signal dispatcher (called from socket.onmessage) ───────────────── */
   function handleCallSignal(d){
     callLog('← recv:', d.type, 'from', d.sender_id, 'myState:', callState);
-    if(String(d.sender_id || '') === String(USER_ID)) return;   // ignore own echoes
+    if(String(d.sender_id || '') === String(USER_ID)) return;
 
     if(d.type === 'call_ring'){
       if(callState !== 'idle') return;
       callState = 'incoming';
-      callShowIncoming(d.caller_id, d.caller_name);
+      callShowIncoming(d.caller_id, d.caller_name, d.call_kind || 'voice');
       return;
     }
 
     if(d.type === 'call_offer'){
+      var kindFromOffer = d.call_kind || 'voice';
       if(callState === 'idle'){
         callState = 'incoming';
         _pendingOffer = d.sdp;
-        callShowIncoming(d.sender_id, d.sender_name);
+        callShowIncoming(d.sender_id, d.sender_name, kindFromOffer);
       } else if(callState === 'incoming'){
         _pendingOffer = d.sdp;
+        callKind = kindFromOffer;
       }
-      // if callState === 'outgoing' (simultaneous call), ignore peer's offer
       return;
     }
 
@@ -4557,7 +4813,7 @@ if (spellcheckToggleBtn) {
           _pendingRemoteIce = [];
           return p;
         })
-        .catch(function(err){ console.error('setRemoteDescription(answer) failed:', err); });
+        .catch(function(err){ callLog('setRemoteDescription(answer) failed:', err); });
       return;
     }
 
@@ -4572,11 +4828,15 @@ if (spellcheckToggleBtn) {
     }
 
     if(d.type === 'call_hangup' || d.type === 'call_decline' || d.type === 'call_cancel'){
-      callTeardown();
+      // The peer ended things. If we were ringing/waiting, that's a missed-for-us.
+      var reason = (callState === 'incoming') ? 'missed'
+                 : (callState === 'outgoing') ? 'cancelled'
+                 : 'ended';
+      callTeardown(reason);
       return;
     }
   }
-  // Expose for the onmessage branch above
+  // Expose for the onmessage branch up top
   window.__handleCallSignal = handleCallSignal;
 
   /* ── Cross-page incoming-call poll ──────────────────────────────────── */
@@ -4592,7 +4852,7 @@ if (spellcheckToggleBtn) {
       if(String(d.ring.room_id) === String(ROOM_ID)){
         if(callState === 'idle'){
           callState = 'incoming';
-          callShowIncoming(d.ring.caller_id, d.ring.caller_name);
+          callShowIncoming(d.ring.caller_id, d.ring.caller_name, d.ring.call_kind || 'voice');
         }
       } else {
         window.location.href = '/messages/' + d.ring.room_id + '/';
@@ -4600,18 +4860,17 @@ if (spellcheckToggleBtn) {
     }).catch(function(){});
   }, 4000);
 
+  /* ── Clean up if the user navigates away mid-call ───────────────────── */
   window.addEventListener('beforeunload', function(){
     if(callState !== 'idle'){
       try { callSignal({ type: 'call_hangup' }); } catch(_){}
     }
   });
 
-  /* Prime AudioContext on first user gesture so the ringtone can actually
-     sound when an incoming call arrives with no fresh user interaction.
-     Safari/iOS and some Chrome configs refuse to create sound otherwise. */
+  /* ── Prime AudioContext on first user gesture (autoplay policy) ─────── */
   (function primeAudio(){
     function prime(){
-      _toneGetCtx();   // creates + resumes if suspended
+      _toneGetCtx();
       document.removeEventListener('click',    prime, true);
       document.removeEventListener('keydown',  prime, true);
       document.removeEventListener('touchend', prime, true);

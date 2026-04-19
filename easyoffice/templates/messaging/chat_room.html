@@ -2642,6 +2642,7 @@ window.addEventListener('beforeunload', function(){
       if(d.type === 'call_ring' || d.type === 'call_offer' || d.type === 'call_answer'
          || d.type === 'ice_candidate' || d.type === 'call_hangup'
          || d.type === 'call_decline' || d.type === 'call_cancel'
+         || d.type === 'call_cleared' || d.type === 'call_callee_ready'
          || d.type === 'call_upgrade_offer' || d.type === 'call_upgrade_answer'
          || d.type === 'present_start' || d.type === 'present_end'
          || d.type === 'present_page' || d.type === 'present_request_page'){
@@ -4458,14 +4459,32 @@ if (spellcheckToggleBtn) {
     _inPageIncomingRing = null;
   }
 
+  // 🩹 Tell the global banner in base.html that this ring is taken care
+  // of, so it hides immediately instead of waiting for its next poll.
+  // Keyed the same way base.html's _ringKey() does it.
+  var _chatRoomBannerBC = null;
+  try { _chatRoomBannerBC = new BroadcastChannel('easyoffice-banner'); } catch(_){ _chatRoomBannerBC = null; }
+  function _notifyBannerHandled(ring){
+    if(!_chatRoomBannerBC || !ring) return;
+    try {
+      _chatRoomBannerBC.postMessage({
+        type: 'banner-handled',
+        ring_id: (ring.room_id || ROOM_ID) + '|' + (ring.caller_id || '') + '|' + (ring.started_at || '')
+      });
+    } catch(_){}
+  }
+
   window.callAccept = function(){
     if(!_inPageIncomingRing) return;
-    var kind = _inPageIncomingRing.call_kind || 'voice';
+    var ring = _inPageIncomingRing;
+    var kind = ring.call_kind || 'voice';
+    _notifyBannerHandled(ring);
     _hideInPageIncoming();
     _openCallPopup(kind, 'incoming');
   };
   window.callDecline = function(){
     if(!_inPageIncomingRing) return;
+    var ring = _inPageIncomingRing;
     // We need to tell the server this is declined — send via our own WS,
     // and also clear the ring record.
     try { if(socket && socket.readyState === WebSocket.OPEN){ socket.send(JSON.stringify({type:'call_decline'})); } } catch(_){}
@@ -4473,8 +4492,9 @@ if (spellcheckToggleBtn) {
       method:'POST',
       headers:{'X-CSRFToken':getCookie('csrftoken'),'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'},
       credentials:'same-origin',
-      body:'reason=declined&call_kind=' + encodeURIComponent(_inPageIncomingRing.call_kind || 'voice')
+      body:'reason=declined&call_kind=' + encodeURIComponent(ring.call_kind || 'voice')
     }).catch(function(){});
+    _notifyBannerHandled(ring);
     _hideInPageIncoming();
   };
   window.callCancel = function(){ /* delegated to popup */ };
@@ -4483,17 +4503,33 @@ if (spellcheckToggleBtn) {
   // (the main onmessage branch is where these arrive — we read via the
   // existing dispatch that calls handleCallSignal)
   function handleCallSignal(d){
-    if(String(d.sender_id || '') === String(USER_ID)) return;
+    if(String(d.sender_id || d.cleared_by || '') === String(USER_ID)) return;
 
     if(d.type === 'call_ring'){
       if(_popupAlive()) return; // popup will handle it
       _showInPageIncoming({
-        caller_id: d.caller_id,
+        room_id:     d.room_id || ROOM_ID,
+        caller_id:   d.caller_id,
         caller_name: d.caller_name,
-        call_kind: d.call_kind || 'voice'
+        call_kind:   d.call_kind || 'voice',
+        started_at:  d.started_at || ''
       });
       return;
     }
+
+    // 🩹 If the caller gave up, or the call is otherwise cleared from
+    // the server side, hide our in-page modal so the user doesn't sit
+    // looking at a ringing UI for a call that no longer exists.
+    // Applies to call_cancel/call_decline/call_hangup (direct WS) and
+    // call_cleared (server-broadcast belt-and-braces signal).
+    if(d.type === 'call_cancel' || d.type === 'call_decline'
+        || d.type === 'call_hangup' || d.type === 'call_cleared'){
+      if(_inPageIncomingRing){
+        _hideInPageIncoming();
+      }
+      return;
+    }
+
     // All other call_* / present_* signals are handled by the popup.
     // We ignore them on the launcher page.
   }

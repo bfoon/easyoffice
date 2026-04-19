@@ -5,7 +5,7 @@ from django.views.generic import TemplateView, View
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages as django_messages
 from django.db.models import Q
-from django.http import HttpResponseForbidden, JsonResponse
+from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
 from django.utils import timezone
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -2512,6 +2512,36 @@ class CallClearView(LoginRequiredMixin, View):
             cache.delete(ring_key_for_other)
         cache.delete(ring_key_for_self)
 
+        # 🩹 CRITICAL FIX — broadcast a "call cleared" event on the room
+        # group so any popup / chat page that joined the WS AFTER the
+        # original signal was sent still learns the call is dead. Without
+        # this, a callee popup that opened late would sit on "Incoming
+        # call..." forever because it missed the direct call_cancel.
+        #
+        # We broadcast for EVERY reason (connected, ended, declined,
+        # cancelled, missed) because the popup uses this as a generic
+        # "the call is no longer pending, stop waiting" signal. The popup
+        # only acts on it if it's still in idle/incoming/outgoing state —
+        # active calls are managed by direct call_hangup signals.
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    _room_group_name(room.id),
+                    {
+                        'type': 'chat.typing',  # reuse generic relay
+                        'payload': {
+                            'type': 'call_cleared',
+                            'room_id': str(room.id),
+                            'reason': reason or 'ended',
+                            'call_kind': call_kind,
+                            'cleared_by': str(request.user.id),
+                        },
+                    },
+                )
+        except Exception:
+            pass
+
         # Post a system message only for outcomes where the call DIDN'T happen.
         # 'connected' and 'ended' are post-call cleanups, not missed calls.
         if other and reason in ('declined', 'cancelled', 'missed') and (had_ring_for_other or had_ring_for_self):
@@ -2839,10 +2869,42 @@ class CallWindowView(LoginRequiredMixin, View):
         if not other:
             return HttpResponse('No peer to call.', status=400)
 
+        # 🩹 For incoming mode, look up the current ring record. If it's
+        # already gone the caller hung up — still render the popup but
+        # mark it so the JS can immediately show "Call cancelled" and
+        # close instead of hanging on "Incoming call..." forever.
+        # Also override `kind` to match the actual ring (user may have
+        # answered a video call via a banner that said "voice").
+        ring_caller_id = ''
+        ring_started_at = ''
+        ring_is_stale = False
+        if mode == 'incoming':
+            try:
+                from django.core.cache import cache
+                raw = cache.get(_call_ring_key(request.user.pk))
+                if raw:
+                    try:
+                        ring_data = _json.loads(raw) if isinstance(raw, str) else raw
+                    except Exception:
+                        ring_data = None
+                    if ring_data:
+                        ring_caller_id  = str(ring_data.get('caller_id') or '')
+                        ring_started_at = str(ring_data.get('started_at') or '')
+                        rk = (ring_data.get('call_kind') or '').strip().lower()
+                        if rk in ('voice', 'video'):
+                            kind = rk
+                else:
+                    ring_is_stale = True
+            except Exception:
+                pass
+
         ctx = {
-            'room':         room,
-            'peer':         other,
-            'initial_kind': kind,
-            'initial_mode': mode,
+            'room':            room,
+            'peer':            other,
+            'initial_kind':    kind,
+            'initial_mode':    mode,
+            'ring_caller_id':  ring_caller_id,
+            'ring_started_at': ring_started_at,
+            'ring_is_stale':   ring_is_stale,
         }
         return render(request, 'messaging/call_window.html', ctx)

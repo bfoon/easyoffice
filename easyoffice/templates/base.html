@@ -467,9 +467,34 @@
       // Another tab handled this ring — hide here.
       if(ev.data.type === 'banner-handled' && _currentRing &&
          String(ev.data.ring_id) === String(_ringKey(_currentRing))){
+        _dismissedRingKeys[_ringKey(_currentRing)] = Date.now();
         _hideBanner();
       }
     };
+  }
+
+  // 🩹 The call popup broadcasts on 'easyoffice-call-<room>' when it
+  // becomes ready/active. If our banner is showing a ring for that
+  // same room, the popup has it under control — drop the banner
+  // instantly instead of waiting for the 4-second /call/incoming/ poll
+  // to notice the ring has been cleared server-side.
+  var _perRoomBCs = {};
+  function _attachPerRoomBC(roomId){
+    if(!roomId || _perRoomBCs[roomId]) return;
+    try {
+      var bc = new BroadcastChannel('easyoffice-call-' + roomId);
+      bc.onmessage = function(ev){
+        if(!ev || !ev.data) return;
+        var t = ev.data.type;
+        if(t !== 'popup-ready' && t !== 'popup-active') return;
+        // If the banner is showing a ring for this exact room, hide it.
+        if(_currentRing && String(_currentRing.room_id) === String(roomId)){
+          _dismissedRingKeys[_ringKey(_currentRing)] = Date.now();
+          _hideBanner();
+        }
+      };
+      _perRoomBCs[roomId] = bc;
+    } catch(_){}
   }
 
   function _ringKey(r){
@@ -569,6 +594,9 @@
   /* ── Banner show/hide ── */
   function _showBanner(ring){
     _currentRing = ring;
+    // 🩹 Start listening on the room's popup BC so if anybody opens
+    // the popup for this ring we drop the banner instantly.
+    _attachPerRoomBC(ring.room_id);
     var name = ring.caller_name || 'Someone';
     var kind = ring.call_kind || 'voice';
     var nEl = byId('eoCallBannerName');   if(nEl) nEl.textContent = name;

@@ -268,6 +268,12 @@ var PEER_NAME     = '{{ peer.full_name|escapejs }}';
 var USER_ID       = '{{ request.user.id|escapejs }}';
 var INITIAL_KIND  = '{{ initial_kind|escapejs }}';
 var INITIAL_MODE  = '{{ initial_mode|escapejs }}';
+// 🩹 For incoming mode: caller id from the ring record. Lets us ignore
+// echoes that aren't from our real peer, and lets the callee popup bail
+// if the ring is stale by the time we render.
+var RING_CALLER_ID  = '{{ ring_caller_id|escapejs }}';
+var RING_STARTED_AT = '{{ ring_started_at|escapejs }}';
+var RING_IS_STALE   = {% if ring_is_stale %}true{% else %}false{% endif %};
 var WS_SCHEME     = window.location.protocol === 'https:' ? 'wss' : 'ws';
 var CSRF_TOKEN    = '{{ csrf_token }}';
 
@@ -311,6 +317,16 @@ var _reconnectAttempt    = 0;
 var _reconnectMaxAttempts= 4;
 var _reconnectInFlight   = false;
 
+// 🩹 Timer that fires if the callee clicks Accept but no offer arrives
+// within a reasonable window. Without this, a callee popup that joined
+// the room group AFTER the caller's offer was broadcast would sit on
+// "Connecting…" forever.
+var _offerWaitTimer = null;
+// True once the callee has clicked Accept but is still waiting for the
+// offer to arrive. Distinct from callState because we're logically
+// "accepted but not yet set up" — a transient sub-state.
+var _acceptPendingOffer = false;
+
 // Presentation state
 var presIsActive    = false;
 var presIsPresenter = false;
@@ -344,12 +360,30 @@ function connectWS(){
     if(INITIAL_MODE === 'outgoing' && callState === 'idle'){
       startOutgoingCall();
     } else if(INITIAL_MODE === 'incoming' && callState === 'idle'){
-      // Incoming mode: the ring record is already on the server (placed by
-      // the caller). We sit and wait for the call_offer from the peer,
-      // OR the caller might already have sent it — either way handleCallSignal
-      // picks it up when it arrives. Show the incoming overlay immediately.
+      // 🩹 If the server told us the ring was already gone by the time
+      // we rendered (caller hung up between sending the ring and our
+      // popup loading), bail immediately. Don't sit on "Incoming call…"
+      // forever.
+      if(RING_IS_STALE){
+        callLog('ring stale at render — tearing down');
+        callTeardown('missed');
+        return;
+      }
+      // Incoming mode: show the ring UI and announce ourselves to the
+      // caller so they re-send their offer. Django Channels does NOT
+      // replay group messages to late joiners — without this announce,
+      // the callee popup would miss the original call_offer entirely and
+      // clicking Accept would be a silent no-op.
       callState = 'incoming';
+      callStartCalleeTone();
       showPreAnswer('incoming');
+      // Give the server a moment to register us in the group, then
+      // announce.
+      setTimeout(function(){ callSignal({type:'call_callee_ready'}); }, 100);
+      // Also re-validate the ring is still alive every few seconds —
+      // in case the caller hung up while we were sitting on the ring
+      // screen and their call_cleared somehow missed us.
+      _startIncomingRingWatchdog();
     }
   };
 
@@ -375,6 +409,35 @@ function callSignal(obj){
   try { callLog('→', obj.type); } catch(_){}
   socket.send(JSON.stringify(obj));
   return true;
+}
+
+/* ── Incoming ring watchdog ─────────────────────────────────────────── */
+/* Polls /call/incoming/ while we're showing the incoming overlay so we
+   catch the case where the caller cancelled but their WS signal never
+   reached us (e.g. our WS hadn't joined the group yet). */
+var _incomingRingWatchdog = null;
+function _startIncomingRingWatchdog(){
+  if(_incomingRingWatchdog) return;
+  _incomingRingWatchdog = setInterval(function(){
+    if(callState !== 'incoming') return;
+    fetch('/messages/call/incoming/', {
+      headers:{'X-Requested-With':'XMLHttpRequest'},
+      credentials:'same-origin'
+    })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if(!d || !d.ok) return;
+      // Ring no longer present on server — caller gave up, teardown.
+      if(!d.ring && callState === 'incoming' && !_acceptPendingOffer){
+        callLog('watchdog: ring cleared server-side, teardown');
+        callTeardown('missed');
+      }
+    })
+    .catch(function(){});
+  }, 4000);
+}
+function _stopIncomingRingWatchdog(){
+  if(_incomingRingWatchdog){ clearInterval(_incomingRingWatchdog); _incomingRingWatchdog = null; }
 }
 
 /* ── Pre-answer overlay (ringing / incoming) ────────────────────────── */
@@ -482,6 +545,9 @@ function callTeardown(serverReason){
   if(_ringTimeoutTimer){ clearTimeout(_ringTimeoutTimer); _ringTimeoutTimer=null; }
   if(_netStatsTimer){ clearInterval(_netStatsTimer); _netStatsTimer=null; }
   if(_disconnectGraceTimer){ clearTimeout(_disconnectGraceTimer); _disconnectGraceTimer=null; }
+  if(_offerWaitTimer){ clearTimeout(_offerWaitTimer); _offerWaitTimer=null; }
+  _stopIncomingRingWatchdog();
+  _acceptPendingOffer = false;
 
   try { if(callPC){ callPC.ontrack=null; callPC.onicecandidate=null; callPC.close(); } } catch(_){}
   callPC = null; callVideoSender = null;
@@ -712,14 +778,28 @@ window.callCancel = function(){
 };
 
 /* ── Incoming answer ────────────────────────────────────────────────── */
-window.callAccept = function(){
-  if(callState !== 'incoming' || !_pendingOffer){ return; }
+
+// Shared core: consume a pending offer and bring up the peer connection.
+// Invoked either from callAccept (offer already here) or from the
+// call_offer handler (offer arrived after accept was clicked).
+function _callConsumePendingOffer(){
+  if(!_pendingOffer){ return; }
+  if(callState !== 'incoming' && !_acceptPendingOffer){ return; }
+
+  var offer = _pendingOffer;
+  _pendingOffer = null;
+
+  // Clear the "waiting for offer" timer — offer is here.
+  if(_offerWaitTimer){ clearTimeout(_offerWaitTimer); _offerWaitTimer = null; }
+  _acceptPendingOffer = false;
+  _stopIncomingRingWatchdog();
+
   getMedia(callKind).then(function(stream){
     if(!stream){ try{ callSignal({type:'call_decline'}); }catch(_){} callTeardown('declined'); return; }
     callLocalStream = stream;
     callPC = buildPC();
     addTracksFromStream(callLocalStream);
-    return callPC.setRemoteDescription(new RTCSessionDescription(_pendingOffer))
+    return callPC.setRemoteDescription(new RTCSessionDescription(offer))
       .then(function(){
         var p = Promise.resolve();
         _pendingRemoteIce.forEach(function(c){ p = p.then(function(){ return callPC.addIceCandidate(new RTCIceCandidate(c)).catch(function(){}); }); });
@@ -730,7 +810,6 @@ window.callAccept = function(){
       .then(function(a){ return callPC.setLocalDescription(a); })
       .then(function(){
         callSignal({type:'call_answer', sdp:callPC.localDescription});
-        _pendingOffer = null;
         hidePreAnswer();
         callStopTones();
         fetch('/messages/call/clear/'+ROOM_ID+'/', {
@@ -742,6 +821,41 @@ window.callAccept = function(){
       });
   })
   .catch(function(err){ callLog('accept:', err); alert('Could not accept call.'); callTeardown('declined'); });
+}
+
+window.callAccept = function(){
+  if(callState !== 'incoming') return;
+
+  // 🩹 Happy path: offer has already arrived — consume it and set up.
+  if(_pendingOffer){
+    _callConsumePendingOffer();
+    return;
+  }
+
+  // 🩹 Offer not here yet. This happens when the callee popup joined
+  // the room group AFTER the caller broadcast their offer. Tell the
+  // caller to re-send, show "Connecting…" and wait up to 12 seconds.
+  // If still nothing, teardown.
+  _acceptPendingOffer = true;
+  var state = byId('wPreAnswerState');
+  var btns  = byId('wPreAnswerBtns');
+  if(state) state.textContent = 'Connecting…';
+  if(btns){
+    btns.innerHTML = '<button class="w-ctl hang" onclick="callDecline()" title="Cancel"><i class="bi bi-telephone-x-fill"></i></button>';
+  }
+  callStopTones();
+
+  // Re-announce in case our first announce was missed (WS reconnect etc.)
+  try { callSignal({type:'call_callee_ready'}); } catch(_){}
+
+  if(_offerWaitTimer){ clearTimeout(_offerWaitTimer); }
+  _offerWaitTimer = setTimeout(function(){
+    if(_acceptPendingOffer && !_pendingOffer){
+      callLog('offer never arrived after accept — teardown');
+      alert('The call could not be connected.');
+      callTeardown('missed');
+    }
+  }, 12000);
 };
 
 window.callDecline = function(){
@@ -1095,7 +1209,7 @@ function handleCallSignal(d){
   callLog('←', d.type);
   // Drop our own echoes. CallRingView broadcasts with caller_id, not
   // sender_id, so both have to be checked.
-  var senderId = String(d.sender_id || d.caller_id || '');
+  var senderId = String(d.sender_id || d.caller_id || d.cleared_by || '');
   if(senderId && senderId === String(USER_ID)) return;
 
   // Ignore signals that aren't call/presentation-related. Our WS is the
@@ -1105,6 +1219,7 @@ function handleCallSignal(d){
     call_ring:1, call_offer:1, call_answer:1, ice_candidate:1,
     call_hangup:1, call_decline:1, call_cancel:1,
     call_upgrade_offer:1, call_upgrade_answer:1,
+    call_callee_ready:1, call_cleared:1,
     present_start:1, present_end:1, present_page:1, present_request_page:1
   };
   if(!recognised[d.type]) return;
@@ -1114,12 +1229,58 @@ function handleCallSignal(d){
     return;
   }
 
+  // 🩹 Caller-side: the callee's popup just joined the room group and
+  // asked us to re-send our offer. Without this, a callee popup that
+  // opened after the original call_offer broadcast would never receive
+  // it (Django Channels doesn't replay group messages to late joiners).
+  if(d.type === 'call_callee_ready'){
+    if(!_iAmOriginalCaller) return;
+    if(callState !== 'outgoing' && callState !== 'active') return;
+    if(!callPC || !callPC.localDescription) return;
+    callLog('callee announced — re-sending offer');
+    try {
+      callSignal({type:'call_offer', sdp:callPC.localDescription, call_kind:callKind});
+    } catch(_){}
+    return;
+  }
+
+  // 🩹 Server broadcasts this from CallClearView whenever the ring
+  // record is cleared for any reason. It's a belt-and-braces signal —
+  // if we missed the direct call_cancel/call_hangup (we joined the
+  // group late, packet lost, etc.) we still learn the call is dead.
+  // Only acts while we're NOT active; active calls are torn down by
+  // the direct call_hangup signal.
+  if(d.type === 'call_cleared'){
+    if(callState === 'idle' || callState === 'active') return;
+    // Don't double-teardown if we're already the one who cleared it.
+    if(String(d.cleared_by || '') === String(USER_ID)) return;
+    var reason = d.reason || 'ended';
+    // Map server reasons to the popup's local reason semantics
+    var localReason =
+      (reason === 'cancelled') ? 'missed' :
+      (reason === 'declined')  ? 'ended'  :
+      (reason === 'missed')    ? 'missed' :
+      (reason === 'connected') ? 'ended'  :
+      'ended';
+    callLog('call_cleared (' + reason + ') received, teardown');
+    callTeardown(localReason);
+    return;
+  }
+
   if(d.type === 'call_offer'){
     var kind = d.call_kind || 'voice';
     if(callState === 'idle' || callState === 'incoming'){
       callState = 'incoming';
       callKind = kind;
       _pendingOffer = d.sdp;
+
+      // 🩹 If the user already clicked Accept and is sitting on
+      // "Connecting…", auto-consume the offer now that it's here.
+      if(_acceptPendingOffer){
+        _callConsumePendingOffer();
+        return;
+      }
+
       callStartCalleeTone();
       showPreAnswer('incoming');
     }

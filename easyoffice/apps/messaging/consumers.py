@@ -87,6 +87,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # 🆕 Upgrade an in-progress voice call to video (full
             # renegotiation — new offer/answer exchange, same peers).
             'call_upgrade_offer', 'call_upgrade_answer',
+            # 🩹 Callee-popup announces itself when it joins the room
+            # group. The caller-popup responds by re-sending its
+            # call_offer so popups that opened AFTER the original offer
+            # broadcast still receive it.
+            'call_callee_ready',
             # 🆕 Document-presentation sync. One presenter at a time;
             # viewers can request a specific page jump which the
             # presenter may honour.

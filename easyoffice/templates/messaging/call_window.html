@@ -35,7 +35,7 @@
   .w-big-name{font-size:1.1rem;font-weight:700;}
 
   /* Outgoing / incoming full-screen overlays (pre-answer) */
-  .w-modal{position:absolute;inset:0;background:rgba(2,6,23,.92);display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:30;color:var(--text);text-align:center;}
+  .w-modal{position:absolute;inset:0;background:#020617;display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:30;color:var(--text);text-align:center;}
   .w-modal.active{display:flex;}
   .w-modal-state{color:var(--text-muted);font-size:.9rem;}
   .w-modal-btns{display:flex;gap:14px;margin-top:20px;}
@@ -130,7 +130,7 @@
   </div>
 
   <div class="w-hero" id="wHero">
-    <div class="w-voice-centre" id="wVoiceCentre">
+    <div class="w-voice-centre hidden" id="wVoiceCentre">
       <div class="w-big-avatar" id="wBigAvatar">{% if peer.avatar %}<img src="{{ peer.avatar.url }}" alt="" style="width:100%;height:100%;object-fit:cover"/>{% else %}{{ peer.full_name|first|upper }}{% endif %}</div>
       <div class="w-big-name">{{ peer.full_name }}</div>
     </div>
@@ -1093,7 +1093,21 @@ window.callToastDeny = function(){
 /* ── Signal dispatcher ──────────────────────────────────────────────── */
 function handleCallSignal(d){
   callLog('←', d.type);
-  if(String(d.sender_id||'') === String(USER_ID)) return;
+  // Drop our own echoes. CallRingView broadcasts with caller_id, not
+  // sender_id, so both have to be checked.
+  var senderId = String(d.sender_id || d.caller_id || '');
+  if(senderId && senderId === String(USER_ID)) return;
+
+  // Ignore signals that aren't call/presentation-related. Our WS is the
+  // chat-room socket so typing, presence_update, chat_message etc. all
+  // arrive here too — just noise from the popup's perspective.
+  var recognised = {
+    call_ring:1, call_offer:1, call_answer:1, ice_candidate:1,
+    call_hangup:1, call_decline:1, call_cancel:1,
+    call_upgrade_offer:1, call_upgrade_answer:1,
+    present_start:1, present_end:1, present_page:1, present_request_page:1
+  };
+  if(!recognised[d.type]) return;
 
   if(d.type === 'call_ring'){
     // Someone else calling — but we're already in a call, ignore.

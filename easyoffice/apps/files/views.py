@@ -1215,24 +1215,6 @@ def _guess_content_type(filename):
     return content_type or 'application/octet-stream'
 
 
-def _unique_file_name_for_folder(base_name, folder):
-    """
-    Avoid duplicate names in the same folder.
-    """
-    original_root, original_ext = os.path.splitext(base_name)
-    candidate = base_name
-    counter = 1
-
-    while SharedFile.objects.filter(
-        folder=folder,
-        name=candidate,
-        is_latest=True
-    ).exists():
-        candidate = f'{original_root} ({counter}){original_ext}'
-        counter += 1
-
-    return candidate
-
 def _unique_file_name_for_folder(folder, original_name):
     root, ext = os.path.splitext(original_name)
     candidate = original_name
@@ -1246,16 +1228,20 @@ def _unique_file_name_for_folder(folder, original_name):
 
 
 def _ensure_pdf_shared_file(source_file, user):
-    """
-    Returns a PDF SharedFile.
-    If already PDF, returns original file.
-    If convertible, creates a converted PDF SharedFile and returns it.
-    """
     if source_file.is_pdf:
         return source_file
 
     if not source_file.is_convertible:
         raise RuntimeError("Selected document cannot be converted to PDF.")
+
+    if not getattr(source_file, 'file', None):
+        raise RuntimeError("Selected document has no file attached.")
+
+    source_name = (
+        source_file.name
+        or os.path.basename(getattr(source_file.file, 'name', '') or '')
+        or f'document-{source_file.pk}'
+    )
 
     tmp_path = None
     pdf_path = None
@@ -1267,7 +1253,7 @@ def _ensure_pdf_shared_file(source_file, user):
             for chunk in source_file.file.chunks():
                 tmp.write(chunk)
 
-        pdf_name = os.path.splitext(source_file.name)[0] + ".pdf"
+        pdf_name = os.path.splitext(source_name)[0] + ".pdf"
         image_exts = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff'}
 
         if source_file.extension.lower() in image_exts:
@@ -1277,7 +1263,7 @@ def _ensure_pdf_shared_file(source_file, user):
                 uploaded_by=user,
                 folder=source_file.folder,
                 visibility=source_file.visibility,
-                description=f'Auto-converted from {source_file.name}',
+                description=f'Auto-converted from {source_name}',
                 tags=source_file.tags,
                 file_size=pdf_buffer.getbuffer().nbytes,
                 file_type='application/pdf',
@@ -1288,13 +1274,14 @@ def _ensure_pdf_shared_file(source_file, user):
         pdf_path = _convert_to_pdf(tmp_path)
         with open(pdf_path, 'rb') as pdf_f:
             from django.core.files import File as DjangoFile
+
             new_pdf = SharedFile.objects.create(
                 name=_unique_file_name_for_folder(source_file.folder, pdf_name),
                 file=DjangoFile(pdf_f, name=pdf_name),
                 folder=source_file.folder,
                 uploaded_by=user,
                 visibility=source_file.visibility,
-                description=f'Auto-converted from {source_file.name}',
+                description=f'Auto-converted from {source_name}',
                 tags=source_file.tags,
                 file_size=os.path.getsize(pdf_path),
                 file_type='application/pdf',
@@ -1323,17 +1310,6 @@ def _apply_pdf_letterhead(
     width_pct=80.0,
     height_pct=70.0,
 ):
-    """
-    Compose the source PDF content inside a movable/resizable content area
-    on top of the letterhead PDF.
-
-    x_pct, y_pct, width_pct, height_pct are percentages relative to the
-    letterhead page size.
-
-    Notes:
-    - x_pct / y_pct are from the TOP-LEFT of the preview UI
-    - PDF coordinates use BOTTOM-LEFT, so Y is converted internally
-    """
     src_reader = PdfReader(source_pdf_path)
     letter_reader = PdfReader(letterhead_pdf_path)
     writer = PdfWriter()
@@ -1346,7 +1322,6 @@ def _apply_pdf_letterhead(
     bg_w = float(letterhead_base.mediabox.width)
     bg_h = float(letterhead_base.mediabox.height)
 
-    # clamp percentages
     x_pct = max(0.0, min(100.0, float(x_pct)))
     y_pct = max(0.0, min(100.0, float(y_pct)))
     width_pct = max(5.0, min(100.0, float(width_pct)))
@@ -1360,7 +1335,6 @@ def _apply_pdf_letterhead(
         use_letterhead = (apply_mode == 'all') or (apply_mode == 'first' and index == 0)
 
         if use_letterhead:
-            # start from a fresh copy of the letterhead page
             writer.add_page(letterhead_base)
             out_page = writer.pages[-1]
 
@@ -1370,16 +1344,13 @@ def _apply_pdf_letterhead(
             src_w = float(src_page.mediabox.width)
             src_h = float(src_page.mediabox.height)
 
-            # fit source page into the movable box while preserving aspect ratio
             scale = min(box_w / src_w, box_h / src_h)
 
             placed_w = src_w * scale
             placed_h = src_h * scale
 
-            # center inside the selected area
             placed_x = box_x + ((box_w - placed_w) / 2.0)
 
-            # UI y is top-based; PDF y is bottom-based
             top_y = bg_h * (y_pct / 100.0)
             box_bottom = bg_h - top_y - box_h
             placed_y = box_bottom + ((box_h - placed_h) / 2.0)
@@ -5558,8 +5529,9 @@ class LetterheadApplyToolView(LoginRequiredMixin, TemplateView):
         document_id = request.POST.get('document_id')
         letterhead_file_id = request.POST.get('letterhead_file_id')
         apply_mode = request.POST.get('apply_mode', 'first')
-        result_name = request.POST.get('result_name', '').strip()
+        result_name = (request.POST.get('result_name') or '').strip()
         send_for_signature = request.POST.get('send_for_signature') == '1'
+        open_mode = request.POST.get('open_mode', 'preview')
 
         if not document_id:
             messages.error(request, 'Please select a document.')
@@ -5578,6 +5550,14 @@ class LetterheadApplyToolView(LoginRequiredMixin, TemplateView):
 
         if not letterhead_file.is_pdf:
             messages.error(request, 'Selected letterhead must be a PDF.')
+            return redirect('letterhead_apply_tool')
+
+        if not getattr(source_doc, 'file', None):
+            messages.error(request, 'The selected source document has no file attached.')
+            return redirect('letterhead_apply_tool')
+
+        if not getattr(letterhead_file, 'file', None):
+            messages.error(request, 'The selected letterhead file has no file attached.')
             return redirect('letterhead_apply_tool')
 
         src_tmp = None
@@ -5614,7 +5594,12 @@ class LetterheadApplyToolView(LoginRequiredMixin, TemplateView):
             if result_name:
                 final_name = result_name if result_name.lower().endswith('.pdf') else result_name + '.pdf'
             else:
-                base_name = os.path.splitext(source_doc.name)[0]
+                source_name = (
+                    source_doc.name
+                    or os.path.basename(getattr(source_doc.file, 'name', '') or '')
+                    or f'document-{source_doc.pk}'
+                )
+                base_name = os.path.splitext(source_name)[0] or f'document-{source_doc.pk}'
                 final_name = f'{base_name} - with letterhead.pdf'
 
             final_name = _unique_file_name_for_folder(source_doc.folder, final_name)
@@ -5624,7 +5609,7 @@ class LetterheadApplyToolView(LoginRequiredMixin, TemplateView):
                 uploaded_by=user,
                 folder=source_doc.folder,
                 visibility=source_doc.visibility,
-                description=f'Generated with letterhead from {letterhead_file.name}',
+                description=f'Generated with letterhead from {letterhead_file.name or "selected letterhead"}',
                 tags=source_doc.tags,
                 file_size=merged_buffer.getbuffer().nbytes,
                 file_type='application/pdf',
@@ -5641,13 +5626,14 @@ class LetterheadApplyToolView(LoginRequiredMixin, TemplateView):
                 new_file,
                 action='created',
                 actor=user,
-                notes=f'Applied letterhead PDF {letterhead_file.name} to {source_doc.name}'
+                notes=f'Applied letterhead PDF to {source_doc.name or source_doc.pk}'
             )
-
-            messages.success(request, f'"{new_file.name}" was created successfully.')
 
             if send_for_signature:
                 return redirect('create_signature_request', pk=new_file.pk)
+
+            if open_mode == 'download':
+                return redirect('file_download', pk=new_file.pk)
 
             return redirect('file_preview', pk=new_file.pk)
 

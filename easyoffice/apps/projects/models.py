@@ -235,6 +235,12 @@ class SurveyAnswer(models.Model):
     response = models.ForeignKey(SurveyResponse, on_delete=models.CASCADE, related_name='answers')
     question = models.ForeignKey(SurveyQuestion, on_delete=models.CASCADE, related_name='answers')
     value = models.TextField(blank=True)
+    import_batch = models.ForeignKey(
+            'LocationImport',
+            on_delete=models.SET_NULL, null=True, blank=True,
+            related_name='imported_answers',
+            help_text='Set when this answer came from a bulk geo-import.'
+        )
 
     def __str__(self):
         return f'Answer to Q:{self.question_id}'
@@ -370,6 +376,12 @@ class ProjectLocation(models.Model):
               related_name='locations',
           )
     notes = models.TextField(blank=True)
+    import_batch = models.ForeignKey(
+                'LocationImport',
+                on_delete=models.SET_NULL, null=True, blank=True,
+                related_name='imported_locations',
+                help_text='Set when this row was created via bulk import.'
+            )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -377,3 +389,80 @@ class ProjectLocation(models.Model):
 
     def __str__(self):
         return f'{self.project.code} — {self.name}'
+
+
+class LocationImport(models.Model):
+    """
+    One row per import operation. When a user imports a CSV/XLSX into the
+    location map (or into a survey's geolocation question), we create one
+    of these so the rows can later be bulk-deleted or traced back to source.
+    """
+
+    class Target(models.TextChoices):
+        PROJECT_LOCATIONS = 'locations', _('Project Locations')
+        SURVEY_ANSWERS = 'survey', _('Survey Geo Answers')
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name='location_imports'
+    )
+    target = models.CharField(
+        max_length=20, choices=Target.choices, default=Target.PROJECT_LOCATIONS
+    )
+
+    # When target=SURVEY_ANSWERS, these identify which survey and which geo question
+    survey = models.ForeignKey(
+        Survey, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='geo_imports'
+    )
+    survey_question = models.ForeignKey(
+        SurveyQuestion, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='geo_imports'
+    )
+
+    # File linkage — SET_NULL so the row survives if the file is later deleted
+    source_file = models.ForeignKey(
+        'files.SharedFile',
+        on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='location_imports',
+        help_text='Link to the source SharedFile. Cleared when user unlinks.'
+    )
+    # Preserved even after unlink — so history stays readable
+    source_filename = models.CharField(max_length=255, blank=True)
+    source_filesize = models.PositiveIntegerField(default=0)
+
+    # The column mapping used — also cached per-file for "remember mappings"
+    # Shape: {"name": "Site Name", "latitude": "Lat", "longitude": "Lng", ...}
+    column_mapping = models.JSONField(default=dict, blank=True)
+
+    # How many rows were successfully created
+    row_count = models.PositiveIntegerField(default=0)
+    # How many rows were skipped (bad coords, duplicate, etc.)
+    skipped_count = models.PositiveIntegerField(default=0)
+
+    # Free-form notes about the import (errors, warnings)
+    notes = models.TextField(blank=True)
+
+    imported_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='location_imports'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        label = self.source_filename or '(unknown file)'
+        return f'{self.project.code} import · {label} · {self.row_count} rows'
+
+    @property
+    def file_still_linked(self):
+        return self.source_file_id is not None
+
+    def get_mapping_display(self):
+        """Human-readable summary of what columns map to what."""
+        if not self.column_mapping:
+            return '—'
+        bits = [f'{k} ← "{v}"' for k, v in self.column_mapping.items() if v]
+        return ', '.join(bits[:4]) + ('…' if len(bits) > 4 else '')

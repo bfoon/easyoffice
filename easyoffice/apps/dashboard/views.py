@@ -8,16 +8,10 @@ from apps.core.models import User
 from apps.tasks.models import Task
 from apps.projects.models import Project
 from apps.staff.models import LeaveRequest
+from apps.opportunities.models import OpportunityMatch, OpportunitySource
 
 
 class DashboardView(LoginRequiredMixin, TemplateView):
-    """
-    Role-aware dashboard:
-    - Admin / CEO / Office Manager / superuser -> office-wide dashboard
-    - Supervisor -> own dashboard + team widgets
-    - Staff -> personal dashboard
-    """
-
     def _is_admin_user(self, user):
         return user.is_superuser or user.groups.filter(
             name__in=['CEO', 'Admin', 'Office Manager']
@@ -51,9 +45,6 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         ctx['staff_profile'] = profile
         ctx['is_supervisor_user'] = bool(profile and profile.is_supervisor_role)
 
-        # ------------------------------------------------------------------
-        # Personal task summary
-        # ------------------------------------------------------------------
         my_tasks = user.assigned_tasks.all()
         ctx['my_tasks_total'] = my_tasks.count()
         ctx['my_tasks_todo'] = my_tasks.filter(status='todo').count()
@@ -77,9 +68,6 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             'due_date', '-created_at'
         )[:6]
 
-        # ------------------------------------------------------------------
-        # Personal projects
-        # ------------------------------------------------------------------
         my_projects = user.projects.filter(status='active').select_related(
             'project_manager'
         ).order_by('-updated_at')
@@ -87,26 +75,16 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         ctx['my_projects'] = my_projects[:4]
         ctx['my_projects_count'] = my_projects.count()
 
-        # ------------------------------------------------------------------
-        # Notifications
-        # ------------------------------------------------------------------
         ctx['recent_notifications'] = user.core_notifications.filter(
             is_read=False
         ).order_by('-created_at')[:5]
 
-        # ------------------------------------------------------------------
-        # Personal leave snapshot
-        # ------------------------------------------------------------------
         ctx['my_pending_leave_requests'] = user.leave_requests.filter(status='pending').count()
         ctx['my_approved_leave_requests'] = user.leave_requests.filter(status='approved').count()
         ctx['my_recent_leave_requests'] = user.leave_requests.select_related(
             'leave_type', 'approved_by'
         ).order_by('-created_at')[:5]
 
-        # ------------------------------------------------------------------
-        # Supervisor widgets
-        # user.supervisees returns StaffProfile objects, not User objects
-        # ------------------------------------------------------------------
         if profile and profile.is_supervisor_role:
             supervisee_profiles = user.supervisees.select_related(
                 'user', 'unit', 'department', 'position'
@@ -152,9 +130,6 @@ class DashboardView(LoginRequiredMixin, TemplateView):
 
             ctx['team_members'] = [sp.user for sp in supervisee_profiles[:8]]
 
-        # ------------------------------------------------------------------
-        # Admin widgets
-        # ------------------------------------------------------------------
         if self._is_admin_user(user):
             total_staff_qs = User.objects.filter(is_active=True, status='active')
             total_projects_qs = Project.objects.all()
@@ -208,7 +183,6 @@ class AdminDashboardView(LoginRequiredMixin, TemplateView):
         dept_filter = (req.GET.get('dept') or '').strip()
         search_q = (req.GET.get('tq') or '').strip()
 
-        # One consistent "open task" queryset for counts + dashboard list
         open_tasks = Task.objects.select_related(
             'assigned_to',
             'assigned_by',
@@ -222,7 +196,6 @@ class AdminDashboardView(LoginRequiredMixin, TemplateView):
             status__in=['done', 'cancelled']
         )
 
-        # Filtered queryset used only for the visible dashboard table
         filtered_tasks = open_tasks
 
         if status_filter:
@@ -271,6 +244,12 @@ class AdminDashboardView(LoginRequiredMixin, TemplateView):
 
         ctx['all_active_tasks'] = task_list
         ctx['all_tasks_count'] = filtered_tasks.count()
+
+        ctx['opportunity_match_count'] = OpportunityMatch.objects.filter(is_read=False).count()
+        ctx['recent_opportunity_matches'] = OpportunityMatch.objects.select_related(
+            'source', 'keyword'
+        ).order_by('-detected_at')[:10]
+        ctx['active_monitor_sources'] = OpportunitySource.objects.filter(is_active=True).count()
 
         ctx['priority_counts'] = {
             'critical': open_tasks.filter(priority='critical').count(),
@@ -358,13 +337,7 @@ class AdminDashboardView(LoginRequiredMixin, TemplateView):
         return ctx
 
 
-# ── Follow-up email: Admin → Supervisor / Unit Head ──────────────────────────
-
 class TaskFollowUpView(LoginRequiredMixin, View):
-    """
-    Admin/CEO sends a follow-up email to a task's supervisor/unit head.
-    POST: task_id, recipient_type ('supervisor'|'unit_head'|'assigned_to'), note
-    """
     def dispatch(self, request, *args, **kwargs):
         if not (
             request.user.is_superuser or
@@ -391,7 +364,6 @@ class TaskFollowUpView(LoginRequiredMixin, View):
                             f'admin@{org_name.lower().replace(" ","")}.org')
         sender    = request.user.full_name
 
-        # Resolve recipient
         recipient_user = None
         profile = getattr(task.assigned_to, 'staffprofile', None)
 
@@ -413,7 +385,6 @@ class TaskFollowUpView(LoginRequiredMixin, View):
             messages.error(request, 'Could not find a valid email address for that recipient.')
             return redirect(request.META.get('HTTP_REFERER', 'admin_dashboard'))
 
-        # Overdue info
         overdue_days = 0
         if task.due_date and task.due_date < timezone.now():
             overdue_days = (timezone.now() - task.due_date).days
@@ -508,7 +479,6 @@ body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-se
             msg.content_subtype = 'html'
             msg.send()
 
-            # Also create an in-app notification if internal user
             try:
                 from apps.core.models import CoreNotification
                 CoreNotification.objects.create(

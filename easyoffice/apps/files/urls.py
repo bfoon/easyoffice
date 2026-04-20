@@ -45,6 +45,7 @@ urlpatterns = [
     path('pdf-tools/split/<uuid:pk>/',         views.PDFSplitView.as_view(),           name='pdf_split'),
     path('pdf-tools/merge-images/',            views.PDFMergeImagesView.as_view(),     name='pdf_merge_images'),
     path('tools/zip-extract/', views.ZipExtractView.as_view(), name='zip_extract'),
+    path('tools/letterhead-apply/', views.LetterheadApplyToolView.as_view(), name='letterhead_apply_tool'),
 
     # ── Letterhead (linked from file-manager tools panel) ─────────────────
     # This entry lets the file manager's "Tools" sidebar point directly to

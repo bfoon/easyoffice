@@ -1,0 +1,130 @@
+{% extends 'base.html' %}
+{% block title %}Opportunity Sources{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="p-4 p-md-5 rounded-4 mb-4 text-white"
+         style="background: linear-gradient(135deg, #0f172a, #334155, #2563eb); box-shadow: 0 18px 40px rgba(0,0,0,.16);">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+            <div>
+                <div class="text-uppercase small fw-bold mb-2" style="letter-spacing:1px; opacity:.85;">
+                    Source Management
+                </div>
+                <h2 class="fw-bold mb-2">Opportunity Sources</h2>
+                <p class="mb-0" style="opacity:.92; max-width:760px;">
+                    Add and manage the websites or feeds the system monitors for proposals, procurement notices,
+                    tenders, consultancy calls, contracts, and project opportunities.
+                </p>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+                <a href="{% url 'opportunity_list' %}" class="btn btn-light">
+                    <i class="bi bi-speedometer2"></i> Dashboard
+                </a>
+                <a href="{% url 'opportunity_source_create' %}" class="btn btn-warning">
+                    <i class="bi bi-plus-lg"></i> Add Source
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
+        <div class="card-header bg-white border-0 p-4 d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <h4 class="mb-1">All Sources</h4>
+                <p class="text-muted mb-0">Monitor the platforms that matter to your procurement and project pipeline.</p>
+            </div>
+            <a href="{% url 'opportunity_source_create' %}" class="btn btn-primary btn-sm">
+                New Source
+            </a>
+        </div>
+
+        <div class="card-body p-0">
+            {% if sources %}
+                <div class="table-responsive">
+                    <table class="table align-middle table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="ps-4">Source</th>
+                                <th>Type</th>
+                                <th>Website</th>
+                                <th>Status</th>
+                                <th>Interval</th>
+                                <th>Last Checked</th>
+                                <th>Health</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for source in sources %}
+                            <tr>
+                                <td class="ps-4">
+                                    <div class="fw-semibold">{{ source.name }}</div>
+                                    {% if source.last_error %}
+                                    <div class="small text-danger mt-1">{{ source.last_error|truncatechars:80 }}</div>
+                                    {% endif %}
+                                </td>
+                                <td>{{ source.get_source_type_display }}</td>
+                                <td>
+                                    <a href="{{ source.url }}" target="_blank" class="text-decoration-none">
+                                        {{ source.url|truncatechars:55 }}
+                                    </a>
+                                </td>
+                                <td>
+                                    {% if source.is_active %}
+                                        <span class="badge bg-success">Active</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">Inactive</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ source.scan_interval_minutes }} min</td>
+                                <td>
+                                    {% if source.last_checked_at %}
+                                        {{ source.last_checked_at|date:"M d, Y H:i" }}
+                                    {% else %}
+                                        <span class="text-muted">Never</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if source.last_status == 'ok' %}
+                                        <span class="badge bg-success">OK</span>
+                                    {% elif source.last_status == 'error' %}
+                                        <span class="badge bg-danger">Error</span>
+                                    {% else %}
+                                        <span class="badge bg-light text-dark">Pending</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <div class="d-flex gap-2 flex-wrap">
+                                        <form method="post" action="{% url 'opportunity_source_scan' source.pk %}" class="d-inline">
+                                            {% csrf_token %}
+                                            <button type="submit" class="btn btn-sm btn-outline-primary">
+                                                <i class="bi bi-arrow-repeat"></i> Scan
+                                            </button>
+                                        </form>
+                                        <a href="{% url 'opportunity_source_edit' source.pk %}" class="btn btn-sm btn-outline-secondary">
+                                            <i class="bi bi-pencil"></i>
+                                        </a>
+                                        <a href="{% url 'opportunity_source_delete' source.pk %}" class="btn btn-sm btn-outline-danger">
+                                            <i class="bi bi-trash"></i>
+                                        </a>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="text-center py-5 text-muted">
+                    <i class="bi bi-broadcast fs-1 d-block mb-3"></i>
+                    <h5 class="mb-2">No sources added yet</h5>
+                    <p class="mb-3">Start by adding a website or feed such as UNDP Procurement, World Bank, MRC, or another source.</p>
+                    <a href="{% url 'opportunity_source_create' %}" class="btn btn-primary">
+                        Add First Source
+                    </a>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

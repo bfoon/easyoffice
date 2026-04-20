@@ -1,0 +1,130 @@
+{% extends 'base.html' %}
+{% block title %}Opportunity Match{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="mb-3">
+        <a href="{% url 'opportunity_list' %}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left"></i> Back to Dashboard
+        </a>
+    </div>
+
+    <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
+        <div class="card-header bg-white border-0 p-4 d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <div class="d-flex gap-2 flex-wrap mb-2">
+                    <span class="badge bg-dark">{{ match.source.name }}</span>
+                    {% if match.keyword %}
+                    <span class="badge bg-info text-dark">{{ match.keyword.keyword }}</span>
+                    {% endif %}
+                    {% if match.country %}
+                    <span class="badge bg-secondary">{{ match.country }}</span>
+                    {% endif %}
+                    {% if match.reference_no %}
+                    <span class="badge bg-light text-dark border">Ref: {{ match.reference_no }}</span>
+                    {% endif %}
+                    {% if not match.is_read %}
+                    <span class="badge bg-warning text-dark">New</span>
+                    {% endif %}
+                    {% if match.is_task_created %}
+                    <span class="badge bg-success">Task Created</span>
+                    {% endif %}
+                    {% if match.is_deadline_passed %}
+                    <span class="badge bg-danger">Deadline Passed</span>
+                    {% elif match.deadline_state == 'critical' %}
+                    <span class="badge bg-danger">Deadline Critical</span>
+                    {% elif match.is_deadline_soon %}
+                    <span class="badge bg-warning text-dark">Deadline Soon</span>
+                    {% endif %}
+                </div>
+                <h2 class="mb-1">{{ match.title }}</h2>
+                <div class="text-muted small">
+                    Detected: {{ match.detected_at|date:"d-M-Y H:i" }}
+                    {% if match.posted_date %} · Posted: {{ match.posted_date|date:"d-M-Y H:i" }}{% endif %}
+                    {% if match.published_at %} · Published: {{ match.published_at|date:"d-M-Y H:i" }}{% endif %}
+                    {% if match.deadline %} · Deadline: {{ match.deadline|date:"d-M-Y H:i" }}{% endif %}
+                </div>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+                <a href="{% url 'opportunity_list' %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-speedometer2"></i> Dashboard
+                </a>
+                <a href="{% url 'opportunity_match_edit' match.pk %}" class="btn btn-outline-primary">
+                    <i class="bi bi-pencil"></i> Edit
+                </a>
+                <a href="{% url 'opportunity_match_delete' match.pk %}" class="btn btn-outline-danger">
+                    <i class="bi bi-trash"></i> Delete
+                </a>
+            </div>
+        </div>
+
+        <div class="card-body p-4">
+            <div class="row g-3 mb-4">
+                <div class="col-md-3">
+                    <div class="border rounded-3 p-3 h-100">
+                        <div class="text-muted small">Reference</div>
+                        <div class="fw-semibold">{{ match.reference_no|default:"—" }}</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="border rounded-3 p-3 h-100">
+                        <div class="text-muted small">Country</div>
+                        <div class="fw-semibold">{{ match.country|default:"—" }}</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="border rounded-3 p-3 h-100">
+                        <div class="text-muted small">Office</div>
+                        <div class="fw-semibold">{{ match.office|default:"—" }}</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="border rounded-3 p-3 h-100">
+                        <div class="text-muted small">Process</div>
+                        <div class="fw-semibold">{{ match.procurement_process|default:"—" }}</div>
+                    </div>
+                </div>
+            </div>
+
+            {% if match.summary %}
+            <div class="mb-4">
+                <h5>Summary</h5>
+                <p class="text-muted mb-0">{{ match.summary|linebreaks }}</p>
+            </div>
+            {% endif %}
+
+            <div class="mb-4">
+                <h5>Official Link</h5>
+                <a href="{{ match.external_url }}" target="_blank">{{ match.external_url }}</a>
+            </div>
+
+            <div class="d-flex gap-2 flex-wrap">
+                <a href="{% url 'opportunity_list' %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Back to Dashboard
+                </a>
+
+                <a href="{{ match.external_url }}" target="_blank" class="btn btn-outline-secondary">
+                    <i class="bi bi-box-arrow-up-right"></i> Open Source Link
+                </a>
+
+                {% if not match.is_read %}
+                <form method="post" action="{% url 'opportunity_match_mark_read' match.pk %}" class="d-inline">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline-warning">
+                        <i class="bi bi-check2"></i> Mark Read
+                    </button>
+                </form>
+                {% endif %}
+
+                <form method="post" action="{% url 'opportunity_create_task' match.pk %}" class="d-inline">
+                    {% csrf_token %}
+                    <button type="submit"
+                            class="btn {% if match.deadline_state == 'passed' or match.deadline_state == 'critical' %}btn-danger{% else %}btn-primary{% endif %}">
+                        <i class="bi bi-check2-square"></i> Create Task
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

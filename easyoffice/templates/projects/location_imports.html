@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Imports — {{ project.name }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'project_list' %}">Projects</a> /
+  <a href="{% url 'project_detail' project.pk %}">{{ project.name }}</a> /
+  <a href="{% url 'project_locations' project.pk %}">Locations</a> /
+  Imports
+{% endblock %}
+
+{% block content %}
+<style>
+:root {
+  --proj:        {{ project.cover_color|default:"#1e3a5f" }};
+  --proj-dark:   color-mix(in srgb, var(--proj) 82%, #000000);
+  --proj-light:  color-mix(in srgb, var(--proj) 14%, #ffffff);
+  --proj-soft:   color-mix(in srgb, var(--proj) 7%,  #ffffff);
+  --proj-tint:   color-mix(in srgb, var(--proj) 22%, #ffffff);
+}
+.imp-wrap { max-width: 1100px; margin: 0 auto; }
+.imp-header-card {
+  background: linear-gradient(135deg, var(--proj-dark) 0%, var(--proj) 50%, var(--proj-tint) 100%);
+  color:#fff; border-radius:var(--eo-radius);
+  padding:22px 26px; margin-bottom:18px; position:relative; overflow:hidden;
+}
+.imp-header-card::before {
+  content:''; position:absolute; right:-40px; top:-40px; width:180px; height:180px;
+  background:rgba(255,255,255,.08); border-radius:50%;
+}
+.imp-row {
+  background:var(--eo-surface); border:1px solid var(--eo-border); border-radius:var(--eo-radius);
+  padding:16px 18px; margin-bottom:10px; transition:.15s;
+  display:grid;
+  grid-template-columns: 1fr auto;
+  gap:14px; align-items:start;
+}
+.imp-row:hover { border-color:var(--proj-tint); box-shadow:0 4px 14px rgba(0,0,0,.05); }
+.imp-title {
+  font-size:.92rem; font-weight:700; color:var(--eo-text); margin-bottom:4px;
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+}
+.imp-pill {
+  font-size:.62rem; font-weight:800; letter-spacing:.04em; padding:3px 8px; border-radius:6px;
+}
+.imp-pill.loc    { background:var(--proj-light); color:var(--proj-dark); }
+.imp-pill.survey { background:#fef3c7; color:#92400e; }
+.imp-pill.unlinked { background:#fee2e2; color:#991b1b; }
+.imp-meta {
+  font-size:.74rem; color:var(--eo-text-muted); line-height:1.7; margin-top:4px;
+  display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:10px 18px;
+  max-width:780px;
+}
+.imp-meta .mk { font-weight:700; color:var(--eo-text); font-variant-numeric:tabular-nums; }
+.imp-meta .mk.dim { color:var(--eo-text-muted); }
+.imp-meta .reduced { color:#b45309; }
+.imp-map-summary {
+  font-size:.72rem; color:var(--eo-text-muted);
+  background:var(--eo-bg); border:1px dashed var(--eo-border);
+  padding:8px 10px; border-radius:8px;
+  margin-top:8px; font-family:ui-monospace,Menlo,monospace;
+}
+.imp-actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+.imp-notes {
+  font-size:.72rem; color:#b45309; background:#fef3c7; border-left:3px solid #f59e0b;
+  padding:8px 12px; border-radius:0 8px 8px 0; margin-top:8px; white-space:pre-wrap;
+}
+.imp-empty {
+  background:var(--eo-surface); border:1px dashed var(--eo-border); border-radius:var(--eo-radius);
+  text-align:center; padding:80px 32px; color:var(--eo-text-muted);
+}
+.imp-empty i { font-size:3rem; color:var(--proj); opacity:.35; display:block; margin-bottom:12px; }
+</style>
+
+<div class="imp-wrap">
+
+  <div class="imp-header-card">
+    <h1 style="font-size:1.4rem;font-weight:800;margin:0 0 4px">
+      <i class="bi bi-archive"></i> Import History
+    </h1>
+    <p style="margin:0;font-size:.86rem;opacity:.88">
+      Every bulk import into this project's locations and surveys.
+      Unlink a file to forget its source while keeping imported data, or delete
+      all rows from a specific import to clean up.
+    </p>
+    <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+      <a href="{% url 'project_locations' project.pk %}"
+         class="eo-btn eo-btn-sm"
+         style="background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.3)">
+        <i class="bi bi-arrow-left"></i> Back to Location Map
+      </a>
+    </div>
+  </div>
+
+  {% if imports %}
+
+  <div style="font-size:.72rem;color:var(--eo-text-muted);margin:0 4px 10px;
+              font-weight:700;text-transform:uppercase;letter-spacing:.06em">
+    {{ imports|length }} import{{ imports|length|pluralize }}
+  </div>
+
+  {% for row in imports %}
+  {% with imp=row.imp %}
+  <div class="imp-row" data-import-id="{{ imp.pk }}">
+    <div>
+      <div class="imp-title">
+        {% if imp.target == 'locations' %}
+          <span class="imp-pill loc"><i class="bi bi-geo-alt"></i> LOCATIONS</span>
+        {% else %}
+          <span class="imp-pill survey"><i class="bi bi-patch-question"></i> SURVEY GEO</span>
+        {% endif %}
+
+        <span>{{ imp.source_filename|default:"(unknown file)" }}</span>
+
+        {% if not imp.source_file %}
+          <span class="imp-pill unlinked"><i class="bi bi-link-45deg"></i> UNLINKED</span>
+        {% endif %}
+
+        {% if imp.target == 'survey' and imp.survey %}
+          <span style="font-size:.72rem;color:var(--eo-text-muted)">
+            → <a href="{% url 'survey_dashboard' project.pk imp.survey.pk %}">{{ imp.survey.title }}</a>
+          </span>
+        {% endif %}
+      </div>
+
+      <div class="imp-meta">
+        <div>
+          <div class="mk dim">CREATED</div>
+          <div class="mk">{{ imp.row_count|intcomma }}</div>
+        </div>
+        <div>
+          <div class="mk dim">SKIPPED</div>
+          <div class="mk">{{ imp.skipped_count|intcomma }}</div>
+        </div>
+        <div>
+          <div class="mk dim">LIVE NOW</div>
+          <div class="mk {% if row.reduced %}reduced{% endif %}">{{ row.live_count|intcomma }}</div>
+        </div>
+        <div>
+          <div class="mk dim">WHEN</div>
+          <div class="mk" title="{{ imp.created_at }}">{{ imp.created_at|naturaltime }}</div>
+        </div>
+        <div style="grid-column: span 2">
+          <div class="mk dim">BY</div>
+          <div class="mk">
+            {% if imp.imported_by %}{{ imp.imported_by.get_full_name|default:imp.imported_by.username }}{% else %}—{% endif %}
+          </div>
+        </div>
+        <div style="grid-column: span 2">
+          <div class="mk dim">FILE SIZE</div>
+          <div class="mk">{{ imp.source_filesize|filesizeformat }}</div>
+        </div>
+      </div>
+
+      {% if imp.column_mapping %}
+      <div class="imp-map-summary">
+        <strong>Mapping:</strong> {{ imp.get_mapping_display }}
+      </div>
+      {% endif %}
+
+      {% if imp.notes %}
+      <div class="imp-notes"><i class="bi bi-exclamation-triangle"></i> {{ imp.notes|linebreaksbr }}</div>
+      {% endif %}
+    </div>
+
+    <div class="imp-actions">
+      {% if imp.source_file %}
+        <a href="{% url 'file_download' imp.source_file.pk %}"
+           class="eo-btn eo-btn-sm eo-btn-secondary"
+           title="Download source file">
+          <i class="bi bi-download"></i>
+        </a>
+        {% if imp.source_file %}
+          <button type="button" class="eo-btn eo-btn-sm eo-btn-secondary"
+                  onclick="rerunImport('{{ imp.pk }}')"
+                  title="Re-open import dialog with this file + mapping">
+            <i class="bi bi-arrow-repeat"></i> Re-run
+          </button>
+        {% endif %}
+        <button type="button" class="eo-btn eo-btn-sm eo-btn-secondary"
+                onclick="unlinkImport('{{ imp.pk }}')"
+                title="Unlink file (keeps imported data)">
+          <i class="bi bi-link-45deg"></i> Unlink
+        </button>
+      {% endif %}
+      {% if is_manager or imp.imported_by == request.user %}
+        <button type="button" class="eo-btn eo-btn-sm"
+                style="background:#fef2f2;color:#b91c1c;border:1px solid #fecaca"
+                onclick="deleteImport('{{ imp.pk }}', {{ row.live_count }})"
+                title="Delete every row created by this import">
+          <i class="bi bi-trash"></i> Delete data
+        </button>
+      {% endif %}
+    </div>
+  </div>
+  {% endwith %}
+  {% endfor %}
+
+  {% else %}
+
+  <div class="imp-empty">
+    <i class="bi bi-archive"></i>
+    <h3 style="font-size:1.05rem;font-weight:700;color:var(--eo-text);margin-bottom:6px">
+      No imports yet
+    </h3>
+    <p style="max-width:420px;margin:0 auto;line-height:1.6;font-size:.86rem">
+      When you bulk-import locations or survey geo answers from a spreadsheet,
+      every import will be listed here so you can trace, unlink, or clean up.
+    </p>
+    <div style="margin-top:18px">
+      <a href="{% url 'project_locations' project.pk %}" class="eo-btn eo-btn-primary">
+        <i class="bi bi-geo-alt"></i> Go to Location Map
+      </a>
+    </div>
+  </div>
+
+  {% endif %}
+</div>
+
+<div id="impToast" style="position:fixed;bottom:24px;right:24px;background:var(--eo-text);
+  color:#fff;padding:10px 18px;border-radius:10px;font-size:.84rem;font-weight:600;
+  z-index:9999;opacity:0;transform:translateY(10px);transition:.2s;pointer-events:none;
+  display:flex;align-items:center;gap:8px;max-width:420px;
+  box-shadow:0 12px 28px rgba(0,0,0,.25)">
+  <i class="bi bi-check-circle-fill" style="color:#4ade80"></i>
+  <span id="impToastMsg"></span>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const IMPORT_POST_URL = "{% url 'project_imports' project.pk %}";
+const CSRF = document.querySelector('[name=csrfmiddlewaretoken]')?.value
+          || document.cookie.match(/csrftoken=([^;]+)/)?.[1]
+          || '';
+
+function toast(msg, ok=true) {
+  const t = document.getElementById('impToast');
+  document.getElementById('impToastMsg').textContent = msg;
+  t.style.opacity = '1'; t.style.transform = 'translateY(0)';
+  t.style.background = ok ? 'var(--eo-text)' : '#991b1b';
+  setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateY(10px)'; }, 2800);
+}
+
+async function postAction(action, extra={}) {
+  const form = new FormData();
+  form.append('csrfmiddlewaretoken', CSRF);
+  form.append('action', action);
+  Object.entries(extra).forEach(([k,v]) => form.append(k,v));
+  const r = await fetch(IMPORT_POST_URL, { method:'POST', body:form,
+    headers:{'X-Requested-With':'XMLHttpRequest'} });
+  try { return await r.json(); } catch(e) { return {error:'Bad response'}; }
+}
+
+async function unlinkImport(id) {
+  if (!confirm('Unlink the source file? Imported data will be kept — only the link to the file is removed.')) return;
+  const j = await postAction('unlink', {import_id:id});
+  if (j.ok) { toast(j.message || 'Unlinked'); setTimeout(()=>location.reload(), 900); }
+  else     { toast(j.error || 'Failed', false); }
+}
+
+async function deleteImport(id, liveCount) {
+  const msg = `Delete ${liveCount} row${liveCount===1?'':'s'} created by this import?\n\nThis cannot be undone.`;
+  if (!confirm(msg)) return;
+  const j = await postAction('delete', {import_id:id});
+  if (j.ok) { toast(j.message || 'Deleted'); setTimeout(()=>location.reload(), 900); }
+  else     { toast(j.error || 'Failed', false); }
+}
+
+async function rerunImport(id) {
+  const j = await postAction('rerun', {import_id:id});
+  if (j.error) { toast(j.error, false); return; }
+  // Redirect to the location-map page with query params that pre-seed
+  // the import modal. The location-map JS listens for these on load.
+  const params = new URLSearchParams({
+    import_rerun: '1',
+    shared_file_id: j.shared_file_id,
+    column_mapping: JSON.stringify(j.column_mapping || {}),
+    target: j.target || 'locations',
+    survey_id: j.survey_id || '',
+    question_id: j.question_id || '',
+  });
+  location.href = `{% url 'project_locations' project.pk %}?${params.toString()}`;
+}
+
+// One hidden CSRF input in case the POST helper needs it
+if (!document.querySelector('[name=csrfmiddlewaretoken]')) {
+  const f = document.createElement('form');
+  f.innerHTML = '{% csrf_token %}';
+  f.style.display='none';
+  document.body.appendChild(f);
+}
+</script>
+{% endblock %}

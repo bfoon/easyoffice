@@ -4,10 +4,10 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.db.models import Q, Count
 from django.utils import timezone
-from apps.projects.models import (
+from .models import (
     Project, Milestone, ProjectUpdate, Risk,
     Survey, SurveyQuestion, SurveyResponse, SurveyAnswer,
-    TrackingSheet, TrackingRow, ProjectLocation,
+    TrackingSheet, TrackingRow, ProjectLocation, LocationImport,
 )
 from apps.messaging.models import ChatRoom
 import csv
@@ -16,15 +16,21 @@ from collections import Counter
 from apps.core.models import User
 from django.db.models import Sum
 from apps.finance.models import PurchaseRequest, Payment, EmployeeFinanceRequest
-from django.http import JsonResponse
 from apps.files.models import SharedFile
 import io
 import requests
+import logging
 from datetime import date, timedelta
-from django.http import HttpResponse, HttpResponseForbidden
+from django.core.files.base import ContentFile
+from django.db import transaction
+from django.http import HttpResponse, HttpResponseForbidden, JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_GET
-from apps.projects.geo_utils import parse_geo_answer
-from apps.projects.geo_utils import lookup_ip_location, reverse_geocode
+from apps.projects.geo_utils import (
+    parse_geo_answer, lookup_ip_location, reverse_geocode,
+    plus_code_to_latlng, is_plus_code, geo_answer_to_columns,
+)
+import os
+from django.urls import reverse
 
 def _is_project_member(user, project):
     return (
@@ -33,28 +39,157 @@ def _is_project_member(user, project):
         project.team_members.filter(id=user.id).exists()
     )
 
+logger = logging.getLogger(__name__)
+
 # --------------------------Helper ---------------------------------
+
+# Column-header aliases used to auto-detect which source column feeds which
+# target field. Lower-cased, stripped. Order in each list = preference.
+_LOCATION_FIELD_ALIASES = {
+    'name': ['name', 'site', 'site name', 'location', 'title', 'label'],
+    'latitude': ['latitude', 'lat', 'y', 'geo_lat', 'coord_lat'],
+    'longitude': ['longitude', 'lng', 'lon', 'long', 'x', 'geo_lng', 'geo_lon'],
+    'address': ['address', 'street', 'location_address', 'full_address'],
+    'description': ['description', 'desc', 'notes', 'details', 'remarks'],
+    'category': ['category', 'type', 'kind', 'group'],
+    'status': ['status', 'state'],
+}
+
+# Survey geo answer only needs lat/lng/address/accuracy/source
+_SURVEY_GEO_ALIASES = {
+    'latitude': _LOCATION_FIELD_ALIASES['latitude'],
+    'longitude': _LOCATION_FIELD_ALIASES['longitude'],
+    'address': _LOCATION_FIELD_ALIASES['address'],
+    'accuracy_m': ['accuracy', 'accuracy_m', 'accuracy_meters', 'acc', 'precision_m'],
+    'source': ['source', 'origin', 'captured_by', 'method'],
+    'name': _LOCATION_FIELD_ALIASES['name'],  # stored into respondent_name
+}
+
+
+def _auto_detect_mapping(headers, aliases):
+    """Given a list of source column headers and a target alias map, return
+    {target_field: best_matching_header_or_''} for every target field."""
+    seen = set()
+    mapping = {}
+    lower_headers = {h.strip().lower(): h for h in headers if h}
+    for target, alist in aliases.items():
+        picked = ''
+        for alias in alist:
+            if alias in lower_headers:
+                candidate = lower_headers[alias]
+                if candidate not in seen:
+                    picked = candidate
+                    seen.add(candidate)
+                    break
+        mapping[target] = picked
+    return mapping
+
+
+def _read_tabular(file_handle, filename):
+    """Return (headers, rows) from an uploaded CSV or XLSX. Rows are list of dicts."""
+    fname = (filename or '').lower()
+    if fname.endswith('.csv'):
+        text = file_handle.read().decode('utf-8-sig', errors='replace')
+        reader = csv.DictReader(io.StringIO(text))
+        headers = list(reader.fieldnames or [])
+        rows = [dict(r) for r in reader]
+        return headers, rows
+    if fname.endswith(('.xlsx', '.xls')):
+        import openpyxl
+        wb = openpyxl.load_workbook(file_handle, data_only=True)
+        ws = wb.active
+        header_cells = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), [])
+        headers = [str(h).strip() if h is not None else '' for h in header_cells]
+        rows = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not any(v is not None and str(v).strip() for v in row):
+                continue
+            rows.append(dict(zip(headers, [
+                '' if v is None else str(v).strip() for v in row
+            ])))
+        return headers, rows
+    raise ValueError('Unsupported file type. Use .csv, .xlsx or .xls.')
+
+
+def _parse_latlng(val, ref_lat=13.4549, ref_lng=-16.5790):
+    """Coerce a cell value into a float or None.
+    Handles plain floats, degree symbols, and Google Plus Codes (full & short).
+    """
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    if is_plus_code(s):
+        lat, _lng = plus_code_to_latlng(s, ref_lat, ref_lng)
+        return lat
+    s = s.replace(',', '.').replace('°', '')
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _resolve_latlng(lat_raw, lng_raw, ref_lat=13.4549, ref_lng=-16.5790):
+    """
+    Convert a pair of raw cell values to (lat_float, lng_float) or (None, None).
+    Handles Plus Codes in the latitude OR longitude column.
+    """
+    lat_s = str(lat_raw or '').strip()
+    lng_s = str(lng_raw or '').strip()
+    if lat_s and is_plus_code(lat_s):
+        return plus_code_to_latlng(lat_s, ref_lat, ref_lng)
+    if lng_s and is_plus_code(lng_s):
+        return plus_code_to_latlng(lng_s, ref_lat, ref_lng)
+    try:
+        return (
+            float(lat_s.replace(',', '.').replace('°', '')),
+            float(lng_s.replace(',', '.').replace('°', '')),
+        )
+    except (ValueError, TypeError):
+        return None, None
+
 
 class OSMTileProxyView(View):
     """
-    Proxy OSM raster tiles through Django so the browser no longer talks
-    directly to the tile server.
+    Proxy OSM raster tiles through Django so the browser never contacts
+    the tile server directly.  Direct browser requests to OSM volunteer
+    servers are blocked (HTTP 403 "Referer required") — proxying through
+    Django sets the correct User-Agent and Referer headers.
+
+    Tiles are cached in Django's cache backend for 24 h to avoid
+    hammering OSM's servers on repeated map loads.
+
+    URL (already in urls.py):
+        surveys/osm-tiles/<int:z>/<int:x>/<int:y>.png
     """
 
     TILE_TIMEOUT = 10
+    SUBDOMAINS   = ['a', 'b', 'c']
+    USER_AGENT   = 'EasyOffice/1.0 (internal map proxy; contact admin@easyoffice.local)'
 
     def get(self, request, z, x, y):
-        tile_url = f"https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        import hashlib
+        from django.core.cache import cache
+
+        sub      = self.SUBDOMAINS[(x + y) % 3]
+        tile_url = f'https://{sub}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+        cache_key = 'osm_tile:' + hashlib.md5(tile_url.encode()).hexdigest()
+
+        cached = cache.get(cache_key)
+        if cached:
+            resp = HttpResponse(cached, content_type='image/png')
+            resp['Cache-Control'] = 'public, max-age=86400'
+            return resp
 
         try:
             r = requests.get(
                 tile_url,
                 headers={
-                    "User-Agent": "EasyOffice-Surveys/1.0",
-                    "Referer": request.build_absolute_uri("/"),
+                    'User-Agent': self.USER_AGENT,
+                    'Referer':    request.build_absolute_uri('/'),
                 },
                 timeout=self.TILE_TIMEOUT,
-                stream=True,
             )
         except requests.RequestException:
             return HttpResponse(status=502)
@@ -62,15 +197,604 @@ class OSMTileProxyView(View):
         if r.status_code != 200:
             return HttpResponse(status=r.status_code)
 
-        resp = HttpResponse(
-            r.content,
-            content_type=r.headers.get("Content-Type", "image/png")
-        )
+        tile_bytes = r.content
+        cache.set(cache_key, tile_bytes, 86400)
 
-        # cache tiles lightly
-        resp["Cache-Control"] = "public, max-age=86400"
+        resp = HttpResponse(tile_bytes, content_type=r.headers.get('Content-Type', 'image/png'))
+        resp['Cache-Control'] = 'public, max-age=86400'
         return resp
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+def _read_spreadsheet(file_obj=None, shared_file=None):
+    """
+    Read a CSV or XLSX file.  Supply exactly one of file_obj (InMemoryUploadedFile)
+    or shared_file (SharedFile model instance).
+    Returns (headers: list[str], rows: list[dict], error: str|None).
+    """
+    try:
+        if shared_file:
+            name = shared_file.name.lower()
+            data = shared_file.file.read()
+        else:
+            name = file_obj.name.lower()
+            data = file_obj.read()
+
+        if name.endswith('.csv'):
+            text = data.decode('utf-8-sig', errors='replace')
+            reader = csv.DictReader(io.StringIO(text))
+            rows = [dict(r) for r in reader]
+            headers = list(reader.fieldnames or [])
+            if not headers and rows:
+                headers = list(rows[0].keys())
+            return headers, rows, None
+
+        elif name.endswith(('.xlsx', '.xls')):
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+            ws = wb.active
+            all_rows = list(ws.iter_rows(values_only=True))
+            if not all_rows:
+                return [], [], 'Empty spreadsheet'
+            headers = [str(c or '').strip() for c in all_rows[0]]
+            rows = []
+            for raw in all_rows[1:]:
+                row = {headers[i]: (str(v).strip() if v is not None else '')
+                       for i, v in enumerate(raw) if i < len(headers)}
+                rows.append(row)
+            return headers, rows, None
+
+        else:
+            return [], [], 'Unsupported file type. Use CSV or XLSX.'
+
+    except Exception as e:
+        logger.exception('_read_spreadsheet error')
+        return [], [], str(e)
+
+
+def _auto_suggest_mapping(headers: list, target: str) -> dict:
+    """
+    Guess column mapping from header names.
+    Returns {field_key: header_name}.
+    """
+    norm = {h.lower().replace(' ', '_').replace('-', '_'): h for h in headers}
+    mapping = {}
+
+    def pick(*candidates):
+        for c in candidates:
+            if c in norm:
+                return norm[c]
+        return ''
+
+    if target == 'locations':
+        mapping['name'] = pick('name', 'location_name', 'site', 'site_name', 'title')
+        mapping['latitude'] = pick('latitude', 'lat', 'y', 'plus_code', 'pluscode', 'olc',
+                                   'open_location_code', 'google_plus_code')
+        mapping['longitude'] = pick('longitude', 'lng', 'lon', 'long', 'x')
+        mapping['address'] = pick('address', 'addr', 'location')
+        mapping['description'] = pick('description', 'desc', 'details', 'notes')
+        mapping['category'] = pick('category', 'cat', 'type')
+        mapping['status'] = pick('status', 'state')
+        mapping['notes'] = pick('notes', 'remarks', 'comment', 'comments')
+    else:  # survey geo
+        mapping['latitude'] = pick('latitude', 'lat', 'y', 'plus_code', 'pluscode', 'olc')
+        mapping['longitude'] = pick('longitude', 'lng', 'lon', 'long', 'x')
+        mapping['address'] = pick('address', 'addr')
+        mapping['accuracy_m'] = pick('accuracy_m', 'accuracy', 'acc')
+        mapping['source'] = pick('source', 'src', 'method')
+        mapping['name'] = pick('name', 'respondent', 'respondent_name')
+
+    return {k: v for k, v in mapping.items() if v}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Enhanced Location Map Export — CSV (streaming) + new "Save to Files"
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SurveyExportView(LoginRequiredMixin, View):
+    """Combined endpoint: `?format=csv|xlsx&save_to_files=0|1`."""
+
+    def get(self, request, pk, sid):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+        survey = get_object_or_404(Survey, pk=sid, project=project)
+
+        fmt = (request.GET.get('format') or 'csv').lower()
+        content, out_name, mime = _build_survey_export(survey, fmt=fmt)
+
+        if request.GET.get('save_to_files') == '1':
+            sf = SharedFile.objects.create(
+                name=out_name,
+                file=ContentFile(content, name=out_name),
+                project=project,
+                uploaded_by=request.user,
+                visibility='private',
+                description=f'Survey export · {survey.title}',
+                tags='export,survey',
+                file_size=len(content),
+                file_type=mime.split(';')[0].strip(),
+            )
+            try:
+                sf.file_hash = sf.compute_hash()
+                sf.save(update_fields=['file_hash'])
+            except Exception:
+                pass
+            return JsonResponse({
+                'ok': True,
+                'message': f'Saved "{out_name}" to your Files.',
+                'file_id': str(sf.pk),
+                'file_name': sf.name,
+            })
+
+        resp = HttpResponse(content, content_type=mime)
+        resp['Content-Disposition'] = f'attachment; filename="{out_name}"'
+        return resp
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Import — multi-step flow
+#    Step 1: POST /import/preview/       → return headers + sample rows + suggested mapping
+#    Step 2: POST /import/commit/        → perform the insert with the chosen mapping
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _user_can_access_file(user, shared_file):
+    """Minimal access check — user owns the file or it's a project document
+    for a project the user is a member of."""
+    if shared_file.uploaded_by_id == user.id or user.is_superuser:
+        return True
+    if shared_file.project_id:
+        try:
+            return _is_project_member(user, shared_file.project)
+        except Exception:
+            return False
+    # Fall back to visibility rules
+    if shared_file.visibility == 'office':
+        return True
+    if user in shared_file.shared_with.all():
+        return True
+    return False
+
+
+def _resolve_import_source(request, project):
+    """
+    Given a request, return (file_obj_like, filename, shared_file_or_None, filesize).
+
+    The file_obj_like is always a binary readable stream suitable for csv /
+    openpyxl — either the uploaded UploadedFile or the SharedFile.file field.
+
+    Accepts EITHER:
+        POST 'import_file'           (new upload, multipart)
+        POST 'shared_file_id'        (pick from existing SharedFile)
+    """
+    sf_id = request.POST.get('shared_file_id') or ''
+    if sf_id:
+        try:
+            sf = SharedFile.objects.get(pk=sf_id)
+        except SharedFile.DoesNotExist:
+            return None, None, None, 0
+        if not _user_can_access_file(request.user, sf):
+            return None, None, None, 0
+        try:
+            f = sf.file
+            f.open('rb')
+            return f, sf.name, sf, int(sf.file_size or 0)
+        except Exception:
+            return None, None, None, 0
+
+    upload = request.FILES.get('import_file')
+    if upload:
+        return upload, upload.name, None, int(getattr(upload, 'size', 0) or 0)
+    return None, None, None, 0
+
+
+class LocationImportPreviewView(LoginRequiredMixin, View):
+
+    def post(self, request, pk):
+        from apps.projects.models import Project
+        project = get_object_or_404(Project, pk=pk)
+
+        target = request.POST.get('target', 'locations')
+        upload = request.FILES.get('import_file')
+        shared_fid = request.POST.get('shared_file_id', '').strip()
+
+        if upload:
+            headers, rows, err = _read_spreadsheet(file_obj=upload)
+        elif shared_fid:
+            from apps.files.models import SharedFile
+            sf = get_object_or_404(SharedFile, pk=shared_fid)
+            headers, rows, err = _read_spreadsheet(shared_file=sf)
+        else:
+            return JsonResponse({'ok': False, 'error': 'No file provided.'})
+
+        if err:
+            return JsonResponse({'ok': False, 'error': err})
+
+        suggested = _auto_suggest_mapping(headers, target)
+
+        return JsonResponse({
+            'ok': True,
+            'headers': headers,
+            'rows': rows[:10],
+            'total_rows': len(rows),
+            'suggested_mapping': suggested,
+            'saved_mapping': {},  # extend: load from DB per (project, filename)
+        })
+
+
+class LocationImportCommitView(LoginRequiredMixin, View):
+    """
+    POST — performs the actual insert.
+
+    Required POST fields:
+        target             : 'locations' | 'survey'
+        column_mapping_json: JSON {target_field: source_header_or_''}
+        shared_file_id     : (optional) UUID of the SharedFile used as source
+        import_file        : (optional) UploadedFile
+        survey_id          : (when target=survey) UUID of the survey
+        question_id        : (when target=survey) UUID of the geolocation question
+    """
+
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return JsonResponse({'error': 'Forbidden'}, status=403)
+
+        target = (request.POST.get('target') or 'locations').strip()
+
+        # Parse mapping (what target field ← what source header)
+        try:
+            mapping = json.loads(request.POST.get('column_mapping_json') or '{}')
+            if not isinstance(mapping, dict):
+                raise ValueError('mapping must be object')
+        except Exception as e:
+            return JsonResponse({'error': f'Bad mapping: {e}'}, status=400)
+
+        file_obj, filename, shared_file, filesize = _resolve_import_source(request, project)
+        if file_obj is None:
+            return JsonResponse({'error': 'No file provided.'}, status=400)
+
+        try:
+            headers, rows = _read_tabular(file_obj, filename)
+        except Exception as e:
+            return JsonResponse({'error': f'Could not read file: {e}'}, status=400)
+        finally:
+            try:
+                if shared_file:
+                    file_obj.close()
+            except Exception:
+                pass
+
+        # ── Branch on target ─────────────────────────────────────────────────
+        if target == 'survey':
+            result = self._commit_survey(request, project, rows, mapping,
+                                         filename, shared_file, filesize)
+        else:
+            result = self._commit_locations(request, project, rows, mapping,
+                                            filename, shared_file, filesize)
+        return JsonResponse(result)
+
+    # ── Project Locations target ─────────────────────────────────────────────
+    def _commit_locations(self, request, project, rows, mapping, filename, shared_file, filesize):
+        def cell(row, target_field):
+            src = mapping.get(target_field) or ''
+            return row.get(src, '') if src else ''
+
+        created = 0
+        skipped = 0
+        skip_notes = []
+
+        with transaction.atomic():
+            batch = LocationImport.objects.create(
+                project=project,
+                target=LocationImport.Target.PROJECT_LOCATIONS,
+                source_file=shared_file,
+                source_filename=filename or '',
+                source_filesize=filesize,
+                column_mapping=mapping,
+                imported_by=request.user,
+            )
+
+            # Reference point for short Plus Code recovery
+            _first = project.locations.order_by('created_at').first()
+            _ref_lat = float(_first.latitude)  if _first else 13.4549
+            _ref_lng = float(_first.longitude) if _first else -16.5790
+
+            for i, row in enumerate(rows, start=2):  # +1 for header, +1 for 1-indexed
+                lat, lng = _resolve_latlng(
+                    cell(row, 'latitude'), cell(row, 'longitude'), _ref_lat, _ref_lng
+                )
+                name = (cell(row, 'name') or '').strip() or f'Imported row {i-1}'
+                if lat is None or lng is None:
+                    skipped += 1
+                    if len(skip_notes) < 10:
+                        skip_notes.append(f'Row {i}: missing/invalid lat or lng')
+                    continue
+                if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+                    skipped += 1
+                    if len(skip_notes) < 10:
+                        skip_notes.append(f'Row {i}: out-of-range coordinates')
+                    continue
+                ProjectLocation.objects.create(
+                    project=project,
+                    name=name[:200],
+                    description=(cell(row, 'description') or '')[:2000],
+                    address=(cell(row, 'address') or '')[:400],
+                    latitude=lat,
+                    longitude=lng,
+                    category=(cell(row, 'category') or '')[:100],
+                    status=(cell(row, 'status') or 'pending').lower()[:20],
+                    notes=(cell(row, 'notes') or '')[:2000] if 'notes' in mapping else '',
+                    import_batch=batch,
+                )
+                created += 1
+
+            batch.row_count = created
+            batch.skipped_count = skipped
+            batch.notes = '\n'.join(skip_notes)
+            batch.save(update_fields=['row_count', 'skipped_count', 'notes'])
+
+        return {
+            'ok': True,
+            'import_id': str(batch.pk),
+            'created': created,
+            'skipped': skipped,
+            'skipped_notes': skip_notes,
+            'redirect_url': reverse('project_locations', kwargs={'pk': project.pk}),
+        }
+
+    # ── Survey geo answers target ────────────────────────────────────────────
+    def _commit_survey(self, request, project, rows, mapping, filename, shared_file, filesize):
+        from .models import Survey, SurveyQuestion, SurveyResponse, SurveyAnswer
+
+        survey_id = request.POST.get('survey_id') or ''
+        question_id = request.POST.get('question_id') or ''
+        if not (survey_id and question_id):
+            return {'error': 'survey_id and question_id are required for survey imports.'}
+
+        try:
+            survey = Survey.objects.get(pk=survey_id, project=project)
+            question = SurveyQuestion.objects.get(pk=question_id, survey=survey, q_type='geolocation')
+        except (Survey.DoesNotExist, SurveyQuestion.DoesNotExist):
+            return {'error': 'Survey or question not found (must be a geolocation question).'}
+
+        def cell(row, target_field):
+            src = mapping.get(target_field) or ''
+            return row.get(src, '') if src else ''
+
+        created = 0
+        skipped = 0
+        skip_notes = []
+
+        with transaction.atomic():
+            batch = LocationImport.objects.create(
+                project=project,
+                target=LocationImport.Target.SURVEY_ANSWERS,
+                survey=survey,
+                survey_question=question,
+                source_file=shared_file,
+                source_filename=filename or '',
+                source_filesize=filesize,
+                column_mapping=mapping,
+                imported_by=request.user,
+            )
+
+            # Reference point for short Plus Code recovery
+            _first = project.locations.order_by('created_at').first()
+            _ref_lat = float(_first.latitude)  if _first else 13.4549
+            _ref_lng = float(_first.longitude) if _first else -16.5790
+
+            for i, row in enumerate(rows, start=2):
+                lat, lng = _resolve_latlng(
+                    cell(row, 'latitude'), cell(row, 'longitude'), _ref_lat, _ref_lng
+                )
+                if lat is None or lng is None:
+                    skipped += 1
+                    if len(skip_notes) < 10:
+                        skip_notes.append(f'Row {i}: missing/invalid lat or lng')
+                    continue
+                if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+                    skipped += 1
+                    if len(skip_notes) < 10:
+                        skip_notes.append(f'Row {i}: out-of-range coordinates')
+                    continue
+
+                try:
+                    acc_m = float((cell(row, 'accuracy_m') or '0').replace(',', '.'))
+                except Exception:
+                    acc_m = 0
+                source = (cell(row, 'source') or 'import').strip().lower()[:20] or 'import'
+                address = (cell(row, 'address') or '').strip()[:400]
+                name = (cell(row, 'name') or '').strip() or 'Imported respondent'
+
+                # Build the canonical geo JSON our parse_geo_answer understands
+                geo_payload = json.dumps({
+                    'lat': lat, 'lng': lng,
+                    'accuracy_m': acc_m, 'source': source,
+                    'address': address, 'captured_at': '',
+                })
+
+                response = SurveyResponse.objects.create(
+                    survey=survey,
+                    respondent=None,
+                    respondent_name=name[:120],
+                    is_public_response=False,
+                )
+                SurveyAnswer.objects.create(
+                    response=response,
+                    question=question,
+                    value=geo_payload,
+                    import_batch=batch,
+                )
+                created += 1
+
+            batch.row_count = created
+            batch.skipped_count = skipped
+            batch.notes = '\n'.join(skip_notes)
+            batch.save(update_fields=['row_count', 'skipped_count', 'notes'])
+
+        return {
+            'ok': True,
+            'import_id': str(batch.pk),
+            'created': created,
+            'skipped': skipped,
+            'skipped_notes': skip_notes,
+            'redirect_url': reverse('survey_dashboard',
+                                    kwargs={'pk': project.pk, 'sid': survey.pk}),
+        }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Pick-from-Files — list SharedFiles the user can choose as import source
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ImportFilePickerView(LoginRequiredMixin, View):
+    """Return a JSON list of CSV / XLSX files from the Files app."""
+
+    ALLOWED_EXTS = {'csv', 'xlsx', 'xls'}
+
+    def get(self, request, pk):
+        from apps.files.models import SharedFile
+        from django.db.models import Q
+
+        user = request.user
+        profile = getattr(user, 'staffprofile', None)
+        unit = profile.unit if profile else None
+        dept = profile.department if profile else None
+
+        qs = SharedFile.objects.filter(
+            Q(uploaded_by=user) |
+            Q(visibility='office') |
+            Q(visibility='unit', unit=unit) |
+            Q(visibility='department', department=dept) |
+            Q(shared_with=user) |
+            Q(share_access__user=user)
+        ).distinct().order_by('-created_at')
+
+        files = []
+        for f in qs:
+            ext = os.path.splitext(f.name)[1].lower().lstrip('.')
+            if ext not in self.ALLOWED_EXTS:
+                continue
+            files.append({
+                'id': str(f.pk),
+                'name': f.name,
+                'ext': ext,
+                'size': f.file_size,
+                'size_display': f.size_display,
+                'uploaded_at': f.created_at.strftime('%d %b %Y'),
+                'project_code': str(f.project.code) if f.project else '',
+            })
+
+        return JsonResponse({'ok': True, 'files': files})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Import management — list / unlink / bulk-delete / re-run
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ProjectImportsView(LoginRequiredMixin, View):
+    """GET — full management page listing every import on this project.
+
+    Also accepts POST with action=unlink|delete|rerun&import_id=<uuid>.
+    """
+
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+
+        imports = (
+            LocationImport.objects
+            .filter(project=project)
+            .select_related('source_file', 'imported_by', 'survey', 'survey_question')
+            .order_by('-created_at')
+        )
+
+        # Annotate live counts — how many rows are STILL in the DB (may be fewer
+        # than batch.row_count if some were individually deleted)
+        annotated = []
+        for imp in imports:
+            if imp.target == imp.Target.PROJECT_LOCATIONS:
+                live = ProjectLocation.objects.filter(import_batch=imp).count()
+            else:
+                from .models import SurveyAnswer
+                live = SurveyAnswer.objects.filter(import_batch=imp).count()
+            annotated.append({
+                'imp': imp,
+                'live_count': live,
+                'reduced': live < imp.row_count,
+            })
+
+        is_manager = request.user.is_superuser or project.project_manager == request.user
+        return render(request, 'projects/location_imports.html', {
+            'project': project,
+            'imports': annotated,
+            'is_manager': is_manager,
+        })
+
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return JsonResponse({'error': 'Forbidden'}, status=403)
+        is_manager = request.user.is_superuser or project.project_manager == request.user
+
+        action = (request.POST.get('action') or '').strip()
+        imp_id = request.POST.get('import_id') or ''
+        try:
+            imp = LocationImport.objects.get(pk=imp_id, project=project)
+        except LocationImport.DoesNotExist:
+            return JsonResponse({'error': 'Import not found'}, status=404)
+
+        if action == 'unlink':
+            # Clear the FK but keep all rows. History is preserved via
+            # source_filename which was stored at import time.
+            imp.source_file = None
+            imp.save(update_fields=['source_file'])
+            return JsonResponse({'ok': True, 'message': 'File unlinked. Data preserved.'})
+
+        if action == 'delete':
+            # Only the importer or a project manager may bulk-delete
+            if not (is_manager or imp.imported_by_id == request.user.id):
+                return JsonResponse({'error': 'Not permitted'}, status=403)
+            with transaction.atomic():
+                if imp.target == imp.Target.PROJECT_LOCATIONS:
+                    ProjectLocation.objects.filter(import_batch=imp).delete()
+                else:
+                    from .models import SurveyAnswer, SurveyResponse
+                    # Delete answers AND the responses that were created just for them
+                    resp_ids = SurveyAnswer.objects.filter(
+                        import_batch=imp).values_list('response_id', flat=True)
+                    SurveyAnswer.objects.filter(import_batch=imp).delete()
+                    # Only delete the response if it has no remaining answers
+                    SurveyResponse.objects.filter(
+                        pk__in=list(resp_ids)
+                    ).filter(answers__isnull=True).delete()
+                deleted_rows = imp.row_count
+                imp.delete()
+            return JsonResponse({
+                'ok': True,
+                'message': f'Deleted {deleted_rows} rows from this import.'
+            })
+
+        if action == 'rerun':
+            # Re-run only possible if source_file is still linked
+            if not imp.source_file_id:
+                return JsonResponse({
+                    'error': 'Source file is no longer linked; cannot re-run.'}, status=400)
+            # We don't actually re-commit here — the client redirects to the
+            # import modal with the file and saved mapping pre-filled.
+            return JsonResponse({
+                'ok': True,
+                'shared_file_id': str(imp.source_file_id),
+                'column_mapping': imp.column_mapping,
+                'target': imp.target,
+                'survey_id': str(imp.survey_id) if imp.survey_id else '',
+                'question_id': str(imp.survey_question_id) if imp.survey_question_id else '',
+            })
+
+        return JsonResponse({'error': 'Unknown action'}, status=400)
 # ---------------------------------------------------------------------------
 # Project List
 # ---------------------------------------------------------------------------
@@ -1011,34 +1735,6 @@ class ProjectDocumentUnlinkView(LoginRequiredMixin, View):
 # SURVEY VIEWS
 # =============================================================================
 
-def _save_survey_questions(survey, request):
-    """
-    Rebuild survey questions from posted form fields.
-    """
-    survey.questions.all().delete()
-
-    q_texts = request.POST.getlist('q_text')
-    q_types = request.POST.getlist('q_type')
-    q_options = request.POST.getlist('q_options')
-    q_required = set(request.POST.getlist('q_required'))
-
-    order = 0
-    for i, text in enumerate(q_texts):
-        text = (text or '').strip()
-        if not text:
-            continue
-
-        SurveyQuestion.objects.create(
-            survey=survey,
-            text=text,
-            q_type=q_types[i] if i < len(q_types) else 'text',
-            options=(q_options[i] if i < len(q_options) else '').strip(),
-            is_required=str(i) in q_required,
-            order=order,
-        )
-        order += 1
-
-
 class ProjectSurveyListView(LoginRequiredMixin, View):
     """List all surveys for a project + create new surveys + export responses."""
 
@@ -1049,7 +1745,7 @@ class ProjectSurveyListView(LoginRequiredMixin, View):
 
         export_sid = request.GET.get('export', '').strip()
         if export_sid:
-            return self._export_csv(request, project, export_sid)
+            return self._build_survey_export(request, project, export_sid)
 
         surveys = (
             project.surveys
@@ -1124,16 +1820,23 @@ class ProjectSurveyListView(LoginRequiredMixin, View):
 
         writer = csv.writer(response)
 
-        # Header row
+        # Header row — geo questions emit 5 sub-columns each
+        geo_qids = {str(q.pk) for q in questions if q.q_type == 'geolocation'}
         header = [
-            'Response ID',
-            'Submitted At',
-            'Respondent',
-            'Respondent Name',
-            'Is Public Response',
-            'IP Address',
-            'Device ID',
-        ] + [q.text for q in questions]
+            'Response ID', 'Submitted At', 'Respondent',
+            'Respondent Name', 'Is Public Response', 'IP Address', 'Device ID',
+        ]
+        for q in questions:
+            if q.q_type == 'geolocation':
+                header.extend([
+                    f'{q.text} [lat]',
+                    f'{q.text} [lng]',
+                    f'{q.text} [address]',
+                    f'{q.text} [accuracy_m]',
+                    f'{q.text} [source]',
+                ])
+            else:
+                header.append(q.text)
         writer.writerow(header)
 
         # Data rows
@@ -1155,7 +1858,15 @@ class ProjectSurveyListView(LoginRequiredMixin, View):
             ]
 
             for q in questions:
-                row.append(answer_map.get(str(q.pk), ''))
+                qid = str(q.pk)
+                if qid in geo_qids:
+                    cols = geo_answer_to_columns(answer_map.get(qid, ''))
+                    row.extend([
+                        cols['latitude'], cols['longitude'], cols['address'],
+                        cols['accuracy_m'], cols['source'],
+                    ])
+                else:
+                    row.append(answer_map.get(qid, ''))
 
             writer.writerow(row)
 
@@ -1408,90 +2119,6 @@ class SurveyEditView(LoginRequiredMixin, View):
 
         messages.success(request, f'Survey "{survey.title}" updated.')
         return redirect('survey_dashboard', pk=pk, sid=sid)
-
-class PublicSurveyView(View):
-    """
-    Public survey access (no login required)
-    """
-
-    def get(self, request, token):
-        survey = get_object_or_404(Survey, public_token=token, is_public=True)
-
-        if not survey.is_active:
-            return render(request, 'projects/survey_public_closed.html', {
-                'survey': survey
-            })
-
-        questions = survey.questions.order_by('order')
-
-        return render(request, 'projects/survey_submit.html', {
-            'survey': survey,
-            'project': survey.project,
-            'questions': questions,
-            'is_public_view': True
-        })
-
-    def post(self, request, token):
-        survey = get_object_or_404(Survey, public_token=token, is_public=True)
-
-        if not survey.is_active:
-            return redirect('survey_public', token=token)
-
-        # ── Prevent multiple submissions ──
-        if not survey.allow_multiple_responses:
-            if request.session.get(f'survey_done_{survey.id}'):
-                messages.warning(request, 'You already submitted this survey.')
-                return redirect('survey_public', token=token)
-
-        questions = survey.questions.order_by('order')
-
-        errors = []
-        answers = []
-
-        for q in questions:
-            field = f'q_{q.pk}'
-
-            if q.q_type == 'multi_choice':
-                val = ', '.join(request.POST.getlist(field))
-            else:
-                val = request.POST.get(field, '').strip()
-
-            if q.is_required and not val:
-                errors.append(q.text)
-
-            answers.append((q, val))
-
-        if errors:
-            messages.error(request, 'Please answer all required questions.')
-            return render(request, 'projects/survey_submit.html', {
-                'survey': survey,
-                'project': survey.project,
-                'questions': questions,
-                'is_public_view': True
-            })
-
-        resp = SurveyResponse.objects.create(
-            survey=survey,
-            respondent=None,
-            respondent_name=request.POST.get('respondent_name', '').strip(),
-        )
-
-        for q, val in answers:
-            SurveyAnswer.objects.create(
-                response=resp,
-                question=q,
-                value=val
-            )
-
-        # mark session
-        request.session[f'survey_done_{survey.id}'] = True
-
-        messages.success(request, 'Thank you for your response!')
-        return redirect('survey_public', token=token)
-
-# =============================================================================
-# TRACKING SHEET VIEWS
-# =============================================================================
 
 class TrackingSheetView(LoginRequiredMixin, View):
     """Main tracking sheet (get-or-create per project)."""
@@ -1963,8 +2590,112 @@ class LocationTemplateDownloadView(LoginRequiredMixin, View):
 
 
 # =============================================================================
-# LOCATION MAP HTML EXPORT
+# LOCATION MAP HTML and CSV EXPORT
 # =============================================================================
+
+class LocationMapExportCSVView(LoginRequiredMixin, View):
+    """
+    GET: Returns a CSV with geo-friendly columns. Works for direct download
+    AND for the "Save to Files" flow (if ?save_to_files=1&format=csv|xlsx is
+    supplied, the file is written as a SharedFile in the user's files and we
+    JSON-redirect back to the files app).
+    """
+
+    HEADERS = [
+        'ID', 'Name', 'Description', 'Address',
+        'Latitude', 'Longitude',
+        'Accuracy (m)', 'Source',
+        'Category', 'Status', 'Assigned To',
+        'Zone', 'Notes', 'Created At',
+    ]
+
+    def _row(self, loc):
+        return [
+            str(loc.pk),
+            loc.name,
+            loc.description or '',
+            loc.address or '',
+            f'{loc.latitude:.6f}' if loc.latitude is not None else '',
+            f'{loc.longitude:.6f}' if loc.longitude is not None else '',
+            '',  # Accuracy — ProjectLocation has no accuracy field
+            'manual',  # Source — all manual unless imported
+            loc.category or '',
+            loc.get_status_display(),
+            loc.assigned_to.get_full_name() if loc.assigned_to else '',
+            loc.zone.name if loc.zone else '',
+            loc.notes or '',
+            loc.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+        ]
+
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden()
+
+        fmt = (request.GET.get('format') or 'csv').lower()
+        save_to_files = request.GET.get('save_to_files') == '1'
+
+        locations = project.locations.select_related('assigned_to', 'zone').all()
+
+        if fmt == 'xlsx':
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = 'Locations'
+            ws.append(self.HEADERS)
+            for loc in locations:
+                ws.append(self._row(loc))
+            # Freeze header row + widen some columns
+            ws.freeze_panes = 'A2'
+            for i, w in enumerate([32, 28, 40, 40, 14, 14, 14, 14, 18, 14, 20, 16, 30, 20], start=1):
+                ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+            buf = io.BytesIO()
+            wb.save(buf)
+            buf.seek(0)
+            content = buf.read()
+            mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            out_name = f'{project.code}_locations.xlsx'
+        else:
+            sio = io.StringIO()
+            # utf-8 BOM so Excel opens it correctly
+            sio.write('\ufeff')
+            writer = csv.writer(sio)
+            writer.writerow(self.HEADERS)
+            for loc in locations:
+                writer.writerow(self._row(loc))
+            content = sio.getvalue().encode('utf-8')
+            mime = 'text/csv; charset=utf-8'
+            out_name = f'{project.code}_locations.csv'
+
+        # ── Save to Files app as a SharedFile ────────────────────────────────
+        if save_to_files:
+            sf = SharedFile.objects.create(
+                name=out_name,
+                file=ContentFile(content, name=out_name),
+                project=project,
+                uploaded_by=request.user,
+                visibility='private',
+                description=f'Location map export from project {project.code}',
+                tags='export,locations',
+                file_size=len(content),
+                file_type=mime.split(';')[0].strip(),
+            )
+            try:
+                sf.file_hash = sf.compute_hash()
+                sf.save(update_fields=['file_hash'])
+            except Exception:
+                pass
+            return JsonResponse({
+                'ok': True,
+                'message': f'Saved "{out_name}" to your Files.',
+                'file_id': str(sf.pk),
+                'file_name': sf.name,
+            })
+
+        # ── Direct download ──────────────────────────────────────────────────
+        resp = HttpResponse(content, content_type=mime)
+        resp['Content-Disposition'] = f'attachment; filename="{out_name}"'
+        return resp
 
 class LocationMapHTMLExportView(LoginRequiredMixin, View):
     """Download a self-contained interactive Leaflet map as an HTML file."""

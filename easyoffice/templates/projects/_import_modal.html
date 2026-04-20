@@ -1,0 +1,788 @@
+
+
+<div class="proj-modal-backdrop" id="importModal">
+  <div class="proj-modal" style="width:880px;max-width:96vw;display:flex;flex-direction:column;max-height:92vh">
+
+    {# ── Head ─────────────────────────────────────────────────────────── #}
+    <div class="proj-modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:32px;height:32px;border-radius:9px;
+                    background:var(--proj-light);color:var(--proj-dark);
+                    display:flex;align-items:center;justify-content:center">
+          <i class="bi bi-upload"></i>
+        </div>
+        <div>
+          <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">Import Data</div>
+          <div id="impSubtitle" style="font-size:.72rem;color:var(--eo-text-muted)">
+            {% if target == 'survey' %}
+              Bulk-add geo responses to this survey question
+            {% else %}
+              Bulk-add locations to the map
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <button onclick="closeImportModal()" type="button"
+              style="background:none;border:none;cursor:pointer;font-size:1.4rem;
+                     color:var(--eo-text-muted);line-height:1">&times;</button>
+    </div>
+
+    {# ── Progress steps ──────────────────────────────────────────────── #}
+    <div style="display:flex;gap:0;padding:10px 22px 0;border-bottom:1px solid var(--eo-border)">
+      <div class="imp-step active" data-step="source">
+        <span class="n">1</span><span class="l">Source</span>
+      </div>
+      <div class="imp-step-sep"></div>
+      <div class="imp-step" data-step="map">
+        <span class="n">2</span><span class="l">Map Columns</span>
+      </div>
+      <div class="imp-step-sep"></div>
+      <div class="imp-step" data-step="review">
+        <span class="n">3</span><span class="l">Review & Import</span>
+      </div>
+    </div>
+
+    {# ── Body (scrolls) ──────────────────────────────────────────────── #}
+    <div class="proj-modal-body" style="padding:18px 22px;overflow-y:auto;flex:1">
+
+      {# ── STEP 1 — Source ──────────────────────────────────────────── #}
+      <div class="imp-panel" data-panel="source">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+          <label class="imp-src-option active" data-mode="upload">
+            <input type="radio" name="impMode" value="upload" checked>
+            <div>
+              <div style="font-size:.88rem;font-weight:700"><i class="bi bi-cloud-upload"></i> Upload new file</div>
+              <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:2px">
+                Drag a .csv or .xlsx from your computer
+              </div>
+            </div>
+          </label>
+          <label class="imp-src-option" data-mode="pick">
+            <input type="radio" name="impMode" value="pick">
+            <div>
+              <div style="font-size:.88rem;font-weight:700"><i class="bi bi-folder2-open"></i> Pick from Files</div>
+              <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:2px">
+                Choose a spreadsheet already in the Files app
+              </div>
+            </div>
+          </label>
+        </div>
+
+        {# Upload zone #}
+        <div id="impUploadBox">
+          <div id="impDrop"
+               style="border:2px dashed var(--eo-border);border-radius:14px;
+                      background:var(--eo-bg);padding:32px;text-align:center;cursor:pointer;
+                      transition:.15s">
+            <i class="bi bi-cloud-upload" style="font-size:2rem;color:var(--proj);opacity:.8"></i>
+            <div style="font-size:.92rem;font-weight:700;color:var(--eo-text);margin-top:8px">
+              Click or drop a file here
+            </div>
+            <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:2px">
+              .csv · .xlsx · .xls
+            </div>
+            <div id="impFileName" style="margin-top:14px;font-size:.82rem;font-weight:700;color:var(--proj-dark);display:none"></div>
+          </div>
+          <input type="file" id="impFileInput" accept=".csv,.xlsx,.xls" style="display:none">
+        </div>
+
+        {# Pick-from-files #}
+        <div id="impPickBox" style="display:none">
+          <input type="text" id="impPickSearch" class="eo-form-control"
+                 placeholder="Search files…" style="margin-bottom:8px">
+          <div id="impPickList"
+               style="max-height:320px;overflow-y:auto;border:1px solid var(--eo-border);border-radius:10px">
+          </div>
+        </div>
+      </div>
+
+      {# ── STEP 2 — Column mapping ─────────────────────────────────── #}
+      <div class="imp-panel" data-panel="map" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div>
+            <div style="font-size:.88rem;font-weight:700;color:var(--eo-text)">Map your columns</div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted)">
+              Pick which source column feeds each target field.
+              Leave blank to skip.
+            </div>
+          </div>
+          <span id="impFileStats" style="font-size:.72rem;color:var(--eo-text-muted)"></span>
+        </div>
+
+        <div id="impMapRows" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px"></div>
+
+        <div style="font-size:.74rem;font-weight:700;color:var(--eo-text-muted);margin:14px 0 6px;
+                    text-transform:uppercase;letter-spacing:.04em">
+          Preview (first 5 rows)
+        </div>
+        <div style="overflow-x:auto;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <table id="impPreviewTable" style="width:100%;border-collapse:collapse;font-size:.76rem">
+            <thead><tr id="impPreviewHead"></tr></thead>
+            <tbody id="impPreviewBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      {# ── STEP 3 — Review ─────────────────────────────────────────── #}
+      <div class="imp-panel" data-panel="review" style="display:none">
+        <div style="background:var(--proj-light);border:1px solid var(--proj-tint);
+                    border-radius:12px;padding:16px 18px;margin-bottom:14px">
+          <div style="font-size:.88rem;font-weight:700;color:var(--proj-dark);margin-bottom:4px">
+            Ready to import
+          </div>
+          <div id="impReviewSummary" style="font-size:.8rem;color:var(--eo-text);line-height:1.6"></div>
+        </div>
+
+        <div id="impMapReview"
+             style="background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:10px;
+                    padding:12px 14px;font-size:.76rem;font-family:ui-monospace,monospace">
+        </div>
+      </div>
+
+    </div>
+
+    {# ── Footer / actions ─────────────────────────────────────────────── #}
+    <div style="padding:12px 22px;border-top:1px solid var(--eo-border);background:var(--eo-bg);
+                display:flex;gap:8px;align-items:center">
+      <span id="impError" style="color:#b91c1c;font-size:.78rem;font-weight:600;margin-right:auto"></span>
+
+      <button type="button" id="impBack" class="eo-btn eo-btn-sm eo-btn-secondary"
+              onclick="impGoto('prev')" style="display:none">
+        <i class="bi bi-arrow-left"></i> Back
+      </button>
+      <button type="button" id="impNext" class="eo-btn eo-btn-sm eo-btn-primary"
+              onclick="impGoto('next')" disabled>
+        Continue <i class="bi bi-arrow-right"></i>
+      </button>
+      <button type="button" id="impSubmit" class="eo-btn eo-btn-sm eo-btn-primary"
+              onclick="impSubmit()" style="display:none;min-width:140px">
+        <i class="bi bi-upload"></i> Import Now
+      </button>
+    </div>
+  </div>
+</div>
+
+<style>
+/* ── Import modal styles ──────────────────────────────────────────────── */
+.imp-step {
+  display:flex; align-items:center; gap:8px;
+  padding:12px 14px; color:var(--eo-text-muted); font-size:.82rem; font-weight:700;
+  position:relative;
+}
+.imp-step .n {
+  width:22px; height:22px; border-radius:50%;
+  background:var(--eo-border); color:#fff;
+  font-size:.72rem; font-weight:800;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+}
+.imp-step.active { color:var(--proj-dark); }
+.imp-step.active .n { background:var(--proj); }
+.imp-step.done .n {
+  background:#10b981;
+}
+.imp-step.done .n::before { content:'✓'; }
+.imp-step.done .n { font-size:0; }
+.imp-step.done .n::before { font-size:.82rem; }
+.imp-step-sep {
+  flex:1; height:2px; background:var(--eo-border); margin:auto 0;
+  max-width:80px;
+}
+
+.imp-src-option {
+  display:flex; align-items:flex-start; gap:10px;
+  padding:14px 16px; border:1.5px solid var(--eo-border); border-radius:12px;
+  cursor:pointer; background:#fff; transition:.12s;
+}
+.imp-src-option:hover { border-color:var(--proj-tint); }
+.imp-src-option.active {
+  border-color:var(--proj); background:var(--proj-light);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--proj) 12%, transparent);
+}
+.imp-src-option input { accent-color:var(--proj); flex-shrink:0; margin-top:2px; }
+
+#impDrop:hover, #impDrop.dragover {
+  border-color:var(--proj);
+  background:var(--proj-soft, var(--eo-bg));
+}
+
+.imp-pick-item {
+  display:grid; grid-template-columns:32px 1fr auto; gap:10px; align-items:center;
+  padding:10px 12px; border-bottom:1px solid var(--eo-border); cursor:pointer;
+  transition:background .1s;
+}
+.imp-pick-item:hover { background:var(--eo-bg); }
+.imp-pick-item:last-child { border-bottom:none; }
+.imp-pick-item.selected { background:var(--proj-light); }
+.imp-pick-item .fi {
+  width:32px; height:32px; border-radius:8px; background:var(--proj-light);
+  color:var(--proj-dark); font-size:.72rem; font-weight:800;
+  display:flex; align-items:center; justify-content:center; text-transform:uppercase;
+}
+.imp-pick-item .name {
+  font-size:.86rem; font-weight:600; color:var(--eo-text);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.imp-pick-item .sub { font-size:.7rem; color:var(--eo-text-muted); }
+
+.imp-map-row {
+  display:grid; grid-template-columns: 170px 1fr 32px; gap:8px; align-items:center;
+  padding:8px 12px; background:var(--eo-surface); border:1px solid var(--eo-border);
+  border-radius:9px;
+}
+.imp-map-row.required { border-left:3px solid var(--proj); }
+.imp-map-row .label {
+  font-size:.8rem; font-weight:700; color:var(--eo-text);
+  display:flex; align-items:center; gap:4px;
+}
+.imp-map-row .label .req { color:#ef4444; }
+.imp-map-row select {
+  width:100%; border:1px solid var(--eo-border); border-radius:7px;
+  padding:6px 10px; font-size:.82rem; background:#fff; color:var(--eo-text);
+  outline:none;
+}
+.imp-map-row select:focus { border-color:var(--proj); box-shadow:0 0 0 2px color-mix(in srgb,var(--proj) 15%,transparent); }
+.imp-map-row .skip {
+  width:28px; height:28px; display:flex; align-items:center; justify-content:center;
+  background:var(--eo-bg); border:1px solid var(--eo-border); border-radius:7px;
+  color:var(--eo-text-muted); cursor:pointer; font-size:.9rem;
+}
+.imp-map-row .skip:hover { color:#b91c1c; border-color:#fecaca; }
+
+#impPreviewTable th {
+  background:var(--proj-light); color:var(--proj-dark); font-weight:700;
+  padding:8px 10px; text-align:left; border-bottom:1px solid var(--eo-border);
+  white-space:nowrap; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em;
+}
+#impPreviewTable td {
+  padding:7px 10px; border-bottom:1px solid var(--eo-border);
+  color:var(--eo-text); font-size:.76rem; max-width:220px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+#impPreviewTable tr:last-child td { border-bottom:none; }
+</style>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════
+   Import flow controller — pure JS, no external libs.
+   Exposes: openImportModal(prefill?), closeImportModal()
+   ══════════════════════════════════════════════════════════════════════ */
+
+const IMPORT_TARGET   = {% if target == 'survey' %}"survey"{% else %}"locations"{% endif %};
+const IMPORT_PROJECT  = "{{ project.pk }}";
+{% if target == 'survey' %}
+const IMPORT_SURVEY   = "{{ survey.pk }}";
+const IMPORT_QUESTION = "{{ geo_question.pk }}";
+{% else %}
+const IMPORT_SURVEY   = "";
+const IMPORT_QUESTION = "";
+{% endif %}
+
+const IMPORT_PREVIEW_URL = "{% url 'location_import_preview' project.pk %}";
+const IMPORT_COMMIT_URL  = "{% url 'location_import_commit'  project.pk %}";
+const IMPORT_PICKER_URL  = "{% url 'location_import_picker'  project.pk %}";
+
+const IMPORT_FIELDS = IMPORT_TARGET === 'survey'
+  ? [
+      {key:'latitude',   label:'Latitude',     required:true},
+      {key:'longitude',  label:'Longitude',    required:true},
+      {key:'address',    label:'Address',      required:false},
+      {key:'accuracy_m', label:'Accuracy (m)', required:false},
+      {key:'source',     label:'Source',       required:false},
+      {key:'name',       label:'Respondent name', required:false},
+    ]
+  : [
+      {key:'name',        label:'Name',         required:true},
+      {key:'latitude',    label:'Latitude',     required:true},
+      {key:'longitude',   label:'Longitude',    required:true},
+      {key:'address',     label:'Address',      required:false},
+      {key:'description', label:'Description',  required:false},
+      {key:'category',    label:'Category',     required:false},
+      {key:'status',      label:'Status',       required:false},
+      {key:'notes',       label:'Notes',        required:false},
+    ];
+
+const IMP_STATE = {
+  step: 'source',
+  mode: 'upload',             // 'upload' | 'pick'
+  file: null,                 // UploadedFile
+  sharedFileId: '',
+  filename: '',
+  filesize: 0,
+  headers: [],
+  rows: [],
+  totalRows: 0,
+  mapping: {},
+  pickerLoaded: false,
+};
+
+function impGetCSRF() {
+  return document.querySelector('[name=csrfmiddlewaretoken]')?.value
+    || document.cookie.match(/csrftoken=([^;]+)/)?.[1]
+    || '';
+}
+
+function openImportModal(prefill) {
+  impReset();
+  if (prefill) impApplyPrefill(prefill);
+  document.getElementById('importModal').classList.add('open');
+}
+function closeImportModal() {
+  document.getElementById('importModal').classList.remove('open');
+}
+
+// Backdrop click
+document.getElementById('importModal')?.addEventListener('click', e => {
+  if (e.target.id === 'importModal') closeImportModal();
+});
+
+function impReset() {
+  IMP_STATE.step = 'source';
+  IMP_STATE.mode = 'upload';
+  IMP_STATE.file = null;
+  IMP_STATE.sharedFileId = '';
+  IMP_STATE.filename = '';
+  IMP_STATE.filesize = 0;
+  IMP_STATE.headers = [];
+  IMP_STATE.rows = [];
+  IMP_STATE.totalRows = 0;
+  IMP_STATE.mapping = {};
+  document.getElementById('impFileName').style.display = 'none';
+  document.getElementById('impFileName').textContent = '';
+  document.getElementById('impError').textContent = '';
+  document.getElementById('impFileInput').value = '';
+  document.querySelectorAll('.imp-src-option').forEach((el,i)=>{
+    el.classList.toggle('active', i === 0);
+  });
+  document.getElementById('impUploadBox').style.display = '';
+  document.getElementById('impPickBox').style.display = 'none';
+  impRenderStep();
+}
+
+function impApplyPrefill(p) {
+  // Used by "Re-run import" from imports page
+  if (p.sharedFileId) {
+    IMP_STATE.mode = 'pick';
+    IMP_STATE.sharedFileId = p.sharedFileId;
+    document.querySelectorAll('.imp-src-option').forEach(el=>{
+      el.classList.toggle('active', el.dataset.mode === 'pick');
+    });
+    document.getElementById('impUploadBox').style.display = 'none';
+    document.getElementById('impPickBox').style.display = '';
+    impLoadPicker(p.sharedFileId);
+  }
+  if (p.mapping) IMP_STATE.mapping = p.mapping;
+}
+
+// ── Source selection ────────────────────────────────────────────────
+document.querySelectorAll('.imp-src-option').forEach(opt => {
+  opt.addEventListener('click', () => {
+    document.querySelectorAll('.imp-src-option').forEach(x => x.classList.remove('active'));
+    opt.classList.add('active');
+    IMP_STATE.mode = opt.dataset.mode;
+    document.getElementById('impUploadBox').style.display = IMP_STATE.mode === 'upload' ? '' : 'none';
+    document.getElementById('impPickBox').style.display   = IMP_STATE.mode === 'pick'   ? '' : 'none';
+    if (IMP_STATE.mode === 'pick' && !IMP_STATE.pickerLoaded) impLoadPicker();
+    impUpdateNav();
+  });
+});
+
+// ── Upload: click + drag & drop ─────────────────────────────────────
+const impDrop = document.getElementById('impDrop');
+const impFileInput = document.getElementById('impFileInput');
+impDrop?.addEventListener('click', () => impFileInput.click());
+impFileInput?.addEventListener('change', e => impHandleFile(e.target.files?.[0]));
+;['dragover','dragenter'].forEach(ev => impDrop?.addEventListener(ev, e => {
+  e.preventDefault(); impDrop.classList.add('dragover');
+}));
+;['dragleave','drop'].forEach(ev => impDrop?.addEventListener(ev, e => {
+  e.preventDefault(); impDrop.classList.remove('dragover');
+}));
+impDrop?.addEventListener('drop', e => {
+  e.preventDefault();
+  impHandleFile(e.dataTransfer.files?.[0]);
+});
+function impHandleFile(file) {
+  if (!file) return;
+  IMP_STATE.file = file;
+  IMP_STATE.filename = file.name;
+  IMP_STATE.filesize = file.size;
+  IMP_STATE.sharedFileId = '';
+  const el = document.getElementById('impFileName');
+  el.textContent = `${file.name} · ${(file.size/1024).toFixed(1)} KB`;
+  el.style.display = 'block';
+  impUpdateNav();
+}
+
+// ── Pick from files ─────────────────────────────────────────────────
+async function impLoadPicker(preselectId) {
+  const list = document.getElementById('impPickList');
+  list.innerHTML = '<div style="padding:24px;text-align:center;color:var(--eo-text-muted);font-size:.84rem">Loading…</div>';
+  try {
+    const r = await fetch(IMPORT_PICKER_URL);
+    const j = await r.json();
+    IMP_STATE.pickerLoaded = true;
+    if (!j.ok || !j.files?.length) {
+      list.innerHTML = '<div style="padding:24px;text-align:center;color:var(--eo-text-muted);font-size:.84rem">No CSV or XLSX files in your Files app yet.</div>';
+      return;
+    }
+    const html = j.files.map(f => `
+      <div class="imp-pick-item" data-id="${f.id}" data-name="${f.name.replace(/"/g,'&quot;')}" data-size="${f.size}">
+        <div class="fi">${f.ext.toUpperCase()}</div>
+        <div>
+          <div class="name">${f.name}</div>
+          <div class="sub">${f.size_display} · ${f.uploaded_at}${f.project_code ? ' · ['+f.project_code+']' : ''}</div>
+        </div>
+        <i class="bi bi-chevron-right" style="color:var(--eo-text-muted)"></i>
+      </div>`).join('');
+    list.innerHTML = html;
+    list.querySelectorAll('.imp-pick-item').forEach(item => {
+      item.addEventListener('click', () => {
+        list.querySelectorAll('.imp-pick-item').forEach(x => x.classList.remove('selected'));
+        item.classList.add('selected');
+        IMP_STATE.sharedFileId = item.dataset.id;
+        IMP_STATE.filename = item.dataset.name;
+        IMP_STATE.filesize = parseInt(item.dataset.size||'0',10);
+        IMP_STATE.file = null;
+        impUpdateNav();
+      });
+      if (preselectId && item.dataset.id === preselectId) {
+        item.click();
+      }
+    });
+  } catch(e) {
+    list.innerHTML = '<div style="padding:24px;color:#b91c1c;font-size:.84rem">Failed to load file list.</div>';
+  }
+}
+document.getElementById('impPickSearch')?.addEventListener('input', e => {
+  const q = e.target.value.toLowerCase().trim();
+  document.querySelectorAll('#impPickList .imp-pick-item').forEach(it => {
+    const name = (it.dataset.name||'').toLowerCase();
+    it.style.display = (!q || name.includes(q)) ? '' : 'none';
+  });
+});
+
+// ── Navigation ──────────────────────────────────────────────────────
+function impUpdateNav() {
+  const err = document.getElementById('impError');
+  err.textContent = '';
+  const next = document.getElementById('impNext');
+  const back = document.getElementById('impBack');
+  const submit = document.getElementById('impSubmit');
+
+  if (IMP_STATE.step === 'source') {
+    const ready = (IMP_STATE.mode === 'upload' && IMP_STATE.file)
+               || (IMP_STATE.mode === 'pick' && IMP_STATE.sharedFileId);
+    next.disabled = !ready;
+    back.style.display = 'none';
+    next.style.display = '';
+    submit.style.display = 'none';
+  } else if (IMP_STATE.step === 'map') {
+    const required = IMPORT_FIELDS.filter(f => f.required).map(f => f.key);
+    const ok = required.every(k => !!(IMP_STATE.mapping[k] || '').trim());
+    next.disabled = !ok;
+    next.style.display = '';
+    back.style.display = '';
+    submit.style.display = 'none';
+    if (!ok) err.textContent = 'Map all required fields to continue.';
+  } else if (IMP_STATE.step === 'review') {
+    next.style.display = 'none';
+    back.style.display = '';
+    submit.style.display = '';
+  }
+
+  document.querySelectorAll('.imp-step').forEach(s => {
+    s.classList.remove('active','done');
+    const st = s.dataset.step;
+    if (st === IMP_STATE.step) s.classList.add('active');
+    const order = ['source','map','review'];
+    if (order.indexOf(st) < order.indexOf(IMP_STATE.step)) s.classList.add('done');
+  });
+}
+
+async function impGoto(dir) {
+  const order = ['source','map','review'];
+  const idx = order.indexOf(IMP_STATE.step);
+  if (dir === 'next') {
+    if (IMP_STATE.step === 'source') {
+      await impFetchPreview();     // triggers step change on success
+    } else if (idx < order.length - 1) {
+      IMP_STATE.step = order[idx+1];
+      impRenderStep();
+    }
+  } else if (dir === 'prev') {
+    if (idx > 0) {
+      IMP_STATE.step = order[idx-1];
+      impRenderStep();
+    }
+  }
+}
+
+function impRenderStep() {
+  document.querySelectorAll('.imp-panel').forEach(p => {
+    p.style.display = p.dataset.panel === IMP_STATE.step ? '' : 'none';
+  });
+  if (IMP_STATE.step === 'map') impRenderMap();
+  if (IMP_STATE.step === 'review') impRenderReview();
+  impUpdateNav();
+}
+
+// ── Preview fetch ───────────────────────────────────────────────────
+async function impFetchPreview() {
+  const next = document.getElementById('impNext');
+  next.disabled = true;
+  next.innerHTML = '<i class="bi bi-hourglass-split"></i> Reading…';
+  const err = document.getElementById('impError');
+  err.textContent = '';
+
+  const form = new FormData();
+  form.append('csrfmiddlewaretoken', impGetCSRF());
+  form.append('target', IMPORT_TARGET);
+  if (IMP_STATE.mode === 'upload' && IMP_STATE.file) {
+    form.append('import_file', IMP_STATE.file);
+  } else if (IMP_STATE.sharedFileId) {
+    form.append('shared_file_id', IMP_STATE.sharedFileId);
+  }
+
+  try {
+    const r = await fetch(IMPORT_PREVIEW_URL, {
+      method:'POST', body:form,
+      headers:{'X-Requested-With':'XMLHttpRequest'}
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'Preview failed');
+    IMP_STATE.headers = j.headers || [];
+    IMP_STATE.rows = j.rows || [];
+    IMP_STATE.totalRows = j.total_rows || 0;
+    // Apply saved mapping first (if any), then overlay suggested for blanks
+    IMP_STATE.mapping = Object.assign(
+      {}, j.suggested_mapping || {}, j.saved_mapping || {},
+      IMP_STATE.mapping  // if user prefilled via re-run, win over both
+    );
+    IMP_STATE.step = 'map';
+    impRenderStep();
+  } catch(e) {
+    err.textContent = String(e.message || e);
+  } finally {
+    next.innerHTML = 'Continue <i class="bi bi-arrow-right"></i>';
+    impUpdateNav();
+  }
+}
+
+// ── Render mapping step ─────────────────────────────────────────────
+// ── Plus Code detection ─────────────────────────────────────────────
+function _looksLikePlusCode(val) {
+  if (!val) return false;
+  const v = String(val).trim().toUpperCase();
+  // Full Plus Code: 8+ chars before '+', 2 after — e.g. "6FG22222+22"
+  // Short Plus Code with locality: e.g. "C7PM+F8G Banjul"
+  return /^[23456789CFGHJMPQRVWX]{4,8}\+[23456789CFGHJMPQRVWX]{2,}/.test(v) ||
+         /^[A-Z0-9]{4,8}\+[A-Z0-9]{2,}(\s.+)?$/.test(v);
+}
+
+function _detectPlusCodesInColumn(colName) {
+  if (!colName) return false;
+  const samples = (IMP_STATE.rows || []).slice(0, 10)
+    .map(r => String(r[colName] ?? '')).filter(Boolean);
+  if (!samples.length) return false;
+  const hits = samples.filter(_looksLikePlusCode).length;
+  return hits >= Math.min(2, samples.length);  // at least 2 (or all if fewer)
+}
+
+function _showPlusCodeBanner(fields) {
+  let banner = document.getElementById('impPlusCodeBanner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'impPlusCodeBanner';
+    banner.style.cssText = `
+      display:none; margin-bottom:12px; padding:10px 14px;
+      background:#ecfdf5; border:1px solid #6ee7b7; border-radius:10px;
+      font-size:.78rem; color:#065f46; display:flex; align-items:flex-start; gap:10px;
+    `;
+    const mapRows = document.getElementById('impMapRows');
+    mapRows.parentNode.insertBefore(banner, mapRows);
+  }
+  if (fields.length === 0) { banner.style.display = 'none'; return; }
+  IMP_STATE.hasPlusCodes = true;
+  banner.style.display = 'flex';
+  banner.innerHTML = `
+    <i class="bi bi-geo-alt-fill" style="font-size:1.1rem;color:#059669;flex-shrink:0;margin-top:1px"></i>
+    <div>
+      <strong>Google Plus Codes detected</strong> in column${fields.length>1?'s':''}: 
+      <code>${fields.join(', ')}</code><br>
+      These will be automatically converted to latitude &amp; longitude during import.
+      <br><span style="opacity:.75">Short codes (e.g. <code>C7PM+F8G</code>) are resolved using the project's reference location.</span>
+    </div>`;
+}
+
+function impRenderMap() {
+  document.getElementById('impFileStats').textContent =
+    `${IMP_STATE.filename} · ${IMP_STATE.totalRows} rows · ${IMP_STATE.headers.length} columns`;
+
+  IMP_STATE.hasPlusCodes = false;
+
+  const box = document.getElementById('impMapRows');
+  box.innerHTML = IMPORT_FIELDS.map(f => {
+    const options = ['<option value="">— skip —</option>']
+      .concat(IMP_STATE.headers.map(h =>
+        `<option value="${h.replace(/"/g,'&quot;')}" ${IMP_STATE.mapping[f.key]===h?'selected':''}>${h}</option>`
+      )).join('');
+
+    // Detect plus codes in the currently mapped column for this field
+    const mapped = IMP_STATE.mapping[f.key] || '';
+    const hasPc = (f.key === 'latitude' || f.key === 'longitude') && _detectPlusCodesInColumn(mapped);
+    const pcBadge = hasPc
+      ? `<span style="font-size:.6rem;background:#d1fae5;color:#065f46;padding:2px 6px;border-radius:5px;font-weight:700;margin-left:4px">
+           <i class="bi bi-geo-alt"></i> PLUS CODES → LAT/LNG
+         </span>`
+      : '';
+
+    return `
+      <div class="imp-map-row ${f.required?'required':''}">
+        <div class="label">
+          ${f.label}${f.required?'<span class="req">*</span>':''}${pcBadge}
+        </div>
+        <select data-field="${f.key}">${options}</select>
+        <button type="button" class="skip" title="Skip this field"
+                onclick="impMapSkip('${f.key}')"><i class="bi bi-slash-circle"></i></button>
+      </div>`;
+  }).join('');
+
+  box.querySelectorAll('select').forEach(sel => {
+    sel.addEventListener('change', () => {
+      IMP_STATE.mapping[sel.dataset.field] = sel.value || '';
+      _recheckPlusCodes();
+      impUpdateNav();
+    });
+  });
+
+  _recheckPlusCodes();
+
+  // Preview table
+  const head = document.getElementById('impPreviewHead');
+  const body = document.getElementById('impPreviewBody');
+  head.innerHTML = IMP_STATE.headers.map(h => `<th>${h}</th>`).join('');
+  body.innerHTML = (IMP_STATE.rows||[]).slice(0,5).map(r =>
+    '<tr>' + IMP_STATE.headers.map(h =>
+      `<td title="${String(r[h]??'').replace(/"/g,'&quot;')}">${String(r[h]??'')}</td>`
+    ).join('') + '</tr>'
+  ).join('');
+}
+
+function _recheckPlusCodes() {
+  const pcFields = [];
+  ['latitude','longitude'].forEach(key => {
+    const col = IMP_STATE.mapping[key] || '';
+    if (col && _detectPlusCodesInColumn(col)) pcFields.push(col);
+  });
+  // Also check if headers themselves look like plus code columns even before mapping
+  if (!pcFields.length) {
+    IMP_STATE.headers.forEach(h => {
+      const norm = h.toLowerCase().replace(/[\s_-]/g,'');
+      if (['pluscode','plus_code','olc','openlocationcode','googlepluscode'].includes(norm)) {
+        // auto-suggest: map latitude to this col if not yet mapped
+        if (!IMP_STATE.mapping['latitude']) {
+          IMP_STATE.mapping['latitude'] = h;
+          const sel = document.querySelector('#impMapRows select[data-field="latitude"]');
+          if (sel) sel.value = h;
+          pcFields.push(h);
+        }
+      }
+    });
+  }
+  _showPlusCodeBanner(pcFields);
+  IMP_STATE.hasPlusCodes = pcFields.length > 0;
+}
+
+function impMapSkip(key) {
+  IMP_STATE.mapping[key] = '';
+  const sel = document.querySelector(`#impMapRows select[data-field="${key}"]`);
+  if (sel) sel.value = '';
+  _recheckPlusCodes();
+  impUpdateNav();
+}
+
+// ── Render review step ──────────────────────────────────────────────
+function impRenderReview() {
+  const expected = Math.max(0, IMP_STATE.totalRows);
+  document.getElementById('impReviewSummary').innerHTML = `
+    <strong>${expected.toLocaleString()}</strong> row${expected===1?'':'s'}
+    will be ${IMPORT_TARGET === 'survey'
+      ? 'added as responses to the geolocation question'
+      : 'added as locations to the map'}.
+    <br>
+    Rows with missing or invalid coordinates will be skipped automatically.
+  `;
+  const mapped = Object.entries(IMP_STATE.mapping)
+    .filter(([k,v]) => v)
+    .map(([k,v]) => `<div style="display:flex;gap:8px">
+      <span style="color:var(--proj-dark);font-weight:700;min-width:130px">${k}</span>
+      <span style="color:var(--eo-text-muted)">←</span>
+      <span style="color:var(--eo-text)">"${v}"</span>
+    </div>`).join('');
+  const skipped = Object.entries(IMP_STATE.mapping)
+    .filter(([k,v]) => !v)
+    .map(([k]) => `<div style="color:var(--eo-text-muted);opacity:.7">
+      <span style="min-width:130px;display:inline-block">${k}</span>
+      <span style="font-style:italic">skipped</span>
+    </div>`).join('');
+  document.getElementById('impMapReview').innerHTML =
+    `<div style="font-weight:700;color:var(--eo-text);margin-bottom:6px">Mapped:</div>${mapped}` +
+    (skipped ? `<div style="font-weight:700;color:var(--eo-text);margin:12px 0 6px">Skipped:</div>${skipped}` : '');
+}
+
+// ── Submit ──────────────────────────────────────────────────────────
+async function impSubmit() {
+  const btn = document.getElementById('impSubmit');
+  const err = document.getElementById('impError');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Importing…';
+  err.textContent = '';
+
+  const form = new FormData();
+  form.append('csrfmiddlewaretoken', impGetCSRF());
+  form.append('target', IMPORT_TARGET);
+  form.append('column_mapping_json', JSON.stringify(IMP_STATE.mapping));
+  form.append('has_plus_codes', IMP_STATE.hasPlusCodes ? '1' : '0');
+  if (IMP_STATE.mode === 'upload' && IMP_STATE.file) {
+    form.append('import_file', IMP_STATE.file);
+  } else if (IMP_STATE.sharedFileId) {
+    form.append('shared_file_id', IMP_STATE.sharedFileId);
+  }
+  if (IMPORT_TARGET === 'survey') {
+    form.append('survey_id', IMPORT_SURVEY);
+    form.append('question_id', IMPORT_QUESTION);
+  }
+
+  try {
+    const r = await fetch(IMPORT_COMMIT_URL, {
+      method:'POST', body:form,
+      headers:{'X-Requested-With':'XMLHttpRequest'}
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'Import failed');
+    // show brief success, then redirect
+    btn.innerHTML = `<i class="bi bi-check-circle"></i> ${j.created} imported`;
+    setTimeout(() => {
+      location.href = j.redirect_url || location.href;
+    }, 700);
+  } catch(e) {
+    err.textContent = String(e.message || e);
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-upload"></i> Import Now';
+  }
+}
+
+// ── Handle prefill from ?import_rerun=1 query params ───────────────
+(function handleRerunParams() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('import_rerun') !== '1') return;
+  let mapping = {};
+  try { mapping = JSON.parse(params.get('column_mapping') || '{}'); } catch(e){}
+  setTimeout(() => {
+    openImportModal({
+      sharedFileId: params.get('shared_file_id') || '',
+      mapping: mapping,
+    });
+  }, 200);
+})();
+</script>

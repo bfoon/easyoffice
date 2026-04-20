@@ -580,50 +580,19 @@ function pcSubmit() {
   {% endif %}
 </div>
 
-<!-- {# ═══ Import Modal ══════════════════════════════════════════════════════════ #} -->
+<!-- {# ═══ Import Modal — Enhanced (Files App + Plus Code Detection) ══════════ #} -->
 {% if is_member %}
-<div class="proj-modal-backdrop" id="importModal">
-  <div class="proj-modal" style="width:540px">
-    <div class="proj-modal-head">
-      <span style="font-size:1rem;font-weight:700"><i class="bi bi-upload me-2"></i>Import Locations</span>
-      <button onclick="closeModal('importModal')" style="background:none;border:none;cursor:pointer;font-size:1.2rem;color:var(--eo-text-muted)">&times;</button>
-    </div>
-    <div class="proj-modal-body">
-
-      {# Format reminder #}
-      <div style="background:var(--eo-bg);border:1px solid var(--eo-border);border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:.8rem;color:var(--eo-text-muted)">
-        <div style="font-weight:700;color:var(--eo-text);margin-bottom:6px"><i class="bi bi-info-circle me-1"></i>Required columns</div>
-        <div style="font-family:monospace;font-size:.76rem;background:var(--eo-surface);padding:6px 10px;border-radius:6px;border:1px solid var(--eo-border)">
-          name &nbsp;·&nbsp; latitude &nbsp;·&nbsp; longitude
-        </div>
-        <div style="margin-top:6px">Optional: description, address, category, status, notes</div>
-        <div style="margin-top:4px">Status values: <code>pending</code> · <code>in_progress</code> · <code>completed</code> · <code>on_hold</code></div>
-        <div style="margin-top:8px;display:flex;gap:8px">
-          <a href="{% url 'location_template' project.pk 'csv' %}" class="eo-btn eo-btn-sm eo-btn-secondary"><i class="bi bi-filetype-csv me-1"></i>CSV Template</a>
-          <a href="{% url 'location_template' project.pk 'xlsx' %}" class="eo-btn eo-btn-sm eo-btn-secondary"><i class="bi bi-file-earmark-excel me-1"></i>Excel Template</a>
-        </div>
-      </div>
-
-      <form method="post" action="{% url 'location_import' project.pk %}" enctype="multipart/form-data" id="import-form">
-        {% csrf_token %}
-        <div id="drop-zone" onclick="document.getElementById('import-file-input').click()">
-          <i class="bi bi-cloud-upload" style="font-size:2rem;color:var(--eo-primary);display:block;margin-bottom:8px"></i>
-          <div style="font-size:.88rem;font-weight:600;color:var(--eo-text);margin-bottom:4px">Drop CSV or Excel file here</div>
-          <div style="font-size:.78rem;color:var(--eo-text-muted)">or click to browse</div>
-          <div id="drop-file-name" style="margin-top:10px;font-size:.8rem;font-weight:600;color:var(--eo-primary);display:none"></div>
-        </div>
-        <input type="file" id="import-file-input" name="import_file" accept=".csv,.xlsx,.xls" style="display:none" onchange="onFileChosen(this)"/>
-
-        <div style="display:flex;gap:8px;padding-top:16px;border-top:1px solid var(--eo-border);margin-top:16px">
-          <button type="submit" class="eo-btn eo-btn-primary" id="import-submit-btn" disabled>
-            <i class="bi bi-upload"></i> Import
-          </button>
-          <button type="button" onclick="closeModal('importModal')" class="eo-btn eo-btn-secondary">Cancel</button>
-        </div>
-      </form>
-    </div>
-  </div>
-</div>
+{% include "projects/_import_modal.html" with target="locations" project=project %}
+<script>
+// Bridge: openModal('importModal') → openImportModal()  (keeps zone/add buttons working)
+(function() {
+  var _orig = window.openModal;
+  window.openModal = function(id) {
+    if (id === 'importModal') { openImportModal(); return; }
+    if (_orig) _orig(id);
+  };
+})();
+</script>
 
 <!-- {# ═══ Add Location Modal ════════════════════════════════════════════════════ #} -->
 <div class="proj-modal-backdrop" id="addLocModal">
@@ -903,7 +872,7 @@ var tileLayers = {
   'Dark':    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',             {attribution:'&copy; OSM &copy; CARTO', subdomains:'abcd', maxZoom:20}),
   'Satellite':L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',  {attribution:'&copy; Esri', maxZoom:19}),
   'Terrain': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', {attribution:'&copy; Esri', maxZoom:19}),
-  'Street':  L.tileLayer('https://tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',                       {attribution:'&copy; OSM contributors', maxZoom:20}),
+  'Street':  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',             {attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', subdomains:'abc', maxZoom:19}),
 };
 tileLayers['Voyager'].addTo(leafMap);
 L.control.layers(tileLayers, {}, {position:'topleft', collapsed:true}).addTo(leafMap);

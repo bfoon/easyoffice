@@ -1,0 +1,509 @@
+{% extends "base.html" %}
+{% block title %}Apply Letterhead{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'file_manager' %}">File Manager</a> / <span>Apply Letterhead</span>
+{% endblock %}
+
+{% block content %}
+<style>
+  .lh-shell{
+    display:grid;
+    grid-template-columns: 380px 1fr;
+    gap:24px;
+  }
+  .lh-card{
+    background:#fff;
+    border:1px solid #e5e7eb;
+    border-radius:20px;
+    box-shadow:0 10px 30px rgba(15,23,42,.06);
+  }
+  .lh-card-body{ padding:22px; }
+  .lh-muted{ color:#64748b; }
+  .lh-stage-wrap{
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+  }
+  .lh-toolbar{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    align-items:center;
+    justify-content:space-between;
+  }
+  .lh-toolbar-left,.lh-toolbar-right{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    align-items:center;
+  }
+  .lh-stage{
+    position:relative;
+    width:100%;
+    min-height:900px;
+    background:linear-gradient(180deg,#f8fafc,#eef2ff);
+    border:1px solid #dbe3ee;
+    border-radius:24px;
+    padding:20px;
+    overflow:auto;
+  }
+  .lh-paper{
+    position:relative;
+    width:794px;
+    height:1123px;
+    margin:0 auto;
+    background:#fff;
+    border-radius:10px;
+    box-shadow:0 18px 50px rgba(15,23,42,.18);
+    overflow:hidden;
+    border:1px solid #e5e7eb;
+  }
+  .lh-paper iframe{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    border:none;
+    background:#fff;
+    pointer-events:none;
+  }
+  .lh-content-box{
+    position:absolute;
+    border:2px dashed #2563eb;
+    background:rgba(37,99,235,.08);
+    box-shadow:0 0 0 1px rgba(255,255,255,.9) inset;
+    border-radius:14px;
+    cursor:move;
+    min-width:60px;
+    min-height:60px;
+  }
+  .lh-content-box.active{
+    border-style:solid;
+    box-shadow:0 0 0 3px rgba(37,99,235,.12);
+  }
+  .lh-box-header{
+    position:absolute;
+    top:-36px;
+    left:0;
+    display:flex;
+    gap:8px;
+    align-items:center;
+    background:#0f172a;
+    color:#fff;
+    font-size:.78rem;
+    padding:7px 10px;
+    border-radius:999px;
+    box-shadow:0 10px 24px rgba(15,23,42,.18);
+    white-space:nowrap;
+  }
+  .lh-box-label{
+    font-weight:700;
+  }
+  .lh-box-sub{
+    opacity:.8;
+  }
+  .lh-resize{
+    position:absolute;
+    width:16px;
+    height:16px;
+    right:-8px;
+    bottom:-8px;
+    background:#2563eb;
+    border:2px solid #fff;
+    border-radius:50%;
+    cursor:nwse-resize;
+    box-shadow:0 4px 14px rgba(37,99,235,.35);
+  }
+  .lh-grid-overlay{
+    position:absolute;
+    inset:0;
+    background-image:
+      linear-gradient(to right, rgba(148,163,184,.16) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(148,163,184,.16) 1px, transparent 1px);
+    background-size:40px 40px;
+    pointer-events:none;
+  }
+  .lh-chip{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    border:1px solid #dbe3ee;
+    background:#fff;
+    border-radius:999px;
+    padding:7px 12px;
+    font-size:.82rem;
+    color:#334155;
+  }
+  .lh-number-grid{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:12px;
+  }
+  .lh-mini-help{
+    font-size:.82rem;
+    color:#64748b;
+    background:#f8fafc;
+    border:1px solid #e2e8f0;
+    border-radius:16px;
+    padding:14px;
+    line-height:1.55;
+  }
+  .lh-select, .lh-input{
+    border-radius:12px;
+    min-height:44px;
+  }
+  .lh-btn-soft{
+    border:1px solid #dbe3ee;
+    background:#fff;
+    color:#0f172a;
+    border-radius:12px;
+    padding:10px 14px;
+    font-weight:600;
+  }
+  .lh-btn-soft:hover{
+    background:#f8fafc;
+  }
+  .lh-status{
+    font-size:.82rem;
+    color:#0f766e;
+    background:#ecfeff;
+    border:1px solid #a5f3fc;
+    padding:10px 12px;
+    border-radius:12px;
+  }
+
+  @media (max-width: 1200px){
+    .lh-shell{ grid-template-columns:1fr; }
+    .lh-paper{
+      transform-origin: top center;
+      transform: scale(.82);
+      margin-bottom:-200px;
+    }
+  }
+  @media (max-width: 768px){
+    .lh-paper{
+      transform: scale(.58);
+      margin-bottom:-420px;
+    }
+    .lh-number-grid{ grid-template-columns:1fr; }
+  }
+</style>
+
+<div class="container-fluid py-4">
+  <div class="lh-shell">
+    <div class="lh-card">
+      <div class="lh-card-body">
+        <h4 class="fw-bold mb-2">Apply Letterhead</h4>
+        <p class="lh-muted mb-4">
+          Preview the template, drag the document content area, resize it, and generate a polished final PDF ready for signature.
+        </p>
+
+        <form method="post" id="letterheadForm">
+          {% csrf_token %}
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Source Document</label>
+            <select name="document_id" id="documentSelect" class="form-select lh-select" required>
+              <option value="">-- Select document --</option>
+              {% for f in files %}
+                <option value="{{ f.id }}"
+                        data-preview="{% url 'file_preview' f.id %}"
+                        {% if preselected_file and preselected_file.id == f.id %}selected{% endif %}>
+                  {{ f.name }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Letterhead PDF</label>
+            <select name="letterhead_file_id" id="letterheadSelect" class="form-select lh-select" required>
+              <option value="">-- Select PDF letterhead --</option>
+              {% for f in pdf_files %}
+                <option value="{{ f.id }}" data-preview="{% url 'file_preview' f.id %}">
+                  {{ f.name }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Apply To</label>
+            <select name="apply_mode" class="form-select lh-select">
+              <option value="first">First page only</option>
+              <option value="all">All pages</option>
+            </select>
+          </div>
+
+          <div class="lh-number-grid mb-3">
+            <div>
+              <label class="form-label fw-semibold">X Position (%)</label>
+              <input type="number" step="0.1" min="0" max="100" name="x_pct" id="xPct" class="form-control lh-input" value="10">
+            </div>
+            <div>
+              <label class="form-label fw-semibold">Y Position (%)</label>
+              <input type="number" step="0.1" min="0" max="100" name="y_pct" id="yPct" class="form-control lh-input" value="18">
+            </div>
+            <div>
+              <label class="form-label fw-semibold">Width (%)</label>
+              <input type="number" step="0.1" min="5" max="100" name="width_pct" id="widthPct" class="form-control lh-input" value="80">
+            </div>
+            <div>
+              <label class="form-label fw-semibold">Height (%)</label>
+              <input type="number" step="0.1" min="5" max="100" name="height_pct" id="heightPct" class="form-control lh-input" value="70">
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Result File Name</label>
+            <input type="text" name="result_name" class="form-control lh-input" placeholder="Example: Contract Final.pdf">
+          </div>
+
+          <div class="form-check mb-4">
+            <input class="form-check-input" type="checkbox" name="send_for_signature" value="1" id="sendForSignature">
+            <label class="form-check-label" for="sendForSignature">
+              After generation, go directly to Send for Signature
+            </label>
+          </div>
+
+          <div class="d-flex gap-2 flex-wrap">
+            <button type="submit" class="btn btn-primary px-4">
+              <i class="bi bi-magic me-1"></i> Generate Final PDF
+            </button>
+            <button type="button" class="lh-btn-soft" id="resetBoxBtn">Reset</button>
+            <button type="button" class="lh-btn-soft" id="centerBoxBtn">Center</button>
+            <a href="{% url 'file_manager' %}" class="btn btn-outline-secondary px-4">Cancel</a>
+          </div>
+
+          <div class="lh-mini-help mt-4">
+            <strong>Tips:</strong><br>
+            Drag the blue content area to move it.<br>
+            Drag the bottom-right handle to resize it.<br>
+            Use the percentage fields for precise alignment.<br>
+            Keep the content box below the header and above the footer area.
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="lh-stage-wrap">
+      <div class="lh-toolbar">
+        <div class="lh-toolbar-left">
+          <span class="lh-chip"><i class="bi bi-layout-text-window-reverse"></i> Live placement studio</span>
+          <span class="lh-chip"><i class="bi bi-arrows-move"></i> Drag to move</span>
+          <span class="lh-chip"><i class="bi bi-bounding-box"></i> Resize to fit</span>
+        </div>
+        <div class="lh-toolbar-right">
+          <label class="form-check d-flex align-items-center gap-2 mb-0">
+            <input class="form-check-input" type="checkbox" id="showGrid" checked>
+            <span class="small">Show grid</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="lh-card">
+        <div class="lh-card-body">
+          <div class="lh-status mb-3" id="layoutStatus">
+            Select a letterhead PDF to start previewing the layout.
+          </div>
+
+          <div class="lh-stage">
+            <div class="lh-paper" id="paper">
+              <iframe id="letterheadFrame" title="Letterhead preview"></iframe>
+              <div class="lh-grid-overlay" id="gridOverlay"></div>
+
+              <div class="lh-content-box active" id="contentBox" style="left:10%;top:18%;width:80%;height:70%;">
+                <div class="lh-box-header">
+                  <span class="lh-box-label">Document Content Area</span>
+                  <span class="lh-box-sub" id="boxReadout">10%, 18% · 80% × 70%</span>
+                </div>
+                <div class="lh-resize" id="resizeHandle"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="small text-muted mt-3">
+            The blue box represents where the source document will be placed inside the letterhead PDF when the final file is generated.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const paper = document.getElementById('paper');
+  const contentBox = document.getElementById('contentBox');
+  const resizeHandle = document.getElementById('resizeHandle');
+  const letterheadFrame = document.getElementById('letterheadFrame');
+  const letterheadSelect = document.getElementById('letterheadSelect');
+  const documentSelect = document.getElementById('documentSelect');
+
+  const xPctInput = document.getElementById('xPct');
+  const yPctInput = document.getElementById('yPct');
+  const widthPctInput = document.getElementById('widthPct');
+  const heightPctInput = document.getElementById('heightPct');
+  const boxReadout = document.getElementById('boxReadout');
+  const layoutStatus = document.getElementById('layoutStatus');
+  const gridOverlay = document.getElementById('gridOverlay');
+  const showGrid = document.getElementById('showGrid');
+
+  const resetBoxBtn = document.getElementById('resetBoxBtn');
+  const centerBoxBtn = document.getElementById('centerBoxBtn');
+
+  let dragMode = null;
+  let startX = 0;
+  let startY = 0;
+  let startLeft = 0;
+  let startTop = 0;
+  let startWidth = 0;
+  let startHeight = 0;
+
+  function clamp(v, min, max) {
+    return Math.min(max, Math.max(min, v));
+  }
+
+  function updateBoxFromInputs() {
+    const x = clamp(parseFloat(xPctInput.value || 0), 0, 100);
+    const y = clamp(parseFloat(yPctInput.value || 0), 0, 100);
+    const w = clamp(parseFloat(widthPctInput.value || 5), 5, 100);
+    const h = clamp(parseFloat(heightPctInput.value || 5), 5, 100);
+
+    contentBox.style.left = x + '%';
+    contentBox.style.top = y + '%';
+    contentBox.style.width = w + '%';
+    contentBox.style.height = h + '%';
+    boxReadout.textContent = `${x.toFixed(1)}%, ${y.toFixed(1)}% · ${w.toFixed(1)}% × ${h.toFixed(1)}%`;
+  }
+
+  function updateInputsFromBox() {
+    const paperRect = paper.getBoundingClientRect();
+    const boxRect = contentBox.getBoundingClientRect();
+
+    const leftPct = ((boxRect.left - paperRect.left) / paperRect.width) * 100;
+    const topPct = ((boxRect.top - paperRect.top) / paperRect.height) * 100;
+    const widthPct = (boxRect.width / paperRect.width) * 100;
+    const heightPct = (boxRect.height / paperRect.height) * 100;
+
+    xPctInput.value = clamp(leftPct, 0, 100).toFixed(1);
+    yPctInput.value = clamp(topPct, 0, 100).toFixed(1);
+    widthPctInput.value = clamp(widthPct, 5, 100).toFixed(1);
+    heightPctInput.value = clamp(heightPct, 5, 100).toFixed(1);
+
+    updateBoxFromInputs();
+  }
+
+  function setLetterheadPreview() {
+    const opt = letterheadSelect.options[letterheadSelect.selectedIndex];
+    const preview = opt ? opt.dataset.preview : '';
+    if (preview) {
+      letterheadFrame.src = preview;
+      layoutStatus.textContent = 'Letterhead preview loaded. Drag and resize the document content area until it fits perfectly.';
+    } else {
+      letterheadFrame.removeAttribute('src');
+      layoutStatus.textContent = 'Select a letterhead PDF to start previewing the layout.';
+    }
+  }
+
+  contentBox.addEventListener('mousedown', function (e) {
+    if (e.target === resizeHandle) return;
+    dragMode = 'move';
+    const rect = contentBox.getBoundingClientRect();
+    startX = e.clientX;
+    startY = e.clientY;
+    startLeft = rect.left;
+    startTop = rect.top;
+    e.preventDefault();
+  });
+
+  resizeHandle.addEventListener('mousedown', function (e) {
+    dragMode = 'resize';
+    const rect = contentBox.getBoundingClientRect();
+    startX = e.clientX;
+    startY = e.clientY;
+    startWidth = rect.width;
+    startHeight = rect.height;
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  window.addEventListener('mousemove', function (e) {
+    if (!dragMode) return;
+
+    const paperRect = paper.getBoundingClientRect();
+    const boxRect = contentBox.getBoundingClientRect();
+
+    if (dragMode === 'move') {
+      let newLeft = boxRect.left + (e.clientX - startX);
+      let newTop = boxRect.top + (e.clientY - startY);
+
+      const currentWidth = boxRect.width;
+      const currentHeight = boxRect.height;
+
+      newLeft = clamp(newLeft, paperRect.left, paperRect.right - currentWidth);
+      newTop = clamp(newTop, paperRect.top, paperRect.bottom - currentHeight);
+
+      const leftPct = ((newLeft - paperRect.left) / paperRect.width) * 100;
+      const topPct = ((newTop - paperRect.top) / paperRect.height) * 100;
+
+      xPctInput.value = leftPct.toFixed(1);
+      yPctInput.value = topPct.toFixed(1);
+
+      startX = e.clientX;
+      startY = e.clientY;
+      updateBoxFromInputs();
+    }
+
+    if (dragMode === 'resize') {
+      let newWidth = startWidth + (e.clientX - startX);
+      let newHeight = startHeight + (e.clientY - startY);
+
+      const left = boxRect.left - paperRect.left;
+      const top = boxRect.top - paperRect.top;
+
+      newWidth = clamp(newWidth, 60, paperRect.width - left);
+      newHeight = clamp(newHeight, 60, paperRect.height - top);
+
+      widthPctInput.value = ((newWidth / paperRect.width) * 100).toFixed(1);
+      heightPctInput.value = ((newHeight / paperRect.height) * 100).toFixed(1);
+
+      updateBoxFromInputs();
+    }
+  });
+
+  window.addEventListener('mouseup', function () {
+    dragMode = null;
+  });
+
+  [xPctInput, yPctInput, widthPctInput, heightPctInput].forEach(input => {
+    input.addEventListener('input', updateBoxFromInputs);
+  });
+
+  letterheadSelect.addEventListener('change', setLetterheadPreview);
+
+  showGrid.addEventListener('change', function () {
+    gridOverlay.style.display = this.checked ? 'block' : 'none';
+  });
+
+  resetBoxBtn.addEventListener('click', function () {
+    xPctInput.value = '10.0';
+    yPctInput.value = '18.0';
+    widthPctInput.value = '80.0';
+    heightPctInput.value = '70.0';
+    updateBoxFromInputs();
+  });
+
+  centerBoxBtn.addEventListener('click', function () {
+    widthPctInput.value = '76.0';
+    heightPctInput.value = '68.0';
+    xPctInput.value = '12.0';
+    yPctInput.value = '16.0';
+    updateBoxFromInputs();
+  });
+
+  setLetterheadPreview();
+  updateBoxFromInputs();
+})();
+</script>
+{% endblock %}

@@ -27,6 +27,45 @@ urlpatterns = [
         views.OSMTileProxyView.as_view(),
         name="survey_osm_tile_proxy",
     ),
+    # Enhanced export — supports ?format=csv|xlsx&save_to_files=0|1
+    path(
+        '<uuid:pk>/locations/export/',
+        views.LocationMapExportCSVView.as_view(),
+        name='location_export',
+    ),
+
+    # Enhanced survey export — ?format=csv|xlsx&save_to_files=0|1
+    path(
+        '<uuid:pk>/surveys/<uuid:sid>/export/',
+        views.SurveyExportView.as_view(),
+        name='survey_export',
+    ),
+
+    # Multi-step import: preview + commit
+    path(
+        '<uuid:pk>/locations/import/preview/',
+        views.LocationImportPreviewView.as_view(),
+        name='location_import_preview',
+    ),
+    path(
+        '<uuid:pk>/locations/import/commit/',
+        views.LocationImportCommitView.as_view(),
+        name='location_import_commit',
+    ),
+
+    # Pick-from-Files source picker (JSON list)
+    path(
+        '<uuid:pk>/locations/import/picker/',
+        views.ImportFilePickerView.as_view(),
+        name='location_import_picker',
+    ),
+
+    # Import management — list + unlink/delete/rerun via POST action
+    path(
+        '<uuid:pk>/locations/imports/',
+        views.ProjectImportsView.as_view(),
+        name='project_imports',
+    ),
 
 
     # Public survey — no login required (token-based)

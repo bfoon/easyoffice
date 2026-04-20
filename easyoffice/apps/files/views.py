@@ -16,10 +16,12 @@ import os, subprocess, tempfile, hashlib, mimetypes, re, html, zipfile
 from django.utils.decorators import method_decorator
 from io import BytesIO
 from pathlib import Path
-from django.core.files.base import ContentFile
 from pypdf import PdfReader, PdfWriter
+from django.core.files.base import ContentFile
+from pypdf import PdfReader, PdfWriter, Transformation
 from PIL import Image
 from django.views.decorators.clickjacking import xframe_options_sameorigin
+from apps.letterhead.models import LetterheadTemplate
 from apps.files.models import (
     SharedFile,
     FileFolder,
@@ -1231,6 +1233,176 @@ def _unique_file_name_for_folder(base_name, folder):
 
     return candidate
 
+def _unique_file_name_for_folder(folder, original_name):
+    root, ext = os.path.splitext(original_name)
+    candidate = original_name
+    counter = 2
+
+    while SharedFile.objects.filter(folder=folder, name=candidate, is_latest=True).exists():
+        candidate = f"{root} ({counter}){ext}"
+        counter += 1
+
+    return candidate
+
+
+def _ensure_pdf_shared_file(source_file, user):
+    """
+    Returns a PDF SharedFile.
+    If already PDF, returns original file.
+    If convertible, creates a converted PDF SharedFile and returns it.
+    """
+    if source_file.is_pdf:
+        return source_file
+
+    if not source_file.is_convertible:
+        raise RuntimeError("Selected document cannot be converted to PDF.")
+
+    tmp_path = None
+    pdf_path = None
+
+    try:
+        suffix = f".{source_file.extension}" if source_file.extension else ""
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp_path = tmp.name
+            for chunk in source_file.file.chunks():
+                tmp.write(chunk)
+
+        pdf_name = os.path.splitext(source_file.name)[0] + ".pdf"
+        image_exts = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff'}
+
+        if source_file.extension.lower() in image_exts:
+            pdf_buffer = _convert_image_to_pdf(tmp_path)
+            new_pdf = SharedFile.objects.create(
+                name=_unique_file_name_for_folder(source_file.folder, pdf_name),
+                uploaded_by=user,
+                folder=source_file.folder,
+                visibility=source_file.visibility,
+                description=f'Auto-converted from {source_file.name}',
+                tags=source_file.tags,
+                file_size=pdf_buffer.getbuffer().nbytes,
+                file_type='application/pdf',
+            )
+            new_pdf.file.save(pdf_name, ContentFile(pdf_buffer.read()), save=True)
+            return new_pdf
+
+        pdf_path = _convert_to_pdf(tmp_path)
+        with open(pdf_path, 'rb') as pdf_f:
+            from django.core.files import File as DjangoFile
+            new_pdf = SharedFile.objects.create(
+                name=_unique_file_name_for_folder(source_file.folder, pdf_name),
+                file=DjangoFile(pdf_f, name=pdf_name),
+                folder=source_file.folder,
+                uploaded_by=user,
+                visibility=source_file.visibility,
+                description=f'Auto-converted from {source_file.name}',
+                tags=source_file.tags,
+                file_size=os.path.getsize(pdf_path),
+                file_type='application/pdf',
+            )
+            return new_pdf
+
+    finally:
+        try:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        except Exception:
+            pass
+        try:
+            if pdf_path and os.path.exists(pdf_path):
+                os.unlink(pdf_path)
+        except Exception:
+            pass
+
+
+def _apply_pdf_letterhead(
+    source_pdf_path,
+    letterhead_pdf_path,
+    apply_mode='first',
+    x_pct=10.0,
+    y_pct=18.0,
+    width_pct=80.0,
+    height_pct=70.0,
+):
+    """
+    Compose the source PDF content inside a movable/resizable content area
+    on top of the letterhead PDF.
+
+    x_pct, y_pct, width_pct, height_pct are percentages relative to the
+    letterhead page size.
+
+    Notes:
+    - x_pct / y_pct are from the TOP-LEFT of the preview UI
+    - PDF coordinates use BOTTOM-LEFT, so Y is converted internally
+    """
+    src_reader = PdfReader(source_pdf_path)
+    letter_reader = PdfReader(letterhead_pdf_path)
+    writer = PdfWriter()
+
+    if not letter_reader.pages:
+        raise RuntimeError("Letterhead PDF is empty.")
+
+    letterhead_base = letter_reader.pages[0]
+
+    bg_w = float(letterhead_base.mediabox.width)
+    bg_h = float(letterhead_base.mediabox.height)
+
+    # clamp percentages
+    x_pct = max(0.0, min(100.0, float(x_pct)))
+    y_pct = max(0.0, min(100.0, float(y_pct)))
+    width_pct = max(5.0, min(100.0, float(width_pct)))
+    height_pct = max(5.0, min(100.0, float(height_pct)))
+
+    box_x = bg_w * (x_pct / 100.0)
+    box_w = bg_w * (width_pct / 100.0)
+    box_h = bg_h * (height_pct / 100.0)
+
+    for index, src_page in enumerate(src_reader.pages):
+        use_letterhead = (apply_mode == 'all') or (apply_mode == 'first' and index == 0)
+
+        if use_letterhead:
+            # start from a fresh copy of the letterhead page
+            writer.add_page(letterhead_base)
+            out_page = writer.pages[-1]
+
+            if getattr(out_page, "rotation", 0):
+                out_page.transfer_rotation_to_content()
+
+            src_w = float(src_page.mediabox.width)
+            src_h = float(src_page.mediabox.height)
+
+            # fit source page into the movable box while preserving aspect ratio
+            scale = min(box_w / src_w, box_h / src_h)
+
+            placed_w = src_w * scale
+            placed_h = src_h * scale
+
+            # center inside the selected area
+            placed_x = box_x + ((box_w - placed_w) / 2.0)
+
+            # UI y is top-based; PDF y is bottom-based
+            top_y = bg_h * (y_pct / 100.0)
+            box_bottom = bg_h - top_y - box_h
+            placed_y = box_bottom + ((box_h - placed_h) / 2.0)
+
+            transformation = (
+                Transformation()
+                .scale(scale, scale)
+                .translate(placed_x, placed_y)
+            )
+
+            out_page.merge_transformed_page(
+                src_page,
+                transformation,
+                over=True,
+                expand=False,
+            )
+        else:
+            writer.add_page(src_page)
+
+    output = BytesIO()
+    writer.write(output)
+    output.seek(0)
+    return output
 # ─────────────────────────────────────────────────────────────────────────────
 # File Manager
 # ─────────────────────────────────────────────────────────────────────────────
@@ -5351,3 +5523,146 @@ class FileNoteBulkStatusView(LoginRequiredMixin, View):
                 }
 
         return JsonResponse({'statuses': statuses})
+
+class LetterheadApplyToolView(LoginRequiredMixin, TemplateView):
+    template_name = 'files/letterhead_apply_tool.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+
+        editable_files = _editable_files_qs(user).select_related('folder').order_by('-created_at')
+        pdf_files = editable_files.filter(file_type='application/pdf').order_by('-created_at')
+
+        preselected_file = None
+        file_id = self.request.GET.get('file')
+        if file_id:
+            try:
+                preselected_file = editable_files.get(pk=file_id)
+            except SharedFile.DoesNotExist:
+                pass
+
+        active_letterhead = LetterheadTemplate.get_active()
+
+        ctx.update({
+            'files': editable_files,
+            'pdf_files': pdf_files,
+            'preselected_file': preselected_file,
+            'active_letterhead': active_letterhead,
+        })
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        user = request.user
+
+        document_id = request.POST.get('document_id')
+        letterhead_file_id = request.POST.get('letterhead_file_id')
+        apply_mode = request.POST.get('apply_mode', 'first')
+        result_name = request.POST.get('result_name', '').strip()
+        send_for_signature = request.POST.get('send_for_signature') == '1'
+
+        if not document_id:
+            messages.error(request, 'Please select a document.')
+            return redirect('letterhead_apply_tool')
+
+        if not letterhead_file_id:
+            messages.error(request, 'Please select a letterhead PDF from File Manager.')
+            return redirect('letterhead_apply_tool')
+
+        source_doc = get_object_or_404(SharedFile, pk=document_id)
+        letterhead_file = get_object_or_404(SharedFile, pk=letterhead_file_id)
+
+        if not _can_edit_file(user, source_doc):
+            messages.error(request, 'You do not have permission to use this document.')
+            return redirect('file_manager')
+
+        if not letterhead_file.is_pdf:
+            messages.error(request, 'Selected letterhead must be a PDF.')
+            return redirect('letterhead_apply_tool')
+
+        src_tmp = None
+        letter_tmp = None
+
+        try:
+            pdf_doc = _ensure_pdf_shared_file(source_doc, user)
+
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as srcf:
+                src_tmp = srcf.name
+                for chunk in pdf_doc.file.chunks():
+                    srcf.write(chunk)
+
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as ltf:
+                letter_tmp = ltf.name
+                for chunk in letterhead_file.file.chunks():
+                    ltf.write(chunk)
+
+            x_pct = request.POST.get('x_pct', '10')
+            y_pct = request.POST.get('y_pct', '18')
+            width_pct = request.POST.get('width_pct', '80')
+            height_pct = request.POST.get('height_pct', '70')
+
+            merged_buffer = _apply_pdf_letterhead(
+                src_tmp,
+                letter_tmp,
+                apply_mode=apply_mode,
+                x_pct=x_pct,
+                y_pct=y_pct,
+                width_pct=width_pct,
+                height_pct=height_pct,
+            )
+
+            if result_name:
+                final_name = result_name if result_name.lower().endswith('.pdf') else result_name + '.pdf'
+            else:
+                base_name = os.path.splitext(source_doc.name)[0]
+                final_name = f'{base_name} - with letterhead.pdf'
+
+            final_name = _unique_file_name_for_folder(source_doc.folder, final_name)
+
+            new_file = SharedFile.objects.create(
+                name=final_name,
+                uploaded_by=user,
+                folder=source_doc.folder,
+                visibility=source_doc.visibility,
+                description=f'Generated with letterhead from {letterhead_file.name}',
+                tags=source_doc.tags,
+                file_size=merged_buffer.getbuffer().nbytes,
+                file_type='application/pdf',
+            )
+            new_file.file.save(final_name, ContentFile(merged_buffer.read()), save=True)
+
+            try:
+                new_file.file_hash = new_file.compute_hash()
+                new_file.save(update_fields=['file_hash'])
+            except Exception:
+                pass
+
+            _log_file_history(
+                new_file,
+                action='created',
+                actor=user,
+                notes=f'Applied letterhead PDF {letterhead_file.name} to {source_doc.name}'
+            )
+
+            messages.success(request, f'"{new_file.name}" was created successfully.')
+
+            if send_for_signature:
+                return redirect('create_signature_request', pk=new_file.pk)
+
+            return redirect('file_preview', pk=new_file.pk)
+
+        except Exception as e:
+            messages.error(request, f'Could not create the final PDF: {e}')
+            return redirect('letterhead_apply_tool')
+
+        finally:
+            try:
+                if src_tmp and os.path.exists(src_tmp):
+                    os.unlink(src_tmp)
+            except Exception:
+                pass
+            try:
+                if letter_tmp and os.path.exists(letter_tmp):
+                    os.unlink(letter_tmp)
+            except Exception:
+                pass

@@ -21,6 +21,135 @@
   --proj-on:     color-mix(in srgb, var(--proj) 75%, #000000);
 }
 
+/* Survey action buttons */
+.survey-header-actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:10px;
+  flex-wrap:wrap;
+  flex-shrink:0;
+}
+
+.survey-inline-form{
+  display:inline-flex;
+  margin:0;
+}
+
+.survey-toggle-btn,
+.survey-import-btn,
+.survey-export-trigger{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  border-radius:12px;
+  transition:all .18s ease;
+}
+
+.survey-toggle-btn:hover,
+.survey-import-btn:hover,
+.survey-export-trigger:hover{
+  transform:translateY(-1px);
+}
+
+.survey-toggle-btn-close{
+  border-color:color-mix(in srgb, var(--eo-danger) 30%, #ffffff);
+  color:var(--eo-danger);
+  background:color-mix(in srgb, var(--eo-danger) 7%, #ffffff);
+}
+
+.survey-toggle-btn-close:hover{
+  background:color-mix(in srgb, var(--eo-danger) 12%, #ffffff);
+  border-color:color-mix(in srgb, var(--eo-danger) 45%, #ffffff);
+}
+
+.survey-toggle-btn-open{
+  color:var(--eo-success, #198754);
+  background:color-mix(in srgb, #198754 8%, #ffffff);
+  border-color:color-mix(in srgb, #198754 22%, #ffffff);
+}
+
+.survey-toggle-btn-open:hover{
+  background:color-mix(in srgb, #198754 12%, #ffffff);
+}
+
+/* Export dropdown */
+.survey-export-dropdown{
+  position:relative;
+  display:inline-block;
+}
+
+.survey-export-menu{
+  display:none;
+  position:absolute;
+  right:0;
+  top:calc(100% + 8px);
+  min-width:240px;
+  background:#fff;
+  border:1px solid var(--eo-border);
+  border-radius:14px;
+  box-shadow:0 18px 40px rgba(15, 23, 42, 0.14);
+  z-index:50;
+  overflow:hidden;
+  padding:6px 0;
+}
+
+.survey-export-item{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  width:100%;
+  padding:11px 14px;
+  text-decoration:none;
+  color:var(--eo-text);
+  font-size:.84rem;
+  background:transparent;
+  border:none;
+  text-align:left;
+  cursor:pointer;
+  transition:background .15s ease, color .15s ease;
+}
+
+.survey-export-item:hover{
+  background:var(--eo-bg);
+  color:var(--proj-dark);
+}
+
+.survey-export-item i{
+  font-size:.95rem;
+  color:var(--proj);
+  width:18px;
+  text-align:center;
+}
+
+.survey-export-item-btn{
+  font:inherit;
+}
+
+/* Responsive */
+@media (max-width: 768px){
+  .survey-header-actions{
+    width:100%;
+    justify-content:flex-start;
+  }
+
+  .survey-export-dropdown{
+    width:100%;
+  }
+
+  .survey-export-trigger{
+    width:100%;
+    justify-content:center;
+  }
+
+  .survey-export-menu{
+    left:0;
+    right:0;
+    min-width:unset;
+    width:100%;
+  }
+}
+
 /* ── Bar chart ── */
 .res-bar-row { display:flex;align-items:center;gap:10px;margin-bottom:8px; }
 .res-bar-label { font-size:.82rem;color:var(--eo-text);min-width:130px;max-width:130px;
@@ -71,29 +200,62 @@
       {% endif %}
     </div>
 
-    <div style="display:flex;gap:8px;flex-wrap:wrap;flex-shrink:0">
-      {% if survey.is_active and not already_responded %}
-      <a href="{% url 'survey_submit' project.pk survey.pk %}" class="eo-btn eo-btn-sm eo-btn-primary">
-        <i class="bi bi-pencil-square"></i> Submit Response
-      </a>
-      {% endif %}
-      {% if is_manager %}
-      <form method="post" action="{% url 'survey_toggle' project.pk survey.pk %}" style="display:inline">
-        {% csrf_token %}
-        <button type="submit" class="eo-btn eo-btn-sm eo-btn-secondary"
-                style="{% if survey.is_active %}color:var(--eo-danger){% endif %}">
-          <i class="bi bi-{% if survey.is_active %}stop-circle{% else %}play-circle{% endif %}"></i>
-          {% if survey.is_active %}Close Survey{% else %}Reopen{% endif %}
+    <div class="survey-header-actions">
+  {% if survey.is_active and not already_responded %}
+    <a href="{% url 'survey_submit' project.pk survey.pk %}" class="eo-btn eo-btn-sm eo-btn-primary">
+      <i class="bi bi-pencil-square"></i>
+      <span>Submit Response</span>
+    </a>
+  {% endif %}
+
+  {% if is_manager %}
+    <form method="post" action="{% url 'survey_toggle' project.pk survey.pk %}" class="survey-inline-form">
+      {% csrf_token %}
+      <button
+        type="submit"
+        class="eo-btn eo-btn-sm survey-toggle-btn {% if survey.is_active %}survey-toggle-btn-close{% else %}survey-toggle-btn-open{% endif %}">
+        <i class="bi bi-{% if survey.is_active %}stop-circle{% else %}play-circle{% endif %}"></i>
+        <span>{% if survey.is_active %}Close Survey{% else %}Reopen Survey{% endif %}</span>
+      </button>
+    </form>
+  {% endif %}
+
+  {% if responses.count > 0 %}
+    <div class="survey-export-dropdown eo-dropdown">
+      <button
+        type="button"
+        class="eo-btn eo-btn-sm eo-btn-secondary survey-export-trigger"
+        onclick="toggleSurveyExport('{{ survey.pk }}')">
+        <i class="bi bi-download"></i>
+        <span>Export</span>
+      </button>
+
+      <div id="surveyExport_{{ survey.pk }}" class="survey-export-menu">
+        <a href="{% url 'survey_export' project.pk survey.pk %}?format=csv" class="survey-export-item">
+          <i class="bi bi-filetype-csv"></i>
+          <span>CSV (geo split)</span>
+        </a>
+
+        <a href="{% url 'survey_export' project.pk survey.pk %}?format=xlsx" class="survey-export-item">
+          <i class="bi bi-file-earmark-excel"></i>
+          <span>Excel</span>
+        </a>
+
+        <button type="button" class="survey-export-item survey-export-item-btn"
+                onclick="saveSurveyExport('{{ survey.pk }}','csv')">
+          <i class="bi bi-cloud-upload"></i>
+          <span>Save CSV to Files</span>
         </button>
-      </form>
-      {% endif %}
-      {% if responses.count > 0 %}
-      <a href="{% url 'project_surveys' project.pk %}?export={{ survey.pk }}"
-         class="eo-btn eo-btn-sm eo-btn-secondary" style="color:var(--eo-text-muted)">
-        <i class="bi bi-download"></i> Export
-      </a>
-      {% endif %}
+
+        <button type="button" class="survey-export-item survey-export-item-btn"
+                onclick="saveSurveyExport('{{ survey.pk }}','xlsx')">
+          <i class="bi bi-cloud-upload"></i>
+          <span>Save Excel to Files</span>
+        </button>
+      </div>
     </div>
+  {% endif %}
+</div>
   </div>
 
   {# Meta strip #}
@@ -358,5 +520,69 @@ function toggleResp(trigger) {
   var open    = body.classList.toggle('open');
   chevron.style.transform = open ? 'rotate(180deg)' : '';
 }
+</script>
+<script>
+function toggleSurveyExport(sid) {
+  const el = document.getElementById('surveyExport_'+sid);
+  document.querySelectorAll('[id^="surveyExport_"]').forEach(m => { if (m !== el) m.style.display='none'; });
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+async function saveSurveyExport(sid, fmt) {
+  const url = `/projects/{{ project.pk }}/surveys/${sid}/export/?format=${fmt}&save_to_files=1`;
+  try {
+    const r = await fetch(url);
+    const j = await r.json();
+    if (j.ok) alert(j.message + '\nAvailable in your Files app.');
+    else      alert(j.error || 'Save failed');
+  } catch(e) { alert('Save failed'); }
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.eo-dropdown')) {
+    document.querySelectorAll('[id^="surveyExport_"]').forEach(m => m.style.display='none');
+  }
+});
+</script>
+<script>
+function toggleSurveyExport(sid) {
+  const el = document.getElementById('surveyExport_' + sid);
+  document.querySelectorAll('[id^="surveyExport_"]').forEach(menu => {
+    if (menu !== el) menu.style.display = 'none';
+  });
+
+  el.style.display = (el.style.display === 'block') ? 'none' : 'block';
+}
+
+async function saveSurveyExport(sid, fmt) {
+  const url = `/projects/{{ project.pk }}/surveys/${sid}/export/?format=${fmt}&save_to_files=1`;
+
+  try {
+    const r = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest'
+      }
+    });
+
+    const j = await r.json();
+
+    if (j.ok) {
+      alert(j.message + '\nAvailable in your Files app.');
+      const menu = document.getElementById('surveyExport_' + sid);
+      if (menu) menu.style.display = 'none';
+    } else {
+      alert(j.error || 'Save failed');
+    }
+  } catch (e) {
+    alert('Save failed');
+  }
+}
+
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.survey-export-dropdown')) {
+    document.querySelectorAll('[id^="surveyExport_"]').forEach(menu => {
+      menu.style.display = 'none';
+    });
+  }
+});
 </script>
 {% endblock %}

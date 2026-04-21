@@ -133,8 +133,12 @@ def _notify_user(user, title, message, link=''):
 
 
 def _send_otp_email(user, otp):
+    if not user.email:
+        logger.warning("OTP email not sent: user %s has no email address", user.pk)
+        return False
+
     try:
-        send_mail(
+        sent = send_mail(
             subject='Your EasyOffice login verification code',
             message=(
                 f'Hi {user.first_name or user.email},\n\n'
@@ -144,12 +148,15 @@ def _send_otp_email(user, otp):
                 f'Do not share it with anyone.\n\n'
                 f'If you did not attempt to log in, contact your administrator immediately.\n'
             ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
             recipient_list=[user.email],
-            fail_silently=True,
+            fail_silently=False,
         )
-    except Exception as e:
-        logger.warning('OTP email failed for %s: %s', user.email, e)
+        logger.info("OTP email sent to %s (sent=%s)", user.email, sent)
+        return sent > 0
+    except Exception:
+        logger.exception("OTP email failed for %s", user.email)
+        return False
 
 
 def _send_switch_email(user, sw, request):
@@ -463,7 +470,14 @@ class LoginView(View):
             pending_country=country,
             pending_user_agent=request.META.get('HTTP_USER_AGENT', ''),
         )
-        _send_otp_email(user, otp)
+        email_sent = _send_otp_email(user, otp)
+
+        if not email_sent:
+            messages.error(
+                request,
+                "We generated your OTP, but the email could not be sent. Please contact the administrator."
+            )
+            logger.error("OTP created but email failed for user %s", user.email)
 
         SecurityEvent.log(
             user=user,

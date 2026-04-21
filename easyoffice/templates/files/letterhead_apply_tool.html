@@ -1,1025 +1,557 @@
 {% extends "base.html" %}
 {% block title %}Letterhead Studio{% endblock %}
 {% block breadcrumb %}
-  <a href="{% url 'file_manager' %}">File Manager</a> / <span>Letterhead Studio</span>
-{% endblock %}
-
-{% block extra_head %}
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <a href="{% url 'file_manager' %}">File Manager</a> / <span>Apply Letterhead</span>
 {% endblock %}
 
 {% block content %}
 <style>
-/* ── Reset & root ─────────────────────────────────────────────────────────── */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+/* ── Shell ────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
 
-:root {
-  --ink:      #0d1117;
-  --ink2:     #161b22;
-  --ink3:     #21262d;
-  --ink4:     #30363d;
-  --border:   #30363d;
-  --border2:  #21262d;
-  --dim:      #8b949e;
-  --dim2:     #6e7681;
-  --text:     #e6edf3;
-  --text2:    #c9d1d9;
-  --accent:   #3b82f6;
-  --accent2:  #1d4ed8;
-  --accent-g: #10b981;
-  --accent-a: #f59e0b;
-  --accent-r: #ef4444;
-  --surface:  #f0f4f8;
-  --paper-bg: #ffffff;
-  --r:        10px;
-  --r2:       16px;
-  --font:     'DM Sans', system-ui, sans-serif;
-  --mono:     'DM Mono', ui-monospace, monospace;
-  --ease:     cubic-bezier(.4, 0, .2, 1);
-  --spring:   cubic-bezier(.34, 1.56, .64, 1);
-}
-
-body { font-family: var(--font); }
-
-/* ── Studio shell ─────────────────────────────────────────────────────────── */
-.studio {
+.lh-studio {
   display: grid;
   grid-template-columns: 340px 1fr;
-  height: calc(100vh - 60px);
-  background: var(--ink);
+  height: calc(100vh - 64px);
+  background: var(--eo-bg, #f8fafc);
   overflow: hidden;
+  border-top: 1px solid var(--eo-border, #e2e8f0);
 }
 
 /* ── Sidebar ──────────────────────────────────────────────────────────────── */
-.sidebar {
-  background: var(--ink2);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+.lh-sidebar {
+  background: var(--eo-surface, #fff);
+  border-right: 1px solid var(--eo-border, #e2e8f0);
+  display: flex; flex-direction: column; overflow: hidden;
 }
 
-.sidebar-header {
-  padding: 20px 20px 16px;
-  border-bottom: 1px solid var(--border2);
+.lh-sidebar-head {
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid var(--eo-border, #e2e8f0);
   flex-shrink: 0;
+  display: flex; align-items: center; gap: 10px;
 }
 
-.studio-wordmark {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 4px;
-}
-
-.studio-icon {
-  width: 32px;
-  height: 32px;
-  background: linear-gradient(135deg, var(--accent), #60a5fa);
+.lh-brand-icon {
+  width: 32px; height: 32px;
+  background: linear-gradient(135deg, #2563eb, #60a5fa);
   border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 15px;
-  color: #fff;
-  flex-shrink: 0;
-  box-shadow: 0 4px 12px rgba(59,130,246,.35);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; color: #fff; flex-shrink: 0;
+  box-shadow: 0 3px 8px rgba(37,99,235,.25);
 }
 
-.studio-title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--text);
-  letter-spacing: -.01em;
+.lh-brand-title {
+  font-size: .92rem; font-weight: 700;
+  color: var(--eo-text, #0f172a); letter-spacing: -.01em;
 }
 
-.studio-sub {
-  font-size: .72rem;
-  color: var(--dim);
-  margin-top: 2px;
+.lh-brand-sub { font-size: .7rem; color: var(--eo-text-muted, #64748b); margin-top: 1px; }
+
+/* ── Tabs ─────────────────────────────────────────────────────────────────── */
+.lh-tab-bar {
+  display: flex; padding: 0 8px;
+  border-bottom: 1px solid var(--eo-border, #e2e8f0);
+  flex-shrink: 0; background: var(--eo-surface, #fff);
 }
 
-/* ── Tab bar ──────────────────────────────────────────────────────────────── */
-.tab-bar {
-  display: flex;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--border2);
-  flex-shrink: 0;
-  gap: 2px;
+.lh-tab {
+  flex: 1; padding: 10px 4px;
+  font-size: .71rem; font-weight: 600;
+  letter-spacing: .03em; text-transform: uppercase;
+  color: var(--eo-text-muted, #64748b);
+  background: none; border: none; border-bottom: 2px solid transparent;
+  cursor: pointer; transition: color .14s, border-color .14s;
+  white-space: nowrap; font-family: inherit;
 }
 
-.tab-btn {
-  flex: 1;
-  padding: 10px 6px;
-  font-size: .73rem;
-  font-weight: 600;
-  font-family: var(--font);
-  letter-spacing: .02em;
-  color: var(--dim);
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-  transition: color .15s var(--ease), border-color .15s var(--ease);
-  white-space: nowrap;
-  text-transform: uppercase;
-}
+.lh-tab:hover { color: var(--eo-text, #0f172a); }
+.lh-tab.active { color: #2563eb; border-bottom-color: #2563eb; }
 
-.tab-btn:hover { color: var(--text2); }
-.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-/* ── Sidebar scroll body ──────────────────────────────────────────────────── */
-.sidebar-body {
-  flex: 1;
-  overflow-y: auto;
+.lh-panel-body {
+  flex: 1; overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: var(--ink4) transparent;
+  scrollbar-color: var(--eo-border, #e2e8f0) transparent;
 }
 
-.sidebar-body::-webkit-scrollbar { width: 4px; }
-.sidebar-body::-webkit-scrollbar-track { background: transparent; }
-.sidebar-body::-webkit-scrollbar-thumb { background: var(--ink4); border-radius: 4px; }
+.lh-panel-body::-webkit-scrollbar { width: 4px; }
+.lh-panel-body::-webkit-scrollbar-thumb { background: var(--eo-border, #e2e8f0); border-radius: 4px; }
 
-/* ── Tab panels ───────────────────────────────────────────────────────────── */
-.tab-panel { display: none; padding: 16px; }
-.tab-panel.active { display: block; }
+.lh-tab-panel { display: none; padding: 16px; }
+.lh-tab-panel.active { display: block; }
 
-/* ── Field group ──────────────────────────────────────────────────────────── */
-.field-group {
-  margin-bottom: 14px;
+/* ── Fields ───────────────────────────────────────────────────────────────── */
+.lh-field { margin-bottom: 14px; }
+
+.lh-label {
+  font-size: .7rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--eo-text-muted, #64748b); margin-bottom: 5px;
+  display: flex; align-items: center; gap: 5px;
 }
 
-.field-label {
-  font-size: .71rem;
-  font-weight: 600;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  color: var(--dim);
-  margin-bottom: 6px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.lh-label i { color: #2563eb; font-size: .82rem; }
+
+.lh-select, .lh-input, .lh-textarea {
+  width: 100%; background: var(--eo-bg, #f8fafc);
+  border: 1px solid var(--eo-border, #e2e8f0); border-radius: 8px;
+  color: var(--eo-text, #0f172a); font-family: inherit; font-size: .85rem;
+  padding: 9px 11px; outline: none;
+  transition: border-color .14s, box-shadow .14s; appearance: none;
 }
 
-.field-label i { font-size: .85rem; color: var(--accent); }
-
-.studio-select,
-.studio-input,
-.studio-textarea {
-  width: 100%;
-  background: var(--ink3);
-  border: 1px solid var(--border);
-  border-radius: var(--r);
-  color: var(--text2);
-  font-family: var(--font);
-  font-size: .85rem;
-  padding: 10px 12px;
-  outline: none;
-  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
-  appearance: none;
+.lh-select:focus, .lh-input:focus, .lh-textarea:focus {
+  border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.12); background: #fff;
 }
 
-.studio-select:focus,
-.studio-input:focus,
-.studio-textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59,130,246,.15);
-  color: var(--text);
+.lh-select-wrap { position: relative; }
+.lh-select-wrap::after {
+  content: '\f282'; font-family: 'Bootstrap Icons';
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--eo-text-muted, #64748b); pointer-events: none; font-size: .78rem;
 }
 
-.studio-select option { background: var(--ink3); }
+.lh-textarea { min-height: 90px; resize: vertical; line-height: 1.55; }
 
-.studio-textarea {
-  min-height: 100px;
-  resize: vertical;
-  line-height: 1.55;
+.lh-section {
+  font-size: .65rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--eo-text-muted, #64748b); margin: 14px 0 8px;
+  display: flex; align-items: center; gap: 8px;
 }
 
-.studio-select-wrap {
-  position: relative;
-}
+.lh-section::after { content: ''; flex: 1; height: 1px; background: var(--eo-border, #e2e8f0); }
 
-.studio-select-wrap::after {
-  content: '\f282';
-  font-family: 'Bootstrap Icons';
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--dim);
-  pointer-events: none;
-  font-size: .8rem;
-}
-
-/* ── Divider ──────────────────────────────────────────────────────────────── */
-.s-divider {
-  height: 1px;
-  background: var(--border2);
-  margin: 16px 0;
-}
-
-/* ── Section label ────────────────────────────────────────────────────────── */
-.section-label {
-  font-size: .68rem;
-  font-weight: 700;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  color: var(--dim2);
-  margin-bottom: 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.section-label::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--border2);
-}
+.lh-divider { height: 1px; background: var(--eo-border, #e2e8f0); margin: 14px 0; }
 
 /* ── Coord grid ───────────────────────────────────────────────────────────── */
-.coord-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+.lh-coord-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+.lh-coord-field { position: relative; }
+
+.lh-coord-field input {
+  width: 100%; background: var(--eo-bg, #f8fafc);
+  border: 1px solid var(--eo-border, #e2e8f0); border-radius: 8px;
+  color: var(--eo-text, #0f172a); font-size: .82rem; font-family: ui-monospace, monospace;
+  padding: 8px 26px 8px 10px; outline: none;
+  transition: border-color .14s, box-shadow .14s;
 }
 
-.coord-field {
-  position: relative;
+.lh-coord-field input:focus {
+  border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.1); background: #fff;
 }
 
-.coord-field input {
-  width: 100%;
-  background: var(--ink3);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--text2);
-  font-family: var(--mono);
-  font-size: .82rem;
-  padding: 9px 28px 9px 10px;
-  outline: none;
-  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+.lh-coord-unit {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  font-size: .65rem; color: var(--eo-text-muted, #64748b);
+  font-family: ui-monospace, monospace; pointer-events: none;
 }
 
-.coord-field input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59,130,246,.12);
-  color: var(--text);
+.lh-coord-lbl {
+  font-size: .67rem; color: var(--eo-text-muted, #64748b);
+  font-weight: 600; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 4px;
 }
 
-.coord-unit {
-  position: absolute;
-  right: 9px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: .68rem;
-  color: var(--dim2);
-  font-family: var(--mono);
-  pointer-events: none;
+/* ── Presets ──────────────────────────────────────────────────────────────── */
+.lh-preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+.lh-preset-btn {
+  background: var(--eo-bg, #f8fafc); border: 1px solid var(--eo-border, #e2e8f0);
+  color: var(--eo-text, #0f172a); border-radius: 8px; padding: 7px 8px;
+  font-size: .73rem; font-weight: 600; font-family: inherit; cursor: pointer;
+  text-align: center; transition: background .12s, border-color .12s, transform .1s;
 }
 
-.coord-label {
-  font-size: .68rem;
-  color: var(--dim);
-  font-weight: 600;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-  margin-bottom: 5px;
+.lh-preset-btn:hover { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; transform: translateY(-1px); }
+.lh-preset-btn:active { transform: translateY(0); }
+
+/* ── Range ────────────────────────────────────────────────────────────────── */
+.lh-range-row { display: flex; align-items: center; gap: 10px; }
+
+.lh-range-row input[type="range"] {
+  flex: 1; height: 4px; appearance: none;
+  background: var(--eo-border, #e2e8f0); border-radius: 4px; outline: none; cursor: pointer;
 }
 
-/* ── Preset chips ─────────────────────────────────────────────────────────── */
-.preset-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+.lh-range-row input[type="range"]::-webkit-slider-thumb {
+  appearance: none; width: 14px; height: 14px; border-radius: 50%;
+  background: #2563eb; box-shadow: 0 2px 6px rgba(37,99,235,.3); cursor: pointer;
 }
 
-.preset-chip {
-  background: var(--ink3);
-  border: 1px solid var(--border);
-  color: var(--text2);
-  border-radius: 8px;
-  padding: 7px 10px;
-  font-size: .74rem;
-  font-weight: 600;
-  font-family: var(--font);
-  cursor: pointer;
-  transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease), transform .1s var(--spring);
-  text-align: center;
+.lh-range-val { font-size: .72rem; color: var(--eo-text-muted, #64748b); font-family: ui-monospace, monospace; min-width: 36px; text-align: right; }
+
+/* ── Toggles ──────────────────────────────────────────────────────────────── */
+.lh-toggle-list { display: flex; flex-direction: column; gap: 6px; }
+
+.lh-toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 10px; background: var(--eo-bg, #f8fafc);
+  border: 1px solid var(--eo-border, #e2e8f0); border-radius: 8px;
 }
 
-.preset-chip:hover {
-  background: var(--ink4);
-  border-color: var(--accent);
-  color: var(--text);
-  transform: translateY(-1px);
+.lh-toggle-lbl { font-size: .8rem; color: var(--eo-text, #0f172a); font-weight: 500; }
+
+.lh-switch { position: relative; width: 36px; height: 20px; }
+.lh-switch input { opacity: 0; width: 0; height: 0; }
+
+.lh-switch-thumb {
+  position: absolute; inset: 0; background: #cbd5e1;
+  border-radius: 20px; cursor: pointer; transition: background .18s;
 }
 
-.preset-chip:active { transform: translateY(0); }
-
-/* ── Range sliders ────────────────────────────────────────────────────────── */
-.range-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.lh-switch-thumb::before {
+  content: ''; position: absolute; width: 14px; height: 14px;
+  left: 3px; top: 3px; background: #fff; border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: transform .18s;
 }
 
-.range-row input[type="range"] {
-  flex: 1;
-  height: 4px;
-  appearance: none;
-  background: var(--ink4);
-  border-radius: 4px;
-  outline: none;
-  cursor: pointer;
+.lh-switch input:checked + .lh-switch-thumb { background: #2563eb; }
+.lh-switch input:checked + .lh-switch-thumb::before { transform: translateX(16px); }
+
+/* ── Tip ──────────────────────────────────────────────────────────────────── */
+.lh-tip {
+  background: #eff6ff; border: 1px solid #bfdbfe;
+  border-radius: 8px; padding: 10px 12px;
+  font-size: .74rem; color: #1e40af; line-height: 1.55;
 }
 
-.range-row input[type="range"]::-webkit-slider-thumb {
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 2px 8px rgba(59,130,246,.4);
-  cursor: pointer;
-  transition: transform .1s var(--spring);
+.lh-tip i { color: #2563eb; }
+
+/* ── Active letterhead ────────────────────────────────────────────────────── */
+.lh-active-card {
+  background: #fef2f2; border: 1px solid #fecaca;
+  border-radius: 8px; padding: 10px 12px;
+  display: flex; align-items: flex-start; gap: 10px;
 }
 
-.range-row input[type="range"]::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
+.lh-active-icon {
+  width: 32px; height: 32px; background: #fee2e2; border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: .9rem; color: #ef4444; flex-shrink: 0;
 }
 
-.range-val {
-  font-family: var(--mono);
-  font-size: .73rem;
-  color: var(--dim);
-  min-width: 30px;
-  text-align: right;
+.lh-active-name { font-size: .81rem; font-weight: 700; color: var(--eo-text, #0f172a); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lh-active-meta { font-size: .7rem; color: var(--eo-text-muted, #64748b); margin-top: 2px; }
+
+/* ── Sig toggle ───────────────────────────────────────────────────────────── */
+.lh-sig-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 11px;
+  background: var(--eo-bg, #f8fafc); border: 1px solid var(--eo-border, #e2e8f0);
+  border-radius: 8px; cursor: pointer;
 }
 
-/* ── Toggle switches ──────────────────────────────────────────────────────── */
-.toggle-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.lh-sig-lbl { flex: 1; font-size: .8rem; font-weight: 600; color: var(--eo-text, #0f172a); }
+.lh-sig-sub { font-size: .69rem; color: var(--eo-text-muted, #64748b); font-weight: 400; }
+
+/* ── Warning banner ───────────────────────────────────────────────────────── */
+.lh-warning {
+  background: #fffbeb; border: 1px solid #fde68a;
+  border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;
+  font-size: .77rem; color: #92400e; line-height: 1.5;
+  display: flex; align-items: flex-start; gap: 8px;
 }
 
-.toggle-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 10px;
-  background: var(--ink3);
-  border: 1px solid var(--border2);
-  border-radius: 8px;
+.lh-warning.hidden { display: none; }
+
+/* ── Action footer ────────────────────────────────────────────────────────── */
+.lh-action-footer {
+  padding: 12px 16px; border-top: 1px solid var(--eo-border, #e2e8f0);
+  background: var(--eo-surface, #fff); display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;
 }
 
-.toggle-label-text {
-  font-size: .8rem;
-  color: var(--text2);
-  font-weight: 500;
+.lh-btn-primary {
+  width: 100%; padding: 11px 16px; background: #2563eb;
+  border: none; border-radius: 8px; color: #fff; font-family: inherit;
+  font-size: .85rem; font-weight: 700; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  transition: background .14s, transform .12s, box-shadow .14s;
+  box-shadow: 0 2px 8px rgba(37,99,235,.25);
 }
 
-.toggle-switch {
-  position: relative;
-  width: 36px;
-  height: 20px;
+.lh-btn-primary:hover { background: #1d4ed8; transform: translateY(-1px); box-shadow: 0 4px 14px rgba(37,99,235,.35); }
+.lh-btn-primary:active { transform: translateY(0); }
+
+.lh-btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+.lh-btn-secondary {
+  width: 100%; padding: 9px 14px; background: var(--eo-surface, #fff);
+  border: 1px solid var(--eo-border, #e2e8f0); border-radius: 8px;
+  color: var(--eo-text, #0f172a); font-family: inherit; font-size: .8rem; font-weight: 600;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
+  transition: background .12s, border-color .12s; text-decoration: none;
 }
 
-.toggle-switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
+.lh-btn-secondary:hover { background: var(--eo-bg, #f8fafc); border-color: #94a3b8; color: var(--eo-text, #0f172a); }
+
+.lh-btn-mini {
+  padding: 7px 10px; background: var(--eo-bg, #f8fafc);
+  border: 1px solid var(--eo-border, #e2e8f0); border-radius: 7px;
+  color: var(--eo-text-muted, #64748b); font-family: inherit; font-size: .72rem; font-weight: 600;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px;
+  transition: background .12s, color .12s, border-color .12s;
 }
 
-.toggle-thumb {
-  position: absolute;
-  inset: 0;
-  background: var(--ink4);
-  border-radius: 20px;
-  cursor: pointer;
-  transition: background .2s var(--ease);
-  border: 1px solid var(--border);
+.lh-btn-mini:hover { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+
+/* ── Canvas ───────────────────────────────────────────────────────────────── */
+.lh-canvas-area {
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--eo-bg, #f8fafc);
 }
 
-.toggle-thumb::before {
-  content: '';
-  position: absolute;
-  width: 14px;
-  height: 14px;
-  left: 2px;
-  top: 2px;
-  background: var(--dim);
-  border-radius: 50%;
-  transition: transform .2s var(--spring), background .2s var(--ease);
+.lh-topbar {
+  height: 46px; background: var(--eo-surface, #fff);
+  border-bottom: 1px solid var(--eo-border, #e2e8f0);
+  display: flex; align-items: center; gap: 8px; padding: 0 14px; flex-shrink: 0;
 }
 
-.toggle-switch input:checked + .toggle-thumb {
-  background: rgba(59,130,246,.2);
-  border-color: var(--accent);
+.lh-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--eo-bg, #f8fafc); border: 1px solid var(--eo-border, #e2e8f0);
+  border-radius: 20px; padding: 3px 9px;
+  font-size: .69rem; font-weight: 600; color: var(--eo-text-muted, #64748b);
 }
 
-.toggle-switch input:checked + .toggle-thumb::before {
-  transform: translateX(16px);
-  background: var(--accent);
+.lh-badge.blue { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+.lh-badge i { font-size: .75rem; }
+.lh-spacer { flex: 1; }
+
+.lh-readout {
+  font-family: ui-monospace, monospace; font-size: .7rem;
+  color: var(--eo-text-muted, #64748b); background: var(--eo-bg, #f8fafc);
+  border: 1px solid var(--eo-border, #e2e8f0); padding: 3px 9px; border-radius: 6px;
 }
 
-/* ── Action button group ──────────────────────────────────────────────────── */
-.action-group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 16px;
-  border-top: 1px solid var(--border2);
-  flex-shrink: 0;
+.lh-readout b { color: #2563eb; }
+
+.lh-zoom-chip {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--eo-bg, #f8fafc); border: 1px solid var(--eo-border, #e2e8f0);
+  border-radius: 7px; padding: 3px 8px;
+  font-size: .69rem; font-weight: 600; color: var(--eo-text-muted, #64748b);
 }
 
-.btn-generate {
-  width: 100%;
-  padding: 12px 16px;
-  background: linear-gradient(135deg, var(--accent), #60a5fa);
-  border: none;
-  border-radius: var(--r);
-  color: #fff;
-  font-family: var(--font);
-  font-size: .88rem;
-  font-weight: 700;
-  letter-spacing: .02em;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  transition: opacity .15s var(--ease), transform .15s var(--spring), box-shadow .15s var(--ease);
-  box-shadow: 0 4px 16px rgba(59,130,246,.35);
+.lh-zoom-chip input[type="range"] {
+  width: 60px; height: 3px; appearance: none;
+  background: var(--eo-border, #e2e8f0); border-radius: 3px; cursor: pointer;
 }
 
-.btn-generate:hover {
-  opacity: .92;
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(59,130,246,.45);
+.lh-zoom-chip input[type="range"]::-webkit-slider-thumb {
+  appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #2563eb; cursor: pointer;
 }
 
-.btn-generate:active { transform: translateY(0); }
+.lh-zoom-val { font-family: ui-monospace, monospace; min-width: 28px; color: #2563eb; }
 
-.btn-secondary {
-  width: 100%;
-  padding: 10px 16px;
-  background: var(--ink3);
-  border: 1px solid var(--border);
-  border-radius: var(--r);
-  color: var(--text2);
-  font-family: var(--font);
-  font-size: .82rem;
-  font-weight: 600;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease);
-  text-decoration: none;
+/* ── Statusbar ────────────────────────────────────────────────────────────── */
+.lh-statusbar {
+  height: 34px; background: var(--eo-surface, #fff);
+  border-top: 1px solid var(--eo-border, #e2e8f0);
+  display: flex; align-items: center; gap: 10px; padding: 0 14px; flex-shrink: 0;
 }
 
-.btn-secondary:hover {
-  background: var(--ink4);
-  border-color: var(--dim2);
-  color: var(--text);
+.lh-status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,.5);
+  flex-shrink: 0; animation: lhpulse 2.4s ease-in-out infinite;
 }
 
-.btn-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
+@keyframes lhpulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.3)} }
 
-.btn-mini {
-  padding: 8px 10px;
-  background: var(--ink3);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--dim);
-  font-family: var(--font);
-  font-size: .74rem;
-  font-weight: 600;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  transition: background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease);
-}
-
-.btn-mini:hover { background: var(--ink4); color: var(--text2); border-color: var(--dim2); }
-
-/* ── Signature toggle ─────────────────────────────────────────────────────── */
-.sig-toggle-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--ink3);
-  border: 1px solid var(--border2);
-  border-radius: var(--r);
-  cursor: pointer;
-}
-
-.sig-toggle-wrap label { cursor: pointer; }
-
-.sig-label {
-  flex: 1;
-  font-size: .8rem;
-  font-weight: 600;
-  color: var(--text2);
-}
-
-.sig-sub {
-  font-size: .7rem;
-  color: var(--dim);
-  font-weight: 400;
-  display: block;
-  margin-top: 1px;
-}
-
-/* ── Canvas area ──────────────────────────────────────────────────────────── */
-.canvas-area {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--ink);
-}
-
-/* ── Topbar ───────────────────────────────────────────────────────────────── */
-.topbar {
-  height: 48px;
-  background: var(--ink2);
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 16px;
-  flex-shrink: 0;
-}
-
-.topbar-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: var(--ink3);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 4px 10px;
-  font-size: .71rem;
-  font-weight: 600;
-  color: var(--dim);
-  letter-spacing: .02em;
-}
-
-.topbar-badge i { font-size: .8rem; }
-.topbar-badge.highlight { color: var(--accent); border-color: rgba(59,130,246,.3); background: rgba(59,130,246,.08); }
-
-.topbar-spacer { flex: 1; }
-
-.readout {
-  font-family: var(--mono);
-  font-size: .72rem;
-  color: var(--dim);
-  background: var(--ink3);
-  border: 1px solid var(--border2);
-  padding: 4px 10px;
-  border-radius: 6px;
-  letter-spacing: .02em;
-}
-
-.readout b { color: var(--accent); }
-
-/* ── Status bar ───────────────────────────────────────────────────────────── */
-.status-bar {
-  height: 36px;
-  background: var(--ink2);
-  border-top: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0 16px;
-  flex-shrink: 0;
-}
-
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent-g);
-  box-shadow: 0 0 6px var(--accent-g);
-  flex-shrink: 0;
-  animation: pulse 2.4s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .5; transform: scale(1.3); }
-}
-
-.status-text {
-  font-size: .72rem;
-  color: var(--dim);
-  flex: 1;
-}
-
-.status-coords {
-  font-family: var(--mono);
-  font-size: .68rem;
-  color: var(--dim2);
-  letter-spacing: .02em;
-}
+.lh-status-text { font-size: .7rem; color: var(--eo-text-muted, #64748b); flex: 1; }
+.lh-status-coords { font-family: ui-monospace, monospace; font-size: .67rem; color: #94a3b8; }
 
 /* ── Stage ────────────────────────────────────────────────────────────────── */
-.stage-scroll {
-  flex: 1;
-  overflow: auto;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 32px 24px;
+.lh-stage {
+  flex: 1; overflow: auto;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 28px 24px 48px; gap: 0;
   scrollbar-width: thin;
-  scrollbar-color: var(--ink4) transparent;
+  scrollbar-color: var(--eo-border, #e2e8f0) transparent;
 }
 
-.stage-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
-.stage-scroll::-webkit-scrollbar-track { background: transparent; }
-.stage-scroll::-webkit-scrollbar-thumb { background: var(--ink4); border-radius: 4px; }
+.lh-stage::-webkit-scrollbar { width: 6px; height: 6px; }
+.lh-stage::-webkit-scrollbar-thumb { background: var(--eo-border, #e2e8f0); border-radius: 4px; }
 
-/* ── Paper ────────────────────────────────────────────────────────────────── */
+/* ── Page wrap (one per doc page) ────────────────────────────────────────── */
+.lh-page-wrap {
+  position: relative; width: 794px; min-width: 794px;
+  transform-origin: top center; transition: transform .2s;
+  /* height managed by JS to avoid gap on zoom */
+}
+
+.lh-page-num {
+  position: absolute; top: -22px; left: 0;
+  font-size: .67rem; font-weight: 700; color: #94a3b8;
+  font-family: ui-monospace, monospace; letter-spacing: .04em;
+}
+
+/* ── Paper (A4 sheet) ─────────────────────────────────────────────────────── */
 .lh-paper {
-  position: relative;
-  width: 794px;
-  min-width: 794px;
-  height: 1123px;
-  background: var(--paper-bg);
-  border-radius: 3px;
-  box-shadow:
-    0 0 0 1px rgba(0,0,0,.2),
-    0 4px 12px rgba(0,0,0,.2),
-    0 20px 60px rgba(0,0,0,.4),
-    0 40px 80px rgba(0,0,0,.25);
+  position: relative; width: 794px; min-width: 794px; height: 1123px;
+  background: #fff; border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.1), 0 4px 16px rgba(0,0,0,.1), 0 12px 32px rgba(0,0,0,.07);
   overflow: hidden;
-  transform-origin: top center;
-  transition: transform .22s var(--ease);
 }
 
 .lh-paper iframe {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border: none;
-  background: #fff;
-  pointer-events: none;
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  border: none; background: #fff; pointer-events: none; z-index: 0;
 }
 
-/* ── Grid overlay ─────────────────────────────────────────────────────────── */
+/* ── Empty state ─────────────────────────────────────────────────────────── */
+.lh-empty-state {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  background: linear-gradient(150deg, #f8fafc, #eef2ff); z-index: 1; transition: opacity .25s;
+}
+
+.lh-empty-icon {
+  width: 52px; height: 52px; background: linear-gradient(135deg, #e0e7ff, #dbeafe);
+  border-radius: 14px; display: flex; align-items: center; justify-content: center;
+  font-size: 1.5rem; color: #6366f1;
+}
+
+.lh-empty-txt { font-size: .8rem; color: #6366f1; font-weight: 600; text-align: center; }
+
+/* ── Grid / safe zone ─────────────────────────────────────────────────────── */
 .lh-grid-overlay {
-  position: absolute;
-  inset: 0;
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
   background-image:
-    linear-gradient(to right, rgba(59,130,246,.08) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(59,130,246,.08) 1px, transparent 1px);
-  background-size: 40px 40px;
-  pointer-events: none;
-  z-index: 1;
-  transition: opacity .2s;
+    linear-gradient(to right, rgba(37,99,235,.07) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(37,99,235,.07) 1px, transparent 1px);
+  background-size: 40px 40px; transition: opacity .2s;
 }
 
-/* ── Safe zone ────────────────────────────────────────────────────────────── */
 .lh-safe-zone {
-  position: absolute;
-  left: 10%;
-  top: 14%;
-  width: 80%;
-  height: 72%;
-  border: 1px dashed rgba(16,185,129,.5);
-  background: rgba(16,185,129,.025);
-  border-radius: 4px;
-  pointer-events: none;
-  z-index: 2;
-  transition: opacity .2s;
+  position: absolute; left: 10%; top: 14%; width: 80%; height: 72%;
+  border: 1px dashed rgba(16,185,129,.45); background: rgba(16,185,129,.025);
+  border-radius: 3px; pointer-events: none; z-index: 2; transition: opacity .2s;
 }
 
 .lh-safe-zone::before {
-  content: 'SAFE ZONE';
-  position: absolute;
-  top: -18px;
-  left: 0;
-  font-size: 9px;
-  font-family: var(--mono);
-  font-weight: 500;
-  letter-spacing: .12em;
-  color: rgba(16,185,129,.7);
+  content: 'SAFE ZONE'; position: absolute; top: -17px; left: 0;
+  font-size: 8px; font-family: ui-monospace, monospace;
+  font-weight: 600; letter-spacing: .12em; color: rgba(16,185,129,.65);
 }
 
 /* ── Content box ──────────────────────────────────────────────────────────── */
-.lh-content-box {
-  position: absolute;
-  border: 1.5px solid var(--accent);
-  background: rgba(59,130,246,.04);
-  border-radius: 4px;
-  cursor: move;
-  min-width: 60px;
-  min-height: 60px;
-  z-index: 10;
-  transition: box-shadow .15s var(--ease), border-color .15s var(--ease);
-  user-select: none;
+.lh-box {
+  position: absolute; border: 1.5px solid #2563eb; background: rgba(37,99,235,.04);
+  border-radius: 3px; cursor: move; min-width: 60px; min-height: 60px; z-index: 10;
+  user-select: none; transition: background .12s;
 }
 
-.lh-content-box::before {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  border-radius: 4px;
-  box-shadow: 0 0 0 0 rgba(59,130,246,.25);
-  transition: box-shadow .15s var(--ease);
+.lh-box.lh-box-ghost {
+  border: 1.5px dashed rgba(37,99,235,.35); background: rgba(37,99,235,.025);
+  cursor: default; pointer-events: none;
 }
 
-.lh-content-box.dragging {
-  border-color: #60a5fa;
-  background: rgba(59,130,246,.07);
-  cursor: grabbing;
+.lh-box.dragging { background: rgba(37,99,235,.07); cursor: grabbing; }
+
+.lh-box-pill {
+  position: absolute; top: -28px; left: 0;
+  display: flex; align-items: center; gap: 5px;
+  background: #2563eb; color: #fff;
+  font-size: .65rem; font-weight: 700; font-family: ui-monospace, monospace;
+  padding: 3px 8px; border-radius: 20px; white-space: nowrap; z-index: 13;
+  box-shadow: 0 2px 8px rgba(37,99,235,.3); pointer-events: none;
 }
 
-.lh-content-box.dragging::before {
-  box-shadow: 0 0 0 4px rgba(59,130,246,.18);
-}
+.lh-box-pill.ghost { background: #94a3b8; box-shadow: none; }
 
-/* Corner handles */
 .lh-corner {
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  background: var(--accent);
-  border: 1.5px solid #fff;
-  border-radius: 2px;
-  z-index: 12;
-}
-.lh-corner.tl { top: -4px; left: -4px; cursor: nwse-resize; }
-.lh-corner.tr { top: -4px; right: -4px; cursor: nesw-resize; }
-.lh-corner.bl { bottom: -4px; left: -4px; cursor: nesw-resize; }
-.lh-corner.br { bottom: -4px; right: -4px; cursor: nwse-resize; }
-
-/* Edge handles */
-.lh-edge {
-  position: absolute;
-  background: rgba(59,130,246,.5);
-  border-radius: 2px;
-  z-index: 11;
-}
-.lh-edge.n, .lh-edge.s { left: 8px; right: 8px; height: 3px; cursor: ns-resize; }
-.lh-edge.e, .lh-edge.w { top: 8px; bottom: 8px; width: 3px; cursor: ew-resize; }
-.lh-edge.n { top: -1px; }
-.lh-edge.s { bottom: -1px; }
-.lh-edge.e { right: -1px; }
-.lh-edge.w { left: -1px; }
-
-/* ── Box label pill ───────────────────────────────────────────────────────── */
-.lh-box-label {
-  position: absolute;
-  top: -32px;
-  left: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--accent);
-  color: #fff;
-  font-size: .68rem;
-  font-weight: 700;
-  font-family: var(--mono);
-  padding: 4px 10px;
-  border-radius: 20px;
-  white-space: nowrap;
-  z-index: 13;
-  box-shadow: 0 4px 10px rgba(59,130,246,.35);
-  pointer-events: none;
+  position: absolute; width: 8px; height: 8px;
+  background: #2563eb; border: 1.5px solid #fff; border-radius: 2px; z-index: 12;
 }
 
-/* ── Text preview canvas ──────────────────────────────────────────────────── */
+.lh-corner.tl { top:-4px; left:-4px; cursor:nwse-resize; }
+.lh-corner.tr { top:-4px; right:-4px; cursor:nesw-resize; }
+.lh-corner.bl { bottom:-4px; left:-4px; cursor:nesw-resize; }
+.lh-corner.br { bottom:-4px; right:-4px; cursor:nwse-resize; }
+
+.lh-edge { position: absolute; background: rgba(37,99,235,.45); border-radius: 2px; z-index: 11; }
+.lh-edge.n, .lh-edge.s { left:8px; right:8px; height:3px; cursor:ns-resize; }
+.lh-edge.e, .lh-edge.w { top:8px; bottom:8px; width:3px; cursor:ew-resize; }
+.lh-edge.n { top:-1px; }
+.lh-edge.s { bottom:-1px; }
+.lh-edge.e { right:-1px; }
+.lh-edge.w { left:-1px; }
+
+/* ── Text preview ─────────────────────────────────────────────────────────── */
 .lh-overlay-shell {
-  position: absolute;
-  inset: 0;
-  border-radius: 3px;
-  overflow: hidden;
-  background: rgba(255,255,255,.95);
-  pointer-events: none;
+  position: absolute; inset: 0; border-radius: 2px; overflow: hidden;
+  background: rgba(255,255,255,.93); pointer-events: none;
 }
 
 .lh-text-preview {
-  position: absolute;
-  inset: 0;
-  padding: 20px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow: hidden;
+  position: absolute; inset: 0; padding: 18px 20px;
+  display: flex; flex-direction: column; gap: 10px; overflow: hidden;
 }
 
-.lh-text-line {
-  height: 9px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #cbd5e1, #e2e8f0);
+.lh-tl { height: 8px; border-radius: 999px; background: linear-gradient(90deg, #cbd5e1, #e2e8f0); }
+.lh-tl.sm{width:34%} .lh-tl.md{width:56%} .lh-tl.lg{width:82%} .lh-tl.xl{width:96%}
+.lh-tblock { display: flex; flex-direction: column; gap: 7px; }
+
+/* Ghost page labels */
+.lh-ghost-lbl {
+  position: absolute; bottom: 16px; right: 16px;
+  background: rgba(37,99,235,.08); border: 1px solid rgba(37,99,235,.2);
+  border-radius: 6px; padding: 5px 10px;
+  font-size: .68rem; font-weight: 600; color: #1d4ed8;
+  font-family: ui-monospace, monospace; pointer-events: none; z-index: 3;
 }
 
-.lh-text-line.sm  { width: 34%; }
-.lh-text-line.md  { width: 56%; }
-.lh-text-line.lg  { width: 82%; }
-.lh-text-line.xl  { width: 96%; }
-
-.lh-text-block {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.lh-plain-lbl {
+  position: absolute; bottom: 16px; right: 16px;
+  background: #f1f5f9; border: 1px solid #e2e8f0;
+  border-radius: 6px; padding: 5px 10px;
+  font-size: .68rem; font-weight: 600; color: #64748b;
+  font-family: ui-monospace, monospace; pointer-events: none; z-index: 3;
 }
-
-/* ── Status badge in canvas ───────────────────────────────────────────────── */
-.no-letterhead-hint {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 14px;
-  background: linear-gradient(160deg, #f8fafc 0%, #eef2ff 100%);
-  z-index: 0;
-  pointer-events: none;
-  transition: opacity .3s;
-}
-
-.no-lh-icon {
-  width: 60px;
-  height: 60px;
-  background: linear-gradient(135deg, #e0e7ff, #dbeafe);
-  border-radius: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.6rem;
-  color: #6366f1;
-  box-shadow: 0 4px 16px rgba(99,102,241,.15);
-}
-
-.no-lh-text {
-  font-size: .82rem;
-  color: #6366f1;
-  font-weight: 600;
-  letter-spacing: .02em;
-  text-align: center;
-  max-width: 200px;
-  line-height: 1.5;
-}
-
-/* ── Active letterhead card (bottom of sidebar) ───────────────────────────── */
-.active-lh-card {
-  background: var(--ink3);
-  border: 1px solid var(--border2);
-  border-radius: var(--r);
-  padding: 12px;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.active-lh-icon {
-  width: 36px;
-  height: 36px;
-  background: rgba(239,68,68,.12);
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1rem;
-  color: #ef4444;
-  flex-shrink: 0;
-}
-
-.active-lh-info { flex: 1; min-width: 0; }
-.active-lh-name {
-  font-size: .82rem;
-  font-weight: 700;
-  color: var(--text2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.active-lh-meta {
-  font-size: .71rem;
-  color: var(--dim);
-  margin-top: 2px;
-  line-height: 1.4;
-}
-
-/* ── Mini tip ─────────────────────────────────────────────────────────────── */
-.mini-tip {
-  background: rgba(59,130,246,.06);
-  border: 1px solid rgba(59,130,246,.2);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-size: .74rem;
-  color: var(--dim);
-  line-height: 1.55;
-}
-
-.mini-tip strong { color: var(--text2); font-weight: 600; }
-.mini-tip i { color: var(--accent); }
-
-/* ── Zoom chip (top right of stage) ──────────────────────────────────────── */
-.zoom-chip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--ink3);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px 8px;
-  font-size: .7rem;
-  font-weight: 600;
-  color: var(--dim);
-}
-
-.zoom-chip input[type="range"] {
-  width: 64px;
-  height: 3px;
-  appearance: none;
-  background: var(--ink4);
-  border-radius: 3px;
-  cursor: pointer;
-}
-
-.zoom-chip input[type="range"]::-webkit-slider-thumb {
-  appearance: none;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--accent);
-  cursor: pointer;
-}
-
-.zoom-val { font-family: var(--mono); min-width: 30px; color: var(--accent); }
 
 /* ── Responsive ───────────────────────────────────────────────────────────── */
-@media (max-width: 1280px) {
-  .studio { grid-template-columns: 300px 1fr; }
-}
+@media (max-width: 1280px) { .lh-studio { grid-template-columns: 300px 1fr; } }
 
 @media (max-width: 900px) {
-  .studio {
-    grid-template-columns: 1fr;
-    height: auto;
-  }
-  .sidebar { max-height: 600px; }
-  .canvas-area { min-height: 500px; }
-  .stage-scroll { padding: 16px; }
-  .lh-paper { transform: scale(.6) !important; transform-origin: top center !important; }
+  .lh-studio { grid-template-columns: 1fr; height: auto; }
+  .lh-sidebar { max-height: 580px; }
+  .lh-canvas-area { min-height: 500px; }
+  .lh-page-wrap { transform: scale(.55) !important; transform-origin: top center !important; margin-bottom: -520px !important; }
 }
 </style>
 
-<div class="studio">
+<div class="lh-studio">
 
-  <!-- ── LEFT SIDEBAR ──────────────────────────────────────────────────────── -->
-  <aside class="sidebar">
+  <!-- ══ SIDEBAR ══ -->
+  <aside class="lh-sidebar">
 
-    <!-- Header -->
-    <div class="sidebar-header">
-      <div class="studio-wordmark">
-        <div class="studio-icon"><i class="bi bi-file-earmark-richtext"></i></div>
-        <div>
-          <div class="studio-title">Letterhead Studio</div>
-          <div class="studio-sub">Position · Preview · Generate</div>
-        </div>
+    <div class="lh-sidebar-head">
+      <div class="lh-brand-icon"><i class="bi bi-file-earmark-richtext"></i></div>
+      <div>
+        <div class="lh-brand-title">Letterhead Studio</div>
+        <div class="lh-brand-sub">Position · Preview · Generate</div>
       </div>
     </div>
 
-    <!-- Tabs -->
-    <div class="tab-bar">
-      <button class="tab-btn active" data-tab="setup">Setup</button>
-      <button class="tab-btn" data-tab="layout">Layout</button>
-      <button class="tab-btn" data-tab="canvas">Canvas</button>
-      <button class="tab-btn" data-tab="output">Output</button>
+    <div class="lh-tab-bar">
+      <button class="lh-tab active" data-tab="setup">Setup</button>
+      <button class="lh-tab" data-tab="layout">Layout</button>
+      <button class="lh-tab" data-tab="canvas">Canvas</button>
+      <button class="lh-tab" data-tab="output">Output</button>
     </div>
 
-    <form method="post" id="letterheadForm" target="_blank">
+    <form method="post" id="lhForm" target="_blank">
       {% csrf_token %}
       <input type="hidden" name="open_mode" id="openMode" value="preview">
 
-      <!-- ── TAB: Setup ──────────────────────────────────────────────────── -->
-      <div class="tab-panel active sidebar-body" id="tab-setup">
+      <!-- Setup tab -->
+      <div class="lh-tab-panel active lh-panel-body" id="tab-setup">
 
-        <div class="field-group">
-          <div class="field-label"><i class="bi bi-file-earmark-text"></i> Source Document</div>
-          <div class="studio-select-wrap">
-            <select name="document_id" id="documentSelect" class="studio-select" required>
+        <div class="lh-field">
+          <div class="lh-label"><i class="bi bi-file-earmark-text"></i> Source Document</div>
+          <div class="lh-select-wrap">
+            <select name="document_id" id="documentSelect" class="lh-select" required>
               <option value="">Select document…</option>
               {% for f in files %}
-                <option value="{{ f.id }}" data-name="{{ f.name|escape }}"
+                <option value="{{ f.id }}" data-name="{{ f.name|escape }}" data-pages="{{ f.page_count|default:1 }}"
                         {% if preselected_file and preselected_file.id == f.id %}selected{% endif %}>
                   {{ f.name }}
                 </option>
@@ -1028,15 +560,13 @@ body { font-family: var(--font); }
           </div>
         </div>
 
-        <div class="field-group">
-          <div class="field-label"><i class="bi bi-file-earmark-pdf"></i> Letterhead PDF</div>
-          <div class="studio-select-wrap">
-            <select name="letterhead_file_id" id="letterheadSelect" class="studio-select" required>
+        <div class="lh-field">
+          <div class="lh-label"><i class="bi bi-file-earmark-pdf"></i> Letterhead PDF</div>
+          <div class="lh-select-wrap">
+            <select name="letterhead_file_id" id="letterheadSelect" class="lh-select" required>
               <option value="">Select letterhead…</option>
               {% for f in pdf_files %}
-                <option value="{{ f.id }}"
-                        data-preview="{% url 'file_preview' f.id %}"
-                        data-name="{{ f.name|escape }}">
+                <option value="{{ f.id }}" data-preview="{% url 'file_preview' f.id %}" data-name="{{ f.name|escape }}">
                   {{ f.name }}
                 </option>
               {% endfor %}
@@ -1044,204 +574,165 @@ body { font-family: var(--font); }
           </div>
         </div>
 
-        <div class="field-group">
-          <div class="field-label"><i class="bi bi-eye"></i> Preview Text</div>
-          <textarea id="previewTextInput" class="studio-textarea" placeholder="Type sample text to preview layout…">Dear Sir/Madam,
+        <div class="lh-field">
+          <div class="lh-label"><i class="bi bi-eye"></i> Preview Text</div>
+          <textarea id="previewTextInput" class="lh-textarea" placeholder="Type sample text to preview layout…">Dear Sir/Madam,
 
 This is a live text-only placement preview. The final PDF will use the selected source document.
 
 Kind regards,</textarea>
         </div>
 
-        <div class="field-group">
-          <div class="field-label"><i class="bi bi-layers"></i> Apply Mode</div>
-          <div class="studio-select-wrap">
-            <select name="apply_mode" id="applyMode" class="studio-select">
+        <div class="lh-field">
+          <div class="lh-label"><i class="bi bi-layers"></i> Apply Letterhead To</div>
+          <div class="lh-select-wrap">
+            <select name="apply_mode" id="applyMode" class="lh-select">
               <option value="first">First page only</option>
               <option value="all">All pages</option>
             </select>
           </div>
         </div>
 
+        <div class="lh-warning hidden" id="multiPageWarning">
+          <i class="bi bi-exclamation-triangle-fill" style="flex-shrink:0;margin-top:1px;color:#d97706"></i>
+          <span>
+            <strong>Applying to all <span id="warnPageCount">N</span> pages.</strong>
+            Scroll the canvas to see how the content box appears on every page.
+          </span>
+        </div>
+
         {% if active_letterhead %}
-        <div class="s-divider"></div>
-        <div class="section-label">Active Letterhead</div>
-        <div class="active-lh-card">
-          <div class="active-lh-icon"><i class="bi bi-file-earmark-pdf-fill"></i></div>
-          <div class="active-lh-info">
-            <div class="active-lh-name">{{ active_letterhead.name }}</div>
-            <div class="active-lh-meta">
-              {{ active_letterhead.company_name }}<br>
-              {{ active_letterhead.get_template_key_display }}
-            </div>
+        <div class="lh-divider"></div>
+        <div class="lh-section">Active Letterhead</div>
+        <div class="lh-active-card">
+          <div class="lh-active-icon"><i class="bi bi-file-earmark-pdf-fill"></i></div>
+          <div style="flex:1;min-width:0">
+            <div class="lh-active-name">{{ active_letterhead.name }}</div>
+            <div class="lh-active-meta">{{ active_letterhead.company_name }}<br>{{ active_letterhead.get_template_key_display }}</div>
           </div>
         </div>
         {% endif %}
 
       </div>
 
-      <!-- ── TAB: Layout ─────────────────────────────────────────────────── -->
-      <div class="tab-panel sidebar-body" id="tab-layout">
-
-        <div class="section-label">Content Area Position</div>
-        <div class="coord-grid" style="margin-bottom:14px">
-          <div class="coord-field">
-            <div class="coord-label">X Offset</div>
+      <!-- Layout tab -->
+      <div class="lh-tab-panel lh-panel-body" id="tab-layout">
+        <div class="lh-section">Content Area Position</div>
+        <div class="lh-coord-grid" style="margin-bottom:14px">
+          <div class="lh-coord-field">
+            <div class="lh-coord-lbl">X Offset</div>
             <input type="number" step="0.1" min="0" max="100" name="x_pct" id="xPct" value="10">
-            <span class="coord-unit">%</span>
+            <span class="lh-coord-unit">%</span>
           </div>
-          <div class="coord-field">
-            <div class="coord-label">Y Offset</div>
+          <div class="lh-coord-field">
+            <div class="lh-coord-lbl">Y Offset</div>
             <input type="number" step="0.1" min="0" max="100" name="y_pct" id="yPct" value="18">
-            <span class="coord-unit">%</span>
+            <span class="lh-coord-unit">%</span>
           </div>
-          <div class="coord-field">
-            <div class="coord-label">Width</div>
+          <div class="lh-coord-field">
+            <div class="lh-coord-lbl">Width</div>
             <input type="number" step="0.1" min="5" max="100" name="width_pct" id="widthPct" value="80">
-            <span class="coord-unit">%</span>
+            <span class="lh-coord-unit">%</span>
           </div>
-          <div class="coord-field">
-            <div class="coord-label">Height</div>
+          <div class="lh-coord-field">
+            <div class="lh-coord-lbl">Height</div>
             <input type="number" step="0.1" min="5" max="100" name="height_pct" id="heightPct" value="70">
-            <span class="coord-unit">%</span>
+            <span class="lh-coord-unit">%</span>
           </div>
         </div>
 
-        <div class="section-label">Quick Presets</div>
-        <div class="preset-row" style="margin-bottom:14px">
-          <button type="button" class="preset-chip preset-btn" data-x="10" data-y="18" data-w="80" data-h="70">
-            Standard Letter
-          </button>
-          <button type="button" class="preset-chip preset-btn" data-x="9" data-y="16" data-w="82" data-h="74">
-            Contract
-          </button>
-          <button type="button" class="preset-chip preset-btn" data-x="12" data-y="22" data-w="76" data-h="62">
-            Memo
-          </button>
-          <button type="button" class="preset-chip preset-btn" data-x="8" data-y="20" data-w="84" data-h="68">
-            Invoice
-          </button>
+        <div class="lh-section">Quick Presets</div>
+        <div class="lh-preset-grid" style="margin-bottom:14px">
+          <button type="button" class="lh-preset-btn preset-btn" data-x="10" data-y="18" data-w="80" data-h="70">Standard Letter</button>
+          <button type="button" class="lh-preset-btn preset-btn" data-x="9" data-y="16" data-w="82" data-h="74">Contract</button>
+          <button type="button" class="lh-preset-btn preset-btn" data-x="12" data-y="22" data-w="76" data-h="62">Memo</button>
+          <button type="button" class="lh-preset-btn preset-btn" data-x="8" data-y="20" data-w="84" data-h="68">Invoice</button>
         </div>
 
-        <div class="section-label">Actions</div>
-        <div class="btn-row" style="margin-bottom:14px">
-          <button type="button" class="btn-mini" id="resetBoxBtn">
-            <i class="bi bi-arrow-counterclockwise"></i> Reset
-          </button>
-          <button type="button" class="btn-mini" id="centerBoxBtn">
-            <i class="bi bi-align-center"></i> Center
-          </button>
-          <button type="button" class="btn-mini" id="fitSafeZoneBtn">
-            <i class="bi bi-bounding-box"></i> Fit Safe Zone
-          </button>
-          <button type="button" class="btn-mini" id="snapToMarginBtn">
-            <i class="bi bi-layout-sidebar-inset"></i> Snap Margins
-          </button>
+        <div class="lh-section">Quick Actions</div>
+        <div class="lh-preset-grid" style="margin-bottom:14px">
+          <button type="button" class="lh-btn-mini" id="resetBoxBtn"><i class="bi bi-arrow-counterclockwise"></i> Reset</button>
+          <button type="button" class="lh-btn-mini" id="centerBoxBtn"><i class="bi bi-align-center"></i> Center</button>
+          <button type="button" class="lh-btn-mini" id="fitSafeZoneBtn"><i class="bi bi-bounding-box"></i> Safe Zone</button>
+          <button type="button" class="lh-btn-mini" id="snapToMarginBtn"><i class="bi bi-layout-sidebar-inset"></i> Margins</button>
         </div>
 
-        <div class="mini-tip">
+        <div class="lh-tip">
           <i class="bi bi-cursor-fill"></i> <strong>Drag</strong> the blue box to reposition.<br>
           <i class="bi bi-bounding-box-circles"></i> <strong>Drag edges or corners</strong> to resize.<br>
-          <i class="bi bi-grid-3x3-gap"></i> Enable snap to align to the grid.
+          <i class="bi bi-files"></i> Ghost boxes on other pages show exactly how each page will look.
         </div>
-
       </div>
 
-      <!-- ── TAB: Canvas ─────────────────────────────────────────────────── -->
-      <div class="tab-panel sidebar-body" id="tab-canvas">
-
-        <div class="section-label">Preview Opacity</div>
-        <div class="range-row" style="margin-bottom:14px">
+      <!-- Canvas tab -->
+      <div class="lh-tab-panel lh-panel-body" id="tab-canvas">
+        <div class="lh-section">Preview Opacity</div>
+        <div class="lh-range-row" style="margin-bottom:14px">
           <input type="range" id="overlayOpacity" min="20" max="100" value="92">
-          <span class="range-val" id="opacityVal">92%</span>
+          <span class="lh-range-val" id="opacityVal">92%</span>
         </div>
-
-        <div class="section-label">Zoom</div>
-        <div class="range-row" style="margin-bottom:14px">
+        <div class="lh-section">Zoom</div>
+        <div class="lh-range-row" style="margin-bottom:14px">
           <input type="range" id="stageZoom" min="40" max="130" value="100">
-          <span class="range-val" id="zoomVal">100%</span>
+          <span class="lh-range-val" id="zoomVal">100%</span>
         </div>
-
-        <div class="section-label">Helpers</div>
-        <div class="toggle-list" style="margin-bottom:14px">
-          <div class="toggle-row">
-            <span class="toggle-label-text">Grid lines</span>
-            <label class="toggle-switch">
-              <input type="checkbox" id="showGrid" checked>
-              <span class="toggle-thumb"></span>
-            </label>
+        <div class="lh-section">Helpers</div>
+        <div class="lh-toggle-list" style="margin-bottom:14px">
+          <div class="lh-toggle-row">
+            <span class="lh-toggle-lbl">Grid lines</span>
+            <label class="lh-switch"><input type="checkbox" id="showGrid" checked><span class="lh-switch-thumb"></span></label>
           </div>
-          <div class="toggle-row">
-            <span class="toggle-label-text">Safe zone guide</span>
-            <label class="toggle-switch">
-              <input type="checkbox" id="showSafeZone" checked>
-              <span class="toggle-thumb"></span>
-            </label>
+          <div class="lh-toggle-row">
+            <span class="lh-toggle-lbl">Safe zone guide</span>
+            <label class="lh-switch"><input type="checkbox" id="showSafeZone" checked><span class="lh-switch-thumb"></span></label>
           </div>
-          <div class="toggle-row">
-            <span class="toggle-label-text">Overlay label</span>
-            <label class="toggle-switch">
-              <input type="checkbox" id="showOverlayText" checked>
-              <span class="toggle-thumb"></span>
-            </label>
+          <div class="lh-toggle-row">
+            <span class="lh-toggle-lbl">Preview overlay</span>
+            <label class="lh-switch"><input type="checkbox" id="showOverlayText" checked><span class="lh-switch-thumb"></span></label>
           </div>
-          <div class="toggle-row">
-            <span class="toggle-label-text">Snap to grid</span>
-            <label class="toggle-switch">
-              <input type="checkbox" id="snapGrid" checked>
-              <span class="toggle-thumb"></span>
-            </label>
+          <div class="lh-toggle-row">
+            <span class="lh-toggle-lbl">Snap to grid</span>
+            <label class="lh-switch"><input type="checkbox" id="snapGrid" checked><span class="lh-switch-thumb"></span></label>
           </div>
         </div>
-
-        <div class="mini-tip">
-          Adjust opacity to balance seeing the letterhead and the content area simultaneously.
-        </div>
+        <div class="lh-tip">Reduce opacity to see the letterhead through the content overlay.</div>
       </div>
 
-      <!-- ── TAB: Output ─────────────────────────────────────────────────── -->
-      <div class="tab-panel sidebar-body" id="tab-output">
-
-        <div class="field-group">
-          <div class="field-label"><i class="bi bi-file-earmark"></i> Result File Name</div>
-          <input type="text" name="result_name" class="studio-input" placeholder="e.g. Contract_Final.pdf">
+      <!-- Output tab -->
+      <div class="lh-tab-panel lh-panel-body" id="tab-output">
+        <div class="lh-field">
+          <div class="lh-label"><i class="bi bi-file-earmark"></i> Result File Name</div>
+          <input type="text" name="result_name" class="lh-input" placeholder="e.g. Contract_Final.pdf">
         </div>
-
-        <div class="s-divider"></div>
-
-        <div class="section-label">Options</div>
-        <div class="sig-toggle-wrap" style="margin-bottom:14px">
-          <label class="toggle-switch">
+        <div class="lh-divider"></div>
+        <div class="lh-section">Options</div>
+        <div class="lh-sig-row" style="margin-bottom:14px">
+          <label class="lh-switch">
             <input type="checkbox" name="send_for_signature" value="1" id="sendForSignature">
-            <span class="toggle-thumb"></span>
+            <span class="lh-switch-thumb"></span>
           </label>
-          <label class="sig-label" for="sendForSignature">
+          <label class="lh-sig-lbl" for="sendForSignature">
             Send for Signature
-            <span class="sig-sub">Redirect to signature flow after generation</span>
+            <span class="lh-sig-sub">Go to signature flow after generating</span>
           </label>
         </div>
-
-        <div class="mini-tip" style="margin-bottom:14px">
-          <i class="bi bi-box-arrow-up-right"></i>
-          <strong>Generate & Preview</strong> opens the final PDF in a new tab so you can verify before saving.<br><br>
-          <i class="bi bi-download"></i>
-          <strong>Download</strong> saves the merged file directly.
+        <div class="lh-tip">
+          <i class="bi bi-box-arrow-up-right"></i> <strong>Generate &amp; Preview</strong> opens result in new tab.<br><br>
+          <i class="bi bi-download"></i> <strong>Download</strong> saves the merged file directly.
         </div>
-
       </div>
 
     </form>
 
-    <!-- Action footer (always visible) -->
-    <div class="action-group">
-      <button type="button" class="btn-generate" id="generatePreviewBtn">
+    <div class="lh-action-footer">
+      <button type="button" class="lh-btn-primary" id="generatePreviewBtn">
         <i class="bi bi-magic"></i> Generate &amp; Preview
       </button>
-      <div class="btn-row">
-        <button type="button" class="btn-secondary" id="generateDownloadBtn">
+      <div class="lh-btn-row">
+        <button type="button" class="lh-btn-secondary" id="generateDownloadBtn">
           <i class="bi bi-download"></i> Download
         </button>
-        <a href="{% url 'file_manager' %}" class="btn-secondary">
+        <a href="{% url 'file_manager' %}" class="lh-btn-secondary">
           <i class="bi bi-x-lg"></i> Cancel
         </a>
       </div>
@@ -1249,101 +740,80 @@ Kind regards,</textarea>
 
   </aside>
 
-  <!-- ── RIGHT CANVAS ───────────────────────────────────────────────────── -->
-  <div class="canvas-area">
+  <!-- ══ CANVAS ══ -->
+  <div class="lh-canvas-area">
 
-    <!-- Top bar -->
-    <div class="topbar">
-      <span class="topbar-badge highlight">
-        <i class="bi bi-layout-text-window-reverse"></i> Live Placement Studio
-      </span>
-      <span class="topbar-badge">
-        <i class="bi bi-arrows-move"></i> Drag to move
-      </span>
-      <span class="topbar-badge">
-        <i class="bi bi-bounding-box"></i> Edges to resize
-      </span>
-      <div class="topbar-spacer"></div>
-      <div class="readout" id="boxReadout">
-        <b>x</b> 10.0% &nbsp; <b>y</b> 18.0% &nbsp; <b>w</b> 80.0% &nbsp; <b>h</b> 70.0%
+    <div class="lh-topbar">
+      <span class="lh-badge blue"><i class="bi bi-layout-text-window-reverse"></i> Live Placement Studio</span>
+      <span class="lh-badge"><i class="bi bi-arrows-move"></i> Drag to move</span>
+      <span class="lh-badge"><i class="bi bi-bounding-box"></i> Edges to resize</span>
+      <div class="lh-spacer"></div>
+      <div class="lh-readout" id="boxReadout">
+        <b>x</b> 10.0% &nbsp;<b>y</b> 18.0% &nbsp;<b>w</b> 80.0% &nbsp;<b>h</b> 70.0%
       </div>
-      <div class="zoom-chip">
-        <i class="bi bi-zoom-in" style="color:var(--dim)"></i>
+      <div class="lh-zoom-chip">
+        <i class="bi bi-zoom-in"></i>
         <input type="range" id="zoomSlider" min="40" max="130" value="100">
-        <span class="zoom-val" id="zoomDisplay">100%</span>
+        <span class="lh-zoom-val" id="zoomDisplay">100%</span>
       </div>
     </div>
 
-    <!-- Paper stage -->
-    <div class="stage-scroll" id="stageScroll">
-      <div class="lh-paper" id="paper">
+    <!-- Stage -->
+    <div class="lh-stage" id="lhStage">
 
-        <!-- Letterhead iframe -->
-        <iframe id="letterheadFrame" title="Letterhead preview"></iframe>
+      <!-- Page 1 — always the editable page -->
+      <div class="lh-page-wrap" id="pageWrap1">
+        <div class="lh-paper" id="paper1">
+          <iframe id="letterheadFrame" title="Letterhead preview"></iframe>
 
-        <!-- Empty state -->
-        <div class="no-letterhead-hint" id="noLhHint">
-          <div class="no-lh-icon"><i class="bi bi-file-earmark-richtext"></i></div>
-          <div class="no-lh-text">Select a letterhead PDF to preview it here</div>
-        </div>
-
-        <!-- Overlays -->
-        <div class="lh-grid-overlay" id="gridOverlay"></div>
-        <div class="lh-safe-zone" id="safeZone"></div>
-
-        <!-- Content box -->
-        <div class="lh-content-box" id="contentBox" style="left:10%;top:18%;width:80%;height:70%;">
-
-          <div class="lh-box-label" id="boxLabel">
-            <i class="bi bi-file-earmark-text"></i>
-            Content Area &nbsp;<span id="boxLabelCoords">10%, 18%</span>
+          <div class="lh-empty-state" id="noLhHint">
+            <div class="lh-empty-icon"><i class="bi bi-file-earmark-richtext"></i></div>
+            <div class="lh-empty-txt">Select a letterhead PDF<br>to preview it here</div>
           </div>
 
-          <!-- Resize handles — edges -->
-          <div class="lh-edge n" data-edge="n"></div>
-          <div class="lh-edge s" data-edge="s"></div>
-          <div class="lh-edge e" data-edge="e"></div>
-          <div class="lh-edge w" data-edge="w"></div>
+          <div class="lh-grid-overlay" id="gridOverlay1"></div>
+          <div class="lh-safe-zone" id="safeZone1"></div>
 
-          <!-- Resize handles — corners -->
-          <div class="lh-corner tl" data-corner="tl"></div>
-          <div class="lh-corner tr" data-corner="tr"></div>
-          <div class="lh-corner bl" data-corner="bl"></div>
-          <div class="lh-corner br" data-corner="br"></div>
-
-          <!-- Text preview -->
-          <div class="lh-overlay-shell" id="textPreviewShell">
-            <div class="lh-text-preview" id="textPreviewCanvas">
-              <div class="lh-text-line md"></div>
-              <div class="lh-text-line sm"></div>
-              <div class="lh-text-block">
-                <div class="lh-text-line xl"></div>
-                <div class="lh-text-line lg"></div>
-                <div class="lh-text-line xl"></div>
-                <div class="lh-text-line md"></div>
-              </div>
-              <div class="lh-text-block">
-                <div class="lh-text-line xl"></div>
-                <div class="lh-text-line lg"></div>
-                <div class="lh-text-line md"></div>
-              </div>
-              <div class="lh-text-block">
-                <div class="lh-text-line sm"></div>
-                <div class="lh-text-line md"></div>
+          <!-- Draggable/resizable content box -->
+          <div class="lh-box" id="contentBox" style="left:10%;top:18%;width:80%;height:70%">
+            <div class="lh-box-pill" id="boxLabel">
+              <i class="bi bi-file-earmark-text"></i>
+              Content Area &nbsp;<span id="boxLabelCoords">10%, 18%</span>
+            </div>
+            <div class="lh-edge n" data-edge="n"></div>
+            <div class="lh-edge s" data-edge="s"></div>
+            <div class="lh-edge e" data-edge="e"></div>
+            <div class="lh-edge w" data-edge="w"></div>
+            <div class="lh-corner tl" data-corner="tl"></div>
+            <div class="lh-corner tr" data-corner="tr"></div>
+            <div class="lh-corner bl" data-corner="bl"></div>
+            <div class="lh-corner br" data-corner="br"></div>
+            <div class="lh-overlay-shell" id="textPreviewShell">
+              <div class="lh-text-preview" id="textPreviewCanvas">
+                <div class="lh-tl md"></div><div class="lh-tl sm"></div>
+                <div class="lh-tblock">
+                  <div class="lh-tl xl"></div><div class="lh-tl lg"></div>
+                  <div class="lh-tl xl"></div><div class="lh-tl md"></div>
+                </div>
+                <div class="lh-tblock">
+                  <div class="lh-tl xl"></div><div class="lh-tl lg"></div><div class="lh-tl md"></div>
+                </div>
               </div>
             </div>
           </div>
 
-        </div><!-- /contentBox -->
+        </div>
+      </div><!-- /pageWrap1 -->
 
-      </div><!-- /paper -->
-    </div><!-- /stage -->
+      <!-- Ghost pages injected by JS -->
+      <div id="ghostPagesContainer"></div>
 
-    <!-- Status bar -->
-    <div class="status-bar">
-      <div class="status-dot"></div>
-      <span class="status-text" id="layoutStatus">Select a letterhead PDF to start previewing</span>
-      <span class="status-coords" id="statusCoords">—</span>
+    </div><!-- /lhStage -->
+
+    <div class="lh-statusbar">
+      <div class="lh-status-dot"></div>
+      <span class="lh-status-text" id="layoutStatus">Select a letterhead PDF to start previewing</span>
+      <span class="lh-status-coords" id="statusCoords">—</span>
     </div>
 
   </div><!-- /canvas-area -->
@@ -1354,108 +824,84 @@ Kind regards,</textarea>
 (function () {
   'use strict';
 
-  /* ── DOM refs ──────────────────────────────────────────────────────────── */
-  const paper            = document.getElementById('paper');
-  const contentBox       = document.getElementById('contentBox');
-  const letterheadFrame  = document.getElementById('letterheadFrame');
-  const letterheadSelect = document.getElementById('letterheadSelect');
-  const documentSelect   = document.getElementById('documentSelect');
-  const noLhHint         = document.getElementById('noLhHint');
+  const lhFrame         = document.getElementById('letterheadFrame');
+  const lhSelect        = document.getElementById('letterheadSelect');
+  const docSelect       = document.getElementById('documentSelect');
+  const noLhHint        = document.getElementById('noLhHint');
+  const ghostContainer  = document.getElementById('ghostPagesContainer');
+  const paper1          = document.getElementById('paper1');
+  const pageWrap1       = document.getElementById('pageWrap1');
 
-  const xPctInput       = document.getElementById('xPct');
-  const yPctInput       = document.getElementById('yPct');
-  const widthPctInput   = document.getElementById('widthPct');
-  const heightPctInput  = document.getElementById('heightPct');
+  const xInput = document.getElementById('xPct'),  yInput = document.getElementById('yPct');
+  const wInput = document.getElementById('widthPct'), hInput = document.getElementById('heightPct');
 
-  const boxReadout      = document.getElementById('boxReadout');
-  const boxLabelCoords  = document.getElementById('boxLabelCoords');
-  const statusCoords    = document.getElementById('statusCoords');
-  const layoutStatus    = document.getElementById('layoutStatus');
+  const boxReadout     = document.getElementById('boxReadout');
+  const boxLabelCoords = document.getElementById('boxLabelCoords');
+  const statusCoords   = document.getElementById('statusCoords');
+  const layoutStatus   = document.getElementById('layoutStatus');
 
-  const gridOverlay     = document.getElementById('gridOverlay');
-  const safeZone        = document.getElementById('safeZone');
+  const gridOverlay1  = document.getElementById('gridOverlay1');
+  const safeZone1     = document.getElementById('safeZone1');
+  const showGrid      = document.getElementById('showGrid');
+  const showSafeZone  = document.getElementById('showSafeZone');
+  const showOverlay   = document.getElementById('showOverlayText');
+  const snapGrid      = document.getElementById('snapGrid');
+  const overlayOpacity= document.getElementById('overlayOpacity');
+  const opacityVal    = document.getElementById('opacityVal');
 
-  const showGrid        = document.getElementById('showGrid');
-  const showSafeZone    = document.getElementById('showSafeZone');
-  const showOverlayText = document.getElementById('showOverlayText');
-  const snapGrid        = document.getElementById('snapGrid');
-  const overlayOpacity  = document.getElementById('overlayOpacity');
+  const stageZoom   = document.getElementById('stageZoom');
+  const zoomVal     = document.getElementById('zoomVal');
+  const zoomSlider  = document.getElementById('zoomSlider');
+  const zoomDisplay = document.getElementById('zoomDisplay');
 
-  const stageZoom       = document.getElementById('stageZoom');
-  const zoomVal         = document.getElementById('zoomVal');
-  const zoomSlider      = document.getElementById('zoomSlider');
-  const zoomDisplay     = document.getElementById('zoomDisplay');
-
-  const resetBoxBtn     = document.getElementById('resetBoxBtn');
-  const centerBoxBtn    = document.getElementById('centerBoxBtn');
-  const fitSafeZoneBtn  = document.getElementById('fitSafeZoneBtn');
-  const snapToMarginBtn = document.getElementById('snapToMarginBtn');
-
+  const contentBox        = document.getElementById('contentBox');
   const textPreviewShell  = document.getElementById('textPreviewShell');
   const textPreviewCanvas = document.getElementById('textPreviewCanvas');
   const previewTextInput  = document.getElementById('previewTextInput');
-  const opacityVal        = document.getElementById('opacityVal');
 
-  const form                = document.getElementById('letterheadForm');
+  const applyMode      = document.getElementById('applyMode');
+  const multiWarning   = document.getElementById('multiPageWarning');
+  const warnPageCount  = document.getElementById('warnPageCount');
+
+  const form                = document.getElementById('lhForm');
   const openMode            = document.getElementById('openMode');
   const generatePreviewBtn  = document.getElementById('generatePreviewBtn');
   const generateDownloadBtn = document.getElementById('generateDownloadBtn');
 
-  /* ── State ─────────────────────────────────────────────────────────────── */
-  let dragMode   = null;   // 'move' | 'n' | 's' | 'e' | 'w' | 'tl' | 'tr' | 'bl' | 'br'
-  let startX     = 0, startY = 0;
-  let startLeft  = 0, startTop = 0, startWidth = 0, startHeight = 0;
+  let dragMode = null, startX = 0, startY = 0;
+  let startLeft = 0, startTop = 0, startWidth = 0, startHeight = 0;
+  let currentZoom = 100, currentPageCount = 1;
 
-  /* ── Helpers ───────────────────────────────────────────────────────────── */
-  function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+  const clamp = (v,lo,hi) => Math.min(hi, Math.max(lo, v));
+  const snap  = v => snapGrid.checked ? Math.round(v / 0.5) * 0.5 : v;
+  const escH  = s => String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-  function gridSnap(v, step = 0.5) {
-    if (!snapGrid.checked) return v;
-    return Math.round(v / step) * step;
-  }
-
-  function escHtml(s) {
-    return String(s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
-
-  /* ── Read current box values ───────────────────────────────────────────── */
-  function getBox() {
-    return {
-      x: parseFloat(xPctInput.value  || 0),
-      y: parseFloat(yPctInput.value  || 0),
-      w: parseFloat(widthPctInput.value  || 5),
-      h: parseFloat(heightPctInput.value || 5),
-    };
-  }
-
-  /* ── Apply box to DOM ──────────────────────────────────────────────────── */
+  /* ── Apply box ─────────────────────────────────────────────────────────── */
   function applyBox(x, y, w, h) {
-    x = clamp(x, 0, 100 - w);
-    y = clamp(y, 0, 100 - h);
-    w = clamp(w, 5, 100 - x);
-    h = clamp(h, 5, 100 - y);
+    x = clamp(x, 0, 100 - w);  y = clamp(y, 0, 100 - h);
+    w = clamp(w, 5, 100 - x);  h = clamp(h, 5, 100 - y);
 
-    xPctInput.value     = x.toFixed(1);
-    yPctInput.value     = y.toFixed(1);
-    widthPctInput.value = w.toFixed(1);
-    heightPctInput.value= h.toFixed(1);
+    xInput.value = x.toFixed(1);  yInput.value = y.toFixed(1);
+    wInput.value = w.toFixed(1);  hInput.value = h.toFixed(1);
 
-    contentBox.style.left   = x + '%';
-    contentBox.style.top    = y + '%';
-    contentBox.style.width  = w + '%';
-    contentBox.style.height = h + '%';
+    contentBox.style.left   = x + '%';  contentBox.style.top    = y + '%';
+    contentBox.style.width  = w + '%';  contentBox.style.height = h + '%';
 
-    const coordStr = `x ${x.toFixed(1)}%  y ${y.toFixed(1)}%  w ${w.toFixed(1)}%  h ${h.toFixed(1)}%`;
-    boxReadout.innerHTML = `<b>x</b> ${x.toFixed(1)}% &nbsp; <b>y</b> ${y.toFixed(1)}% &nbsp; <b>w</b> ${w.toFixed(1)}% &nbsp; <b>h</b> ${h.toFixed(1)}%`;
+    boxReadout.innerHTML = `<b>x</b> ${x.toFixed(1)}% &nbsp;<b>y</b> ${y.toFixed(1)}% &nbsp;<b>w</b> ${w.toFixed(1)}% &nbsp;<b>h</b> ${h.toFixed(1)}%`;
     boxLabelCoords.textContent = `${x.toFixed(1)}%, ${y.toFixed(1)}%`;
-    statusCoords.textContent   = coordStr;
+    statusCoords.textContent   = `x${x.toFixed(1)}  y${y.toFixed(1)}  w${w.toFixed(1)}  h${h.toFixed(1)}`;
+
+    // Sync ghost boxes on other pages
+    document.querySelectorAll('.lh-ghost-box').forEach(gb => {
+      gb.style.left = x + '%'; gb.style.top    = y + '%';
+      gb.style.width= w + '%'; gb.style.height = h + '%';
+    });
   }
 
   function updateBoxFromInputs() {
-    const b = getBox();
-    applyBox(b.x, b.y, b.w, b.h);
+    applyBox(parseFloat(xInput.value||0), parseFloat(yInput.value||0),
+             parseFloat(wInput.value||5), parseFloat(hInput.value||5));
   }
 
   /* ── Text preview ──────────────────────────────────────────────────────── */
@@ -1463,218 +909,239 @@ Kind regards,</textarea>
     const raw = (previewTextInput.value || '').trim();
     if (!raw) {
       textPreviewCanvas.innerHTML = `
-        <div class="lh-text-line md"></div>
-        <div class="lh-text-line sm"></div>
-        <div class="lh-text-block">
-          <div class="lh-text-line xl"></div>
-          <div class="lh-text-line lg"></div>
-          <div class="lh-text-line xl"></div>
-          <div class="lh-text-line md"></div>
-        </div>
-        <div class="lh-text-block">
-          <div class="lh-text-line xl"></div>
-          <div class="lh-text-line lg"></div>
-          <div class="lh-text-line md"></div>
-        </div>`;
+        <div class="lh-tl md"></div><div class="lh-tl sm"></div>
+        <div class="lh-tblock"><div class="lh-tl xl"></div><div class="lh-tl lg"></div>
+          <div class="lh-tl xl"></div><div class="lh-tl md"></div></div>
+        <div class="lh-tblock"><div class="lh-tl xl"></div><div class="lh-tl lg"></div>
+          <div class="lh-tl md"></div></div>`;
       return;
     }
-
-    const safe  = escHtml(raw);
-    const paras = safe.split(/\n{2,}/);
+    const paras = escH(raw).split(/\n{2,}/);
     textPreviewCanvas.innerHTML = paras.map(p => {
       const lines = p.split(/\n/).filter(Boolean);
-      if (!lines.length) return '';
-      return `<div class="lh-text-block">
-        ${lines.map(l => `<div style="font-size:.88rem;line-height:1.65;color:#334155;">${l}</div>`).join('')}
-      </div>`;
+      return lines.length ? `<div class="lh-tblock">${lines.map(l =>
+        `<div style="font-size:.85rem;line-height:1.65;color:#334155">${l}</div>`).join('')}</div>` : '';
     }).join('');
   }
 
-  /* ── Letterhead select ─────────────────────────────────────────────────── */
+  /* ── Letterhead preview ────────────────────────────────────────────────── */
   function loadLetterheadPreview() {
-    const opt     = letterheadSelect.options[letterheadSelect.selectedIndex];
+    const opt     = lhSelect.options[lhSelect.selectedIndex];
     const preview = opt ? opt.dataset.preview : '';
     const name    = opt ? opt.dataset.name    : '';
-
     if (preview) {
-      letterheadFrame.src = preview;
-      noLhHint.style.opacity = '0';
-      noLhHint.style.pointerEvents = 'none';
-      layoutStatus.textContent = `Letterhead loaded: ${name} — drag the blue box to position the content area.`;
+      lhFrame.src = preview;
+      noLhHint.style.opacity = '0'; noLhHint.style.pointerEvents = 'none';
+      layoutStatus.textContent = `Letterhead: ${name} — drag the blue box to position the content area.`;
     } else {
-      letterheadFrame.removeAttribute('src');
-      noLhHint.style.opacity = '1';
-      noLhHint.style.pointerEvents = '';
+      lhFrame.removeAttribute('src');
+      noLhHint.style.opacity = '1'; noLhHint.style.pointerEvents = '';
       layoutStatus.textContent = 'Select a letterhead PDF to start previewing.';
     }
   }
 
+  /* ── Ghost pages ───────────────────────────────────────────────────────── */
+  function buildGhostPages(totalPages, applyAll) {
+    ghostContainer.innerHTML = '';
+    if (totalPages <= 1) return;
+
+    const x = parseFloat(xInput.value || 10), y = parseFloat(yInput.value || 18);
+    const w = parseFloat(wInput.value || 80), h = parseFloat(hInput.value || 70);
+    const gridOpacity = showGrid.checked ? 1 : 0;
+    const szOpacity   = showSafeZone.checked ? 1 : 0;
+
+    for (let i = 2; i <= totalPages; i++) {
+      const boxHtml = applyAll ? `
+        <div class="lh-box lh-box-ghost lh-ghost-box"
+             style="left:${x}%;top:${y}%;width:${w}%;height:${h}%">
+          <div class="lh-box-pill ghost">
+            <i class="bi bi-file-earmark-richtext"></i> Page ${i} — letterhead applied
+          </div>
+          <div class="lh-overlay-shell" style="opacity:.65">
+            <div class="lh-text-preview">
+              <div class="lh-tl md"></div><div class="lh-tl sm"></div>
+              <div class="lh-tblock"><div class="lh-tl xl"></div><div class="lh-tl lg"></div>
+                <div class="lh-tl md"></div></div>
+            </div>
+          </div>
+        </div>` : `
+        <div class="lh-plain-lbl">
+          <i class="bi bi-file-earmark"></i> Page ${i} — no letterhead (first page only)
+        </div>`;
+
+      ghostContainer.insertAdjacentHTML('beforeend', `
+        <div class="lh-page-wrap" style="margin-top:28px">
+          <div class="lh-page-num">Page ${i} of ${totalPages}</div>
+          <div class="lh-paper">
+            <div class="lh-grid-overlay" style="opacity:${gridOpacity}"></div>
+            <div class="lh-safe-zone" style="opacity:${szOpacity}"></div>
+            ${boxHtml}
+          </div>
+        </div>`);
+    }
+
+    applyCurrentZoom();
+  }
+
+  /* ── Update multi-page state ───────────────────────────────────────────── */
+  function updatePageState() {
+    const opt   = docSelect.options[docSelect.selectedIndex];
+    const pages = parseInt((opt && opt.dataset.pages) || 1) || 1;
+    currentPageCount = Math.max(1, pages);
+
+    const applyAll = applyMode.value === 'all';
+
+    if (currentPageCount > 1 && applyAll) {
+      multiWarning.classList.remove('hidden');
+      warnPageCount.textContent = currentPageCount;
+    } else {
+      multiWarning.classList.add('hidden');
+    }
+
+    buildGhostPages(currentPageCount, applyAll);
+  }
+
   /* ── Drag & resize ─────────────────────────────────────────────────────── */
   function startDrag(e, mode) {
-    e.preventDefault();
-    e.stopPropagation();
-
-    dragMode = mode;
-    startX   = e.clientX;
-    startY   = e.clientY;
-
-    const pr   = paper.getBoundingClientRect();
-    const cr   = contentBox.getBoundingClientRect();
-
-    startLeft   = (cr.left   - pr.left)  / pr.width  * 100;
-    startTop    = (cr.top    - pr.top)   / pr.height * 100;
+    e.preventDefault(); e.stopPropagation();
+    dragMode = mode; startX = e.clientX; startY = e.clientY;
+    const pr = paper1.getBoundingClientRect();
+    const cr = contentBox.getBoundingClientRect();
+    startLeft   = (cr.left - pr.left) / pr.width  * 100;
+    startTop    = (cr.top  - pr.top)  / pr.height * 100;
     startWidth  = cr.width  / pr.width  * 100;
     startHeight = cr.height / pr.height * 100;
-
     contentBox.classList.add('dragging');
     document.body.style.cursor =
       mode === 'move' ? 'grabbing' :
       (mode === 'n' || mode === 's') ? 'ns-resize' :
       (mode === 'e' || mode === 'w') ? 'ew-resize' :
-      (mode === 'nw' || mode === 'se' || mode === 'tl' || mode === 'br') ? 'nwse-resize' :
-      'nesw-resize';
+      (mode === 'tl' || mode === 'br') ? 'nwse-resize' : 'nesw-resize';
   }
 
-  /* Content box — move */
   contentBox.addEventListener('mousedown', function (e) {
-    if (e.target !== contentBox && !e.target.classList.contains('lh-overlay-shell') &&
-        !e.target.classList.contains('lh-text-preview') &&
-        !e.target.classList.contains('lh-text-block') &&
-        !e.target.classList.contains('lh-text-line')) return;
-    startDrag(e, 'move');
+    const t = e.target;
+    if (t === contentBox || t.classList.contains('lh-overlay-shell') ||
+        t.classList.contains('lh-text-preview') ||
+        t.classList.contains('lh-tblock') || t.classList.contains('lh-tl') ||
+        (t.tagName === 'DIV' && t.closest('#textPreviewCanvas')))
+      startDrag(e, 'move');
   });
 
-  /* Edge handles */
-  contentBox.querySelectorAll('[data-edge]').forEach(el => {
-    el.addEventListener('mousedown', e => startDrag(e, e.target.dataset.edge));
-  });
+  contentBox.querySelectorAll('[data-edge]').forEach(el =>
+    el.addEventListener('mousedown', e => startDrag(e, e.target.dataset.edge)));
 
-  /* Corner handles */
-  contentBox.querySelectorAll('[data-corner]').forEach(el => {
-    el.addEventListener('mousedown', e => startDrag(e, e.target.dataset.corner));
-  });
+  contentBox.querySelectorAll('[data-corner]').forEach(el =>
+    el.addEventListener('mousedown', e => startDrag(e, e.target.dataset.corner)));
 
   window.addEventListener('mousemove', function (e) {
     if (!dragMode) return;
-
-    const pr = paper.getBoundingClientRect();
+    const pr = paper1.getBoundingClientRect();
     const dx = (e.clientX - startX) / pr.width  * 100;
     const dy = (e.clientY - startY) / pr.height * 100;
-
     let x = startLeft, y = startTop, w = startWidth, h = startHeight;
 
     if (dragMode === 'move') {
-      x = gridSnap(clamp(startLeft + dx, 0, 100 - w));
-      y = gridSnap(clamp(startTop  + dy, 0, 100 - h));
+      x = snap(clamp(startLeft + dx, 0, 100 - w));
+      y = snap(clamp(startTop  + dy, 0, 100 - h));
     } else {
-      // Resize by mode
-      if (dragMode === 'e'  || dragMode === 'tr' || dragMode === 'br') w = gridSnap(clamp(startWidth  + dx, 5, 100 - x));
-      if (dragMode === 'w'  || dragMode === 'tl' || dragMode === 'bl') {
-        const newW = gridSnap(clamp(startWidth  - dx, 5, startLeft + startWidth));
-        x = gridSnap(startLeft + startWidth - newW);
-        w = newW;
+      if (dragMode==='e'||dragMode==='tr'||dragMode==='br') w=snap(clamp(startWidth+dx,5,100-x));
+      if (dragMode==='w'||dragMode==='tl'||dragMode==='bl') {
+        const nw=snap(clamp(startWidth-dx,5,startLeft+startWidth));
+        x=snap(startLeft+startWidth-nw); w=nw;
       }
-      if (dragMode === 's'  || dragMode === 'bl' || dragMode === 'br') h = gridSnap(clamp(startHeight + dy, 5, 100 - y));
-      if (dragMode === 'n'  || dragMode === 'tl' || dragMode === 'tr') {
-        const newH = gridSnap(clamp(startHeight - dy, 5, startTop + startHeight));
-        y = gridSnap(startTop + startHeight - newH);
-        h = newH;
+      if (dragMode==='s'||dragMode==='bl'||dragMode==='br') h=snap(clamp(startHeight+dy,5,100-y));
+      if (dragMode==='n'||dragMode==='tl'||dragMode==='tr') {
+        const nh=snap(clamp(startHeight-dy,5,startTop+startHeight));
+        y=snap(startTop+startHeight-nh); h=nh;
       }
     }
-
     applyBox(x, y, w, h);
   });
 
-  window.addEventListener('mouseup', function () {
+  window.addEventListener('mouseup', () => {
     if (!dragMode) return;
-    dragMode = null;
-    contentBox.classList.remove('dragging');
-    document.body.style.cursor = '';
+    dragMode = null; contentBox.classList.remove('dragging'); document.body.style.cursor = '';
   });
 
-  /* ── Input sync ────────────────────────────────────────────────────────── */
-  [xPctInput, yPctInput, widthPctInput, heightPctInput].forEach(inp => {
-    inp.addEventListener('input', updateBoxFromInputs);
-  });
+  [xInput,yInput,wInput,hInput].forEach(inp => inp.addEventListener('input', updateBoxFromInputs));
 
   /* ── Tabs ──────────────────────────────────────────────────────────────── */
-  document.querySelectorAll('.tab-btn').forEach(btn => {
+  document.querySelectorAll('.lh-tab').forEach(btn => {
     btn.addEventListener('click', function () {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.lh-tab').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.lh-tab-panel').forEach(p => p.classList.remove('active'));
       this.classList.add('active');
       document.getElementById('tab-' + this.dataset.tab).classList.add('active');
     });
   });
 
   /* ── Toggles ───────────────────────────────────────────────────────────── */
-  showGrid.addEventListener('change', () => {
-    gridOverlay.style.opacity = showGrid.checked ? '1' : '0';
-  });
+  showGrid.addEventListener('change', () =>
+    document.querySelectorAll('.lh-grid-overlay').forEach(el =>
+      el.style.opacity = showGrid.checked ? '1' : '0'));
 
-  showSafeZone.addEventListener('change', () => {
-    safeZone.style.opacity = showSafeZone.checked ? '1' : '0';
-  });
+  showSafeZone.addEventListener('change', () =>
+    document.querySelectorAll('.lh-safe-zone').forEach(el =>
+      el.style.opacity = showSafeZone.checked ? '1' : '0'));
 
-  showOverlayText.addEventListener('change', () => {
-    textPreviewShell.style.display = showOverlayText.checked ? '' : 'none';
-  });
+  showOverlay.addEventListener('change', () =>
+    textPreviewShell.style.display = showOverlay.checked ? '' : 'none');
 
-  /* ── Opacity ───────────────────────────────────────────────────────────── */
   overlayOpacity.addEventListener('input', function () {
     const v = parseInt(this.value);
     textPreviewShell.style.opacity = (v / 100).toFixed(2);
     opacityVal.textContent = v + '%';
   });
 
-  /* ── Zoom (both sliders sync) ──────────────────────────────────────────── */
-  function applyZoom(z) {
-    paper.style.transform = `scale(${z / 100})`;
-    stageZoom.value    = z;
-    zoomVal.textContent = z + '%';
-    zoomSlider.value   = z;
-    zoomDisplay.textContent = z + '%';
+  /* ── Zoom ──────────────────────────────────────────────────────────────── */
+  function applyCurrentZoom() {
+    const z = currentZoom / 100;
+    const paperH = 1123;
+    document.querySelectorAll('.lh-page-wrap').forEach(pw => {
+      pw.style.transform = `scale(${z})`;
+      pw.style.transformOrigin = 'top center';
+      pw.style.height = (paperH * z) + 'px';
+    });
   }
 
-  stageZoom.addEventListener('input', () => applyZoom(parseInt(stageZoom.value)));
-  zoomSlider.addEventListener('input', () => applyZoom(parseInt(zoomSlider.value)));
+  function setZoom(z) {
+    currentZoom = z;
+    stageZoom.value    = z; zoomVal.textContent = z + '%';
+    zoomSlider.value   = z; zoomDisplay.textContent = z + '%';
+    applyCurrentZoom();
+  }
 
-  /* ── Quick action buttons ──────────────────────────────────────────────── */
-  resetBoxBtn.addEventListener('click', () => applyBox(10, 18, 80, 70));
-  centerBoxBtn.addEventListener('click', () => applyBox(12, 16, 76, 68));
-  fitSafeZoneBtn.addEventListener('click', () => applyBox(10, 14, 80, 72));
-  snapToMarginBtn.addEventListener('click', () => applyBox(8.5, 12, 83, 74));
+  stageZoom.addEventListener('input',  () => setZoom(parseInt(stageZoom.value)));
+  zoomSlider.addEventListener('input', () => setZoom(parseInt(zoomSlider.value)));
 
-  document.querySelectorAll('.preset-btn').forEach(btn => {
+  /* ── Quick actions ─────────────────────────────────────────────────────── */
+  document.getElementById('resetBoxBtn').addEventListener('click', () => applyBox(10,18,80,70));
+  document.getElementById('centerBoxBtn').addEventListener('click', () => applyBox(12,16,76,68));
+  document.getElementById('fitSafeZoneBtn').addEventListener('click', () => applyBox(10,14,80,72));
+  document.getElementById('snapToMarginBtn').addEventListener('click', () => applyBox(8.5,12,83,74));
+
+  document.querySelectorAll('.preset-btn').forEach(btn =>
     btn.addEventListener('click', function () {
-      applyBox(
-        parseFloat(this.dataset.x),
-        parseFloat(this.dataset.y),
-        parseFloat(this.dataset.w),
-        parseFloat(this.dataset.h)
-      );
-    });
-  });
+      applyBox(parseFloat(this.dataset.x), parseFloat(this.dataset.y),
+               parseFloat(this.dataset.w), parseFloat(this.dataset.h));
+    }));
 
-  /* ── Generate buttons ──────────────────────────────────────────────────── */
-  generatePreviewBtn.addEventListener('click', () => {
-    openMode.value = 'preview';
-    form.submit();
-  });
-
-  generateDownloadBtn.addEventListener('click', () => {
-    openMode.value = 'download';
-    form.submit();
-  });
-
-  /* ── Selects ───────────────────────────────────────────────────────────── */
-  letterheadSelect.addEventListener('change', loadLetterheadPreview);
-  previewTextInput.addEventListener('input', renderTextPreview);
+  /* ── Generate ──────────────────────────────────────────────────────────── */
+  generatePreviewBtn.addEventListener('click', () => { openMode.value = 'preview'; form.submit(); });
+  generateDownloadBtn.addEventListener('click', () => { openMode.value = 'download'; form.submit(); });
 
   /* ── Init ──────────────────────────────────────────────────────────────── */
+  lhSelect.addEventListener('change', loadLetterheadPreview);
+  docSelect.addEventListener('change', updatePageState);
+  applyMode.addEventListener('change', updatePageState);
+  previewTextInput.addEventListener('input', renderTextPreview);
+
   loadLetterheadPreview();
   renderTextPreview();
   updateBoxFromInputs();
+  updatePageState();
+  applyCurrentZoom();
 
 })();
 </script>

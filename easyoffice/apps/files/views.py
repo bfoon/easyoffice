@@ -22,6 +22,8 @@ from pypdf import PdfReader, PdfWriter, Transformation
 from PIL import Image
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 from apps.letterhead.models import LetterheadTemplate
+from django.urls import reverse
+from django.core.files.storage import default_storage
 from apps.files.models import (
     SharedFile,
     FileFolder,
@@ -326,6 +328,41 @@ def _convert_to_pdf(source_path):
         raise RuntimeError(
             'LibreOffice is not installed. Install with: apt-get install libreoffice'
         )
+
+def _replace_shared_pdf_in_place(pdf, raw_bytes, actor=None, notes=''):
+    """
+    Overwrite the binary content of an existing SharedFile in place.
+    Used by live preview PDF editing so the same file updates immediately.
+    """
+    storage_name = (pdf.file.name or '').strip()
+    if not storage_name:
+        storage_name = f'shared_files/{timezone.now():%Y/%m}/{pdf.name}'
+
+    try:
+        if default_storage.exists(storage_name):
+            default_storage.delete(storage_name)
+    except Exception:
+        pass
+
+    saved_name = default_storage.save(storage_name, ContentFile(raw_bytes))
+    pdf.file.name = saved_name
+    pdf.file_size = len(raw_bytes)
+    pdf.file_type = 'application/pdf'
+    pdf.file_hash = hashlib.sha256(raw_bytes).hexdigest()
+    pdf.version = (pdf.version or 1) + 1
+    pdf.save(update_fields=['file', 'file_size', 'file_type', 'file_hash', 'version', 'updated_at'])
+
+    try:
+        _log_file_history(
+            pdf,
+            FileHistory.Action.UPDATED,
+            actor=actor,
+            notes=notes or 'PDF updated in preview'
+        )
+    except Exception:
+        pass
+
+    return pdf
 
 def _convert_image_to_pdf(source_path):
     """
@@ -1717,31 +1754,18 @@ class FilePreviewView(LoginRequiredMixin, View):
 
     def get(self, request, pk):
         f = get_object_or_404(SharedFile, pk=pk)
-        user = request.user
-        profile = getattr(user, 'staffprofile', None)
-        unit = profile.unit if profile else None
-        dept = profile.department if profile else None
 
-        if not (
-            f.uploaded_by == user or
-            f.visibility == 'office' or
-            (f.visibility == 'unit' and f.unit == unit) or
-            (f.visibility == 'department' and f.department == dept) or
-            f.shared_with.filter(id=user.id).exists()
-        ):
+        if not _file_permission_for(request.user, f):
             raise Http404
 
         ext = (f.extension or '').lower().strip('.')
 
-        # ── ZIP files → preview archive contents ─────────────────────────────
         if ext in self._ZIP_EXTS:
             return self._zip_preview(f)
 
-        # ── Office documents → convert to PDF, serve inline ─────────────────
         if ext in self._OFFICE_EXTS:
             return self._office_preview(f, ext)
 
-        # ── Text files → plain text so JS can fetch & display ───────────────
         if ext in self._TEXT_EXTS:
             response = FileResponse(
                 f.file.open('rb'),
@@ -1751,7 +1775,6 @@ class FilePreviewView(LoginRequiredMixin, View):
             response['X-Frame-Options'] = 'SAMEORIGIN'
             return response
 
-        # ── Everything else (PDF, image, video, audio, etc.) ───────────────
         content_type, _ = mimetypes.guess_type(f.name)
         content_type = content_type or 'application/octet-stream'
         response = FileResponse(f.file.open('rb'), content_type=content_type)
@@ -1760,9 +1783,6 @@ class FilePreviewView(LoginRequiredMixin, View):
         return response
 
     def _zip_preview(self, f):
-        """
-        Preview ZIP archive contents as simple inline HTML.
-        """
         try:
             with f.file.open('rb') as fh:
                 with zipfile.ZipFile(fh) as zf:
@@ -1941,9 +1961,6 @@ class FilePreviewView(LoginRequiredMixin, View):
         return response
 
     def _office_preview(self, f, ext):
-        """
-        Convert Office file to PDF (LibreOffice) with a file-system cache.
-        """
         import shutil
 
         cache_dir = Path(tempfile.gettempdir()) / 'eo_preview_cache'
@@ -1964,7 +1981,7 @@ class FilePreviewView(LoginRequiredMixin, View):
                 src_tmp.flush()
                 src_tmp.close()
 
-                pdf_path = _convert_to_pdf(src_tmp.name)  # existing helper
+                pdf_path = _convert_to_pdf(src_tmp.name)
                 shutil.copy2(pdf_path, str(cache_path))
             except Exception as exc:
                 return HttpResponse(
@@ -1987,9 +2004,6 @@ class FilePreviewView(LoginRequiredMixin, View):
         return response
 
     def _human_size(self, size):
-        """
-        Convert byte size to human readable string.
-        """
         try:
             size = int(size or 0)
         except (TypeError, ValueError):
@@ -2006,6 +2020,157 @@ class FilePreviewView(LoginRequiredMixin, View):
         if unit == 0:
             return f'{int(value)} {units[unit]}'
         return f'{value:.1f} {units[unit]}'
+
+from django.urls import reverse
+
+class FilePreviewInfoView(LoginRequiredMixin, View):
+    def get(self, request, pk):
+        f = get_object_or_404(SharedFile, pk=pk)
+
+        if not _file_permission_for(request.user, f):
+            return JsonResponse({'ok': False, 'error': 'Permission denied.'}, status=403)
+
+        data = {
+            'ok': True,
+            'id': str(f.pk),
+            'name': f.name,
+            'is_pdf': bool(getattr(f, 'is_pdf', False)),
+            'can_edit': bool(_can_edit_file(request.user, f)),
+            'preview_url': reverse('file_preview', kwargs={'pk': f.pk}),
+        }
+
+        if data['is_pdf']:
+            try:
+                with f.file.open('rb') as fh:
+                    page_count = len(PdfReader(fh).pages)
+            except Exception as exc:
+                return JsonResponse({'ok': False, 'error': f'Could not read PDF: {exc}'}, status=422)
+
+            data.update({
+                'page_count': page_count,
+                'remove_url': reverse('pdf_remove_pages', kwargs={'pk': f.pk}),
+                'reorder_url': reverse('pdf_reorder_pages', kwargs={'pk': f.pk}),
+            })
+
+        return JsonResponse(data)
+
+class PDFRemovePagesView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        pdf = get_object_or_404(SharedFile, pk=pk)
+
+        if not _can_edit_file(request.user, pdf):
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'You do not have permission to edit this file.'}, status=403)
+            messages.error(request, 'You do not have permission to edit this file.')
+            return redirect('pdf_tools_page')
+
+        if not getattr(pdf, 'is_pdf', False):
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'This file is not a PDF.'}, status=400)
+            messages.error(request, 'This file is not a PDF.')
+            return redirect('pdf_tools_page')
+
+        remove_pages_raw = request.POST.get('remove_pages', '').strip()
+        overwrite = (request.POST.get('overwrite') or '').strip().lower() in {'1', 'true', 'yes'}
+        output_name = request.POST.get('output_name', '').strip() or f'{pdf.name.rsplit(".", 1)[0]}-edited.pdf'
+
+        try:
+            with pdf.file.open('rb') as fh:
+                reader = PdfReader(fh)
+                writer = PdfWriter()
+
+                total_pages = len(reader.pages)
+                remove_pages = parse_page_ranges(remove_pages_raw, total_pages)
+
+                if not remove_pages:
+                    if _is_ajax(request):
+                        return JsonResponse({'ok': False, 'error': 'Please provide valid pages to remove.'}, status=400)
+                    messages.error(request, 'Please provide valid pages to remove.')
+                    return redirect('pdf_tools_page')
+
+                if len(remove_pages) >= total_pages:
+                    if _is_ajax(request):
+                        return JsonResponse({'ok': False, 'error': 'You cannot remove every page from the document.'}, status=400)
+                    messages.error(request, 'You cannot remove every page from the document.')
+                    return redirect('pdf_tools_page')
+
+                for page_num in range(1, total_pages + 1):
+                    if page_num not in remove_pages:
+                        writer.add_page(reader.pages[page_num - 1])
+
+            buffer = BytesIO()
+            writer.write(buffer)
+            raw_bytes = buffer.getvalue()
+
+            if overwrite:
+                storage_name = (pdf.file.name or '').strip()
+                if storage_name:
+                    try:
+                        from django.core.files.storage import default_storage
+                        if default_storage.exists(storage_name):
+                            default_storage.delete(storage_name)
+                    except Exception:
+                        pass
+
+                pdf.file.save(pdf.name, ContentFile(raw_bytes), save=False)
+                pdf.file_size = len(raw_bytes)
+                pdf.file_type = 'application/pdf'
+                pdf.file_hash = hashlib.sha256(raw_bytes).hexdigest()
+                pdf.version = (pdf.version or 1) + 1
+                pdf.save(update_fields=['file', 'file_size', 'file_type', 'file_hash', 'version', 'updated_at'])
+
+                try:
+                    _log_file_history(
+                        pdf,
+                        FileHistory.Action.UPDATED,
+                        actor=request.user,
+                        notes=f'Pages removed in preview: {remove_pages_raw}'
+                    )
+                except Exception:
+                    pass
+
+                return JsonResponse({
+                    'ok': True,
+                    'message': f'"{pdf.name}" updated successfully.',
+                    'file_id': str(pdf.pk),
+                    'page_count': total_pages - len(remove_pages),
+                })
+
+            if not output_name.lower().endswith('.pdf'):
+                output_name += '.pdf'
+
+            new_file = SharedFile.objects.create(
+                name=output_name,
+                uploaded_by=request.user,
+                visibility=pdf.visibility,
+                folder=pdf.folder,
+                description=f'Edited from {pdf.name}',
+                tags=pdf.tags,
+                file_size=len(raw_bytes),
+                file_type='application/pdf',
+            )
+            new_file.file.save(output_name, ContentFile(raw_bytes), save=True)
+
+            try:
+                new_file.file_hash = new_file.compute_hash()
+                new_file.save(update_fields=['file_hash'])
+            except Exception:
+                pass
+
+            if _is_ajax(request):
+                return JsonResponse({
+                    'ok': True,
+                    'message': f'Edited PDF created: "{output_name}".',
+                    'file_id': str(new_file.pk),
+                })
+
+            messages.success(request, f'Edited PDF created: "{output_name}".')
+        except Exception as e:
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': f'Could not remove pages: {e}'}, status=400)
+            messages.error(request, f'Could not remove pages: {e}')
+
+        return redirect('pdf_tools_page')
 
 class FileDeleteView(LoginRequiredMixin, View):
     def post(self, request, pk):
@@ -2319,6 +2484,37 @@ class FolderDeleteView(LoginRequiredMixin, View):
             return JsonResponse({'ok': True, 'message': f'Folder "{name}" moved to recycle bin.', 'folder_id': str(pk)})
 
         return redirect(f'/files/?folder={parent_id}' if parent_id else 'file_manager')
+
+class PermanentDeleteTrashFileView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        item = get_object_or_404(
+            FileTrash,
+            pk=pk,
+            owner=request.user,
+            is_restored=False,
+            item_type='file',
+        )
+
+        item_name = item.name
+
+        # delete stored trash blob from storage if present
+        try:
+            if item.file_blob:
+                item.file_blob.delete(save=False)
+        except Exception:
+            pass
+
+        item.delete()
+
+        if _is_ajax(request):
+            return JsonResponse({
+                'ok': True,
+                'message': f'"{item_name}" permanently deleted.',
+                'trash_id': pk,
+            })
+
+        messages.success(request, f'"{item_name}" permanently deleted.')
+        return redirect('recycle_bin')
 
 class FolderShareView(LoginRequiredMixin, View):
     def post(self, request, pk):
@@ -3668,62 +3864,6 @@ def parse_page_ranges(raw, max_pages):
                 selected.add(i)
     return selected
 
-class PDFRemovePagesView(LoginRequiredMixin, View):
-    def post(self, request, pk):
-        pdf = get_object_or_404(SharedFile, pk=pk)
-        if not _can_edit_file(request.user, pdf):
-            messages.error(request, 'You do not have permission to edit this file.')
-            return redirect('pdf_tools_page')
-
-        if not getattr(pdf, 'is_pdf', False):
-            messages.error(request, 'This file is not a PDF.')
-            return redirect('pdf_tools_page')
-
-        remove_pages_raw = request.POST.get('remove_pages', '').strip()
-        output_name = request.POST.get('output_name', '').strip() or f'{pdf.name.rsplit(".", 1)[0]}-edited.pdf'
-
-        try:
-            reader = PdfReader(pdf.file.open('rb'))
-            writer = PdfWriter()
-
-            total_pages = len(reader.pages)
-            remove_pages = parse_page_ranges(remove_pages_raw, total_pages)
-
-            for page_num in range(1, total_pages + 1):
-                if page_num not in remove_pages:
-                    writer.add_page(reader.pages[page_num - 1])
-
-            buffer = BytesIO()
-            writer.write(buffer)
-            buffer.seek(0)
-
-            if not output_name.lower().endswith('.pdf'):
-                output_name += '.pdf'
-
-            new_file = SharedFile.objects.create(
-                name=output_name,
-                uploaded_by=request.user,
-                visibility=pdf.visibility,
-                folder=pdf.folder,
-                description=f'Edited from {pdf.name}',
-                tags=pdf.tags,
-                file_size=buffer.getbuffer().nbytes,
-                file_type='application/pdf',
-            )
-            new_file.file.save(output_name, ContentFile(buffer.read()), save=True)
-
-            try:
-                new_file.file_hash = new_file.compute_hash()
-                new_file.save(update_fields=['file_hash'])
-            except Exception:
-                pass
-
-            messages.success(request, f'Edited PDF created: "{output_name}".')
-        except Exception as e:
-            messages.error(request, f'Could not remove pages: {e}')
-
-        return redirect('pdf_tools_page')
-
 class PDFSplitView(LoginRequiredMixin, View):
     def post(self, request, pk):
         pdf = get_object_or_404(SharedFile, pk=pk)
@@ -3837,34 +3977,59 @@ class PDFRotatePagesView(LoginRequiredMixin, View):
 class PDFReorderPagesView(LoginRequiredMixin, View):
     def post(self, request, pk):
         pdf = get_object_or_404(SharedFile, pk=pk)
+
         if not _can_edit_file(request.user, pdf):
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'You do not have permission to edit this file.'}, status=403)
             messages.error(request, 'You do not have permission to edit this file.')
             return redirect('pdf_tools_page')
 
         if not getattr(pdf, 'is_pdf', False):
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': 'This file is not a PDF.'}, status=400)
             messages.error(request, 'This file is not a PDF.')
             return redirect('pdf_tools_page')
 
         page_order_raw = request.POST.get('page_order', '').strip()
+        overwrite = (request.POST.get('overwrite') or '').strip().lower() in {'1', 'true', 'yes'}
 
         try:
-            reader = PdfReader(pdf.file.open('rb'))
-            total_pages = len(reader.pages)
+            with pdf.file.open('rb') as fh:
+                reader = PdfReader(fh)
+                total_pages = len(reader.pages)
 
-            page_order = [int(x.strip()) for x in page_order_raw.split(',') if x.strip()]
-            if sorted(page_order) != list(range(1, total_pages + 1)):
-                messages.error(request, 'Page order must include every page exactly once.')
-                return redirect('pdf_tools_page')
+                page_order = [int(x.strip()) for x in page_order_raw.split(',') if x.strip()]
+                if sorted(page_order) != list(range(1, total_pages + 1)):
+                    if _is_ajax(request):
+                        return JsonResponse({'ok': False, 'error': 'Page order must include every page exactly once.'}, status=400)
+                    messages.error(request, 'Page order must include every page exactly once.')
+                    return redirect('pdf_tools_page')
 
-            writer = PdfWriter()
-            for page_num in page_order:
-                writer.add_page(reader.pages[page_num - 1])
+                writer = PdfWriter()
+                for page_num in page_order:
+                    writer.add_page(reader.pages[page_num - 1])
 
-            output_name = f'{pdf.name.rsplit(".", 1)[0]}-reordered.pdf'
             buffer = BytesIO()
             writer.write(buffer)
-            buffer.seek(0)
+            raw_bytes = buffer.getvalue()
 
+            if overwrite:
+                _replace_shared_pdf_in_place(
+                    pdf,
+                    raw_bytes,
+                    actor=request.user,
+                    notes=f'Pages reordered in preview: {page_order_raw}'
+                )
+
+                return JsonResponse({
+                    'ok': True,
+                    'message': f'"{pdf.name}" reordered successfully.',
+                    'file_id': str(pdf.pk),
+                    'page_count': total_pages,
+                    'preview_url': reverse('file_preview', kwargs={'pk': pdf.pk}),
+                })
+
+            output_name = f'{pdf.name.rsplit(".", 1)[0]}-reordered.pdf'
             new_file = SharedFile.objects.create(
                 name=output_name,
                 uploaded_by=request.user,
@@ -3872,10 +4037,10 @@ class PDFReorderPagesView(LoginRequiredMixin, View):
                 folder=pdf.folder,
                 description=f'Reordered from {pdf.name}',
                 tags=pdf.tags,
-                file_size=buffer.getbuffer().nbytes,
+                file_size=len(raw_bytes),
                 file_type='application/pdf',
             )
-            new_file.file.save(output_name, ContentFile(buffer.read()), save=True)
+            new_file.file.save(output_name, ContentFile(raw_bytes), save=True)
 
             try:
                 new_file.file_hash = new_file.compute_hash()
@@ -3885,6 +4050,8 @@ class PDFReorderPagesView(LoginRequiredMixin, View):
 
             messages.success(request, f'Reordered PDF created: "{output_name}".')
         except Exception as e:
+            if _is_ajax(request):
+                return JsonResponse({'ok': False, 'error': f'Could not reorder pages: {e}'}, status=400)
             messages.error(request, f'Could not reorder pages: {e}')
 
         return redirect('pdf_tools_page')

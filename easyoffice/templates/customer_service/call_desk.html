@@ -1,0 +1,278 @@
+
+{% extends "base.html" %}
+{% block title %}Call Desk{% endblock %}
+{% block breadcrumb %}<a href="{% url 'customer_service_dashboard' %}">Customer Service</a> / Call Desk{% endblock %}
+{% block content %}
+<style>
+.cs-lookup-card,.cs-side-card{border:1px solid var(--eo-border);border-radius:16px;background:var(--eo-surface);padding:16px;box-shadow:0 6px 20px rgba(15,23,42,.04)}
+.cs-customer-chip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;font-size:.8rem;font-weight:700}
+.cs-preview-box{border:1px dashed var(--eo-border);border-radius:14px;padding:14px;background:var(--eo-bg);min-height:160px}
+</style>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title"><i class="bi bi-telephone-forward"></i> Call Desk</h1>
+    <p class="eo-page-subtitle">Answer calls, identify customers instantly, log requests, and route tickets professionally.</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a href="{% url 'customer_service_customer_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-people"></i> Contacts</a>
+    <a href="{% url 'customer_service_ticket_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-ticket-detailed"></i> Tickets</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="cs-lookup-card mb-3">
+      <div class="row g-3 align-items-end">
+        <div class="col-md-8">
+          <label class="eo-form-label">Caller number</label>
+          <input type="text" id="lookupPhone" class="eo-form-control" placeholder="e.g. 7xx xxxx or +2207xxxxxx">
+        </div>
+        <div class="col-md-4">
+          <button type="button" class="eo-btn eo-btn-primary w-100" onclick="lookupCustomer()">
+            <i class="bi bi-search"></i> Lookup Caller
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <form method="post" class="cs-lookup-card">
+      {% csrf_token %}
+      <h3 class="eo-card-title mb-3"><i class="bi bi-journal-plus"></i> Log Call</h3>
+
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="eo-form-label">Phone number</label>
+          <input type="text" name="phone_number" id="phoneNumberInput" class="eo-form-control" required>
+        </div>
+        <div class="col-md-6">
+          <label class="eo-form-label">Call type</label>
+          <select name="call_type" class="eo-form-select">
+            <option value="sales">Sales Inquiry</option>
+            <option value="maintenance">Maintenance Request</option>
+            <option value="support">Support</option>
+            <option value="complaint">Complaint</option>
+            <option value="callback">Callback Request</option>
+            <option value="followup">Follow Up</option>
+            <option value="general">General Inquiry</option>
+          </select>
+        </div>
+
+        <div class="col-md-6">
+          <label class="eo-form-label">Customer full name</label>
+          <input type="text" name="full_name" id="customerNameInput" class="eo-form-control" placeholder="Required for new callers">
+        </div>
+        <div class="col-md-6">
+          <label class="eo-form-label">Company name</label>
+          <input type="text" name="company_name" id="companyNameInput" class="eo-form-control">
+        </div>
+
+        <div class="col-md-6">
+          <label class="eo-form-label">Email</label>
+          <input type="email" name="email" id="customerEmailInput" class="eo-form-control">
+        </div>
+        <div class="col-md-6">
+          <label class="eo-form-label">Preferred contact method</label>
+          <select name="preferred_contact_method" id="preferredContactInput" class="eo-form-select">
+            <option value="phone">Phone</option>
+            <option value="email">Email</option>
+            <option value="sms">SMS</option>
+            <option value="whatsapp">WhatsApp</option>
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="eo-form-label">City</label>
+          <input type="text" name="city" id="cityInput" class="eo-form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="eo-form-label">Area</label>
+          <input type="text" name="area" id="areaInput" class="eo-form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="eo-form-label">Department</label>
+          <select name="department" class="eo-form-select">
+            <option value="">— select department —</option>
+            {% for dept in departments %}
+            <option value="{{ dept.id }}">{{ dept.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-8">
+          <label class="eo-form-label">Subject</label>
+          <input type="text" name="subject" class="eo-form-control" required>
+        </div>
+        <div class="col-md-4">
+          <label class="eo-form-label">Priority</label>
+          <select name="priority" class="eo-form-select">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+            <option value="critical">Critical</option>
+          </select>
+        </div>
+
+        <div class="col-12">
+          <label class="eo-form-label">Call summary / request</label>
+          <textarea name="summary" rows="6" class="eo-form-control" placeholder="Log what the caller wants, what was discussed, and what needs to happen next." required></textarea>
+        </div>
+
+        <div class="col-md-4">
+          <label class="eo-form-label">Immediate outcome</label>
+          <select name="outcome" class="eo-form-select">
+            <option value="">— select outcome —</option>
+            <option value="resolved">Resolved by Agent</option>
+            <option value="routed">Routed</option>
+            <option value="forwarded">Forwarded</option>
+            <option value="callback">Callback Needed</option>
+            <option value="escalated">Escalated</option>
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="eo-form-label">Callback number</label>
+          <input type="text" name="callback_number" class="eo-form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="eo-form-label">Feedback email</label>
+          <input type="email" name="callback_email" class="eo-form-control">
+        </div>
+
+        <div class="col-md-4">
+          <label class="eo-form-check">
+            <input type="checkbox" class="eo-form-check-input" name="create_ticket" checked>
+            <span class="eo-form-check-label">Create ticket from this call</span>
+          </label>
+        </div>
+        <div class="col-md-4">
+          <label class="eo-form-check">
+            <input type="checkbox" class="eo-form-check-input" name="callback_required">
+            <span class="eo-form-check-label">Customer needs callback</span>
+          </label>
+        </div>
+        <div class="col-md-4">
+          <label class="eo-form-check">
+            <input type="checkbox" class="eo-form-check-input" name="needs_feedback" checked>
+            <span class="eo-form-check-label">Customer wants feedback request</span>
+          </label>
+        </div>
+
+        <div class="col-12">
+          <label class="eo-form-label">Customer notes</label>
+          <textarea name="customer_notes" rows="3" class="eo-form-control" placeholder="Special preference, product history, address guidance, key note, or any relationship context."></textarea>
+        </div>
+      </div>
+
+      <div class="mt-4 d-flex gap-2 flex-wrap">
+        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-save"></i> Log Call</button>
+        <button type="reset" class="eo-btn eo-btn-secondary"><i class="bi bi-arrow-clockwise"></i> Reset</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="cs-side-card mb-3">
+      <h3 class="eo-card-title"><i class="bi bi-person-vcard"></i> Customer Preview</h3>
+      <div id="lookupResult" class="cs-preview-box text-muted">
+        Lookup a phone number to see existing customer details, recent calls, and open tickets.
+      </div>
+    </div>
+
+    <div class="cs-side-card mb-3">
+      <h3 class="eo-card-title"><i class="bi bi-clock-history"></i> Recent Calls</h3>
+      <div class="list-group list-group-flush">
+        {% for call in recent_calls %}
+        <div class="list-group-item px-0">
+          <div class="fw-bold">{{ call.subject }}</div>
+          <small class="text-muted">{% if call.customer %}{{ call.customer.display_name }}{% else %}{{ call.phone_number }}{% endif %} · {{ call.started_at|date:"M j, H:i" }}</small>
+        </div>
+        {% empty %}
+        <div class="text-muted">No recent calls.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="cs-side-card">
+      <h3 class="eo-card-title"><i class="bi bi-ticket-detailed"></i> Recent Tickets</h3>
+      <div class="list-group list-group-flush">
+        {% for ticket in recent_tickets %}
+        <a href="{% url 'customer_service_ticket_detail' ticket.pk %}" class="list-group-item list-group-item-action px-0">
+          <div class="fw-bold">{{ ticket.ticket_no }}</div>
+          <small class="text-muted">{{ ticket.subject }}</small>
+        </a>
+        {% empty %}
+        <div class="text-muted">No recent tickets.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function lookupCustomer() {
+  const phone = document.getElementById('lookupPhone').value.trim();
+  const resultBox = document.getElementById('lookupResult');
+  if (!phone) {
+    resultBox.innerHTML = '<div class="text-danger">Enter a phone number first.</div>';
+    return;
+  }
+
+  resultBox.innerHTML = '<div class="text-muted">Checking caller history...</div>';
+
+  const url = "{% url 'customer_service_phone_lookup' %}?phone=" + encodeURIComponent(phone);
+  const res = await fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}});
+  const data = await res.json();
+
+  document.getElementById('phoneNumberInput').value = phone;
+
+  if (!data.exists) {
+    resultBox.innerHTML = '<div class="text-warning fw-bold mb-2">New caller</div><div class="text-muted">No customer record found. Fill customer details to create a new contact.</div>';
+    document.getElementById('customerNameInput').value = '';
+    document.getElementById('companyNameInput').value = '';
+    document.getElementById('customerEmailInput').value = '';
+    document.getElementById('cityInput').value = '';
+    document.getElementById('areaInput').value = '';
+    return;
+  }
+
+  document.getElementById('customerNameInput').value = data.customer.full_name || '';
+  document.getElementById('companyNameInput').value = data.customer.company_name || '';
+  document.getElementById('customerEmailInput').value = data.customer.email || '';
+  document.getElementById('cityInput').value = data.customer.city || '';
+  document.getElementById('areaInput').value = data.customer.area || '';
+  document.getElementById('preferredContactInput').value = data.customer.preferred_contact_method || 'phone';
+
+  let html = '<div class="cs-customer-chip mb-3"><i class="bi bi-person-check"></i> Existing customer found</div>';
+  html += '<div class="mb-2"><strong>' + data.customer.display_name + '</strong></div>';
+  if (data.customer.email) html += '<div class="small text-muted mb-1"><i class="bi bi-envelope"></i> ' + data.customer.email + '</div>';
+  if (data.phones && data.phones.length) {
+    html += '<div class="small mb-2"><strong>Numbers:</strong> ' + data.phones.map(p => p.number + (p.primary ? ' (primary)' : '')).join(', ') + '</div>';
+  }
+
+  html += '<hr><div class="small fw-bold mb-1">Open Tickets</div>';
+  if (data.open_tickets.length) {
+    html += '<ul class="small mb-3">';
+    data.open_tickets.forEach(t => {
+      html += '<li><strong>' + t.ticket_no + '</strong> — ' + t.subject + ' <span class="text-muted">(' + t.status + ')</span></li>';
+    });
+    html += '</ul>';
+  } else {
+    html += '<div class="small text-muted mb-3">No open tickets.</div>';
+  }
+
+  html += '<div class="small fw-bold mb-1">Recent Calls</div>';
+  if (data.recent_calls.length) {
+    html += '<ul class="small mb-0">';
+    data.recent_calls.forEach(c => {
+      html += '<li>' + c.subject + ' <span class="text-muted">(' + c.started_at + ')</span></li>';
+    });
+    html += '</ul>';
+  } else {
+    html += '<div class="small text-muted">No call history.</div>';
+  }
+
+  resultBox.innerHTML = html;
+}
+</script>
+{% endblock %}

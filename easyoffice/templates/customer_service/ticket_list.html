@@ -1,0 +1,93 @@
+
+{% extends "base.html" %}
+{% block title %}Service Tickets{% endblock %}
+{% block breadcrumb %}<a href="{% url 'customer_service_dashboard' %}">Customer Service</a> / Tickets{% endblock %}
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title"><i class="bi bi-ticket-detailed"></i> Service Tickets</h1>
+    <p class="eo-page-subtitle">Track open requests, routing, assignments, and SLA progress across teams.</p>
+  </div>
+  <a href="{% url 'customer_service_call_desk' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus-circle"></i> New Call / Ticket</a>
+</div>
+
+<form class="eo-card mb-3">
+  <div class="row g-3 align-items-end">
+    <div class="col-md-4">
+      <label class="eo-form-label">Search</label>
+      <input type="text" name="q" value="{{ q }}" class="eo-form-control" placeholder="Ticket, subject, customer">
+    </div>
+    <div class="col-md-2">
+      <label class="eo-form-label">Status</label>
+      <select name="status" class="eo-form-select">
+        <option value="">All</option>
+        {% for value,label in status_choices %}
+        <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="eo-form-label">Department</label>
+      <select name="department" class="eo-form-select">
+        <option value="">All</option>
+        {% for d in departments %}
+        <option value="{{ d.id }}" {% if department_filter == d.id|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-1">
+      <label class="eo-form-check">
+        <input type="checkbox" name="mine" value="1" class="eo-form-check-input" {% if mine_filter == "1" %}checked{% endif %}>
+        <span class="eo-form-check-label">Mine</span>
+      </label>
+    </div>
+    <div class="col-md-2">
+      <button class="eo-btn eo-btn-primary w-100"><i class="bi bi-funnel"></i> Filter</button>
+    </div>
+  </div>
+</form>
+
+<div class="eo-card">
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th>Ticket</th>
+          <th>Customer</th>
+          <th>Type</th>
+          <th>Priority</th>
+          <th>Status</th>
+          <th>Department</th>
+          <th>Owner</th>
+          <th>Due</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ticket in tickets %}
+        <tr>
+          <td>
+            <div class="fw-bold">{{ ticket.ticket_no }}</div>
+            <small class="text-muted">{{ ticket.subject|truncatechars:48 }}</small>
+          </td>
+          <td>{{ ticket.customer.display_name }}</td>
+          <td>{{ ticket.get_ticket_type_display }}</td>
+          <td>{{ ticket.get_priority_display }}</td>
+          <td>
+            <span class="badge {% if ticket.status == 'resolved' or ticket.status == 'closed' %}text-bg-success{% elif ticket.status == 'escalated' %}text-bg-danger{% else %}text-bg-secondary{% endif %}">
+              {{ ticket.get_status_display }}
+            </span>
+          </td>
+          <td>{{ ticket.department.name|default:"—" }}</td>
+          <td>{{ ticket.current_owner.full_name|default:"—" }}</td>
+          <td>{% if ticket.resolution_due_at %}{{ ticket.resolution_due_at|date:"M j, H:i" }}{% else %}—{% endif %}</td>
+          <td><a href="{% url 'customer_service_ticket_detail' ticket.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">Open</a></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="9" class="text-muted">No tickets found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

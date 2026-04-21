@@ -7,6 +7,167 @@
 
 {% block content %}
 <style>
+/* ── Preview side rail ───────────────────────────────────────────── */
+.fm-preview-shell {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  background: #111827;
+}
+
+.fm-preview-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  background: #111827;
+}
+
+.fm-pdf-rail-toggle {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 20;
+  border: 1px solid var(--eo-border);
+  background: rgba(255,255,255,.96);
+  color: var(--eo-text);
+  border-radius: 10px;
+  padding: 7px 10px;
+  font-size: .78rem;
+  font-weight: 700;
+  box-shadow: 0 6px 18px rgba(0,0,0,.18);
+  cursor: pointer;
+}
+
+.fm-pdf-rail {
+  width: 280px;
+  flex: 0 0 280px;
+  display: flex;
+  flex-direction: column;
+  background: var(--eo-surface);
+  border-left: 1px solid var(--eo-border);
+  transition: width .18s ease, flex-basis .18s ease, opacity .18s ease, transform .18s ease;
+}
+
+.fm-pdf-rail.is-hidden {
+  width: 0;
+  flex-basis: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateX(10px);
+  border-left: none;
+}
+
+.fm-pdf-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  border-bottom: 1px solid var(--eo-border);
+}
+
+.fm-pdf-rail-meta {
+  padding: 12px 12px 8px;
+}
+
+.fm-pdf-rail-file {
+  font-size: .85rem;
+  font-weight: 700;
+  color: var(--eo-text);
+  word-break: break-word;
+}
+
+.fm-pdf-rail-count {
+  font-size: .74rem;
+  color: var(--eo-text-muted);
+  margin-top: 4px;
+}
+
+.fm-pdf-rail-help {
+  margin: 0 12px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--eo-border);
+  border-radius: 10px;
+  background: var(--eo-bg);
+  font-size: .73rem;
+  color: var(--eo-text-muted);
+  line-height: 1.45;
+}
+
+.fm-pdf-page-list {
+  flex: 1;
+  overflow: auto;
+  padding: 0 12px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 8px;
+}
+
+.fm-pdf-page-chip {
+  width: 56px;
+  height: 60px;
+  border-radius: 12px;
+  border: 1px solid var(--eo-border);
+  background: var(--eo-bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  cursor: grab;
+  user-select: none;
+  transition: transform .12s, border-color .12s, background .12s;
+}
+
+.fm-pdf-page-chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--eo-accent);
+}
+
+.fm-pdf-page-chip.dragging {
+  opacity: .5;
+}
+
+.fm-pdf-page-chip.selected-for-delete {
+  background: #fef2f2;
+  border-color: #ef4444;
+  color: #b91c1c;
+}
+
+.fm-pdf-page-chip-num {
+  font-size: .9rem;
+  font-weight: 800;
+}
+
+.fm-pdf-page-chip-lbl {
+  font-size: .63rem;
+  color: var(--eo-text-muted);
+}
+
+.fm-pdf-rail-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--eo-border);
+}
+
+.fm-pdf-rail-status {
+  padding: 0 12px 12px;
+  font-size: .74rem;
+  color: var(--eo-text-muted);
+  min-height: 18px;
+}
+
+@media (max-width: 900px) {
+  .fm-pdf-rail {
+    width: 220px;
+    flex-basis: 220px;
+  }
+}
+
 /* ── Layout ── */
 .fm-layout {
   display: flex;
@@ -1231,13 +1392,17 @@
               {% endif %}
               {% if file.user_permission == 'full' %}
               {# ── full only: delete ── #}
-              <form method="post" action="{% url 'file_delete' file.pk %}" style="display:inline"
-                    onsubmit="return confirm('Delete {{ file.name|escapejs }}? This cannot be undone.')">
-                {% csrf_token %}
-                <button class="fm-action-btn danger" type="submit" title="Delete">
-                  <i class="bi bi-trash"></i>
-                </button>
-              </form>
+              <form method="post"
+                  action="{% url 'file_delete' file.pk %}"
+                  class="js-file-delete-form"
+                  data-file-id="{{ file.id }}"
+                  data-file-name="{{ file.name|escapejs }}"
+                  style="display:inline">
+              {% csrf_token %}
+              <button class="fm-action-btn danger" type="submit" title="Delete">
+                <i class="bi bi-trash"></i>
+              </button>
+            </form>
               {% endif %}
             </div>
           </div>
@@ -2958,6 +3123,409 @@
      live on the file list without needing to open the note modal */
   setInterval(runBulkCheck, 15000);
 
+})();
+</script>
+<script>
+(function () {
+  'use strict';
+
+  const modal         = document.getElementById('previewModal');
+  const loading       = document.getElementById('previewLoading');
+  const content       = document.getElementById('previewContent');
+  const fileNameEl    = document.getElementById('previewModalFileName');
+  const downloadBtn   = document.getElementById('previewDownloadBtn');
+
+  if (!modal || !loading || !content || !fileNameEl || !downloadBtn) return;
+
+  const OFFICE_EXTS = new Set(['doc','docx','odt','rtf','xls','xlsx','ods','ppt','pptx','odp']);
+  const TEXT_EXTS   = new Set(['md','py','js','html','css','sql','xml','json','csv','txt','yml','yaml','ini','log']);
+  const IMAGE_EXTS  = new Set(['jpg','jpeg','png','gif','webp','svg','bmp']);
+  const VIDEO_EXTS  = new Set(['mp4','mov','avi','mkv','webm']);
+  const AUDIO_EXTS  = new Set(['mp3','wav','ogg','m4a']);
+  const ZIP_EXTS    = new Set(['zip']);
+
+  let currentFileId = null;
+  let currentFileExt = '';
+  let currentMeta = null;
+  let pageOrder = [];
+  let deleteSet = new Set();
+  let dragPage = null;
+
+  function csrfToken() {
+    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  function esc(s) {
+    return String(s || '').replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+
+  function previewUrl(fileId) {
+    return `/files/${fileId}/preview/`;
+  }
+
+  function previewInfoUrl(fileId) {
+    return `/files/${fileId}/preview-info/`;
+  }
+
+  function downloadUrl(fileId) {
+    return `/files/${fileId}/download/`;
+  }
+
+  function resetPreviewState() {
+    currentMeta = null;
+    pageOrder = [];
+    deleteSet = new Set();
+    dragPage = null;
+  }
+
+  function setRailStatus(text, isError) {
+    const el = document.getElementById('pdfRailStatus');
+    if (!el) return;
+    el.textContent = text || '—';
+    el.style.color = isError ? '#dc2626' : '';
+  }
+
+  async function safeJsonFetch(url, options) {
+    const response = await fetch(url, options || {});
+    const text = await response.text();
+
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (e) {
+      console.error('Expected JSON but got:', text);
+      throw new Error(`Server returned non-JSON response from ${url}`);
+    }
+
+    if (!response.ok || (data && data.ok === false)) {
+      throw new Error((data && data.error) ? data.error : `Request failed (${response.status})`);
+    }
+
+    return data;
+  }
+
+  function buildPreviewShell() {
+    content.innerHTML = `
+      <div class="fm-preview-shell" id="fmPreviewShell">
+        <div class="fm-preview-main">
+          <button type="button" id="pdfRailToggle" class="fm-pdf-rail-toggle" hidden>
+            <i class="bi bi-layout-sidebar-inset"></i> Pages
+          </button>
+          <div id="previewSurface" style="width:100%;height:100%;"></div>
+        </div>
+
+        <aside id="pdfRail" class="fm-pdf-rail is-hidden" hidden>
+          <div class="fm-pdf-rail-head">
+            <strong>Page tools</strong>
+            <button type="button" id="pdfRailHideBtn" class="eo-btn eo-btn-secondary eo-btn-sm">Hide</button>
+          </div>
+
+          <div class="fm-pdf-rail-meta">
+            <div id="pdfRailFileName" class="fm-pdf-rail-file">—</div>
+            <div id="pdfRailPageCount" class="fm-pdf-rail-count">0 pages</div>
+          </div>
+
+          <div class="fm-pdf-rail-help">
+            Click a page chip to mark it for deletion. Drag chips to change order.
+          </div>
+
+          <div id="pdfPageList" class="fm-pdf-page-list"></div>
+
+          <div class="fm-pdf-rail-actions">
+            <button type="button" id="pdfApplyReorderBtn" class="eo-btn eo-btn-primary eo-btn-sm">
+              <i class="bi bi-arrow-down-up"></i> Save order
+            </button>
+            <button type="button" id="pdfDeleteSelectedBtn" class="eo-btn eo-btn-secondary eo-btn-sm"
+                    style="color:var(--eo-danger);border-color:var(--eo-danger)">
+              <i class="bi bi-trash"></i> Delete selected
+            </button>
+          </div>
+
+          <div id="pdfRailStatus" class="fm-pdf-rail-status">—</div>
+        </aside>
+      </div>
+    `;
+  }
+
+  function showRail() {
+    const rail = document.getElementById('pdfRail');
+    if (!rail) return;
+    rail.hidden = false;
+    requestAnimationFrame(function () {
+      rail.classList.remove('is-hidden');
+    });
+  }
+
+  function hideRail() {
+    const rail = document.getElementById('pdfRail');
+    if (!rail) return;
+    rail.classList.add('is-hidden');
+    setTimeout(function () {
+      rail.hidden = true;
+    }, 180);
+  }
+
+  function renderPageList() {
+    const list = document.getElementById('pdfPageList');
+    if (!list) return;
+
+    list.innerHTML = '';
+
+    pageOrder.forEach(function (pageNum) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'fm-pdf-page-chip' + (deleteSet.has(pageNum) ? ' selected-for-delete' : '');
+      chip.draggable = true;
+      chip.dataset.page = String(pageNum);
+
+      chip.innerHTML = `
+        <div class="fm-pdf-page-chip-num">${pageNum}</div>
+        <div class="fm-pdf-page-chip-lbl">${deleteSet.has(pageNum) ? 'Delete' : 'Page'}</div>
+      `;
+
+      chip.addEventListener('click', function () {
+        if (deleteSet.has(pageNum)) deleteSet.delete(pageNum);
+        else deleteSet.add(pageNum);
+        renderPageList();
+      });
+
+      chip.addEventListener('dragstart', function () {
+        dragPage = pageNum;
+        chip.classList.add('dragging');
+      });
+
+      chip.addEventListener('dragend', function () {
+        dragPage = null;
+        chip.classList.remove('dragging');
+      });
+
+      chip.addEventListener('dragover', function (e) {
+        e.preventDefault();
+      });
+
+      chip.addEventListener('drop', function (e) {
+        e.preventDefault();
+        const targetPage = parseInt(chip.dataset.page, 10);
+        if (!dragPage || dragPage === targetPage) return;
+
+        const fromIndex = pageOrder.indexOf(dragPage);
+        const toIndex = pageOrder.indexOf(targetPage);
+        if (fromIndex === -1 || toIndex === -1) return;
+
+        pageOrder.splice(fromIndex, 1);
+        pageOrder.splice(toIndex, 0, dragPage);
+        renderPageList();
+      });
+
+      list.appendChild(chip);
+    });
+  }
+
+  function bindRailEvents() {
+    const toggleBtn = document.getElementById('pdfRailToggle');
+    const hideBtn = document.getElementById('pdfRailHideBtn');
+    const reorderBtn = document.getElementById('pdfApplyReorderBtn');
+    const deleteBtn = document.getElementById('pdfDeleteSelectedBtn');
+
+    if (toggleBtn) toggleBtn.addEventListener('click', showRail);
+    if (hideBtn) hideBtn.addEventListener('click', hideRail);
+
+    if (reorderBtn) {
+      reorderBtn.addEventListener('click', async function () {
+        if (!currentMeta || !currentMeta.reorder_url) return;
+
+        try {
+          setRailStatus('Applying…');
+          const data = await safeJsonFetch(currentMeta.reorder_url, {
+            method: 'POST',
+            headers: {
+              'X-Requested-With': 'XMLHttpRequest',
+              'X-CSRFToken': csrfToken(),
+              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+            },
+            body: new URLSearchParams({
+              page_order: pageOrder.join(','),
+              overwrite: '1'
+            }).toString()
+          });
+
+          setRailStatus(data.message || 'Page order updated.');
+          openPreviewModal(currentFileId, fileNameEl.textContent || '', currentFileExt, true);
+        } catch (err) {
+          console.error(err);
+          setRailStatus(err.message || 'Reorder failed.', true);
+        }
+      });
+    }
+
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', async function () {
+        if (!currentMeta || !currentMeta.remove_url) return;
+
+        if (!deleteSet.size) {
+          setRailStatus('Select at least one page to delete.', true);
+          return;
+        }
+
+        if (deleteSet.size >= pageOrder.length) {
+          setRailStatus('You cannot delete every page.', true);
+          return;
+        }
+
+        try {
+          setRailStatus('Applying…');
+          const data = await safeJsonFetch(currentMeta.remove_url, {
+            method: 'POST',
+            headers: {
+              'X-Requested-With': 'XMLHttpRequest',
+              'X-CSRFToken': csrfToken(),
+              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+            },
+            body: new URLSearchParams({
+              remove_pages: Array.from(deleteSet).sort((a, b) => a - b).join(','),
+              overwrite: '1'
+            }).toString()
+          });
+
+          setRailStatus(data.message || 'Pages deleted.');
+          openPreviewModal(currentFileId, fileNameEl.textContent || '', currentFileExt, true);
+        } catch (err) {
+          console.error(err);
+          setRailStatus(err.message || 'Delete failed.', true);
+        }
+      });
+    }
+  }
+
+  async function loadPreviewInfo(fileId, fileName) {
+    try {
+      const data = await safeJsonFetch(previewInfoUrl(fileId), {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+      });
+
+      const toggleBtn = document.getElementById('pdfRailToggle');
+      const railFile = document.getElementById('pdfRailFileName');
+      const railCount = document.getElementById('pdfRailPageCount');
+
+      currentMeta = data;
+
+      if (railFile) railFile.textContent = fileName || data.name || 'Untitled';
+
+      if (!data.is_pdf || !data.can_edit) {
+        if (toggleBtn) toggleBtn.hidden = true;
+        hideRail();
+        return;
+      }
+
+      if (toggleBtn) toggleBtn.hidden = false;
+      if (railCount) railCount.textContent = `${data.page_count} page${data.page_count === 1 ? '' : 's'}`;
+
+      pageOrder = Array.from({ length: data.page_count }, (_, i) => i + 1);
+      deleteSet = new Set();
+      renderPageList();
+      setRailStatus('Ready');
+    } catch (err) {
+      console.error(err);
+      const toggleBtn = document.getElementById('pdfRailToggle');
+      if (toggleBtn) toggleBtn.hidden = true;
+      hideRail();
+      setRailStatus(err.message || 'Could not load page tools.', true);
+    }
+  }
+
+  function renderPreviewSurface(fileId, fileName, ext) {
+    const surface = document.getElementById('previewSurface');
+    if (!surface) return;
+
+    const url = previewUrl(fileId) + '?_ts=' + Date.now();
+    const cleanExt = String(ext || '').toLowerCase().trim();
+
+    surface.innerHTML = '';
+
+    if (cleanExt === 'pdf' || OFFICE_EXTS.has(cleanExt) || ZIP_EXTS.has(cleanExt)) {
+      surface.innerHTML = `<iframe class="preview-frame" src="${url}" title="${esc(fileName)}"></iframe>`;
+      return;
+    }
+
+    if (IMAGE_EXTS.has(cleanExt)) {
+      surface.innerHTML = `<img class="preview-image" src="${url}" alt="${esc(fileName)}">`;
+      return;
+    }
+
+    if (VIDEO_EXTS.has(cleanExt)) {
+      surface.innerHTML = `<video class="preview-video" src="${url}" controls style="width:100%;height:100%"></video>`;
+      return;
+    }
+
+    if (AUDIO_EXTS.has(cleanExt)) {
+      surface.innerHTML = `
+        <div class="preview-audio">
+          <audio src="${url}" controls style="width:min(720px,92%);"></audio>
+        </div>
+      `;
+      return;
+    }
+
+    if (TEXT_EXTS.has(cleanExt)) {
+      surface.innerHTML = `<pre class="preview-text">Loading text preview…</pre>`;
+      fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+        .then(r => r.text())
+        .then(txt => {
+          const pre = surface.querySelector('.preview-text');
+          if (pre) pre.textContent = txt;
+        })
+        .catch(() => {
+          const pre = surface.querySelector('.preview-text');
+          if (pre) pre.textContent = 'Could not load text preview.';
+        });
+      return;
+    }
+
+    surface.innerHTML = `<iframe class="preview-frame" src="${url}" title="${esc(fileName)}"></iframe>`;
+  }
+
+  window.openPreviewModal = function (fileId, fileName, fileExt) {
+    currentFileId = fileId;
+    currentFileExt = String(fileExt || '').toLowerCase().trim();
+    resetPreviewState();
+
+    fileNameEl.textContent = fileName || 'Untitled';
+    downloadBtn.href = downloadUrl(fileId);
+
+    loading.style.display = 'flex';
+    content.style.display = 'none';
+
+    buildPreviewShell();
+    bindRailEvents();
+
+    modal.classList.add('open');
+
+    requestAnimationFrame(function () {
+      renderPreviewSurface(fileId, fileName, currentFileExt);
+      loadPreviewInfo(fileId, fileName);
+      loading.style.display = 'none';
+      content.style.display = 'block';
+    });
+  };
+
+  window.closePreviewModal = function () {
+    modal.classList.remove('open');
+    currentFileId = null;
+    currentFileExt = '';
+    resetPreviewState();
+    content.innerHTML = '';
+    loading.style.display = 'flex';
+    content.style.display = 'none';
+  };
+
+  modal.addEventListener('click', function (e) {
+    if (e.target === modal) {
+      window.closePreviewModal();
+    }
+  });
 })();
 </script>
 {% endblock %}

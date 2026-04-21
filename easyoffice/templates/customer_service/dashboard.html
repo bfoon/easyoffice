@@ -1,0 +1,88 @@
+
+{% extends "base.html" %}
+{% block title %}Customer Service Dashboard{% endblock %}
+{% block breadcrumb %}<span>Customer Service Dashboard</span>{% endblock %}
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title"><i class="bi bi-headset"></i> Customer Service Dashboard</h1>
+    <p class="eo-page-subtitle">Live service performance, routing, escalation, and customer experience overview.</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a href="{% url 'customer_service_call_desk' %}" class="eo-btn eo-btn-primary"><i class="bi bi-telephone-plus"></i> Open Call Desk</a>
+    <a href="{% url 'customer_service_ticket_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-ticket-detailed"></i> Tickets</a>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-lg-2"><div class="eo-stat"><div class="eo-stat-label">Calls Today</div><div class="eo-stat-value">{{ calls_today }}</div><i class="bi bi-telephone eo-stat-icon"></i></div></div>
+  <div class="col-6 col-lg-2"><div class="eo-stat eo-stat-info"><div class="eo-stat-label">Open Tickets</div><div class="eo-stat-value">{{ open_tickets }}</div><i class="bi bi-ticket-perforated eo-stat-icon"></i></div></div>
+  <div class="col-6 col-lg-2"><div class="eo-stat eo-stat-warning"><div class="eo-stat-label">Overdue</div><div class="eo-stat-value">{{ overdue_tickets }}</div><i class="bi bi-alarm eo-stat-icon"></i></div></div>
+  <div class="col-6 col-lg-2"><div class="eo-stat" style="border-color:#fecaca;background:#fff7f7"><div class="eo-stat-label">Escalated</div><div class="eo-stat-value">{{ escalated_tickets }}</div><i class="bi bi-arrow-up-right-circle eo-stat-icon" style="color:#ef4444"></i></div></div>
+  <div class="col-6 col-lg-2"><div class="eo-stat" style="border-color:#a7f3d0;background:#f0fdf4"><div class="eo-stat-label">Resolved Today</div><div class="eo-stat-value">{{ resolved_today }}</div><i class="bi bi-check2-circle eo-stat-icon" style="color:#10b981"></i></div></div>
+  <div class="col-6 col-lg-2"><div class="eo-stat" style="border-color:#ddd6fe;background:#faf5ff"><div class="eo-stat-label">Avg Service</div><div class="eo-stat-value">{{ avg_service_quality|default:"-" }}</div><i class="bi bi-star-fill eo-stat-icon" style="color:#8b5cf6"></i></div></div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-6">
+    <div class="eo-card h-100">
+      <h3 class="eo-card-title"><i class="bi bi-clock-history"></i> Recent Calls</h3>
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead><tr><th>Caller</th><th>Type</th><th>Handled By</th><th>When</th><th>Outcome</th></tr></thead>
+          <tbody>
+            {% for call in recent_calls %}
+            <tr>
+              <td>{% if call.customer %}{{ call.customer.display_name }}{% else %}{{ call.phone_number }}{% endif %}</td>
+              <td>{{ call.get_call_type_display }}</td>
+              <td>{{ call.handled_by.full_name|default:"—" }}</td>
+              <td>{{ call.started_at|date:"M j, H:i" }}</td>
+              <td>{{ call.get_outcome_display|default:"—" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-muted">No calls yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="eo-card h-100">
+      <h3 class="eo-card-title"><i class="bi bi-building"></i> Tickets by Department</h3>
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead><tr><th>Department</th><th>Tickets</th></tr></thead>
+          <tbody>
+            {% for row in tickets_by_department %}
+            <tr>
+              <td>{{ row.name }}</td>
+              <td><span class="badge text-bg-primary">{{ row.ticket_count }}</span></td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="2" class="text-muted">No department stats yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <hr>
+      <h3 class="eo-card-title"><i class="bi bi-ticket-detailed"></i> Recent Tickets</h3>
+      <div class="list-group list-group-flush">
+        {% for ticket in recent_tickets %}
+        <a href="{% url 'customer_service_ticket_detail' ticket.pk %}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-start">
+          <div>
+            <div class="fw-bold">{{ ticket.ticket_no }} — {{ ticket.subject }}</div>
+            <small class="text-muted">{{ ticket.customer.display_name }}{% if ticket.department %} · {{ ticket.department.name }}{% endif %}</small>
+          </div>
+          <span class="badge text-bg-secondary">{{ ticket.get_status_display }}</span>
+        </a>
+        {% empty %}
+        <div class="text-muted">No recent tickets.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

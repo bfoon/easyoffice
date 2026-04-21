@@ -11,6 +11,7 @@ urlpatterns = [
 
     path('<uuid:pk>/download/',                 views.FileDownloadView.as_view(),               name='file_download'),
     path('<uuid:pk>/preview/',                  views.FilePreviewView.as_view(),                name='file_preview'),
+    path('<uuid:pk>/preview-info/',             views.FilePreviewInfoView.as_view(),            name='file_preview_info'),
     path('<uuid:pk>/move/',                     views.FileMoveView.as_view(),                   name='file_move'),
     path('<uuid:pk>/rename/',                   views.FileRenameView.as_view(),                 name='file_rename'),
     path('<uuid:pk>/delete/',                   views.FileDeleteView.as_view(),                 name='file_delete'),
@@ -22,67 +23,49 @@ urlpatterns = [
     path('folder/<uuid:pk>/delete/',            views.FolderDeleteView.as_view(),               name='folder_delete'),
     path('folder/<uuid:pk>/rename/',            views.FolderRenameView.as_view(),               name='folder_rename'),
     path('folder/<uuid:pk>/share/',             views.FolderShareView.as_view(),                name='folder_share'),
-    path('recycle-bin/', views.RecycleBinView.as_view(), name='recycle_bin'),
-    path('recycle-bin/<int:pk>/restore/', views.RestoreTrashItemView.as_view(), name='restore_trash_item'),
-    path('history/<uuid:pk>/', views.FileHistoryView.as_view(), name='file_history'),
-    path('folder/<uuid:pk>/move/', views.FolderMoveView.as_view(), name='folder_move'),
+    path('recycle-bin/',                        views.RecycleBinView.as_view(),                  name='recycle_bin'),
+    path('recycle-bin/<int:pk>/restore/',       views.RestoreTrashItemView.as_view(),           name='restore_trash_item'),
+    path('history/<uuid:pk>/',                  views.FileHistoryView.as_view(),                name='file_history'),
+    path('folder/<uuid:pk>/move/',              views.FolderMoveView.as_view(),                 name='folder_move'),
 
     path('signatures/new/',                     views.SignatureRequestCreateView.as_view(),     name='signature_request_new'),
     path('signatures/<uuid:pk>/',               views.SignatureRequestDetailView.as_view(),     name='signature_request_detail'),
     path('signatures/<uuid:pk>/fields/',        views.SaveSignatureFieldsView.as_view(),        name='save_signature_fields'),
-    path('signatures/<uuid:pk>/creator-sign/',  views.CreatorSignView.as_view(),               name='creator_sign'),
+    path('signatures/<uuid:pk>/creator-sign/',  views.CreatorSignView.as_view(),                name='creator_sign'),
 
     path('sign/<uuid:token>/',                  views.SignDocumentView.as_view(),               name='sign_document'),
     path('sign/<uuid:token>/preview/',          views.SignDocumentPreviewView.as_view(),        name='sign_document_preview'),
     path('sign/<uuid:token>/download/',         views.SignDocumentDownloadView.as_view(),       name='sign_document_download'),
     path('sign/<uuid:token>/field/<uuid:field_id>/', views.FillSignatureFieldView.as_view(),   name='fill_signature_field'),
 
-    path('pdf-tools/',                         views.PDFToolsPageView.as_view(),        name='pdf_tools_page'),
-    path('pdf-tools/merge/',                   views.PDFMergeView.as_view(),            name='pdf_merge'),
-    path('pdf-tools/remove-pages/<uuid:pk>/', views.PDFRemovePagesView.as_view(),      name='pdf_remove_pages'),
-    path('pdf-tools/reorder-pages/<uuid:pk>/', views.PDFReorderPagesView.as_view(),    name='pdf_reorder_pages'),
-    path('pdf-tools/rotate-pages/<uuid:pk>/',  views.PDFRotatePagesView.as_view(),     name='pdf_rotate_pages'),
-    path('pdf-tools/split/<uuid:pk>/',         views.PDFSplitView.as_view(),           name='pdf_split'),
-    path('pdf-tools/merge-images/',            views.PDFMergeImagesView.as_view(),     name='pdf_merge_images'),
-    path('tools/zip-extract/', views.ZipExtractView.as_view(), name='zip_extract'),
-    path('tools/letterhead-apply/', views.LetterheadApplyToolView.as_view(), name='letterhead_apply_tool'),
+    path('pdf-tools/',                          views.PDFToolsPageView.as_view(),               name='pdf_tools_page'),
+    path('pdf-tools/merge/',                    views.PDFMergeView.as_view(),                   name='pdf_merge'),
+    path('pdf-tools/remove-pages/<uuid:pk>/',   views.PDFRemovePagesView.as_view(),             name='pdf_remove_pages'),
+    path('pdf-tools/reorder-pages/<uuid:pk>/',  views.PDFReorderPagesView.as_view(),            name='pdf_reorder_pages'),
+    path('pdf-tools/rotate-pages/<uuid:pk>/',   views.PDFRotatePagesView.as_view(),             name='pdf_rotate_pages'),
+    path('pdf-tools/split/<uuid:pk>/',          views.PDFSplitView.as_view(),                   name='pdf_split'),
+    path('pdf-tools/merge-images/',             views.PDFMergeImagesView.as_view(),             name='pdf_merge_images'),
+    path('tools/zip-extract/',                  views.ZipExtractView.as_view(),                  name='zip_extract'),
+    path('tools/letterhead-apply/',             views.LetterheadApplyToolView.as_view(),        name='letterhead_apply_tool'),
 
-    # ── Letterhead (linked from file-manager tools panel) ─────────────────
-    # This entry lets the file manager's "Tools" sidebar point directly to
-    # the letterhead builder without any extra redirect view.
-    # Usage in templates:  {% url 'letterhead_builder' %}
-    # The actual views live in apps/letterhead/; we just expose the named
-    # URL here so file-manager templates can reverse it without importing
-    # a second app's urls module.
+    path('quick-sign/',                         views.QuickSignView.as_view(),                  name='quick_sign'),
+    path('quick-sign/<uuid:pk>/',               views.QuickSignView.as_view(),                  name='quick_sign_file'),
 
-    path('quick-sign/',          views.QuickSignView.as_view(),  name='quick_sign'),
-    path('quick-sign/<uuid:pk>/', views.QuickSignView.as_view(), name='quick_sign_file'),
+    path('tools/notes/',                        views.NotesToPDFView.as_view(),                 name='notes_to_pdf'),
+    path('tools/pdf-to-word/',                  views.PDFToWordView.as_view(),                  name='pdf_to_word'),
+    path('tools/pdf-to-image/',                 views.PDFToImageView.as_view(),                 name='pdf_to_image'),
 
-    path('tools/notes/',        views.NotesToPDFView.as_view(),  name='notes_to_pdf'),
-    path('tools/pdf-to-word/',  views.PDFToWordView.as_view(),   name='pdf_to_word'),
-    path('tools/pdf-to-image/', views.PDFToImageView.as_view(),  name='pdf_to_image'),
+    path('pin/',                                views.PinToggleView.as_view(),                  name='pin_toggle'),
+    path('public/<uuid:token>/',                views.FilePublicDownloadView.as_view(),         name='file_public_download'),
+    path('signatures/view/<uuid:token>/',       views.SignatureViewOnlyView.as_view(),          name='signature_view_only'),
 
-    path('pin/',                           views.PinToggleView.as_view(),            name='pin_toggle'),
-    path('public/<uuid:token>/',           views.FilePublicDownloadView.as_view(),   name='file_public_download'),
-    path('signatures/view/<uuid:token>/',  views.SignatureViewOnlyView.as_view(),    name='signature_view_only'),
+    path('<uuid:pk>/note/',                     views.FileNoteView.as_view(),                    name='file_note'),
+    path('<uuid:pk>/note/share/',               views.FileNoteShareView.as_view(),               name='file_note_share'),
+    path('<uuid:pk>/note/share/revoke_all/',    views.FileNoteShareView.as_view(),               name='file_note_share_revoke_all'),
+    path('<uuid:pk>/note/share/<uuid:share_id>/', views.FileNoteShareView.as_view(),            name='file_note_share_detail'),
+    path('<uuid:pk>/note/typing/',              views.FileNoteTypingView.as_view(),              name='file_note_typing'),
+    path('note/bulk-status/',                   views.FileNoteBulkStatusView.as_view(),          name='file_note_bulk_status'),
+    path('recycle-bin/<int:pk>/delete/', views.PermanentDeleteTrashFileView.as_view(), name='delete_trash_file'),
 
-    # Note read/write
-    path('<uuid:pk>/note/', views.FileNoteView.as_view(), name='file_note'),
-
-    # Note sharing — list & add
-    path('<uuid:pk>/note/share/', views.FileNoteShareView.as_view(), name='file_note_share'),
-
-    # Note sharing — revoke all (called when file stop-sharing fires)
-    path('<uuid:pk>/note/share/revoke_all/', views.FileNoteShareView.as_view(), name='file_note_share_revoke_all'),
-
-    # Note sharing — delete a single share
-    path('<uuid:pk>/note/share/<uuid:share_id>/', views.FileNoteShareView.as_view(), name='file_note_share_detail'),
-
-    path('<uuid:pk>/note/typing/', views.FileNoteTypingView.as_view(), name='file_note_typing'),
-
-    # Bulk badge status — called once on page load to restore badges after refresh
-    path('note/bulk-status/', views.FileNoteBulkStatusView.as_view(), name='file_note_bulk_status'),
-
-    # ── Collaborative editor (Collabora Online / WOPI) ────────────────────────
     path('collabora/', include('apps.files.collabora.urls')),
 ]

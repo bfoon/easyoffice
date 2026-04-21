@@ -51,6 +51,7 @@ urlpatterns = [
     path('letterhead/', include('apps.letterhead.urls')),
     path('invoices/', include('apps.invoices.urls')),
     path('opportunities/', include('apps.opportunities.urls')),
+    path('customer-service/', include('apps.customer_service.urls')),
 
 ]
 

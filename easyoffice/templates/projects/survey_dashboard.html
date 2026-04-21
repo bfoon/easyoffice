@@ -251,36 +251,42 @@
 .feed-chan.pub { background:#dbeafe; color:#1d4ed8; }
 
 /* ── Map ────────────────────────────────────────────────────────────────── */
-.map-el {
-  height: 520px;
-  min-height: 520px;
-  width: 100%;
-  display: block;
-  position: relative;
-  overflow: hidden;
-  background: #e2e8f0;
+.map-el{
+  width:100%;
+  height:clamp(320px, 52vh, 520px);
+  min-height:320px;
+  display:block;
+  position:relative;
+  overflow:hidden;
+  background:#e2e8f0;
+  border-top:1px solid var(--eo-border);
 }
 
-.map-el .ol-viewport,
-.map-el canvas {
-  width: 100% !important;
-  height: 100% !important;
+.map-el .ol-viewport{
+  width:100% !important;
+  height:100% !important;
 }
 
-.ol-popup {
-  position: absolute;
-  background: #fff;
-  box-shadow: 0 10px 25px rgba(0,0,0,.18);
-  padding: 12px 14px;
-  border-radius: 10px;
-  border: 1px solid #e2e8f0;
-  min-width: 220px;
-  max-width: 280px;
-  font-size: 12px;
-  line-height: 1.5;
+.map-el canvas,
+.map-el img{
+  max-width:none !important;
+  max-height:none !important;
 }
 
-.map-tools {
+.ol-popup{
+  position:absolute;
+  background:#fff;
+  box-shadow:0 10px 25px rgba(0,0,0,.18);
+  padding:12px 14px;
+  border-radius:10px;
+  border:1px solid #e2e8f0;
+  min-width:220px;
+  max-width:280px;
+  font-size:12px;
+  line-height:1.5;
+}
+
+.map-tools{
   display:flex;
   gap:6px;
   align-items:center;
@@ -292,7 +298,7 @@
   flex-wrap:wrap;
 }
 
-.map-tools .btn {
+.map-tools .btn{
   font-size:.7rem;
   padding:4px 10px;
   background:#fff;
@@ -303,58 +309,54 @@
   font-weight:600;
 }
 
-.map-tools .btn:hover {
+.map-tools .btn:hover{
   border-color:var(--proj-tint);
   color:var(--proj-dark);
 }
-.map-el {
-  height: 520px;
-  min-height: 520px;
-  width: 100%;
-  display: block;
-  position: relative;
-  overflow: hidden;
-  background: #e2e8f0;
+
+.marker-cluster-small,
+.marker-cluster-medium,
+.marker-cluster-large{
+  background-color:rgba(139,92,246,.25) !important;
 }
 
-.map-el .ol-viewport,
-.map-el .ol-unselectable,
-.map-el .ol-layer,
-.map-el .ol-layer canvas,
-.map-el .ol-layer img {
-  position: absolute !important;
-  inset: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
+.marker-cluster-small div,
+.marker-cluster-medium div,
+.marker-cluster-large div{
+  background-color:var(--proj) !important;
+  color:#fff !important;
+  font-weight:800 !important;
 }
 
-.map-el .ol-viewport,
-.map-el .ol-layer,
-.map-el .ol-layer canvas {
-  display: block !important;
+@media (max-width: 991.98px){
+  .map-el{
+    height:clamp(300px, 46vh, 460px);
+    min-height:300px;
+  }
 }
 
-.map-el canvas,
-.map-el img {
-  max-width: none !important;
-  max-height: none !important;
+@media (max-width: 767.98px){
+  .map-el{
+    height:clamp(280px, 42vh, 380px);
+    min-height:280px;
+  }
+
+  .map-tools{
+    padding:8px 10px;
+    gap:5px;
+  }
+
+  .map-tools .btn{
+    font-size:.68rem;
+    padding:4px 8px;
+  }
 }
 
-.map-el .ol-overlaycontainer,
-.map-el .ol-overlaycontainer-stopevent {
-  position: absolute !important;
-  inset: 0 !important;
-  pointer-events: none;
-}
-
-.map-el .ol-overlaycontainer-stopevent > * {
-  pointer-events: auto;
-}
-.marker-cluster-small, .marker-cluster-medium, .marker-cluster-large {
-  background-color: rgba(139,92,246,.25) !important;
-}
-.marker-cluster-small div, .marker-cluster-medium div, .marker-cluster-large div {
-  background-color:var(--proj) !important; color:#fff !important; font-weight:800 !important;
+@media (max-width: 575.98px){
+  .map-el{
+    height:clamp(250px, 38vh, 320px);
+    min-height:250px;
+  }
 }
 
 /* ── Share box ──────────────────────────────────────────────────────────── */
@@ -571,16 +573,21 @@
 <script src="https://unpkg.com/d3-cloud@1.2.7/build/d3.layout.cloud.js"></script>
 <script>
 /* ══════════════════════════════════════════════════════════════════
-   Survey Dashboard — project-themed palette, advanced interactive charts
-   Fixed map rendering + safer polling
+   Survey Dashboard — full JS block
+   Includes:
+   - polling
+   - KPIs
+   - timeline / channel charts
+   - feed / ticker
+   - question rendering
+   - rating / choice / number / text cloud
+   - OpenLayers geolocation map with responsive fix
    ══════════════════════════════════════════════════════════════════ */
 
-/* ── Theme and other helpers ──────────────────────────────────────────────── */
+/* ── Theme helpers ─────────────────────────────────────────────── */
 const _cssVar = (name, fallback) => {
   try {
-    const v = getComputedStyle(document.documentElement)
-      .getPropertyValue(name)
-      .trim();
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
     return v || fallback;
   } catch (e) {
     return fallback;
@@ -638,44 +645,24 @@ const PALETTE = [
   '#06b6d4'
 ];
 
-function isAnyMapBusy() {
-  return Object.values(MAPS).some(m => m && m.interactionPause);
-}
+/* ── Base state ───────────────────────────────────────────────── */
+const $ = (id) => document.getElementById(id);
 
-async function poll() {
-  try {
-    if (isAnyMapBusy()) return;
-
-    const r = await fetch(POLL_URL, {
-      headers: { 'X-Requested-With': 'XMLHttpRequest' }
-    });
-
-    if (!r.ok) throw new Error(r.status);
-
-    const next = await r.json();
-    next._delta = Math.max(0, (next.total_responses || 0) - (DATA.total_responses || 0));
-    DATA = next;
-    renderAll();
-  } catch (e) {
-    console.warn('poll fail', e);
-  }
-}
-/* ── State ──────────────────────────────────────────────────────── */
 let DATA = JSON.parse(document.getElementById('initialData').textContent);
 const CHARTS = {};
 const MAPS = {};
 const GEO_STATE = {};
+
 let KNOWN_IDS = new Set();
 let POLLING = true;
 let POLL_TIMER = null;
 let FILTER_CHAN = 'all';
 let FILTER_WIN = 'all';
 let TIMELINE_TYPE = 'area';
+
 const POLL_URL = "{% url 'survey_dashboard_data' project.pk survey.pk %}";
 
-/* ── Utils ──────────────────────────────────────────────────────── */
-const $ = (id) => document.getElementById(id);
-
+/* ── Utilities ────────────────────────────────────────────────── */
 const esc = (s) => String(s || '').replace(/[&<>"']/g, c => ({
   '&': '&amp;',
   '<': '&lt;',
@@ -702,7 +689,118 @@ const STOPWORDS = new Set((
   "haven't hasn't hadn't"
 ).split(' '));
 
-/* ── Filters ────────────────────────────────────────────────────── */
+function showDrill(title, body) {
+  let d = document.getElementById('drillModal');
+
+  if (!d) {
+    d = document.createElement('div');
+    d.id = 'drillModal';
+    d.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .18s;pointer-events:none';
+    d.innerHTML = `
+      <div style="background:#fff;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.3);max-width:420px;width:92vw;padding:24px 26px;transform:translateY(10px);transition:transform .18s">
+        <div style="display:flex;align-items:flex-start;gap:12px">
+          <div style="flex:1">
+            <div id="drillTitle" style="font-size:1rem;font-weight:800;color:${PAL.text};margin-bottom:8px"></div>
+            <div id="drillBody" style="font-size:.86rem;line-height:1.65;color:${PAL.textDim}"></div>
+          </div>
+          <button onclick="closeDrill()" style="border:none;background:none;font-size:1.2rem;line-height:1;cursor:pointer;color:${PAL.gray}">&times;</button>
+        </div>
+      </div>`;
+    document.body.appendChild(d);
+
+    d.addEventListener('click', function(e) {
+      if (e.target === d) closeDrill();
+    });
+  }
+
+  $('drillTitle').innerHTML = title;
+  $('drillBody').innerHTML = body;
+  d.style.opacity = '1';
+  d.style.pointerEvents = 'auto';
+  d.firstElementChild.style.transform = 'translateY(0)';
+}
+
+window.closeDrill = function () {
+  const d = $('drillModal');
+  if (!d) return;
+  d.style.opacity = '0';
+  d.style.pointerEvents = 'none';
+  d.firstElementChild.style.transform = 'translateY(10px)';
+};
+
+window.copyPublicUrl = function (e) {
+  if (e) e.preventDefault();
+  const el = $('publicUrl');
+  if (!el) return;
+  el.select();
+  el.setSelectionRange(0, 99999);
+  try {
+    document.execCommand('copy');
+  } catch (err) {}
+};
+
+function updateMeta() {
+  const pulse = $('livePulse');
+  const text = $('liveText');
+  const sync = $('lastSync');
+  const pollBtn = $('pollBtn');
+
+  if (pulse) pulse.classList.toggle('off', !POLLING);
+  if (text) text.textContent = POLLING ? 'LIVE · auto-refresh 10s' : 'PAUSED';
+  if (sync) sync.textContent = nowHMS();
+  if (pollBtn) {
+    pollBtn.innerHTML = POLLING
+      ? '<i class="bi bi-pause-fill"></i> Pause'
+      : '<i class="bi bi-play-fill"></i> Resume';
+  }
+}
+
+window.togglePoll = function () {
+  POLLING = !POLLING;
+  updateMeta();
+  if (POLLING) schedulePoll();
+  else if (POLL_TIMER) clearTimeout(POLL_TIMER);
+};
+
+window.refreshNow = function () {
+  poll();
+};
+
+function isAnyMapBusy() {
+  return Object.values(MAPS).some(m => m && m.interactionPause);
+}
+
+function schedulePoll() {
+  if (POLL_TIMER) clearTimeout(POLL_TIMER);
+  if (!POLLING) return;
+  POLL_TIMER = setTimeout(poll, 10000);
+}
+
+async function poll() {
+  try {
+    if (isAnyMapBusy()) {
+      schedulePoll();
+      return;
+    }
+
+    const r = await fetch(POLL_URL, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    });
+
+    if (!r.ok) throw new Error(r.status);
+
+    const next = await r.json();
+    next._delta = Math.max(0, (next.total_responses || 0) - (DATA.total_responses || 0));
+    DATA = next;
+    renderAll();
+  } catch (e) {
+    console.warn('poll fail', e);
+  } finally {
+    schedulePoll();
+  }
+}
+
+/* ── Filters ───────────────────────────────────────────────────── */
 function setFilter(kind, val) {
   if (kind === 'chan') FILTER_CHAN = val;
   if (kind === 'win') FILTER_WIN = val;
@@ -730,7 +828,7 @@ function filteredRecent() {
   return arr;
 }
 
-/* ── KPIs ───────────────────────────────────────────────────────── */
+/* ── KPIs ──────────────────────────────────────────────────────── */
 function renderKPIs() {
   const t = DATA.total_responses || 0;
   const p = DATA.public_responses || 0;
@@ -761,7 +859,7 @@ function renderKPIs() {
   $('kpiDelta').textContent = DATA._delta ? `+${DATA._delta}` : '+0';
 }
 
-/* ── Timeline ───────────────────────────────────────────────────── */
+/* ── Timeline ─────────────────────────────────────────────────── */
 function renderTimeline() {
   const tl = DATA.timeline || { labels: [], counts: [] };
   const labels = tl.labels.map((d) => {
@@ -831,7 +929,7 @@ window.setTimelineView = (t) => {
   renderTimeline();
 };
 
-/* ── Channel donut ──────────────────────────────────────────────── */
+/* ── Channel donut ─────────────────────────────────────────────── */
 function renderChannel() {
   const int = DATA.internal_responses || 0;
   const pub = DATA.public_responses || 0;
@@ -875,7 +973,7 @@ function renderChannel() {
   CHARTS.channel.render();
 }
 
-/* ── Feed ───────────────────────────────────────────────────────── */
+/* ── Feed ──────────────────────────────────────────────────────── */
 function renderFeed() {
   const arr = filteredRecent();
   $('feedCount').textContent = arr.length + ' row' + (arr.length === 1 ? '' : 's');
@@ -906,7 +1004,7 @@ function renderFeed() {
   }, 2500);
 }
 
-/* ── Ticker ─────────────────────────────────────────────────────── */
+/* ── Ticker ────────────────────────────────────────────────────── */
 function renderTicker() {
   const arr = DATA.recent || [];
 
@@ -924,7 +1022,7 @@ function renderTicker() {
   $('tickerStream').innerHTML = items + items;
 }
 
-/* ── Question panels ────────────────────────────────────────────── */
+/* ── Question panels ───────────────────────────────────────────── */
 function renderQuestionPanels() {
   const container = $('questionPanels');
   const qs = DATA.question_charts || [];
@@ -967,10 +1065,7 @@ function renderQuestionPanels() {
           if (MAPS[id].resizeObserver) MAPS[id].resizeObserver.disconnect();
         } catch (e) {}
         try {
-          if (MAPS[id].intersectionObserver) MAPS[id].intersectionObserver.disconnect();
-        } catch (e) {}
-        try {
-          MAPS[id].map.remove();
+          MAPS[id].map.setTarget(null);
         } catch (e) {}
         delete MAPS[id];
         delete GEO_STATE[id];
@@ -1059,7 +1154,7 @@ function renderQuestionBody(q) {
   else if (q.type === 'geolocation') renderGeo(q);
 }
 
-/* ── Choice ─────────────────────────────────────────────────────── */
+/* ── Choice ────────────────────────────────────────────────────── */
 function renderChoice(q) {
   const labels = q.labels || [];
   const counts = q.counts || [];
@@ -1108,7 +1203,7 @@ function renderChoice(q) {
   CHARTS[key].render();
 }
 
-/* ── Rating ─────────────────────────────────────────────────────── */
+/* ── Rating ────────────────────────────────────────────────────── */
 function renderRating(q) {
   const counts = q.counts || [0, 0, 0, 0, 0];
   const total = counts.reduce((a, b) => a + b, 0);
@@ -1137,7 +1232,7 @@ function renderRating(q) {
   }
 }
 
-/* ── Yes / No ───────────────────────────────────────────────────── */
+/* ── Yes / No ──────────────────────────────────────────────────── */
 function renderYN(q) {
   const counts = q.counts || [0, 0];
   const y = counts[0];
@@ -1161,7 +1256,7 @@ function renderYN(q) {
   `;
 }
 
-/* ── Number ─────────────────────────────────────────────────────── */
+/* ── Number ────────────────────────────────────────────────────── */
 function renderNumber(q) {
   const nums = (q.samples || []).map(v => parseFloat(v)).filter(v => !isNaN(v));
   const target = document.getElementById('chart-q-' + q.id);
@@ -1225,7 +1320,7 @@ function renderNumber(q) {
   CHARTS[key].render();
 }
 
-/* ── Cloud ──────────────────────────────────────────────────────── */
+/* ── Cloud ─────────────────────────────────────────────────────── */
 function renderCloud(q) {
   const samples = q.samples || [];
   const sbox = $('samples-' + q.id);
@@ -1292,7 +1387,29 @@ function renderCloud(q) {
     .start();
 }
 
-/* ── Geo map (OpenLayers + OpenStreetMap) ──────────────────────── */
+/* ── OpenLayers geo map ────────────────────────────────────────── */
+function safeMapUpdateSize(map, delays=[40, 140, 320, 700]) {
+  delays.forEach(delay => {
+    setTimeout(() => {
+      try { map.updateSize(); } catch (e) {}
+    }, delay);
+  });
+}
+
+function bindMapVisibilityRefresh(map, el) {
+  if (!map || !el) return null;
+
+  if ('ResizeObserver' in window) {
+    const ro = new ResizeObserver(() => {
+      safeMapUpdateSize(map);
+    });
+    ro.observe(el);
+    return ro;
+  }
+
+  return null;
+}
+
 function getGeoSignature(points) {
   return (points || [])
     .map(p => [
@@ -1352,11 +1469,11 @@ function createGeoMap(qid, el) {
   });
 
   const rasterLayer = new ol.layer.Tile({
-      source: new ol.source.XYZ({
-        url: 'https://{a-c}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-        attributions: '© OpenStreetMap contributors © CARTO'
-      })
-    });
+    source: new ol.source.XYZ({
+      url: 'https://{a-c}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+      attributions: '© OpenStreetMap contributors © CARTO'
+    })
+  });
 
   const popupEl = document.createElement('div');
   popupEl.className = 'ol-popup';
@@ -1411,7 +1528,7 @@ function createGeoMap(qid, el) {
     setTimeout(() => {
       if (MAPS[qid]) {
         MAPS[qid].interactionPause = false;
-        map.updateSize();
+        try { map.updateSize(); } catch (e) {}
       }
     }, 250);
   });
@@ -1430,22 +1547,8 @@ function createGeoMap(qid, el) {
     popupOverlay.setPosition(evt.coordinate);
   });
 
-  if ('ResizeObserver' in window) {
-    const ro = new ResizeObserver(() => {
-      clearTimeout(MAPS[qid]._resizeT);
-      MAPS[qid]._resizeT = setTimeout(() => {
-        try { map.updateSize(); } catch (e) {}
-      }, 120);
-    });
-    ro.observe(el);
-    MAPS[qid].resizeObserver = ro;
-  }
-
-  [60, 220, 500, 1000].forEach(delay => {
-    setTimeout(() => {
-      try { map.updateSize(); } catch (e) {}
-    }, delay);
-  });
+  MAPS[qid].resizeObserver = bindMapVisibilityRefresh(map, el);
+  safeMapUpdateSize(map, [60, 220, 500, 1000]);
 
   return MAPS[qid];
 }
@@ -1475,14 +1578,11 @@ function renderGeo(q) {
   };
 
   if (GEO_STATE[q.id].signature === signature && m.initialized) {
-    setTimeout(() => {
-      try { m.map.updateSize(); } catch (e) {}
-    }, 60);
+    safeMapUpdateSize(m.map);
     return;
   }
 
   GEO_STATE[q.id].signature = signature;
-
   m.vectorSource.clear();
 
   const features = [];
@@ -1522,12 +1622,16 @@ function renderGeo(q) {
             view.setZoom(14);
           } else if (lonLatBounds.length > 1) {
             const extent = ol.extent.createEmpty();
+
             lonLatBounds.forEach(ll => {
-              ol.extent.extend(extent, ol.proj.transformExtent(
-                [ll[0], ll[1], ll[0], ll[1]],
-                'EPSG:4326',
-                'EPSG:3857'
-              ));
+              ol.extent.extend(
+                extent,
+                ol.proj.transformExtent(
+                  [ll[0], ll[1], ll[0], ll[1]],
+                  'EPSG:4326',
+                  'EPSG:3857'
+                )
+              );
             });
 
             view.fit(extent, {
@@ -1544,12 +1648,9 @@ function renderGeo(q) {
         }
 
         m.initialized = true;
-
-        setTimeout(() => {
-          try { m.map.updateSize(); } catch (e) {}
-        }, 350);
+        safeMapUpdateSize(m.map, [80, 240, 500]);
       } catch (e) {}
-    }, 220);
+    }, 180);
   });
 }
 
@@ -1564,128 +1665,42 @@ window.resetMapView = (qid) => {
   renderGeo(q);
 };
 
-/* ── Drill-down popup ───────────────────────────────────────────── */
-function showDrill(title, body) {
-  let d = document.getElementById('drillModal');
+/* ── Global map resize refresh ─────────────────────────────────── */
+window.addEventListener('resize', () => {
+  Object.values(MAPS).forEach(entry => {
+    if (entry && entry.map) safeMapUpdateSize(entry.map);
+  });
+});
 
-  if (!d) {
-    d = document.createElement('div');
-    d.id = 'drillModal';
-    d.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .18s;pointer-events:none';
-    d.innerHTML = `<div style="background:#fff;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.3);max-width:420px;width:92vw;padding:24px 26px;transform:translateY(10px);transition:transform .18s">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-        <div id="drillT" style="font-size:1rem;font-weight:800;color:#0f172a"></div>
-        <button onclick="closeDrill()" style="background:none;border:none;font-size:1.3rem;color:#64748b;cursor:pointer">&times;</button>
-      </div>
-      <div id="drillB" style="font-size:.88rem;color:#334155;line-height:1.6"></div>
-    </div>`;
-    document.body.appendChild(d);
-    d.addEventListener('click', (e) => {
-      if (e.target === d) closeDrill();
+window.addEventListener('orientationchange', () => {
+  Object.values(MAPS).forEach(entry => {
+    if (entry && entry.map) safeMapUpdateSize(entry.map);
+  });
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    Object.values(MAPS).forEach(entry => {
+      if (entry && entry.map) safeMapUpdateSize(entry.map);
     });
   }
+});
 
-  document.getElementById('drillT').textContent = title;
-  document.getElementById('drillB').textContent = body;
-  d.style.opacity = '1';
-  d.style.pointerEvents = 'all';
-  d.firstElementChild.style.transform = 'translateY(0)';
-}
-
-window.closeDrill = () => {
-  const d = document.getElementById('drillModal');
-  if (!d) return;
-  d.style.opacity = '0';
-  d.style.pointerEvents = 'none';
-};
-
-/* ── Polling ────────────────────────────────────────────────────── */
-function isAnyMapBusy() {
-  return Object.values(MAPS).some((m) => m && m.interactionPause);
-}
-
-async function poll() {
-  try {
-    if (isAnyMapBusy()) return;
-
-    const r = await fetch(POLL_URL, {
-      headers: { 'X-Requested-With': 'XMLHttpRequest' }
-    });
-
-    if (!r.ok) throw new Error(r.status);
-
-    const next = await r.json();
-    next._delta = Math.max(0, (next.total_responses || 0) - (DATA.total_responses || 0));
-    DATA = next;
-    renderAll();
-  } catch (e) {
-    console.warn('poll fail', e);
-  }
-}
-
-function schedule() {
-  if (POLL_TIMER) clearTimeout(POLL_TIMER);
-  if (!POLLING) return;
-
-  POLL_TIMER = setTimeout(async () => {
-    await poll();
-    schedule();
-  }, 10000);
-}
-
-window.refreshNow = () => poll();
-
-window.togglePoll = () => {
-  POLLING = !POLLING;
-  const btn = $('pollBtn');
-  btn.innerHTML = POLLING
-    ? '<i class="bi bi-pause-fill"></i> Pause'
-    : '<i class="bi bi-play-fill"></i> Resume';
-
-  $('livePulse').classList.toggle('off', !POLLING);
-  $('liveText').textContent = POLLING ? 'LIVE · auto-refresh 10s' : 'PAUSED';
-
-  if (POLLING) schedule();
-  else if (POLL_TIMER) clearTimeout(POLL_TIMER);
-};
-
-/* ── Copy public url ────────────────────────────────────────────── */
-window.copyPublicUrl = (ev) => {
-  const el = $('publicUrl');
-  if (!el) return;
-
-  el.select();
-
-  try {
-    navigator.clipboard.writeText(el.value);
-  } catch (e) {
-    document.execCommand('copy');
-  }
-
-  const btn = ev?.currentTarget;
-  if (!btn) return;
-
-  const prev = btn.innerHTML;
-  btn.innerHTML = '<i class="bi bi-check"></i> Copied!';
-  setTimeout(() => {
-    btn.innerHTML = prev;
-  }, 1800);
-};
-
-/* ── Render all ─────────────────────────────────────────────────── */
+/* ── Full render ───────────────────────────────────────────────── */
 function renderAll() {
   renderKPIs();
   renderTimeline();
   renderChannel();
-  renderTicker();
   renderFeed();
+  renderTicker();
   renderQuestionPanels();
-  $('lastSync').textContent = nowHMS();
+  updateMeta();
 }
 
-/* ── Boot ───────────────────────────────────────────────────────── */
-(DATA.recent || []).forEach((r) => KNOWN_IDS.add(r.id));
-renderAll();
-schedule();
+document.addEventListener('DOMContentLoaded', function () {
+  renderAll();
+  updateMeta();
+  schedulePoll();
+});
 </script>
 {% endblock %}

@@ -23,6 +23,7 @@ import logging
 from datetime import date, timedelta
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.views.generic import ListView
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_GET
 from apps.projects.geo_utils import (
@@ -387,6 +388,163 @@ def _resolve_import_source(request, project):
     if upload:
         return upload, upload.name, None, int(getattr(upload, 'size', 0) or 0)
     return None, None, None, 0
+
+def _build_survey_export(survey, fmt='csv'):
+    """
+    Build a survey export as CSV or XLSX.
+
+    Returns:
+        content_bytes, output_filename, mime_type
+    """
+    fmt = (fmt or 'csv').lower().strip()
+    if fmt not in ('csv', 'xlsx'):
+        fmt = 'csv'
+
+    questions = survey.questions.all().order_by('order')
+    responses = survey.responses.select_related('respondent').prefetch_related(
+        'answers', 'answers__question'
+    ).order_by('-submitted_at')
+
+    header = [
+        'Response ID',
+        'Respondent Name',
+        'Respondent User',
+        'Is Public Response',
+        'Submitted At',
+        'IP Address',
+        'Device ID',
+        'User Agent',
+    ]
+
+    geo_question_ids = set()
+    for q in questions:
+        if q.q_type == 'geolocation':
+            geo_question_ids.add(str(q.pk))
+            header.extend([
+                f'{q.text} — Latitude',
+                f'{q.text} — Longitude',
+                f'{q.text} — Accuracy (m)',
+                f'{q.text} — Source',
+                f'{q.text} — Address',
+                f'{q.text} — Captured At',
+            ])
+        else:
+            header.append(q.text)
+
+    rows = []
+    for resp in responses:
+        row = [
+            str(resp.pk),
+            resp.respondent_name or '',
+            str(resp.respondent) if resp.respondent else '',
+            'Yes' if resp.is_public_response else 'No',
+            resp.submitted_at.strftime('%Y-%m-%d %H:%M:%S') if resp.submitted_at else '',
+            resp.ip_address or '',
+            resp.device_id or '',
+            resp.user_agent or '',
+        ]
+
+        answers_by_question = {
+            str(ans.question_id): ans
+            for ans in resp.answers.all()
+        }
+
+        for q in questions:
+            ans = answers_by_question.get(str(q.pk))
+
+            if not ans:
+                if str(q.pk) in geo_question_ids:
+                    row.extend(['', '', '', '', '', ''])
+                else:
+                    row.append('')
+                continue
+
+            raw_value = ans.value or ''
+
+            if str(q.pk) in geo_question_ids:
+                geo_cols = geo_answer_to_columns(raw_value)
+                row.extend([
+                    geo_cols.get('latitude', ''),
+                    geo_cols.get('longitude', ''),
+                    geo_cols.get('accuracy_m', ''),
+                    geo_cols.get('source', ''),
+                    geo_cols.get('address', ''),
+                    geo_cols.get('captured_at', ''),
+                ])
+            else:
+                if q.q_type == 'yes_no':
+                    v = str(raw_value).strip().lower()
+                    if v in ('true', '1', 'yes', 'y', 'on'):
+                        row.append('Yes')
+                    elif v in ('false', '0', 'no', 'n', 'off'):
+                        row.append('No')
+                    else:
+                        row.append(raw_value)
+                else:
+                    row.append(raw_value)
+
+        rows.append(row)
+
+    safe_title = (survey.title or 'survey').strip().replace(' ', '_')
+
+    if fmt == 'xlsx':
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from io import BytesIO
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Survey Export'
+
+        ws.append(header)
+        for r in rows:
+            ws.append(r)
+
+        header_fill = PatternFill(fill_type='solid', fgColor='1E3A5F')
+        header_font = Font(color='FFFFFF', bold=True)
+
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(vertical='center', wrap_text=True)
+
+        for col in ws.columns:
+            max_len = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                try:
+                    val = '' if cell.value is None else str(cell.value)
+                except Exception:
+                    val = ''
+                max_len = max(max_len, len(val))
+            ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 40)
+
+        ws.freeze_panes = 'A2'
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        return (
+            output.getvalue(),
+            f'{safe_title}_export.xlsx',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+
+    # default csv
+    import io
+    import csv
+
+    stream = io.StringIO()
+    writer = csv.writer(stream)
+    writer.writerow(header)
+    writer.writerows(rows)
+
+    return (
+        stream.getvalue().encode('utf-8-sig'),
+        f'{safe_title}_export.csv',
+        'text/csv; charset=utf-8'
+    )
 
 
 class LocationImportPreviewView(LoginRequiredMixin, View):
@@ -1735,39 +1893,42 @@ class ProjectDocumentUnlinkView(LoginRequiredMixin, View):
 # SURVEY VIEWS
 # =============================================================================
 
-class ProjectSurveyListView(LoginRequiredMixin, View):
-    """List all surveys for a project + create new surveys + export responses."""
+class ProjectSurveyListView(LoginRequiredMixin, ListView):
+    model = Survey
+    template_name = 'projects/project_surveys.html'
+    context_object_name = 'surveys'
 
-    def get(self, request, pk):
-        project = get_object_or_404(Project, pk=pk)
-        if not _is_project_member(request.user, project):
-            return HttpResponseForbidden()
+    def get_queryset(self):
+        self.project = get_object_or_404(Project, pk=self.kwargs['pk'])
+        return Survey.objects.filter(project=self.project).order_by('-created_at')
 
-        export_sid = request.GET.get('export', '').strip()
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['project'] = self.project
+        ctx['is_member'] = _is_project_member(self.request.user, self.project)
+        ctx['is_manager'] = (
+            self.request.user.is_superuser or
+            self.project.project_manager == self.request.user
+        )
+        # annotate each survey with a resp_count attribute the template uses
+        for survey in ctx['surveys']:
+            if not hasattr(survey, 'resp_count'):
+                survey.resp_count = survey.responses.count()
+        return ctx
+
+    def get(self, request, *args, **kwargs):
+        self.object_list = self.get_queryset()
+        project = self.project
+
+        export_sid = request.GET.get('export')
         if export_sid:
             return self._build_survey_export(request, project, export_sid)
 
-        surveys = (
-            project.surveys
-            .select_related('created_by')
-            .prefetch_related('questions')
-            .annotate(resp_count=Count('responses'))
-            .order_by('-created_at')
-        )
-
-        active_count = sum(1 for s in surveys if s.is_active)
-        total_responses = sum(getattr(s, 'resp_count', 0) for s in surveys)
-
-        return render(request, 'projects/survey_list.html', {
-            'project': project,
-            'surveys': surveys,
-            'is_member': _is_project_member(request.user, project),
-            'is_manager': request.user.is_superuser or project.project_manager == request.user,
-            'active_count': active_count,
-            'total_responses': total_responses,
-        })
+        context = self.get_context_data()
+        return self.render_to_response(context)
 
     def post(self, request, pk):
+        """Create a new survey with its questions."""
         project = get_object_or_404(Project, pk=pk)
         if not _is_project_member(request.user, project):
             return HttpResponseForbidden()
@@ -1777,96 +1938,98 @@ class ProjectSurveyListView(LoginRequiredMixin, View):
             messages.error(request, 'Survey title is required.')
             return redirect('project_surveys', pk=pk)
 
+        import uuid as _uuid
+        is_public = request.POST.get('is_public') == 'on'
         survey = Survey.objects.create(
             project=project,
             title=title,
             description=request.POST.get('description', '').strip(),
             is_anonymous=request.POST.get('is_anonymous') == 'on',
-            is_public=request.POST.get('is_public') == 'on',
+            is_public=is_public,
             allow_multiple_responses=request.POST.get('allow_multiple_responses') == 'on',
             closes_at=request.POST.get('closes_at') or None,
             created_by=request.user,
+            public_token=_uuid.uuid4() if is_public else None,
         )
-
-        if survey.is_public and not survey.public_token:
-            import uuid
-            survey.public_token = uuid.uuid4()
-            survey.save(update_fields=['public_token'])
 
         _save_survey_questions(survey, request)
 
         messages.success(request, f'Survey "{survey.title}" created.')
         return redirect('survey_dashboard', pk=pk, sid=survey.pk)
 
-    def _export_csv(self, request, project, sid):
+    def _build_survey_export(self, request, project, export_sid):
         survey = get_object_or_404(
-            Survey.objects.prefetch_related('questions', 'responses__answers__question'),
-            pk=sid,
+            Survey,
+            pk=export_sid,
             project=project
         )
 
-        questions = list(survey.questions.order_by('order'))
-        responses = (
-            survey.responses
-            .select_related('respondent')
-            .prefetch_related('answers__question')
-            .order_by('submitted_at')
-        )
+        questions = survey.questions.all().order_by('order')
+        responses = survey.responses.all().order_by('-submitted_at')
 
-        response = HttpResponse(content_type='text/csv; charset=utf-8')
-        response['Content-Disposition'] = (
-            f'attachment; filename="{project.code}_{survey.title.replace(" ", "_")}_responses.csv"'
-        )
+        filename = f"{survey.title or 'survey'}_export.csv".replace(' ', '_')
+
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
 
         writer = csv.writer(response)
 
-        # Header row — geo questions emit 5 sub-columns each
-        geo_qids = {str(q.pk) for q in questions if q.q_type == 'geolocation'}
         header = [
-            'Response ID', 'Submitted At', 'Respondent',
-            'Respondent Name', 'Is Public Response', 'IP Address', 'Device ID',
+            'Response ID',
+            'Respondent Name',
+            'Respondent',
+            'Is Public',
+            'Submitted At',
+            'IP Address',
+            'Device ID',
+            'User Agent',
         ]
+
         for q in questions:
-            if q.q_type == 'geolocation':
-                header.extend([
-                    f'{q.text} [lat]',
-                    f'{q.text} [lng]',
-                    f'{q.text} [address]',
-                    f'{q.text} [accuracy_m]',
-                    f'{q.text} [source]',
-                ])
-            else:
-                header.append(q.text)
+            header.append(q.text)
+
         writer.writerow(header)
 
-        # Data rows
         for resp in responses:
-            answer_map = {str(a.question_id): a.value for a in resp.answers.all()}
-
-            respondent_display = ''
-            if resp.respondent:
-                respondent_display = getattr(resp.respondent, 'full_name', '') or str(resp.respondent)
-
             row = [
                 str(resp.pk),
-                resp.submitted_at.strftime('%Y-%m-%d %H:%M:%S') if resp.submitted_at else '',
-                respondent_display,
-                resp.respondent_name or '',
-                'Yes' if getattr(resp, 'is_public_response', False) else 'No',
-                resp.ip_address or '',
-                resp.device_id or '',
+                getattr(resp, 'respondent_name', '') or '',
+                str(getattr(resp, 'respondent', '') or ''),
+                getattr(resp, 'is_public_response', False),
+                getattr(resp, 'submitted_at', ''),
+                getattr(resp, 'ip_address', ''),
+                getattr(resp, 'device_id', ''),
+                getattr(resp, 'user_agent', ''),
             ]
 
+            answers_by_question = {
+                str(ans.question_id): ans
+                for ans in resp.answers.select_related('question').all()
+            }
+
             for q in questions:
-                qid = str(q.pk)
-                if qid in geo_qids:
-                    cols = geo_answer_to_columns(answer_map.get(qid, ''))
-                    row.extend([
-                        cols['latitude'], cols['longitude'], cols['address'],
-                        cols['accuracy_m'], cols['source'],
-                    ])
-                else:
-                    row.append(answer_map.get(qid, ''))
+                ans = answers_by_question.get(str(q.pk))
+                if not ans:
+                    row.append('')
+                    continue
+
+                value = getattr(ans, 'value', '') or ''
+
+                if q.q_type == 'geolocation':
+                    geo = parse_geo_answer(value)
+                    if geo:
+                        parts = []
+                        if geo.get('address'):
+                            parts.append(geo['address'])
+                        if geo.get('lat') is not None and geo.get('lng') is not None:
+                            parts.append(f"{geo['lat']:.6f}, {geo['lng']:.6f}")
+                        if geo.get('accuracy_m'):
+                            parts.append(f"±{float(geo['accuracy_m']):.0f}m")
+                        if geo.get('source'):
+                            parts.append(str(geo['source']).upper())
+                        value = ' | '.join(parts) if parts else value
+
+                row.append(value)
 
             writer.writerow(row)
 

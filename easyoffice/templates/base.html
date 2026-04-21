@@ -274,42 +274,73 @@
     </div>
 
     <div class="dropdown">
-      <button class="eo-icon-btn" data-bs-toggle="dropdown" aria-expanded="false">
-        <i class="bi bi-bell"></i>
-        {% if unread_notification_count %}
-          <span class="eo-notif-dot">{{ unread_notification_count }}</span>
-        {% endif %}
-      </button>
-      <div class="dropdown-menu dropdown-menu-end eo-notif-dropdown">
-        <div class="eo-notif-header">
-          <span>Notifications</span>
-          <form method="post" action="{% url 'mark_notifications_read' %}" class="d-inline">
-            {% csrf_token %}
-            <button type="submit" class="btn btn-link btn-sm p-0">Mark all read</button>
-          </form>
+        <button class="eo-icon-btn" data-bs-toggle="dropdown" aria-expanded="false" id="notificationBellBtn">
+          <i class="bi bi-bell"></i>
+          <span
+            class="eo-notif-dot"
+            id="notificationBellCount"
+            {% if not unread_notification_count %}style="display:none"{% endif %}>
+            {{ unread_notification_count|default:0 }}
+          </span>
+        </button>
+
+        <div class="dropdown-menu dropdown-menu-end eo-notif-dropdown" id="notificationDropdown">
+          <div class="eo-notif-header d-flex justify-content-between align-items-center">
+            <span>Notifications</span>
+            <button
+              type="button"
+              id="markNotificationsReadBtn"
+              class="btn btn-link btn-sm p-0 text-decoration-none"
+              data-url="{% url 'mark_notifications_read' %}">
+              Mark all read
+            </button>
+          </div>
+
+          <div id="notificationDropdownList">
+            {% for notif in request.user.core_notifications.all|slice:":20" %}
+              {% if not notif.is_read %}
+              <a
+                class="eo-notif-item unread bell-notification-item"
+                href="{{ notif.link|default:'#' }}"
+                data-notification-id="{{ notif.id }}">
+                <div class="eo-notif-icon eo-notif-{{ notif.notification_type }}">
+                  {% if notif.notification_type == 'task' %}
+                    <i class="bi bi-check2-square"></i>
+                  {% elif notif.notification_type == 'message' %}
+                    <i class="bi bi-chat-dots"></i>
+                  {% elif notif.notification_type == 'project' %}
+                    <i class="bi bi-kanban"></i>
+                  {% elif notif.notification_type == 'it' %}
+                    <i class="bi bi-pc-display"></i>
+                  {% elif notif.notification_type == 'meeting' %}
+                    <i class="bi bi-calendar-event"></i>
+                  {% elif notif.notification_type == 'security' %}
+                    <i class="bi bi-shield-lock"></i>
+                  {% else %}
+                    <i class="bi bi-bell"></i>
+                  {% endif %}
+                </div>
+                <div class="eo-notif-body">
+                  <p class="eo-notif-title">{{ notif.title }}</p>
+                  <p class="eo-notif-msg">{{ notif.message|truncatechars:60 }}</p>
+                  <span class="eo-notif-time">{{ notif.created_at|naturaltime }}</span>
+                </div>
+              </a>
+              {% endif %}
+            {% endfor %}
+
+            <div
+              class="eo-notif-empty"
+              id="notificationDropdownEmpty"
+              {% if unread_notification_count %}style="display:none"{% endif %}>
+              <i class="bi bi-bell-slash"></i>
+              <p>No notifications</p>
+            </div>
+          </div>
+
+          <a href="{% url 'notifications' %}" class="eo-notif-footer">View all notifications</a>
         </div>
-        {% for notif in request.user.core_notifications.all|slice:":6" %}
-        <a class="eo-notif-item {% if not notif.is_read %}unread{% endif %}" href="{{ notif.link|default:'#' }}">
-          <div class="eo-notif-icon eo-notif-{{ notif.notification_type }}">
-            {% if notif.notification_type == 'task' %}<i class="bi bi-check2-square"></i>
-            {% elif notif.notification_type == 'message' %}<i class="bi bi-chat-dots"></i>
-            {% elif notif.notification_type == 'project' %}<i class="bi bi-kanban"></i>
-            {% elif notif.notification_type == 'it' %}<i class="bi bi-pc-display"></i>
-            {% elif notif.notification_type == 'meeting' %}<i class="bi bi-calendar-event"></i>
-            {% else %}<i class="bi bi-bell"></i>{% endif %}
-          </div>
-          <div class="eo-notif-body">
-            <p class="eo-notif-title">{{ notif.title }}</p>
-            <p class="eo-notif-msg">{{ notif.message|truncatechars:60 }}</p>
-            <span class="eo-notif-time">{{ notif.created_at|naturaltime }}</span>
-          </div>
-        </a>
-        {% empty %}
-        <div class="eo-notif-empty"><i class="bi bi-bell-slash"></i><p>No notifications</p></div>
-        {% endfor %}
-        <a href="{% url 'notifications' %}" class="eo-notif-footer">View all notifications</a>
       </div>
-    </div>
 
     <div class="dropdown">
       <button class="eo-user-btn" data-bs-toggle="dropdown">
@@ -730,7 +761,168 @@
 })();
 </script>
 {% endif %}
+<script>
+(function () {
+  'use strict';
 
+  function getCSRFToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    if (meta) return meta.getAttribute('content') || '';
+    const input = document.querySelector('input[name="csrfmiddlewaretoken"]');
+    return input ? input.value : '';
+  }
+
+  function updateNotificationBadge(count) {
+    const badge = document.getElementById('notificationBellCount');
+    if (!badge) return;
+
+    const safeCount = parseInt(count || 0, 10);
+    badge.textContent = safeCount;
+
+    if (safeCount > 0) {
+      badge.style.display = '';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  function showNotificationEmptyState() {
+    const empty = document.getElementById('notificationDropdownEmpty');
+    if (empty) {
+      empty.style.display = '';
+    }
+  }
+
+  function hideNotificationEmptyState() {
+    const empty = document.getElementById('notificationDropdownEmpty');
+    if (empty) {
+      empty.style.display = 'none';
+    }
+  }
+
+  function removeAllNotificationItems() {
+    document.querySelectorAll('.bell-notification-item').forEach(function (el) {
+      el.remove();
+    });
+  }
+
+  function unreadDropdownCount() {
+    return document.querySelectorAll('.bell-notification-item').length;
+  }
+
+  async function markAllNotificationsRead(url) {
+    const response = await fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-CSRFToken': getCSRFToken(),
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+      },
+      body: ''
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to mark notifications as read.');
+    }
+
+    return response.json();
+  }
+
+  function appendNotificationToDropdown(data) {
+    const list = document.getElementById('notificationDropdownList');
+    if (!list) return;
+
+    hideNotificationEmptyState();
+
+    const a = document.createElement('a');
+    a.className = 'eo-notif-item unread bell-notification-item';
+    a.href = data.link || '#';
+    a.dataset.notificationId = data.id || '';
+
+    let iconClass = 'bi-bell';
+    if (data.type === 'task') iconClass = 'bi-check2-square';
+    else if (data.type === 'message') iconClass = 'bi-chat-dots';
+    else if (data.type === 'project') iconClass = 'bi-kanban';
+    else if (data.type === 'it') iconClass = 'bi-pc-display';
+    else if (data.type === 'meeting') iconClass = 'bi-calendar-event';
+    else if (data.type === 'security') iconClass = 'bi-shield-lock';
+
+    a.innerHTML = `
+      <div class="eo-notif-icon eo-notif-${data.type || 'default'}">
+        <i class="bi ${iconClass}"></i>
+      </div>
+      <div class="eo-notif-body">
+        <p class="eo-notif-title">${data.title || 'Notification'}</p>
+        <p class="eo-notif-msg">${data.body || ''}</p>
+        <span class="eo-notif-time">Just now</span>
+      </div>
+    `;
+
+    list.insertBefore(a, list.firstChild);
+
+    updateNotificationBadge(unreadDropdownCount());
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    const markBtn = document.getElementById('markNotificationsReadBtn');
+
+    if (markBtn) {
+      markBtn.addEventListener('click', async function (e) {
+        e.preventDefault();
+
+        try {
+          const data = await markAllNotificationsRead(this.dataset.url);
+
+          if (data.status === 'ok') {
+            removeAllNotificationItems();
+            updateNotificationBadge(data.unread_count || 0);
+
+            if ((data.unread_count || 0) <= 0) {
+              showNotificationEmptyState();
+            }
+          }
+        } catch (err) {
+          console.error('Notification mark-read failed:', err);
+        }
+      });
+    }
+
+    // Real-time notification websocket integration
+    const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    const wsUrl = protocol + window.location.host + '/ws/notifications/';
+    let notificationSocket = null;
+
+    try {
+      notificationSocket = new WebSocket(wsUrl);
+    } catch (err) {
+      console.warn('Notification socket could not be opened:', err);
+    }
+
+    if (notificationSocket) {
+      notificationSocket.onmessage = function (event) {
+        try {
+          const data = JSON.parse(event.data);
+
+          appendNotificationToDropdown({
+            id: data.id || '',
+            type: data.type || 'default',
+            title: data.title || 'Notification',
+            body: data.body || '',
+            link: data.link || '#'
+          });
+        } catch (err) {
+          console.error('Notification socket payload error:', err);
+        }
+      };
+
+      notificationSocket.onerror = function (err) {
+        console.warn('Notification websocket error:', err);
+      };
+    }
+  });
+})();
+</script>
 {% block extra_js %}{% endblock %}
 </body>
 </html>

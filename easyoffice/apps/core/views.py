@@ -318,7 +318,6 @@ class LoginView(View):
         except User.DoesNotExist:
             candidate = None
 
-        # Lockout check
         if candidate and sec.lockout_enabled and candidate.is_locked_out():
             unlock_str = candidate.lockout_until.strftime('%H:%M UTC')
             return render(request, self.template_name, {
@@ -329,7 +328,6 @@ class LoginView(View):
                 ),
             })
 
-        # Credential check
         if not form.is_valid():
             if candidate and sec.lockout_enabled:
                 now_locked = candidate.record_failed_login(
@@ -368,7 +366,6 @@ class LoginView(View):
                     })
             return render(request, self.template_name, {'form': form})
 
-        # Credentials valid
         user = form.get_user()
         ip = _get_client_ip(request)
         geo = _geo_lookup(ip)
@@ -454,6 +451,8 @@ class LoginView(View):
             purpose = OTPChallenge.Purpose.DEVICE_VERIFY
 
         pending_did = device_id or _new_device_id()
+        request.session['pending_device_id'] = pending_did
+
         otp = OTPChallenge.issue(
             user=user,
             purpose=purpose,
@@ -568,7 +567,7 @@ class OTPVerifyView(View):
 
         device = TrustedDevice.create_for(
             user=user,
-            device_id=otp.pending_device_id or _new_device_id(),
+            device_id=otp.pending_device_id or request.session.get('pending_device_id') or _new_device_id(),
             device_name=otp.pending_device_name,
             user_agent=otp.pending_user_agent,
             ip_address=otp.pending_ip,
@@ -588,6 +587,7 @@ class OTPVerifyView(View):
         )
 
         request.session.pop(SESSION_OTP_ID, None)
+        request.session.pop('pending_device_id', None)
         return _complete_login(request, user, device)
 
 
@@ -609,7 +609,7 @@ class ResendOTPView(View):
         new_otp = OTPChallenge.issue(
             user=old.user,
             purpose=old.purpose,
-            pending_device_id=old.pending_device_id,
+            pending_device_id=old.pending_device_id or request.session.get('pending_device_id'),
             pending_device_name=old.pending_device_name,
             pending_ip=old.pending_ip,
             pending_city=old.pending_city,
@@ -720,9 +720,11 @@ class TrustedDevicesView(LoginRequiredMixin, View):
     template_name = 'auth/trusted_devices.html'
 
     def get(self, request):
+        current_cookie_device_id = _get_device_id(request)
         return render(request, self.template_name, {
             'devices': request.user.trusted_devices.order_by('-trusted_at'),
-            'current_device_id': _get_device_id(request),
+            'current_cookie_device_id': current_cookie_device_id,
+            'current_active_device_pk': request.user.active_device_id,
         })
 
     def post(self, request):
@@ -775,7 +777,8 @@ class SecurityDashboardView(LoginRequiredMixin, TemplateView):
         ctx['trusted_devices'] = user.trusted_devices.filter(
             is_revoked=False
         ).order_by('-trusted_at')
-        ctx['current_device_id'] = _get_device_id(self.request)
+        ctx['current_cookie_device_id'] = _get_device_id(self.request)
+        ctx['current_active_device_pk'] = user.active_device_id
         return ctx
 
 
@@ -877,11 +880,19 @@ class NotificationsView(LoginRequiredMixin, TemplateView):
 
 class MarkNotificationsReadView(LoginRequiredMixin, View):
     def post(self, request):
-        request.user.core_notifications.filter(is_read=False).update(
+        updated = request.user.core_notifications.filter(is_read=False).update(
             is_read=True,
             read_at=timezone.now()
         )
+
+        unread_count = request.user.core_notifications.filter(is_read=False).count()
+
         if request.headers.get('x-requested-with') == 'XMLHttpRequest':
-            return JsonResponse({'status': 'ok'})
+            return JsonResponse({
+                'status': 'ok',
+                'marked_read': updated,
+                'unread_count': unread_count,
+            })
+
         next_url = request.POST.get('next') or request.META.get('HTTP_REFERER') or '/dashboard/'
         return redirect(next_url)

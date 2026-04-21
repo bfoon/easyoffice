@@ -1,0 +1,627 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ contract.title }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'contract_dashboard' %}">Contracts</a> /
+  <a href="{% url 'contract_list' %}">All Contracts</a> /
+  <span>{{ contract.title|truncatechars:30 }}</span>
+{% endblock %}
+
+{% block content %}
+<style>
+  .cdetail-shell{
+    display:flex;
+    flex-direction:column;
+    gap:1.4rem;
+  }
+  .cdetail-hero{
+    position:relative;
+    overflow:hidden;
+    border-radius:24px;
+    padding:1.5rem;
+    background:
+      radial-gradient(circle at top right, rgba(255,255,255,.15), transparent 24%),
+      linear-gradient(135deg, #0f172a 0%, #1e40af 58%, #0ea5e9 100%);
+    color:#fff;
+    box-shadow:0 24px 50px rgba(15, 23, 42, .16);
+  }
+  .cdetail-hero-top{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:1rem;
+    flex-wrap:wrap;
+    position:relative;
+    z-index:1;
+  }
+  .cdetail-kicker{
+    display:inline-flex;
+    align-items:center;
+    gap:.42rem;
+    padding:.4rem .8rem;
+    border-radius:999px;
+    background:rgba(255,255,255,.12);
+    border:1px solid rgba(255,255,255,.16);
+    font-size:.77rem;
+    font-weight:700;
+    margin-bottom:.8rem;
+  }
+  .cdetail-title{
+    margin:0;
+    font-size:clamp(1.55rem, 2.4vw, 2.2rem);
+    font-weight:800;
+    letter-spacing:-.02em;
+  }
+  .cdetail-subtitle{
+    margin:.45rem 0 0;
+    color:rgba(255,255,255,.86);
+    font-size:.94rem;
+    line-height:1.7;
+  }
+  .cdetail-tags{
+    display:flex;
+    gap:.55rem;
+    flex-wrap:wrap;
+    margin-top:1rem;
+  }
+  .cdetail-tag{
+    display:inline-flex;
+    align-items:center;
+    gap:.4rem;
+    padding:.46rem .8rem;
+    border-radius:999px;
+    background:rgba(255,255,255,.12);
+    border:1px solid rgba(255,255,255,.15);
+    font-size:.76rem;
+    font-weight:700;
+  }
+  .cdetail-actions{
+    display:flex;
+    gap:.65rem;
+    flex-wrap:wrap;
+  }
+  .cdetail-btn{
+    display:inline-flex;
+    align-items:center;
+    gap:.5rem;
+    min-height:42px;
+    padding:.72rem 1rem;
+    border-radius:14px;
+    text-decoration:none;
+    font-weight:700;
+    transition:.2s ease;
+    border:1px solid transparent;
+  }
+  .cdetail-btn:hover{ transform:translateY(-2px); }
+  .cdetail-btn-light{
+    background:rgba(255,255,255,.12);
+    border-color:rgba(255,255,255,.16);
+    color:#fff;
+  }
+  .cdetail-btn-white{
+    background:#fff;
+    color:#0f172a;
+    box-shadow:0 12px 24px rgba(15, 23, 42, .14);
+  }
+  .cdetail-metrics{
+    display:grid;
+    grid-template-columns:repeat(4, minmax(0, 1fr));
+    gap:1rem;
+    margin-top:1.45rem;
+    position:relative;
+    z-index:1;
+  }
+  .cdetail-metric{
+    padding:1rem;
+    border-radius:18px;
+    background:rgba(255,255,255,.12);
+    border:1px solid rgba(255,255,255,.15);
+    backdrop-filter:blur(8px);
+  }
+  .cdetail-metric-label{
+    font-size:.74rem;
+    color:rgba(255,255,255,.8);
+    margin-bottom:.45rem;
+  }
+  .cdetail-metric-value{
+    font-size:1.08rem;
+    font-weight:800;
+    color:#fff;
+  }
+  .cdetail-card{
+    border:1px solid rgba(148,163,184,.18);
+    border-radius:22px;
+    background:linear-gradient(180deg, #fff, #f8fafc);
+    box-shadow:0 16px 34px rgba(15, 23, 42, .06);
+    overflow:hidden;
+  }
+  .cdetail-card-head{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:1rem;
+    flex-wrap:wrap;
+    padding:1.1rem 1.2rem 0;
+  }
+  .cdetail-card-title{
+    margin:0;
+    font-size:1rem;
+    font-weight:800;
+    color:var(--eo-text);
+  }
+  .cdetail-card-subtitle{
+    margin:.22rem 0 0;
+    font-size:.82rem;
+    color:var(--eo-text-muted);
+  }
+  .cdetail-card-body{
+    padding:1rem 1.2rem 1.2rem;
+  }
+  .cdetail-overview-grid{
+    display:grid;
+    grid-template-columns:repeat(2, minmax(0, 1fr));
+    gap:.9rem;
+  }
+  .cdetail-stat{
+    padding:1rem;
+    border-radius:18px;
+    background:#fff;
+    border:1px solid rgba(148,163,184,.14);
+  }
+  .cdetail-stat-label{
+    font-size:.74rem;
+    color:var(--eo-text-muted);
+    margin-bottom:.25rem;
+  }
+  .cdetail-stat-value{
+    font-size:.94rem;
+    font-weight:800;
+    color:var(--eo-text);
+    line-height:1.45;
+    word-break:break-word;
+  }
+  .cdetail-description{
+    margin-top:.9rem;
+    padding:1rem;
+    border-radius:18px;
+    background:#fff;
+    border:1px solid rgba(148,163,184,.14);
+    line-height:1.75;
+    color:var(--eo-text);
+  }
+  .cdetail-timeline{
+    display:flex;
+    flex-direction:column;
+    gap:.8rem;
+  }
+  .cdetail-timeline-item{
+    display:flex;
+    gap:.85rem;
+    align-items:flex-start;
+    padding:.95rem 1rem;
+    border-radius:18px;
+    background:#fff;
+    border:1px solid rgba(148,163,184,.14);
+  }
+  .cdetail-timeline-dot{
+    width:40px;
+    height:40px;
+    border-radius:12px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    flex-shrink:0;
+    background:#eff6ff;
+    color:#2563eb;
+  }
+  .cdetail-timeline-body{
+    flex:1;
+  }
+  .cdetail-timeline-title{
+    font-size:.88rem;
+    font-weight:800;
+    color:var(--eo-text);
+    margin:0;
+  }
+  .cdetail-timeline-meta{
+    margin-top:.2rem;
+    font-size:.76rem;
+    color:var(--eo-text-muted);
+  }
+  .cdetail-side-stack{
+    display:flex;
+    flex-direction:column;
+    gap:1rem;
+  }
+  .cdetail-info-list{
+    display:flex;
+    flex-direction:column;
+    gap:.78rem;
+  }
+  .cdetail-info-item{
+    padding:.9rem 1rem;
+    border-radius:16px;
+    background:#fff;
+    border:1px solid rgba(148,163,184,.14);
+  }
+  .cdetail-info-label{
+    font-size:.72rem;
+    color:var(--eo-text-muted);
+    margin-bottom:.2rem;
+  }
+  .cdetail-info-value{
+    font-size:.88rem;
+    font-weight:800;
+    color:var(--eo-text);
+    line-height:1.6;
+    word-break:break-word;
+  }
+  .cdetail-invoice-list{
+    display:flex;
+    flex-direction:column;
+    gap:.85rem;
+  }
+  .cdetail-invoice-item{
+    display:flex;
+    justify-content:space-between;
+    gap:1rem;
+    flex-wrap:wrap;
+    padding:1rem;
+    border-radius:18px;
+    background:#fff;
+    border:1px solid rgba(148,163,184,.14);
+  }
+  .cdetail-invoice-title{
+    font-size:.92rem;
+    font-weight:800;
+    color:var(--eo-text);
+  }
+  .cdetail-invoice-meta{
+    font-size:.76rem;
+    color:var(--eo-text-muted);
+    line-height:1.65;
+    margin-top:.25rem;
+  }
+  .cdetail-invoice-value{
+    text-align:right;
+  }
+  .cdetail-invoice-amount{
+    font-size:1rem;
+    font-weight:800;
+    color:#059669;
+  }
+  .cdetail-invoice-status{
+    font-size:.74rem;
+    color:var(--eo-text-muted);
+    margin-top:.25rem;
+  }
+  .cdetail-empty{
+    text-align:center;
+    padding:2rem 1rem;
+    color:var(--eo-text-muted);
+  }
+  .cdetail-empty i{
+    display:block;
+    font-size:2rem;
+    margin-bottom:.5rem;
+    opacity:.3;
+  }
+  @media (max-width: 1199px){
+    .cdetail-metrics{ grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 767px){
+    .cdetail-metrics,
+    .cdetail-overview-grid{ grid-template-columns:1fr; }
+  }
+</style>
+
+<div class="cdetail-shell">
+  <section class="cdetail-hero">
+    <div class="cdetail-hero-top">
+      <div>
+        <div class="cdetail-kicker">
+          <i class="bi bi-file-earmark-lock2"></i>
+          Contract Record
+        </div>
+        <h1 class="cdetail-title">{{ contract.title }}</h1>
+        <p class="cdetail-subtitle">
+          {{ contract.get_contract_type_display }} · {{ contract.counterparty_name|default:"No counterparty set" }}
+        </p>
+
+        <div class="cdetail-tags">
+          <span class="cdetail-tag">
+            <i class="bi bi-hash"></i>
+            {{ contract.reference|default:"No reference" }}
+          </span>
+          <span class="cdetail-tag">
+            <i class="bi bi-flag"></i>
+            {{ contract.get_status_display }}
+          </span>
+          <span class="cdetail-tag">
+            <i class="bi bi-cash-stack"></i>
+            {{ contract.get_billing_cycle_display }}
+          </span>
+        </div>
+      </div>
+
+      <div class="cdetail-actions">
+        {% if request.user.is_superuser or is_finance or is_ceo %}
+        <a href="{% url 'contract_update' contract.pk %}" class="cdetail-btn cdetail-btn-white">
+          <i class="bi bi-pencil"></i> Edit
+        </a>
+        {% endif %}
+        <a href="{% url 'contract_list' %}" class="cdetail-btn cdetail-btn-light">
+          <i class="bi bi-arrow-left"></i> Back
+        </a>
+      </div>
+    </div>
+
+    <div class="cdetail-metrics">
+      <div class="cdetail-metric">
+        <div class="cdetail-metric-label">Contract Value</div>
+        <div class="cdetail-metric-value">{{ contract.currency }} {{ contract.standard_cost|floatformat:0|intcomma }}</div>
+      </div>
+      <div class="cdetail-metric">
+        <div class="cdetail-metric-label">Start Date</div>
+        <div class="cdetail-metric-value">{{ contract.start_date|date:"M j, Y" }}</div>
+      </div>
+      <div class="cdetail-metric">
+        <div class="cdetail-metric-label">End Date</div>
+        <div class="cdetail-metric-value">{{ contract.end_date|date:"M j, Y" }}</div>
+      </div>
+      <div class="cdetail-metric">
+        <div class="cdetail-metric-label">Days to End</div>
+        <div class="cdetail-metric-value">
+          {% if contract.is_expired %}
+            Expired
+          {% else %}
+            {{ contract.days_to_end }}
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="row g-4">
+    <div class="col-lg-8 d-flex flex-column gap-4">
+      <section class="cdetail-card">
+        <div class="cdetail-card-head">
+          <div>
+            <h2 class="cdetail-card-title">Overview</h2>
+            <p class="cdetail-card-subtitle">Primary details and agreement summary</p>
+          </div>
+        </div>
+
+        <div class="cdetail-card-body">
+          <div class="cdetail-overview-grid">
+            <div class="cdetail-stat">
+              <div class="cdetail-stat-label">Reference</div>
+              <div class="cdetail-stat-value">{{ contract.reference|default:"—" }}</div>
+            </div>
+
+            <div class="cdetail-stat">
+              <div class="cdetail-stat-label">Status</div>
+              <div class="cdetail-stat-value">{{ contract.get_status_display }}</div>
+            </div>
+
+            <div class="cdetail-stat">
+              <div class="cdetail-stat-label">Contract Type</div>
+              <div class="cdetail-stat-value">{{ contract.get_contract_type_display }}</div>
+            </div>
+
+            <div class="cdetail-stat">
+              <div class="cdetail-stat-label">Billing Cycle</div>
+              <div class="cdetail-stat-value">{{ contract.get_billing_cycle_display }}</div>
+            </div>
+
+            <div class="cdetail-stat">
+              <div class="cdetail-stat-label">Renewal Date</div>
+              <div class="cdetail-stat-value">{{ contract.renewal_date|date:"M j, Y"|default:"—" }}</div>
+            </div>
+
+            <div class="cdetail-stat">
+              <div class="cdetail-stat-label">Next Invoice Date</div>
+              <div class="cdetail-stat-value">{{ contract.next_invoice_date|date:"M j, Y"|default:"—" }}</div>
+            </div>
+          </div>
+
+          <div class="cdetail-description">
+            <strong>Description</strong><br>
+            {{ contract.description|default:"No description." }}
+          </div>
+        </div>
+      </section>
+
+      <section class="cdetail-card">
+        <div class="cdetail-card-head">
+          <div>
+            <h2 class="cdetail-card-title">Contract Timeline</h2>
+            <p class="cdetail-card-subtitle">Key dates for monitoring and follow-up</p>
+          </div>
+        </div>
+
+        <div class="cdetail-card-body">
+          <div class="cdetail-timeline">
+            <div class="cdetail-timeline-item">
+              <div class="cdetail-timeline-dot"><i class="bi bi-play-circle"></i></div>
+              <div class="cdetail-timeline-body">
+                <p class="cdetail-timeline-title">Contract Start</p>
+                <div class="cdetail-timeline-meta">{{ contract.start_date|date:"M j, Y" }}</div>
+              </div>
+            </div>
+
+            <div class="cdetail-timeline-item">
+              <div class="cdetail-timeline-dot"><i class="bi bi-arrow-repeat"></i></div>
+              <div class="cdetail-timeline-body">
+                <p class="cdetail-timeline-title">Renewal Checkpoint</p>
+                <div class="cdetail-timeline-meta">{{ contract.renewal_date|date:"M j, Y"|default:"No renewal date set" }}</div>
+              </div>
+            </div>
+
+            <div class="cdetail-timeline-item">
+              <div class="cdetail-timeline-dot"><i class="bi bi-calendar-x"></i></div>
+              <div class="cdetail-timeline-body">
+                <p class="cdetail-timeline-title">Contract End</p>
+                <div class="cdetail-timeline-meta">
+                  {{ contract.end_date|date:"M j, Y" }}
+                  {% if contract.is_expired %}
+                    · Expired
+                  {% else %}
+                    · {{ contract.days_to_end }} day{{ contract.days_to_end|pluralize }} remaining
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+
+            <div class="cdetail-timeline-item">
+              <div class="cdetail-timeline-dot"><i class="bi bi-receipt"></i></div>
+              <div class="cdetail-timeline-body">
+                <p class="cdetail-timeline-title">Next Invoice Due</p>
+                <div class="cdetail-timeline-meta">{{ contract.next_invoice_date|date:"M j, Y"|default:"No invoice date set" }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="cdetail-card">
+        <div class="cdetail-card-head">
+          <div>
+            <h2 class="cdetail-card-title">Invoice History</h2>
+            <p class="cdetail-card-subtitle">Invoices generated from this contract</p>
+          </div>
+        </div>
+
+        <div class="cdetail-card-body">
+          {% if contract.invoice_links.all %}
+          <div class="cdetail-invoice-list">
+            {% for link in contract.invoice_links.all %}
+            <div class="cdetail-invoice-item">
+              <div>
+                <div class="cdetail-invoice-title">{{ link.invoice.invoice_number }}</div>
+                <div class="cdetail-invoice-meta">
+                  {{ link.period_start|date:"M j, Y"|default:"—" }} → {{ link.period_end|date:"M j, Y"|default:"—" }}
+                </div>
+              </div>
+              <div class="cdetail-invoice-value">
+                <div class="cdetail-invoice-amount">
+                  {{ link.invoice.currency }} {{ link.invoice.amount|floatformat:0|intcomma }}
+                </div>
+                <div class="cdetail-invoice-status">{{ link.invoice.get_status_display }}</div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="cdetail-empty">
+            <i class="bi bi-receipt-cutoff"></i>
+            No invoices generated from this contract yet.
+          </div>
+          {% endif %}
+        </div>
+      </section>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="cdetail-side-stack">
+        <section class="cdetail-card">
+          <div class="cdetail-card-head">
+            <div>
+              <h2 class="cdetail-card-title">Counterparty</h2>
+              <p class="cdetail-card-subtitle">Linked party details</p>
+            </div>
+          </div>
+
+          <div class="cdetail-card-body">
+            <div class="cdetail-info-list">
+              <div class="cdetail-info-item">
+                <div class="cdetail-info-label">Name</div>
+                <div class="cdetail-info-value">{{ contract.counterparty_name|default:"—" }}</div>
+              </div>
+              <div class="cdetail-info-item">
+                <div class="cdetail-info-label">Email</div>
+                <div class="cdetail-info-value">{{ contract.counterparty_email|default:"—" }}</div>
+              </div>
+              <div class="cdetail-info-item">
+                <div class="cdetail-info-label">Company</div>
+                <div class="cdetail-info-value">{{ contract.vendor_company|default:"—" }}</div>
+              </div>
+              <div class="cdetail-info-item">
+                <div class="cdetail-info-label">Phone</div>
+                <div class="cdetail-info-value">{{ contract.vendor_phone|default:"—" }}</div>
+              </div>
+              <div class="cdetail-info-item">
+                <div class="cdetail-info-label">Address</div>
+                <div class="cdetail-info-value">{{ contract.vendor_address|default:"—" }}</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="cdetail-card">
+          <div class="cdetail-card-head">
+            <div>
+              <h2 class="cdetail-card-title">Billing & Controls</h2>
+              <p class="cdetail-card-subtitle">Automation and notification settings</p>
+            </div>
+          </div>
+
+          <div class="cdetail-card-body">
+            <div class="cdetail-info-list">
+              <div class="cdetail-info-item">
+                <div class="cdetail-info-label">Standard Cost</div>
+                <div class="cdetail-info-value">{{ contract.currency }} {{ contract.standard_cost|floatformat:0|intcomma }}</div>
+              </div>
+              <div class="cdetail-info-item">
+                <div class="cdetail-info-label">Auto Generate Invoice</div>
+                <div class="cdetail-info-value">{{ contract.auto_generate_invoice|yesno:"Yes,No" }}</div>
+              </div>
+              <div class="cdetail-info-item">
+                <div class="cdetail-info-label">Auto Send Invoice</div>
+                <div class="cdetail-info-value">{{ contract.auto_send_invoice|yesno:"Yes,No" }}</div>
+              </div>
+              <div class="cdetail-info-item">
+                <div class="cdetail-info-label">End Alert Lead Time</div>
+                <div class="cdetail-info-value">{{ contract.alert_days_before_end }} day{{ contract.alert_days_before_end|pluralize }}</div>
+              </div>
+              <div class="cdetail-info-item">
+                <div class="cdetail-info-label">Renewal Alert Lead Time</div>
+                <div class="cdetail-info-value">{{ contract.alert_days_before_renewal }} day{{ contract.alert_days_before_renewal|pluralize }}</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {% if contract.project or contract.budget %}
+        <section class="cdetail-card">
+          <div class="cdetail-card-head">
+            <div>
+              <h2 class="cdetail-card-title">Linked Records</h2>
+              <p class="cdetail-card-subtitle">Connected planning and finance references</p>
+            </div>
+          </div>
+
+          <div class="cdetail-card-body">
+            <div class="cdetail-info-list">
+              {% if contract.project %}
+              <div class="cdetail-info-item">
+                <div class="cdetail-info-label">Project</div>
+                <div class="cdetail-info-value">{{ contract.project.name }}</div>
+              </div>
+              {% endif %}
+
+              {% if contract.budget %}
+              <div class="cdetail-info-item">
+                <div class="cdetail-info-label">Budget</div>
+                <div class="cdetail-info-value">{{ contract.budget.name }}</div>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+        </section>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

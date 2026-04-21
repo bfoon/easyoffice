@@ -1,0 +1,661 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Contract Monitoring{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'finance_dashboard' %}">Finance</a> / <span>Contracts</span>
+{% endblock %}
+
+{% block content %}
+<style>
+  .cdash-shell{
+    display:flex;
+    flex-direction:column;
+    gap:1.5rem;
+  }
+  .cdash-hero{
+    position:relative;
+    overflow:hidden;
+    border-radius:24px;
+    padding:1.75rem;
+    background:
+      radial-gradient(circle at top right, rgba(255,255,255,.18), transparent 28%),
+      linear-gradient(135deg, #0f172a 0%, #1d4ed8 55%, #0ea5e9 100%);
+    color:#fff;
+    box-shadow:0 24px 50px rgba(15, 23, 42, .18);
+  }
+  .cdash-hero::after{
+    content:"";
+    position:absolute;
+    inset:auto -40px -40px auto;
+    width:180px;
+    height:180px;
+    border-radius:50%;
+    background:rgba(255,255,255,.08);
+  }
+  .cdash-hero-top{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:1rem;
+    flex-wrap:wrap;
+    position:relative;
+    z-index:1;
+  }
+  .cdash-kicker{
+    display:inline-flex;
+    align-items:center;
+    gap:.45rem;
+    padding:.38rem .8rem;
+    border-radius:999px;
+    background:rgba(255,255,255,.14);
+    border:1px solid rgba(255,255,255,.14);
+    font-size:.78rem;
+    font-weight:700;
+    letter-spacing:.02em;
+    margin-bottom:.85rem;
+  }
+  .cdash-title{
+    margin:0;
+    font-size:clamp(1.55rem, 2.4vw, 2.3rem);
+    font-weight:800;
+    letter-spacing:-.02em;
+  }
+  .cdash-subtitle{
+    margin:.55rem 0 0;
+    max-width:760px;
+    color:rgba(255,255,255,.86);
+    font-size:.95rem;
+    line-height:1.7;
+  }
+  .cdash-actions{
+    display:flex;
+    gap:.65rem;
+    flex-wrap:wrap;
+    align-items:center;
+  }
+  .cdash-btn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:.5rem;
+    min-height:42px;
+    padding:.72rem 1rem;
+    border-radius:14px;
+    text-decoration:none;
+    font-weight:700;
+    transition:.25s ease;
+    border:1px solid transparent;
+  }
+  .cdash-btn:hover{
+    transform:translateY(-2px);
+  }
+  .cdash-btn-light{
+    color:#fff;
+    background:rgba(255,255,255,.12);
+    border-color:rgba(255,255,255,.16);
+    backdrop-filter:blur(6px);
+  }
+  .cdash-btn-white{
+    background:#fff;
+    color:#0f172a;
+    box-shadow:0 12px 24px rgba(15, 23, 42, .14);
+  }
+  .cdash-glance{
+    position:relative;
+    z-index:1;
+    display:grid;
+    grid-template-columns:repeat(4, minmax(0, 1fr));
+    gap:1rem;
+    margin-top:1.5rem;
+  }
+  .cdash-glance-card{
+    padding:1rem 1rem .95rem;
+    border-radius:18px;
+    background:rgba(255,255,255,.12);
+    border:1px solid rgba(255,255,255,.14);
+    backdrop-filter:blur(8px);
+  }
+  .cdash-glance-label{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:.5rem;
+    font-size:.78rem;
+    color:rgba(255,255,255,.8);
+    margin-bottom:.55rem;
+  }
+  .cdash-glance-value{
+    font-size:1.65rem;
+    font-weight:800;
+    line-height:1;
+    margin-bottom:.55rem;
+  }
+  .cdash-glance-note{
+    font-size:.76rem;
+    color:rgba(255,255,255,.82);
+  }
+  .cdash-section-card{
+    border:1px solid rgba(148, 163, 184, .16);
+    border-radius:22px;
+    background:linear-gradient(180deg, rgba(255,255,255,.96), rgba(248,250,252,.98));
+    box-shadow:0 16px 34px rgba(15, 23, 42, .06);
+    overflow:hidden;
+  }
+  .cdash-section-head{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:1rem;
+    flex-wrap:wrap;
+    padding:1.15rem 1.2rem 0;
+  }
+  .cdash-section-title{
+    margin:0;
+    font-size:1.02rem;
+    font-weight:800;
+    color:var(--eo-text);
+  }
+  .cdash-section-subtitle{
+    margin:.25rem 0 0;
+    font-size:.82rem;
+    color:var(--eo-text-muted);
+  }
+  .cdash-link-btn{
+    display:inline-flex;
+    align-items:center;
+    gap:.45rem;
+    text-decoration:none;
+    font-weight:700;
+    font-size:.8rem;
+    color:var(--eo-accent);
+  }
+  .cdash-stack{
+    display:flex;
+    flex-direction:column;
+    gap:.85rem;
+    padding:1rem 1.2rem 1.2rem;
+  }
+  .cdash-item{
+    display:flex;
+    gap:.9rem;
+    align-items:flex-start;
+    padding:1rem;
+    border:1px solid rgba(148, 163, 184, .16);
+    border-radius:18px;
+    background:#fff;
+    text-decoration:none;
+    transition:.22s ease;
+  }
+  .cdash-item:hover{
+    transform:translateY(-2px);
+    box-shadow:0 14px 28px rgba(15, 23, 42, .08);
+  }
+  .cdash-item-icon{
+    width:46px;
+    height:46px;
+    border-radius:14px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    flex-shrink:0;
+    font-size:1.05rem;
+  }
+  .cdash-item-body{
+    flex:1;
+    min-width:0;
+  }
+  .cdash-item-title{
+    margin:0;
+    font-size:.96rem;
+    font-weight:800;
+    color:var(--eo-text);
+  }
+  .cdash-item-meta{
+    margin-top:.35rem;
+    font-size:.78rem;
+    color:var(--eo-text-muted);
+    line-height:1.6;
+  }
+  .cdash-item-side{
+    min-width:92px;
+    text-align:right;
+    flex-shrink:0;
+  }
+  .cdash-item-date{
+    font-size:.8rem;
+    font-weight:800;
+  }
+  .cdash-item-note{
+    margin-top:.2rem;
+    font-size:.72rem;
+    color:var(--eo-text-muted);
+  }
+  .cdash-mini-grid{
+    display:grid;
+    grid-template-columns:repeat(2, minmax(0, 1fr));
+    gap:.85rem;
+    padding:1rem 1.2rem 1.2rem;
+  }
+  .cdash-mini-card{
+    border:1px solid rgba(148, 163, 184, .16);
+    border-radius:18px;
+    padding:1rem;
+    background:#fff;
+  }
+  .cdash-mini-label{
+    font-size:.75rem;
+    color:var(--eo-text-muted);
+    margin-bottom:.35rem;
+  }
+  .cdash-mini-value{
+    font-size:1.15rem;
+    font-weight:800;
+    color:var(--eo-text);
+  }
+  .cdash-mini-value.is-success{ color:#059669; }
+  .cdash-mini-value.is-warning{ color:#d97706; }
+  .cdash-mini-value.is-danger{ color:#dc2626; }
+
+  .cdash-recent-list{
+    display:flex;
+    flex-direction:column;
+    gap:.75rem;
+    padding:1rem 1.2rem 1.2rem;
+  }
+  .cdash-recent-item{
+    display:flex;
+    align-items:center;
+    gap:.85rem;
+    padding:.95rem 1rem;
+    border:1px solid rgba(148, 163, 184, .14);
+    border-radius:16px;
+    background:#fff;
+    text-decoration:none;
+    transition:.2s ease;
+  }
+  .cdash-recent-item:hover{
+    transform:translateY(-2px);
+    box-shadow:0 12px 24px rgba(15, 23, 42, .07);
+  }
+  .cdash-recent-icon{
+    width:42px;
+    height:42px;
+    border-radius:12px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:1rem;
+    flex-shrink:0;
+  }
+  .cdash-recent-body{
+    flex:1;
+    min-width:0;
+  }
+  .cdash-recent-title{
+    font-size:.88rem;
+    font-weight:800;
+    color:var(--eo-text);
+  }
+  .cdash-recent-meta{
+    font-size:.74rem;
+    color:var(--eo-text-muted);
+    margin-top:.2rem;
+  }
+  .cdash-quick-actions{
+    display:grid;
+    grid-template-columns:repeat(2, minmax(0, 1fr));
+    gap:.8rem;
+    padding:1rem 1.2rem 1.2rem;
+  }
+  .cdash-action{
+    display:flex;
+    align-items:center;
+    gap:.75rem;
+    text-decoration:none;
+    border:1px solid rgba(148, 163, 184, .16);
+    border-radius:18px;
+    padding:1rem;
+    background:#fff;
+    color:var(--eo-text);
+    transition:.22s ease;
+  }
+  .cdash-action:hover{
+    transform:translateY(-2px);
+    box-shadow:0 12px 24px rgba(15, 23, 42, .07);
+  }
+  .cdash-action-icon{
+    width:42px;
+    height:42px;
+    border-radius:12px;
+    background:rgba(37,99,235,.08);
+    color:#2563eb;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    flex-shrink:0;
+  }
+  .cdash-action span{
+    font-size:.85rem;
+    font-weight:800;
+  }
+  .cdash-empty{
+    padding:2rem 1rem;
+    text-align:center;
+    color:var(--eo-text-muted);
+  }
+  .cdash-empty i{
+    display:block;
+    font-size:2rem;
+    margin-bottom:.55rem;
+    opacity:.35;
+  }
+  @media (max-width: 1199px){
+    .cdash-glance{ grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 767px){
+    .cdash-hero{ padding:1.2rem; border-radius:20px; }
+    .cdash-glance{ grid-template-columns:1fr; }
+    .cdash-mini-grid,
+    .cdash-quick-actions{ grid-template-columns:1fr; }
+    .cdash-item{ flex-wrap:wrap; }
+    .cdash-item-side{ width:100%; text-align:left; min-width:unset; }
+  }
+</style>
+
+<div class="cdash-shell">
+  <section class="cdash-hero">
+    <div class="cdash-hero-top">
+      <div>
+        <div class="cdash-kicker">
+          <i class="bi bi-shield-check"></i>
+          Contract Command Center
+        </div>
+        <h1 class="cdash-title">Contract Monitoring</h1>
+        <p class="cdash-subtitle">
+          Track staff and vendor contracts, follow renewal timelines, monitor expiring agreements,
+          and stay ahead of invoice cycles from one professional workspace.
+        </p>
+      </div>
+
+      <div class="cdash-actions">
+        <a href="{% url 'contract_list' %}" class="cdash-btn cdash-btn-light">
+          <i class="bi bi-list-ul"></i> All Contracts
+        </a>
+
+        {% if is_finance or is_ceo %}
+        <a href="{% url 'contract_create' %}" class="cdash-btn cdash-btn-white">
+          <i class="bi bi-plus-lg"></i> New Contract
+        </a>
+        {% endif %}
+
+        <a href="{% url 'finance_dashboard' %}" class="cdash-btn cdash-btn-light">
+          <i class="bi bi-arrow-left"></i> Finance Dashboard
+        </a>
+      </div>
+    </div>
+
+    <div class="cdash-glance">
+      <div class="cdash-glance-card">
+        <div class="cdash-glance-label">
+          <span>Total Contracts</span>
+          <i class="bi bi-file-earmark-text"></i>
+        </div>
+        <div class="cdash-glance-value">{{ total_contracts }}</div>
+        <div class="cdash-glance-note">All tracked agreements in the system</div>
+      </div>
+
+      <div class="cdash-glance-card">
+        <div class="cdash-glance-label">
+          <span>Active</span>
+          <i class="bi bi-check-circle"></i>
+        </div>
+        <div class="cdash-glance-value">{{ active_contracts }}</div>
+        <div class="cdash-glance-note">Currently valid and running</div>
+      </div>
+
+      <div class="cdash-glance-card">
+        <div class="cdash-glance-label">
+          <span>Expiring Soon</span>
+          <i class="bi bi-bell"></i>
+        </div>
+        <div class="cdash-glance-value">{{ expiring_contracts|length }}</div>
+        <div class="cdash-glance-note">Needs early follow-up and renewal review</div>
+      </div>
+
+      <div class="cdash-glance-card">
+        <div class="cdash-glance-label">
+          <span>Due Invoices</span>
+          <i class="bi bi-cash-coin"></i>
+        </div>
+        <div class="cdash-glance-value">{{ due_invoice_contracts|length }}</div>
+        <div class="cdash-glance-note">Vendor contracts ready for billing action</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="row g-4">
+    <div class="col-lg-7 d-flex flex-column gap-4">
+      <section class="cdash-section-card">
+        <div class="cdash-section-head">
+          <div>
+            <h2 class="cdash-section-title">
+              <i class="bi bi-bell me-1" style="color:#d97706"></i>
+              Expiring Contracts
+            </h2>
+            <p class="cdash-section-subtitle">Priority contracts approaching their end date</p>
+          </div>
+          <a href="{% url 'contract_list' %}?status=expiring" class="cdash-link-btn">
+            View all <i class="bi bi-arrow-right"></i>
+          </a>
+        </div>
+
+        {% if expiring_contracts %}
+        <div class="cdash-stack">
+          {% for c in expiring_contracts %}
+          <a href="{% url 'contract_detail' c.pk %}" class="cdash-item">
+            <div class="cdash-item-icon" style="background:#fff7ed;color:#c2410c;">
+              <i class="bi bi-exclamation-triangle"></i>
+            </div>
+            <div class="cdash-item-body">
+              <p class="cdash-item-title">{{ c.title|truncatechars:50 }}</p>
+              <div class="cdash-item-meta">
+                {{ c.get_contract_type_display }} · {{ c.counterparty_name|truncatechars:28 }}
+                {% if c.project %} · {{ c.project.name|truncatechars:24 }}{% endif %}
+                {% if c.reference %}<br>Ref: {{ c.reference }}{% endif %}
+              </div>
+            </div>
+            <div class="cdash-item-side">
+              <div class="cdash-item-date" style="color:#d97706;">{{ c.end_date|date:"M j, Y" }}</div>
+              <div class="cdash-item-note">
+                {{ c.days_to_end }} day{{ c.days_to_end|pluralize }} left
+              </div>
+            </div>
+          </a>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="cdash-empty">
+          <i class="bi bi-check2-circle"></i>
+          No contracts are expiring soon.
+        </div>
+        {% endif %}
+      </section>
+
+      <section class="cdash-section-card">
+        <div class="cdash-section-head">
+          <div>
+            <h2 class="cdash-section-title">
+              <i class="bi bi-cash-stack me-1" style="color:#059669"></i>
+              Contracts Due for Invoicing
+            </h2>
+            <p class="cdash-section-subtitle">Vendor contracts ready for invoice generation</p>
+          </div>
+          <a href="{% url 'incoming_payment_request_list' %}" class="cdash-link-btn">
+            Open invoices <i class="bi bi-arrow-right"></i>
+          </a>
+        </div>
+
+        {% if due_invoice_contracts %}
+        <div class="cdash-stack">
+          {% for c in due_invoice_contracts %}
+          <a href="{% url 'contract_detail' c.pk %}" class="cdash-item">
+            <div class="cdash-item-icon" style="background:#ecfdf5;color:#059669;">
+              <i class="bi bi-receipt-cutoff"></i>
+            </div>
+            <div class="cdash-item-body">
+              <p class="cdash-item-title">{{ c.title|truncatechars:50 }}</p>
+              <div class="cdash-item-meta">
+                {{ c.counterparty_name|default:"—" }} · {{ c.get_billing_cycle_display }}
+                {% if c.project %}<br>Project: {{ c.project.name|truncatechars:28 }}{% endif %}
+              </div>
+            </div>
+            <div class="cdash-item-side">
+              <div class="cdash-item-date" style="color:#059669;">
+                {{ c.currency }} {{ c.standard_cost|floatformat:0|intcomma }}
+              </div>
+              <div class="cdash-item-note">Due {{ c.next_invoice_date|date:"M j, Y" }}</div>
+            </div>
+          </a>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="cdash-empty">
+          <i class="bi bi-cash-coin"></i>
+          No contracts are currently due for invoicing.
+        </div>
+        {% endif %}
+      </section>
+
+      {% if expired_contracts %}
+      <section class="cdash-section-card">
+        <div class="cdash-section-head">
+          <div>
+            <h2 class="cdash-section-title">
+              <i class="bi bi-x-octagon me-1" style="color:#dc2626"></i>
+              Expired Contracts
+            </h2>
+            <p class="cdash-section-subtitle">Contracts that have passed their end date</p>
+          </div>
+        </div>
+
+        <div class="cdash-stack">
+          {% for c in expired_contracts %}
+          <a href="{% url 'contract_detail' c.pk %}" class="cdash-item">
+            <div class="cdash-item-icon" style="background:#fef2f2;color:#dc2626;">
+              <i class="bi bi-slash-circle"></i>
+            </div>
+            <div class="cdash-item-body">
+              <p class="cdash-item-title">{{ c.title|truncatechars:40 }}</p>
+              <div class="cdash-item-meta">
+                {{ c.counterparty_name|truncatechars:26 }}
+              </div>
+            </div>
+            <div class="cdash-item-side">
+              <div class="cdash-item-date" style="color:#dc2626;">{{ c.end_date|date:"M j, Y" }}</div>
+              <div class="cdash-item-note">Expired</div>
+            </div>
+          </a>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+    </div>
+
+    <div class="col-lg-5 d-flex flex-column gap-4">
+      <section class="cdash-section-card">
+        <div class="cdash-section-head">
+          <div>
+            <h2 class="cdash-section-title">Portfolio Overview</h2>
+            <p class="cdash-section-subtitle">Quick breakdown of your contract base</p>
+          </div>
+        </div>
+
+        <div class="cdash-mini-grid">
+          <div class="cdash-mini-card">
+            <div class="cdash-mini-label">Staff Contracts</div>
+            <div class="cdash-mini-value">{{ staff_contracts }}</div>
+          </div>
+          <div class="cdash-mini-card">
+            <div class="cdash-mini-label">Vendor Contracts</div>
+            <div class="cdash-mini-value">{{ vendor_contracts }}</div>
+          </div>
+          <div class="cdash-mini-card">
+            <div class="cdash-mini-label">Expired</div>
+            <div class="cdash-mini-value is-danger">{{ expired_contracts|length }}</div>
+          </div>
+          <div class="cdash-mini-card">
+            <div class="cdash-mini-label">Invoice Ready</div>
+            <div class="cdash-mini-value is-success">{{ due_invoice_contracts|length }}</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="cdash-section-card">
+        <div class="cdash-section-head">
+          <div>
+            <h2 class="cdash-section-title">Recent Contracts</h2>
+            <p class="cdash-section-subtitle">Most recently tracked agreements</p>
+          </div>
+        </div>
+
+        {% if contracts %}
+        <div class="cdash-recent-list">
+          {% for c in contracts %}
+          <a href="{% url 'contract_detail' c.pk %}" class="cdash-recent-item">
+            <div class="cdash-recent-icon {% if c.contract_type == 'staff' %}is-staff{% endif %}"
+                 style="{% if c.contract_type == 'staff' %}background:#dbeafe;color:#2563eb{% else %}background:#dcfce7;color:#059669{% endif %}">
+              <i class="bi {% if c.contract_type == 'staff' %}bi-person-badge{% else %}bi-buildings{% endif %}"></i>
+            </div>
+            <div class="cdash-recent-body">
+              <div class="cdash-recent-title">{{ c.title|truncatechars:34 }}</div>
+              <div class="cdash-recent-meta">
+                {{ c.counterparty_name|truncatechars:28 }} · {{ c.end_date|date:"M j, Y" }}
+              </div>
+            </div>
+          </a>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="cdash-empty">
+          <i class="bi bi-folder2-open"></i>
+          No contracts available yet.
+        </div>
+        {% endif %}
+      </section>
+
+      <section class="cdash-section-card">
+        <div class="cdash-section-head">
+          <div>
+            <h2 class="cdash-section-title">Quick Actions</h2>
+            <p class="cdash-section-subtitle">Move faster on the next task</p>
+          </div>
+        </div>
+
+        <div class="cdash-quick-actions">
+          <a href="{% url 'contract_list' %}" class="cdash-action">
+            <div class="cdash-action-icon"><i class="bi bi-list-ul"></i></div>
+            <span>Browse Contracts</span>
+          </a>
+
+          {% if is_finance or is_ceo %}
+          <a href="{% url 'contract_create' %}" class="cdash-action">
+            <div class="cdash-action-icon"><i class="bi bi-plus-lg"></i></div>
+            <span>Add Contract</span>
+          </a>
+          {% endif %}
+
+          <a href="{% url 'incoming_payment_request_list' %}" class="cdash-action">
+            <div class="cdash-action-icon"><i class="bi bi-receipt"></i></div>
+            <span>Open Invoices</span>
+          </a>
+
+          <a href="{% url 'finance_dashboard' %}" class="cdash-action">
+            <div class="cdash-action-icon"><i class="bi bi-speedometer2"></i></div>
+            <span>Finance Dashboard</span>
+          </a>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}

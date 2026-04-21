@@ -4,12 +4,16 @@ from django.views.generic import TemplateView, View, DetailView
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.utils import timezone
-from django.db.models import Sum, Q
+from django.db.models import Sum, Q, Count
 from django.http import HttpResponseForbidden
+from django.core.mail import send_mail
+from django.conf import settings
+from apps.core.models import User
 
 from apps.finance.models import (
     Budget, PurchaseRequest, Payment,
     EmployeeFinanceRequest, EmployeeLoan, EmployeeLoanPayment,
+    Contract, ContractAlertLog, ContractInvoiceLink, IncomingPaymentRequest,
 )
 
 
@@ -30,6 +34,16 @@ def _is_ceo(user):
         title = ''
     return str(title).strip().lower() == 'ceo'
 
+def _is_admin(user):
+    return user.is_superuser or user.groups.filter(name__in=['Admin']).exists()
+
+
+def _can_view_contracts(user):
+    return _is_finance(user) or _is_hr(user) or _is_ceo(user) or _is_admin(user)
+
+
+def _can_manage_contracts(user):
+    return _is_finance(user) or _is_ceo(user) or _is_admin(user)
 
 def _can_view_purchase(user, purchase):
     if _is_finance(user) or _is_ceo(user):
@@ -89,6 +103,89 @@ def _apply_payment_to_budget(payment):
     budget.save(update_fields=['spent_amount'])
 
 
+def _next_contract_reference():
+    return f'CTR-{timezone.now().strftime("%Y%m%d%H%M%S%f")}'
+
+
+def _send_contract_email(subject, message, recipients):
+    recipients = [r for r in recipients if r]
+    if not recipients:
+        return
+    try:
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@example.com'),
+            recipient_list=recipients,
+            fail_silently=True,
+        )
+    except Exception:
+        pass
+
+
+def _contract_role_recipients():
+    return User.objects.filter(
+        is_active=True
+    ).filter(
+        Q(groups__name__in=['Finance', 'HR', 'CEO', 'Admin']) | Q(is_superuser=True)
+    ).distinct()
+
+
+def _create_invoice_from_contract(contract, send_now=False):
+    if contract.contract_type != Contract.ContractType.VENDOR:
+        return None
+
+    customer_name = contract.vendor_name or contract.vendor_company or 'Customer'
+    customer_email = contract.vendor_email or ''
+
+    ipr = IncomingPaymentRequest.objects.create(
+        title=contract.title,
+        description=contract.description or f'Contract billing for {contract.title}',
+        customer_name=customer_name,
+        customer_email=customer_email,
+        customer_phone=contract.vendor_phone or '',
+        customer_company=contract.vendor_company or '',
+        customer_address=contract.vendor_address or '',
+        amount=contract.standard_cost,
+        currency=contract.currency,
+        issue_date=timezone.now().date(),
+        due_date=timezone.now().date() + timezone.timedelta(days=14),
+        payment_instructions='Please settle according to agreed contract terms.',
+        notes=f'Auto-generated from contract {contract.reference or contract.pk}',
+        project=contract.project,
+        budget=contract.budget,
+        created_by=contract.created_by,
+    )
+
+    ContractInvoiceLink.objects.create(
+        contract=contract,
+        invoice=ipr,
+        period_start=contract.last_invoice_date or contract.start_date,
+        period_end=timezone.now().date(),
+    )
+
+    contract.last_invoice_date = timezone.now().date()
+
+    if contract.billing_cycle == Contract.BillingCycle.MONTHLY:
+        contract.next_invoice_date = timezone.now().date() + timezone.timedelta(days=30)
+    elif contract.billing_cycle == Contract.BillingCycle.QUARTERLY:
+        contract.next_invoice_date = timezone.now().date() + timezone.timedelta(days=90)
+    elif contract.billing_cycle == Contract.BillingCycle.YEARLY:
+        contract.next_invoice_date = timezone.now().date() + timezone.timedelta(days=365)
+    elif contract.billing_cycle == Contract.BillingCycle.WEEKLY:
+        contract.next_invoice_date = timezone.now().date() + timezone.timedelta(days=7)
+    else:
+        contract.next_invoice_date = None
+
+    contract.save(update_fields=['last_invoice_date', 'next_invoice_date', 'updated_at'])
+
+    if send_now:
+        ipr.status = IncomingPaymentRequest.Status.SENT
+        ipr.save(update_fields=['status', 'updated_at'])
+        _send_invoice_email(ipr)
+
+    return ipr
+
 # ── Finance Dashboard ────────────────────────────────────────────────────────
 
 class FinanceDashboardView(LoginRequiredMixin, TemplateView):
@@ -103,61 +200,172 @@ class FinanceDashboardView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
 
+        user = self.request.user
         today = timezone.now()
         year = today.year
         month = today.month
+        today_date = today.date()
 
-        active_budgets = Budget.objects.filter(fiscal_year=year, status='active')
-        total_budget = active_budgets.aggregate(t=Sum('total_amount'))['t'] or Decimal('0')
-        total_spent = active_budgets.aggregate(t=Sum('spent_amount'))['t'] or Decimal('0')
+        # ── Core finance metrics ────────────────────────────────────────────
+        active_budgets = Budget.objects.filter(
+            fiscal_year=year,
+            status=Budget.Status.ACTIVE
+        )
+
+        total_budget = active_budgets.aggregate(
+            t=Sum('total_amount')
+        )['t'] or Decimal('0')
+
+        total_spent = active_budgets.aggregate(
+            t=Sum('spent_amount')
+        )['t'] or Decimal('0')
+
         total_balance = total_budget - total_spent
 
-        my_requests = PurchaseRequest.objects.filter(requested_by=self.request.user)
+        my_requests = PurchaseRequest.objects.filter(
+            requested_by=user
+        )
+
+        payments_this_month = Payment.objects.filter(
+            payment_date__year=year,
+            payment_date__month=month,
+        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+
+        budgets = active_budgets.select_related(
+            'department', 'unit'
+        ).order_by('-created_at')[:8]
+
+        pending_purchases = PurchaseRequest.objects.filter(
+            status=PurchaseRequest.Status.SUBMITTED
+        ).select_related(
+            'requested_by', 'department', 'budget', 'project'
+        ).order_by('-created_at')[:10]
+
+        pending_staff_requests = EmployeeFinanceRequest.objects.filter(
+            status=EmployeeFinanceRequest.Status.SUBMITTED
+        ).select_related(
+            'employee', 'budget', 'project'
+        ).order_by('-created_at')[:10]
+
+        finance_processing_queue = EmployeeFinanceRequest.objects.filter(
+            status=EmployeeFinanceRequest.Status.CEO_APPROVED
+        ).select_related(
+            'employee', 'budget', 'project'
+        ).order_by('-approval_date', '-created_at')[:10]
+
+        recent_payments = Payment.objects.select_related(
+            'paid_by', 'purchase_request', 'budget', 'employee', 'project'
+        ).order_by('-payment_date', '-created_at')[:8]
+
+        recent_payment_requests = PaymentRequest.objects.select_related(
+            'requested_by', 'recipient_user',
+        ).order_by('-created_at')[:5]
+
+        # ── Contract monitoring metrics ─────────────────────────────────────
+        contract_qs = Contract.objects.select_related(
+            'staff', 'project', 'budget', 'created_by'
+        ).order_by('end_date', '-created_at')
+
+        expiring_contracts = []
+        expired_contracts = []
+        due_invoice_contracts = []
+
+        for c in contract_qs:
+            try:
+                c.update_status_by_dates()
+            except Exception:
+                pass
+
+            try:
+                if c.days_to_end >= 0 and c.days_to_end <= (c.alert_days_before_end or 30):
+                    expiring_contracts.append(c)
+            except Exception:
+                pass
+
+            try:
+                if c.is_expired:
+                    expired_contracts.append(c)
+            except Exception:
+                pass
+
+            try:
+                if (
+                    c.auto_generate_invoice
+                    and c.contract_type == Contract.ContractType.VENDOR
+                    and c.next_invoice_date
+                    and c.next_invoice_date <= today_date
+                    and c.status not in [Contract.Status.EXPIRED, Contract.Status.TERMINATED]
+                ):
+                    due_invoice_contracts.append(c)
+            except Exception:
+                pass
+
+        contract_total_count = contract_qs.count()
+        contract_staff_count = contract_qs.filter(
+            contract_type=Contract.ContractType.STAFF
+        ).count()
+        contract_vendor_count = contract_qs.filter(
+            contract_type=Contract.ContractType.VENDOR
+        ).count()
+
+        # optional: customer invoice snapshot for the dashboard
+        recent_incoming_invoices = IncomingPaymentRequest.objects.select_related(
+            'project', 'budget', 'created_by'
+        ).order_by('-created_at')[:5]
 
         ctx.update({
+            # finance totals
             'total_budget': total_budget,
             'total_spent': total_spent,
             'total_balance': total_balance,
             'overall_pct': round(float(total_spent) / float(total_budget) * 100, 1) if total_budget else 0,
-            'pending_count': PurchaseRequest.objects.filter(status='submitted').count(),
-            'approved_count': PurchaseRequest.objects.filter(status='ceo_approved').count(),
-            'payments_this_month': Payment.objects.filter(
-                payment_date__year=year,
-                payment_date__month=month,
-            ).aggregate(t=Sum('amount'))['t'] or Decimal('0'),
-            'budgets': active_budgets.select_related('department', 'unit').order_by('-created_at')[:8],
-            'pending_purchases': PurchaseRequest.objects.filter(
-                status='submitted'
-            ).select_related(
-                'requested_by', 'department', 'budget', 'project'
-            ).order_by('-created_at')[:10],
-            'pending_staff_requests': EmployeeFinanceRequest.objects.filter(
-                status='submitted'
-            ).select_related(
-                'employee', 'budget', 'project'
-            ).order_by('-created_at')[:10],
-            'finance_processing_queue': EmployeeFinanceRequest.objects.filter(
-                status='ceo_approved'
-            ).select_related(
-                'employee', 'budget', 'project'
-            ).order_by('-approval_date', '-created_at')[:10],
-            'recent_payments': Payment.objects.select_related(
-                'paid_by', 'purchase_request', 'budget', 'employee', 'project'
-            ).order_by('-payment_date', '-created_at')[:8],
-            'recent_payment_requests': PaymentRequest.objects.select_related(
-                'requested_by', 'recipient_user',
-            ).order_by('-created_at')[:5],
+
+            # purchase / staff request / payment stats
+            'pending_count': PurchaseRequest.objects.filter(
+                status=PurchaseRequest.Status.SUBMITTED
+            ).count(),
+            'approved_count': PurchaseRequest.objects.filter(
+                status=PurchaseRequest.Status.CEO_APPROVED
+            ).count(),
+            'payments_this_month': payments_this_month,
+
+            # lists
+            'budgets': budgets,
+            'pending_purchases': pending_purchases,
+            'pending_staff_requests': pending_staff_requests,
+            'finance_processing_queue': finance_processing_queue,
+            'recent_payments': recent_payments,
+            'recent_payment_requests': recent_payment_requests,
+            'recent_incoming_invoices': recent_incoming_invoices,
+
+            # my quick stats
             'my_recent_requests': my_requests.select_related(
                 'department', 'budget', 'project'
             ).order_by('-created_at')[:6],
-            'my_pending_requests': my_requests.filter(status='submitted').count(),
-            'my_draft_requests': my_requests.filter(status='draft').count(),
+            'my_pending_requests': my_requests.filter(
+                status=PurchaseRequest.Status.SUBMITTED
+            ).count(),
+            'my_draft_requests': my_requests.filter(
+                status=PurchaseRequest.Status.DRAFT
+            ).count(),
 
-            'is_finance': _is_finance(self.request.user),
-            'is_ceo': _is_ceo(self.request.user),
-            'is_hr': _is_hr(self.request.user),
-            'can_view_finance_dashboard': _can_view_finance_dashboard(self.request.user),
-            'can_view_my_finance': _can_view_my_finance(self.request.user),
+            # contract monitoring
+            'contract_total_count': contract_total_count,
+            'contract_staff_count': contract_staff_count,
+            'contract_vendor_count': contract_vendor_count,
+            'contract_expiring_count': len(expiring_contracts),
+            'contract_expired_count': len(expired_contracts),
+            'contract_due_invoice_count': len(due_invoice_contracts),
+            'expiring_contracts': expiring_contracts[:6],
+            'expired_contracts': expired_contracts[:6],
+            'due_invoice_contracts': due_invoice_contracts[:6],
+
+            # role / permission flags
+            'is_finance': _is_finance(user),
+            'is_ceo': _is_ceo(user),
+            'is_hr': _is_hr(user),
+            'can_view_finance_dashboard': _can_view_finance_dashboard(user),
+            'can_view_my_finance': _can_view_my_finance(user),
         })
         return ctx
 
@@ -1856,3 +2064,271 @@ class IncomingPaymentRequestCancelView(LoginRequiredMixin, View):
         ipr.save(update_fields=['status', 'updated_at'])
         messages.warning(request, f'Invoice {ipr.invoice_number} cancelled.')
         return redirect('incoming_payment_request_list')
+
+
+
+class ContractDashboardView(LoginRequiredMixin, TemplateView):
+    template_name = 'finance/contract_dashboard.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_view_contracts(request.user):
+            return HttpResponseForbidden('You do not have permission to view contracts.')
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        today = timezone.now().date()
+
+        contracts = Contract.objects.select_related('staff', 'project', 'budget', 'created_by').order_by('end_date', '-created_at')
+
+        expiring = [c for c in contracts if c.days_to_end >= 0 and c.days_to_end <= c.alert_days_before_end]
+        expired = [c for c in contracts if c.is_expired]
+        due_for_invoice = [
+            c for c in contracts
+            if c.auto_generate_invoice and c.contract_type == Contract.ContractType.VENDOR
+            and c.next_invoice_date and c.next_invoice_date <= today
+            and c.status not in [Contract.Status.TERMINATED, Contract.Status.EXPIRED]
+        ]
+
+        ctx.update({
+            'contracts': contracts[:30],
+            'expiring_contracts': expiring[:20],
+            'expired_contracts': expired[:20],
+            'due_invoice_contracts': due_for_invoice[:20],
+            'total_contracts': contracts.count(),
+            'active_contracts': contracts.filter(status=Contract.Status.ACTIVE).count(),
+            'staff_contracts': contracts.filter(contract_type=Contract.ContractType.STAFF).count(),
+            'vendor_contracts': contracts.filter(contract_type=Contract.ContractType.VENDOR).count(),
+            'is_finance': _is_finance(self.request.user),
+            'is_hr': _is_hr(self.request.user),
+            'is_ceo': _is_ceo(self.request.user),
+        })
+        return ctx
+
+
+class ContractListView(LoginRequiredMixin, TemplateView):
+    template_name = 'finance/contract_list.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_view_contracts(request.user):
+            return HttpResponseForbidden('You do not have permission to view contracts.')
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        q = self.request.GET.get('q', '').strip()
+        ctype = self.request.GET.get('contract_type', '').strip()
+        status = self.request.GET.get('status', '').strip()
+
+        qs = Contract.objects.select_related('staff', 'project', 'budget', 'created_by').order_by('end_date', '-created_at')
+
+        if q:
+            qs = qs.filter(
+                Q(title__icontains=q) |
+                Q(reference__icontains=q) |
+                Q(vendor_name__icontains=q) |
+                Q(vendor_company__icontains=q)
+            )
+        if ctype:
+            qs = qs.filter(contract_type=ctype)
+        if status:
+            qs = qs.filter(status=status)
+
+        ctx.update({
+            'contracts': qs,
+            'q': q,
+            'type_filter': ctype,
+            'status_filter': status,
+            'contract_type_choices': Contract.ContractType.choices,
+            'status_choices': Contract.Status.choices,
+        })
+        return ctx
+
+
+class ContractCreateView(LoginRequiredMixin, View):
+    template_name = 'finance/contract_form.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_contracts(request.user):
+            return HttpResponseForbidden('You do not have permission to manage contracts.')
+        return super().dispatch(request, *args, **kwargs)
+
+    def _get_form_context(self, contract=None):
+        from apps.projects.models import Project
+
+        return {
+            'contract': contract,
+            'is_edit': False,
+            'contract_type_choices': Contract.ContractType.choices,
+            'status_choices': Contract.Status.choices,
+            'billing_cycle_choices': Contract.BillingCycle.choices,
+            'staff_users': User.objects.filter(is_active=True).order_by('first_name', 'last_name'),
+            'projects': Project.objects.order_by('name'),
+            'budgets': Budget.objects.order_by('-fiscal_year', 'name'),
+            'is_finance': _is_finance(self.request.user),
+            'is_ceo': _is_ceo(self.request.user),
+            'is_hr': _is_hr(self.request.user),
+        }
+
+    def get(self, request):
+        return render(request, self.template_name, self._get_form_context())
+
+    def post(self, request):
+        from apps.projects.models import Project
+
+        try:
+            standard_cost = Decimal(str(request.POST.get('standard_cost') or '0'))
+        except Exception:
+            messages.error(request, 'Please enter a valid standard cost.')
+            return render(request, self.template_name, self._get_form_context())
+
+        title = request.POST.get('title', '').strip()
+        contract_type = request.POST.get('contract_type')
+
+        if not title:
+            messages.error(request, 'Title is required.')
+            return render(request, self.template_name, self._get_form_context())
+
+        if contract_type not in dict(Contract.ContractType.choices):
+            messages.error(request, 'Please select a valid contract type.')
+            return render(request, self.template_name, self._get_form_context())
+
+        contract = Contract.objects.create(
+            title=title,
+            contract_type=contract_type,
+            staff_id=request.POST.get('staff') or None,
+            vendor_name=request.POST.get('vendor_name', '').strip(),
+            vendor_email=request.POST.get('vendor_email', '').strip(),
+            vendor_phone=request.POST.get('vendor_phone', '').strip(),
+            vendor_company=request.POST.get('vendor_company', '').strip(),
+            vendor_address=request.POST.get('vendor_address', '').strip(),
+            reference=request.POST.get('reference', '').strip() or _next_contract_reference(),
+            description=request.POST.get('description', '').strip(),
+            start_date=request.POST.get('start_date'),
+            end_date=request.POST.get('end_date'),
+            renewal_date=request.POST.get('renewal_date') or None,
+            status=request.POST.get('status') or Contract.Status.ACTIVE,
+            project_id=request.POST.get('project') or None,
+            budget_id=request.POST.get('budget') or None,
+            standard_cost=standard_cost,
+            currency=request.POST.get('currency', 'GMD'),
+            billing_cycle=request.POST.get('billing_cycle', Contract.BillingCycle.ONE_OFF),
+            auto_generate_invoice=request.POST.get('auto_generate_invoice') == 'on',
+            auto_send_invoice=request.POST.get('auto_send_invoice') == 'on',
+            next_invoice_date=request.POST.get('next_invoice_date') or None,
+            alert_days_before_end=request.POST.get('alert_days_before_end') or 30,
+            alert_days_before_renewal=request.POST.get('alert_days_before_renewal') or 14,
+            send_expiry_alerts=request.POST.get('send_expiry_alerts') == 'on',
+            send_renewal_alerts=request.POST.get('send_renewal_alerts') == 'on',
+            created_by=request.user,
+            updated_by=request.user,
+        )
+
+        if 'document' in request.FILES:
+            contract.document = request.FILES['document']
+            contract.save(update_fields=['document'])
+
+        messages.success(request, f'Contract "{contract.title}" created.')
+        return redirect('contract_detail', pk=contract.pk)
+
+
+class ContractUpdateView(LoginRequiredMixin, View):
+    template_name = 'finance/contract_form.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_contracts(request.user):
+            return HttpResponseForbidden('You do not have permission to manage contracts.')
+        self.contract = get_object_or_404(Contract, pk=kwargs['pk'])
+        return super().dispatch(request, *args, **kwargs)
+
+    def _get_form_context(self, contract):
+        from apps.projects.models import Project
+
+        return {
+            'contract': contract,
+            'is_edit': True,
+            'contract_type_choices': Contract.ContractType.choices,
+            'status_choices': Contract.Status.choices,
+            'billing_cycle_choices': Contract.BillingCycle.choices,
+            'staff_users': User.objects.filter(is_active=True).order_by('first_name', 'last_name'),
+            'projects': Project.objects.order_by('name'),
+            'budgets': Budget.objects.order_by('-fiscal_year', 'name'),
+            'is_finance': _is_finance(self.request.user),
+            'is_ceo': _is_ceo(self.request.user),
+            'is_hr': _is_hr(self.request.user),
+        }
+
+    def get(self, request, pk):
+        return render(request, self.template_name, self._get_form_context(self.contract))
+
+    def post(self, request, pk):
+        try:
+            standard_cost = Decimal(str(request.POST.get('standard_cost') or '0'))
+        except Exception:
+            messages.error(request, 'Please enter a valid standard cost.')
+            return render(request, self.template_name, self._get_form_context(self.contract))
+
+        title = request.POST.get('title', '').strip()
+        contract_type = request.POST.get('contract_type')
+
+        if not title:
+            messages.error(request, 'Title is required.')
+            return render(request, self.template_name, self._get_form_context(self.contract))
+
+        if contract_type not in dict(Contract.ContractType.choices):
+            messages.error(request, 'Please select a valid contract type.')
+            return render(request, self.template_name, self._get_form_context(self.contract))
+
+        c = self.contract
+        c.title = title
+        c.contract_type = contract_type
+        c.staff_id = request.POST.get('staff') or None
+        c.vendor_name = request.POST.get('vendor_name', '').strip()
+        c.vendor_email = request.POST.get('vendor_email', '').strip()
+        c.vendor_phone = request.POST.get('vendor_phone', '').strip()
+        c.vendor_company = request.POST.get('vendor_company', '').strip()
+        c.vendor_address = request.POST.get('vendor_address', '').strip()
+        c.reference = request.POST.get('reference', '').strip() or c.reference
+        c.description = request.POST.get('description', '').strip()
+        c.start_date = request.POST.get('start_date')
+        c.end_date = request.POST.get('end_date')
+        c.renewal_date = request.POST.get('renewal_date') or None
+        c.status = request.POST.get('status') or c.status
+        c.project_id = request.POST.get('project') or None
+        c.budget_id = request.POST.get('budget') or None
+        c.standard_cost = standard_cost
+        c.currency = request.POST.get('currency', 'GMD')
+        c.billing_cycle = request.POST.get('billing_cycle', Contract.BillingCycle.ONE_OFF)
+        c.auto_generate_invoice = request.POST.get('auto_generate_invoice') == 'on'
+        c.auto_send_invoice = request.POST.get('auto_send_invoice') == 'on'
+        c.next_invoice_date = request.POST.get('next_invoice_date') or None
+        c.alert_days_before_end = request.POST.get('alert_days_before_end') or 30
+        c.alert_days_before_renewal = request.POST.get('alert_days_before_renewal') or 14
+        c.send_expiry_alerts = request.POST.get('send_expiry_alerts') == 'on'
+        c.send_renewal_alerts = request.POST.get('send_renewal_alerts') == 'on'
+        c.updated_by = request.user
+
+        if 'document' in request.FILES:
+            c.document = request.FILES['document']
+
+        c.save()
+
+        messages.success(request, f'Contract "{c.title}" updated.')
+        return redirect('contract_detail', pk=c.pk)
+
+class ContractDetailView(LoginRequiredMixin, DetailView):
+    model = Contract
+    template_name = 'finance/contract_detail.html'
+    context_object_name = 'contract'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_view_contracts(request.user):
+            return HttpResponseForbidden('You do not have permission to view contracts.')
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['is_finance'] = _is_finance(self.request.user)
+        ctx['is_ceo'] = _is_ceo(self.request.user)
+        ctx['is_hr'] = _is_hr(self.request.user)
+        return ctx

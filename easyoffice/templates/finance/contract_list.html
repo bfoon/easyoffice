@@ -1,0 +1,531 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}All Contracts{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'contract_dashboard' %}">Contracts</a> / <span>All Contracts</span>
+{% endblock %}
+
+{% block content %}
+<style>
+  .clist-shell{
+    display:flex;
+    flex-direction:column;
+    gap:1.25rem;
+  }
+  .clist-hero{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:1rem;
+    flex-wrap:wrap;
+    padding:1.35rem 1.4rem;
+    border-radius:22px;
+    background:
+      radial-gradient(circle at top right, rgba(37, 99, 235, .08), transparent 25%),
+      linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    border:1px solid rgba(148, 163, 184, .18);
+    box-shadow:0 16px 36px rgba(15, 23, 42, .06);
+  }
+  .clist-title{
+    margin:0;
+    font-size:1.65rem;
+    font-weight:800;
+    color:var(--eo-text);
+  }
+  .clist-subtitle{
+    margin:.35rem 0 0;
+    color:var(--eo-text-muted);
+    font-size:.92rem;
+  }
+  .clist-actions{
+    display:flex;
+    gap:.65rem;
+    flex-wrap:wrap;
+  }
+  .clist-btn{
+    display:inline-flex;
+    align-items:center;
+    gap:.5rem;
+    min-height:42px;
+    padding:.72rem 1rem;
+    border-radius:14px;
+    text-decoration:none;
+    font-weight:700;
+    transition:.2s ease;
+  }
+  .clist-btn:hover{ transform:translateY(-2px); }
+  .clist-btn-primary{
+    background:linear-gradient(135deg, #1d4ed8, #2563eb);
+    color:#fff;
+    box-shadow:0 14px 28px rgba(37, 99, 235, .2);
+  }
+  .clist-btn-secondary{
+    background:#fff;
+    color:var(--eo-text);
+    border:1px solid rgba(148,163,184,.18);
+  }
+  .clist-filter-card,
+  .clist-table-card{
+    border:1px solid rgba(148,163,184,.18);
+    border-radius:22px;
+    background:linear-gradient(180deg, #fff 0%, #f8fafc 100%);
+    box-shadow:0 16px 34px rgba(15, 23, 42, .06);
+    overflow:hidden;
+  }
+  .clist-filter-inner{
+    padding:1.2rem;
+  }
+  .clist-filter-top{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:1rem;
+    flex-wrap:wrap;
+    margin-bottom:1rem;
+  }
+  .clist-filter-title{
+    margin:0;
+    font-size:1rem;
+    font-weight:800;
+    color:var(--eo-text);
+  }
+  .clist-filter-subtitle{
+    margin:.22rem 0 0;
+    font-size:.82rem;
+    color:var(--eo-text-muted);
+  }
+  .clist-form-grid{
+    display:grid;
+    grid-template-columns:2fr 1.1fr 1fr auto;
+    gap:.9rem;
+    align-items:end;
+  }
+  .clist-chip-row{
+    display:flex;
+    flex-wrap:wrap;
+    gap:.55rem;
+    margin-top:1rem;
+  }
+  .clist-chip{
+    display:inline-flex;
+    align-items:center;
+    gap:.45rem;
+    padding:.56rem .85rem;
+    border-radius:999px;
+    background:#fff;
+    border:1px solid rgba(148,163,184,.18);
+    font-size:.78rem;
+    font-weight:700;
+    color:var(--eo-text);
+    text-decoration:none;
+    transition:.2s ease;
+  }
+  .clist-chip:hover{ transform:translateY(-1px); }
+  .clist-chip.is-active{
+    background:rgba(37,99,235,.08);
+    color:#1d4ed8;
+    border-color:rgba(37,99,235,.18);
+  }
+  .clist-table-head{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:1rem;
+    flex-wrap:wrap;
+    padding:1.1rem 1.2rem 0;
+  }
+  .clist-table-title{
+    margin:0;
+    font-size:1rem;
+    font-weight:800;
+    color:var(--eo-text);
+  }
+  .clist-table-subtitle{
+    margin:.22rem 0 0;
+    font-size:.82rem;
+    color:var(--eo-text-muted);
+  }
+  .clist-count-badge{
+    display:inline-flex;
+    align-items:center;
+    gap:.45rem;
+    padding:.48rem .8rem;
+    border-radius:999px;
+    background:rgba(15,23,42,.04);
+    color:var(--eo-text);
+    font-size:.78rem;
+    font-weight:800;
+  }
+  .clist-table-wrap{
+    padding:1rem 1.2rem 1.2rem;
+    overflow:auto;
+  }
+  .clist-table{
+    width:100%;
+    border-collapse:separate;
+    border-spacing:0 .75rem;
+    min-width:980px;
+  }
+  .clist-table thead th{
+    font-size:.74rem;
+    text-transform:uppercase;
+    letter-spacing:.04em;
+    color:var(--eo-text-muted);
+    font-weight:800;
+    border:0;
+    padding:0 .9rem .1rem;
+    white-space:nowrap;
+  }
+  .clist-row{
+    background:#fff;
+    box-shadow:0 10px 24px rgba(15, 23, 42, .05);
+    transition:.2s ease;
+  }
+  .clist-row:hover{
+    transform:translateY(-2px);
+    box-shadow:0 16px 30px rgba(15, 23, 42, .08);
+  }
+  .clist-row td{
+    padding:1rem .9rem;
+    vertical-align:middle;
+    border-top:1px solid rgba(148,163,184,.14);
+    border-bottom:1px solid rgba(148,163,184,.14);
+    background:#fff;
+  }
+  .clist-row td:first-child{
+    border-left:1px solid rgba(148,163,184,.14);
+    border-radius:18px 0 0 18px;
+  }
+  .clist-row td:last-child{
+    border-right:1px solid rgba(148,163,184,.14);
+    border-radius:0 18px 18px 0;
+  }
+  .clist-title-cell{
+    display:flex;
+    gap:.85rem;
+    align-items:flex-start;
+  }
+  .clist-type-icon{
+    width:44px;
+    height:44px;
+    border-radius:14px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    flex-shrink:0;
+    font-size:1rem;
+  }
+  .clist-main-title{
+    font-size:.95rem;
+    font-weight:800;
+    color:var(--eo-text);
+    margin:0;
+  }
+  .clist-meta{
+    font-size:.76rem;
+    color:var(--eo-text-muted);
+    margin-top:.28rem;
+    line-height:1.55;
+  }
+  .clist-pill{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-width:88px;
+    padding:.42rem .72rem;
+    border-radius:999px;
+    font-size:.74rem;
+    font-weight:800;
+    border:1px solid transparent;
+  }
+  .clist-pill.staff{
+    background:#eff6ff;
+    color:#1d4ed8;
+    border-color:#bfdbfe;
+  }
+  .clist-pill.vendor{
+    background:#ecfdf5;
+    color:#047857;
+    border-color:#bbf7d0;
+  }
+  .clist-status{
+    display:inline-flex;
+    align-items:center;
+    gap:.4rem;
+    padding:.42rem .72rem;
+    border-radius:999px;
+    font-size:.74rem;
+    font-weight:800;
+    background:#f8fafc;
+    border:1px solid rgba(148,163,184,.18);
+    color:var(--eo-text);
+  }
+  .clist-date-wrap{
+    display:flex;
+    flex-direction:column;
+    gap:.16rem;
+  }
+  .clist-date-main{
+    font-size:.84rem;
+    font-weight:800;
+    color:var(--eo-text);
+  }
+  .clist-date-note{
+    font-size:.72rem;
+    color:var(--eo-text-muted);
+  }
+  .clist-amount{
+    font-size:.9rem;
+    font-weight:800;
+    color:#059669;
+    white-space:nowrap;
+  }
+  .clist-open-btn{
+    display:inline-flex;
+    align-items:center;
+    gap:.45rem;
+    justify-content:center;
+    padding:.62rem .88rem;
+    border-radius:12px;
+    background:#fff;
+    border:1px solid rgba(148,163,184,.18);
+    color:var(--eo-text);
+    text-decoration:none;
+    font-size:.78rem;
+    font-weight:800;
+  }
+  .clist-open-btn:hover{
+    background:rgba(37,99,235,.04);
+    color:#1d4ed8;
+    border-color:rgba(37,99,235,.15);
+  }
+  .clist-empty{
+    text-align:center;
+    padding:2.4rem 1rem 2.7rem;
+    color:var(--eo-text-muted);
+  }
+  .clist-empty i{
+    display:block;
+    font-size:2.2rem;
+    margin-bottom:.55rem;
+    opacity:.3;
+  }
+  @media (max-width: 991px){
+    .clist-form-grid{
+      grid-template-columns:1fr 1fr;
+    }
+  }
+  @media (max-width: 767px){
+    .clist-form-grid{
+      grid-template-columns:1fr;
+    }
+  }
+</style>
+
+<div class="clist-shell">
+  <section class="clist-hero">
+    <div>
+      <h1 class="clist-title">All Contracts</h1>
+      <p class="clist-subtitle">
+        Search, filter, and review staff and vendor contracts from one organized workspace.
+      </p>
+    </div>
+
+    <div class="clist-actions">
+      {% if request.user.is_superuser or is_finance or is_ceo %}
+      <a href="{% url 'contract_create' %}" class="clist-btn clist-btn-primary">
+        <i class="bi bi-plus-lg"></i> New Contract
+      </a>
+      {% endif %}
+      <a href="{% url 'contract_dashboard' %}" class="clist-btn clist-btn-secondary">
+        <i class="bi bi-speedometer2"></i> Dashboard
+      </a>
+    </div>
+  </section>
+
+  <section class="clist-filter-card">
+    <div class="clist-filter-inner">
+      <div class="clist-filter-top">
+        <div>
+          <h2 class="clist-filter-title">Find the right contract faster</h2>
+          <p class="clist-filter-subtitle">Use search and filters to narrow the list instantly.</p>
+        </div>
+      </div>
+
+      <form method="get">
+        <div class="clist-form-grid">
+          <div>
+            <label class="eo-form-label">Search</label>
+            <input
+              type="text"
+              name="q"
+              class="eo-form-control"
+              value="{{ q }}"
+              placeholder="Title, reference, vendor or company"
+            >
+          </div>
+
+          <div>
+            <label class="eo-form-label">Contract Type</label>
+            <select name="contract_type" class="eo-form-select">
+              <option value="">All Types</option>
+              {% for value, label in contract_type_choices %}
+              <option value="{{ value }}" {% if type_filter == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div>
+            <label class="eo-form-label">Status</label>
+            <select name="status" class="eo-form-select">
+              <option value="">All Statuses</option>
+              {% for value, label in status_choices %}
+              <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div>
+            <button class="eo-btn eo-btn-primary w-100" type="submit">
+              <i class="bi bi-search"></i> Filter
+            </button>
+          </div>
+        </div>
+      </form>
+
+      <div class="clist-chip-row">
+        <a href="{% url 'contract_list' %}" class="clist-chip {% if not q and not type_filter and not status_filter %}is-active{% endif %}">
+          <i class="bi bi-grid"></i> All
+        </a>
+        <a href="{% url 'contract_list' %}?contract_type=staff" class="clist-chip {% if type_filter == 'staff' %}is-active{% endif %}">
+          <i class="bi bi-person-badge"></i> Staff
+        </a>
+        <a href="{% url 'contract_list' %}?contract_type=vendor" class="clist-chip {% if type_filter == 'vendor' %}is-active{% endif %}">
+          <i class="bi bi-buildings"></i> Vendor
+        </a>
+        <a href="{% url 'contract_list' %}?status=active" class="clist-chip {% if status_filter == 'active' %}is-active{% endif %}">
+          <i class="bi bi-check-circle"></i> Active
+        </a>
+        <a href="{% url 'contract_list' %}?status=expired" class="clist-chip {% if status_filter == 'expired' %}is-active{% endif %}">
+          <i class="bi bi-slash-circle"></i> Expired
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="clist-table-card">
+    <div class="clist-table-head">
+      <div>
+        <h2 class="clist-table-title">Contracts Register</h2>
+        <p class="clist-table-subtitle">Professional overview of tracked agreements</p>
+      </div>
+      <div class="clist-count-badge">
+        <i class="bi bi-files"></i>
+        {{ contracts|length }} result{{ contracts|length|pluralize }}
+      </div>
+    </div>
+
+    {% if contracts %}
+    <div class="clist-table-wrap">
+      <table class="clist-table">
+        <thead>
+          <tr>
+            <th>Contract</th>
+            <th>Type</th>
+            <th>Counterparty</th>
+            <th>End Date</th>
+            <th>Status</th>
+            <th>Value</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in contracts %}
+          <tr class="clist-row">
+            <td>
+              <div class="clist-title-cell">
+                <div class="clist-type-icon"
+                     style="{% if c.contract_type == 'staff' %}background:#dbeafe;color:#2563eb{% else %}background:#dcfce7;color:#059669{% endif %}">
+                  <i class="bi {% if c.contract_type == 'staff' %}bi-person-badge{% else %}bi-buildings{% endif %}"></i>
+                </div>
+                <div>
+                  <p class="clist-main-title">{{ c.title }}</p>
+                  <div class="clist-meta">
+                    {{ c.reference|default:"No reference" }}
+                    {% if c.project %}<br>Project: {{ c.project.name|truncatechars:30 }}{% endif %}
+                  </div>
+                </div>
+              </div>
+            </td>
+
+            <td>
+              <span class="clist-pill {% if c.contract_type == 'staff' %}staff{% else %}vendor{% endif %}">
+                {{ c.get_contract_type_display }}
+              </span>
+            </td>
+
+            <td>
+              <div class="clist-meta" style="font-size:.82rem;color:var(--eo-text);font-weight:700;">
+                {{ c.counterparty_name|default:"—" }}
+              </div>
+              {% if c.vendor_company %}
+              <div class="clist-meta">{{ c.vendor_company }}</div>
+              {% endif %}
+            </td>
+
+            <td>
+              <div class="clist-date-wrap">
+                <div class="clist-date-main"
+                     style="
+                       {% if c.is_expired %}
+                         color:#dc2626;
+                       {% elif c.days_to_end <= 30 %}
+                         color:#d97706;
+                       {% else %}
+                         color:var(--eo-text);
+                       {% endif %}
+                     ">
+                  {{ c.end_date|date:"M j, Y" }}
+                </div>
+                <div class="clist-date-note">
+                  {% if c.is_expired %}
+                    Expired
+                  {% else %}
+                    {{ c.days_to_end }} day{{ c.days_to_end|pluralize }} left
+                  {% endif %}
+                </div>
+              </div>
+            </td>
+
+            <td>
+              <span class="clist-status">
+                <i class="bi bi-dot"></i> {{ c.get_status_display }}
+              </span>
+            </td>
+
+            <td>
+              <div class="clist-amount">
+                {{ c.currency }} {{ c.standard_cost|floatformat:0|intcomma }}
+              </div>
+              <div class="clist-meta">{{ c.get_billing_cycle_display }}</div>
+            </td>
+
+            <td class="text-end">
+              <a href="{% url 'contract_detail' c.pk %}" class="clist-open-btn">
+                <i class="bi bi-eye"></i> Open
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="clist-empty">
+      <i class="bi bi-file-earmark-x"></i>
+      No contracts found.
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

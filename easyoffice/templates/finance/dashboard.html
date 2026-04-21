@@ -8,7 +8,7 @@
   <div>
     <h1 class="eo-page-title">Finance Dashboard</h1>
     <p class="eo-page-subtitle">
-      Fiscal year overview — budgets, staff finance requests, purchase requests &amp; payments
+      Fiscal year overview — budgets, staff finance requests, purchase requests, payments &amp; contract monitoring
     </p>
   </div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -43,6 +43,12 @@
     {% if is_finance %}
     <a href="{% url 'finance_request_queue' %}" class="eo-btn eo-btn-secondary">
       <i class="bi bi-cash-coin"></i> Processing Queue
+    </a>
+    {% endif %}
+
+    {% if is_finance or is_ceo or is_hr %}
+    <a href="{% url 'contract_dashboard' %}" class="eo-btn eo-btn-primary">
+      <i class="bi bi-file-earmark-text"></i> Contracts
     </a>
     {% endif %}
   </div>
@@ -82,6 +88,40 @@
   </div>
 </div>
 
+<div class="row g-3 mb-4">
+  <div class="col-6 col-xl-3">
+    <div class="eo-stat eo-stat-info">
+      <div class="eo-stat-label">Contracts</div>
+      <div class="eo-stat-value">{{ contract_total_count|default:0 }}</div>
+      <i class="bi bi-file-earmark-text eo-stat-icon"></i>
+    </div>
+  </div>
+
+  <div class="col-6 col-xl-3">
+    <div class="eo-stat eo-stat-success">
+      <div class="eo-stat-label">Staff Contracts</div>
+      <div class="eo-stat-value">{{ contract_staff_count|default:0 }}</div>
+      <i class="bi bi-person-badge eo-stat-icon"></i>
+    </div>
+  </div>
+
+  <div class="col-6 col-xl-3">
+    <div class="eo-stat eo-stat-primary">
+      <div class="eo-stat-label">Vendor Contracts</div>
+      <div class="eo-stat-value">{{ contract_vendor_count|default:0 }}</div>
+      <i class="bi bi-buildings eo-stat-icon"></i>
+    </div>
+  </div>
+
+  <div class="col-6 col-xl-3">
+    <div class="eo-stat eo-stat-danger">
+      <div class="eo-stat-label">Expiring Soon</div>
+      <div class="eo-stat-value">{{ contract_expiring_count|default:0 }}</div>
+      <i class="bi bi-bell eo-stat-icon"></i>
+    </div>
+  </div>
+</div>
+
 <div class="eo-card mb-4">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:12px;flex-wrap:wrap">
     <div>
@@ -109,7 +149,6 @@
 </div>
 
 <div class="row g-4">
-
   <div class="col-lg-8 d-flex flex-column gap-4">
 
     <div class="eo-card">
@@ -167,6 +206,80 @@
       </div>
       {% endif %}
     </div>
+
+    {% if expiring_contracts %}
+    <div class="eo-card" style="border-left:4px solid var(--eo-warning)">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-bell me-1" style="color:var(--eo-warning)"></i>
+            Expiring Contracts
+          </h2>
+          <p class="eo-card-subtitle">{{ expiring_contracts|length }} contract{{ expiring_contracts|length|pluralize }} need attention</p>
+        </div>
+        <a href="{% url 'contract_dashboard' %}" class="eo-btn eo-btn-sm eo-btn-warning">Open Contracts</a>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:0">
+        {% for c in expiring_contracts %}
+        <a href="{% url 'contract_detail' c.pk %}" style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;text-decoration:none;{% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
+          <div style="width:38px;height:38px;border-radius:10px;background:#fff7ed;color:#c2410c;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <i class="bi bi-file-earmark-break"></i>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.88rem;font-weight:700;color:var(--eo-text)">{{ c.title|truncatechars:46 }}</div>
+            <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:4px">
+              {{ c.get_contract_type_display }} · {{ c.counterparty_name|truncatechars:28 }}
+              {% if c.project %} · {{ c.project.name|truncatechars:20 }}{% endif %}
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-size:.75rem;font-weight:700;color:var(--eo-warning)">Ends {{ c.end_date|date:"M j, Y" }}</div>
+            <div style="font-size:.7rem;color:var(--eo-text-muted)">{{ c.days_to_end }} day{{ c.days_to_end|pluralize }} left</div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if due_invoice_contracts %}
+    <div class="eo-card" style="border-left:4px solid var(--eo-success)">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-cash-coin me-1" style="color:var(--eo-success)"></i>
+            Contracts Due for Invoicing
+          </h2>
+          <p class="eo-card-subtitle">{{ due_invoice_contracts|length }} contract{{ due_invoice_contracts|length|pluralize }} ready for billing</p>
+        </div>
+        <a href="{% url 'contract_dashboard' %}" class="eo-btn eo-btn-sm eo-btn-success">Review Billing</a>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:10px">
+        {% for c in due_invoice_contracts %}
+        <div style="padding:12px 14px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <div>
+              <div style="font-size:.88rem;font-weight:700;color:var(--eo-text)">{{ c.title }}</div>
+              <div style="font-size:.74rem;color:var(--eo-text-muted)">
+                {{ c.counterparty_name }} · {{ c.get_billing_cycle_display }}
+              </div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:.94rem;font-weight:800;color:var(--eo-success)">
+                {{ c.currency }} {{ c.standard_cost|floatformat:0|intcomma }}
+              </div>
+              <div style="font-size:.7rem;color:var(--eo-text-muted)">
+                Due {{ c.next_invoice_date|date:"M j, Y" }}
+              </div>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
 
     {% if is_ceo %}
     <div class="eo-card" style="border-left:4px solid #8b5cf6">
@@ -249,194 +362,33 @@
     </div>
     {% endif %}
 
-    {% if pending_purchases %}
-    <div class="eo-card" style="border-left:4px solid var(--eo-warning)">
-      <div class="eo-card-header">
-        <div>
-          <h2 class="eo-card-title">
-            <i class="bi bi-hourglass-split me-1" style="color:var(--eo-warning)"></i>
-            Purchase Requests Awaiting Approval
-          </h2>
-          <p class="eo-card-subtitle">{{ pending_purchases|length }} request{{ pending_purchases|length|pluralize }} awaiting CEO decision</p>
-        </div>
-        <a href="{% url 'purchase_request' %}" class="eo-btn eo-btn-sm eo-btn-warning">Review All</a>
-      </div>
-
-      <div>
-        {% for pr in pending_purchases %}
-        <div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;
-                    {% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
-
-          <span style="width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:6px;
-                       background:{{ pr.priority_color }}"></span>
-
-          <div style="flex:1;min-width:0">
-            <div style="font-size:.88rem;font-weight:700;color:var(--eo-text);margin-bottom:4px">
-              {{ pr.title|truncatechars:60 }}
-            </div>
-            <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:.74rem;color:var(--eo-text-muted)">
-              <span><i class="bi bi-person me-1"></i>{{ pr.requested_by.full_name }}</span>
-              {% if pr.department %}<span><i class="bi bi-building me-1"></i>{{ pr.department.name }}</span>{% endif %}
-              {% if pr.project %}
-              <span style="color:var(--eo-accent);font-weight:600">
-                <i class="bi bi-kanban me-1"></i>{{ pr.project.name|truncatechars:24 }}
-              </span>
-              {% endif %}
-              <span><i class="bi bi-clock me-1"></i>{{ pr.created_at|naturaltime }}</span>
-            </div>
-          </div>
-
-          <div style="text-align:right;flex-shrink:0">
-            <div style="font-size:.95rem;font-weight:800;color:var(--eo-text)">
-              D{{ pr.estimated_cost|floatformat:0|intcomma }}
-            </div>
-            <span style="font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:4px;
-              {% if pr.priority == 'urgent' %}background:#fee2e2;color:#991b1b
-              {% elif pr.priority == 'normal' %}background:#dbeafe;color:#1e40af
-              {% else %}background:#f0fdf4;color:#166534{% endif %}">
-              {{ pr.get_priority_display }}
-            </span>
-          </div>
-
-          {% if is_ceo %}
-          <div style="display:flex;gap:5px;flex-shrink:0">
-            <form method="post" action="{% url 'purchase_approval' pr.pk %}">
-              {% csrf_token %}
-              <input type="hidden" name="action" value="approve"/>
-              <input type="hidden" name="next" value="{{ request.path }}"/>
-              <button type="submit" class="eo-btn eo-btn-success eo-btn-sm eo-btn-icon" title="Approve">
-                <i class="bi bi-check-lg"></i>
-              </button>
-            </form>
-
-            <form method="post" action="{% url 'purchase_approval' pr.pk %}" onsubmit="return confirm('Reject this request?')">
-              {% csrf_token %}
-              <input type="hidden" name="action" value="reject"/>
-              <input type="hidden" name="next" value="{{ request.path }}"/>
-              <button type="submit" class="eo-btn eo-btn-danger eo-btn-sm eo-btn-icon" title="Reject">
-                <i class="bi bi-x-lg"></i>
-              </button>
-            </form>
-          </div>
-          {% endif %}
-        </div>
-        {% endfor %}
-      </div>
-    </div>
-    {% endif %}
-
-    {% if is_finance %}
-    <div class="eo-card" style="border-left:4px solid #10b981">
-      <div class="eo-card-header">
-        <div>
-          <h2 class="eo-card-title">
-            <i class="bi bi-cash-coin me-1" style="color:#10b981"></i>
-            Finance Processing Queue
-          </h2>
-          <p class="eo-card-subtitle">CEO-approved staff requests waiting for payment processing</p>
-        </div>
-        <a href="{% url 'finance_request_queue' %}" class="eo-btn eo-btn-secondary eo-btn-sm">Open Queue</a>
-      </div>
-
-      {% if finance_processing_queue %}
-      <div style="display:flex;flex-direction:column;gap:10px">
-        {% for r in finance_processing_queue %}
-        <div style="padding:12px 14px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
-          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
-            <div>
-              <div style="font-size:.88rem;font-weight:700;color:var(--eo-text)">{{ r.title }}</div>
-              <div style="font-size:.74rem;color:var(--eo-text-muted)">
-                {{ r.employee.full_name|default:r.employee }} · {{ r.get_request_type_display }}
-                {% if r.project %} · {{ r.project.name|truncatechars:24 }}{% endif %}
-              </div>
-            </div>
-            <div style="font-size:.92rem;font-weight:800;color:var(--eo-success)">
-              D{{ r.amount_approved|default:r.amount_requested|floatformat:0|intcomma }}
-            </div>
-          </div>
-        </div>
-        {% endfor %}
-      </div>
-      {% else %}
-      <div style="text-align:center;padding:24px;color:var(--eo-text-muted)">
-        <i class="bi bi-cash-coin" style="font-size:2rem;display:block;margin-bottom:8px;opacity:.25"></i>
-        <p style="font-size:.84rem">No CEO-approved staff requests waiting for finance processing.</p>
-      </div>
-      {% endif %}
-    </div>
-    {% endif %}
-
   </div>
 
   <div class="col-lg-4 d-flex flex-column gap-4">
 
     <div class="eo-card">
       <div class="eo-card-header">
-        <h2 class="eo-card-title">My Finance</h2>
-        <a href="{% url 'my_finance_dashboard' %}" class="eo-btn eo-btn-secondary eo-btn-sm">Open</a>
+        <h2 class="eo-card-title">Contract Actions</h2>
+        <a href="{% url 'contract_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">All</a>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <a href="{% url 'employee_finance_request' %}" class="eo-btn eo-btn-secondary" style="justify-content:flex-start">
-          <i class="bi bi-send-plus"></i> Request Payment
+        <a href="{% url 'contract_dashboard' %}" class="eo-btn eo-btn-secondary" style="justify-content:flex-start">
+          <i class="bi bi-speedometer2"></i> Monitor
         </a>
-        <a href="{% url 'my_loan_list' %}" class="eo-btn eo-btn-secondary" style="justify-content:flex-start">
-          <i class="bi bi-cash-stack"></i> My Loans
+        <a href="{% url 'contract_list' %}" class="eo-btn eo-btn-secondary" style="justify-content:flex-start">
+          <i class="bi bi-file-earmark-text"></i> All Contracts
         </a>
-        <a href="{% url 'payment_list' %}" class="eo-btn eo-btn-secondary" style="justify-content:flex-start">
-          <i class="bi bi-receipt"></i> My Payments
+        {% if is_finance or is_ceo %}
+        <a href="{% url 'contract_create' %}" class="eo-btn eo-btn-primary" style="justify-content:flex-start">
+          <i class="bi bi-plus-lg"></i> New Contract
         </a>
-        <a href="{% url 'purchase_request' %}" class="eo-btn eo-btn-secondary" style="justify-content:flex-start">
-          <i class="bi bi-cart-plus"></i> My Purchases
-        </a>
-      </div>
-    </div>
-
-    {% if is_finance or is_ceo %}
-    <div class="eo-card">
-      <div class="eo-card-header">
-        <h2 class="eo-card-title"><i class="bi bi-send me-1" style="color:var(--eo-primary)"></i>Payment Requests</h2>
-        <a href="{% url 'payment_request_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">All</a>
-      </div>
-
-      {% if recent_payment_requests %}
-      <div style="display:flex;flex-direction:column;gap:0">
-        {% for pr in recent_payment_requests %}
-        <a href="{% url 'payment_request_detail' pr.pk %}"
-           style="display:flex;align-items:center;gap:11px;padding:11px 0;text-decoration:none;
-                  {% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
-          <div style="width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0;background:{{ pr.status_color }}18;color:{{ pr.status_color }}">
-            <i class="bi {% if pr.status == 'paid' %}bi-check-circle-fill{% elif pr.status == 'sent' %}bi-send-fill{% elif pr.status == 'cancelled' %}bi-x-circle{% else %}bi-file-earmark-text{% endif %}"></i>
-          </div>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:.83rem;font-weight:600;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-              {{ pr.title|truncatechars:26 }}
-            </div>
-            <div style="font-size:.71rem;color:var(--eo-text-muted)">
-              {{ pr.effective_recipient_name|truncatechars:20 }}
-              · <span style="color:{{ pr.status_color }};font-weight:600">{{ pr.get_status_display }}</span>
-            </div>
-          </div>
-          <div style="font-size:.88rem;font-weight:800;color:var(--eo-text);flex-shrink:0;white-space:nowrap">
-            {{ pr.currency }} {{ pr.amount|floatformat:0|intcomma }}
-          </div>
-        </a>
-        {% endfor %}
-      </div>
-      {% else %}
-      <div style="text-align:center;padding:24px;color:var(--eo-text-muted);font-size:.84rem">
-        <i class="bi bi-send" style="font-size:1.4rem;display:block;margin-bottom:8px;opacity:.3"></i>
-        No payment requests yet.
-      </div>
-      {% endif %}
-
-      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--eo-border)">
-        <a href="{% url 'payment_request_create' %}" class="eo-btn eo-btn-primary w-100">
-          <i class="bi bi-plus-lg"></i> New Payment Request
+        {% endif %}
+        <a href="{% url 'incoming_payment_request_list' %}" class="eo-btn eo-btn-secondary" style="justify-content:flex-start">
+          <i class="bi bi-cash-stack"></i> Invoices
         </a>
       </div>
     </div>
-    {% endif %}
 
     <div class="eo-card" style="position:sticky;top:20px">
       <div class="eo-card-header">
@@ -447,17 +399,13 @@
       {% if recent_payments %}
       <div style="display:flex;flex-direction:column;gap:0">
         {% for p in recent_payments %}
-        <div style="display:flex;align-items:center;gap:11px;padding:11px 0;
-                    {% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
+        <div style="display:flex;align-items:center;gap:11px;padding:11px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
           <div style="width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0;
             {% if p.method == 'bank_transfer' %}background:#dbeafe;color:#1d4ed8
             {% elif p.method == 'cash' %}background:#d1fae5;color:#065f46
             {% elif p.method == 'cheque' %}background:#fef3c7;color:#92400e
             {% else %}background:#ede9fe;color:#5b21b6{% endif %}">
-            <i class="bi {% if p.method == 'bank_transfer' %}bi-bank
-              {% elif p.method == 'cash' %}bi-cash-coin
-              {% elif p.method == 'cheque' %}bi-file-text
-              {% else %}bi-credit-card{% endif %}"></i>
+            <i class="bi {% if p.method == 'bank_transfer' %}bi-bank{% elif p.method == 'cash' %}bi-cash-coin{% elif p.method == 'cheque' %}bi-file-text{% else %}bi-credit-card{% endif %}"></i>
           </div>
 
           <div style="flex:1;min-width:0">
@@ -470,9 +418,7 @@
             </div>
           </div>
 
-          <div style="font-size:.88rem;font-weight:800;
-                      color:{% if p.direction == 'staff_to_company' %}var(--eo-danger){% else %}var(--eo-text){% endif %};
-                      flex-shrink:0">
+          <div style="font-size:.88rem;font-weight:800;color:{% if p.direction == 'staff_to_company' %}var(--eo-danger){% else %}var(--eo-text){% endif %};flex-shrink:0">
             {% if p.direction == 'staff_to_company' %}-{% endif %}D{{ p.amount|floatformat:0|intcomma }}
           </div>
         </div>
@@ -486,6 +432,5 @@
     </div>
 
   </div>
-
 </div>
 {% endblock %}

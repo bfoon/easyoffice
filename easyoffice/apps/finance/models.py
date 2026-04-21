@@ -1,5 +1,6 @@
 import uuid
 from decimal import Decimal
+from datetime import timedelta
 from django.db import models
 from django.utils import timezone
 from apps.core.models import User
@@ -581,3 +582,182 @@ class IncomingPaymentDocument(models.Model):
 
     def __str__(self):
         return f'{self.get_doc_type_display()} — {self.name}'
+
+class Contract(models.Model):
+    class ContractType(models.TextChoices):
+        STAFF = 'staff', 'Staff'
+        VENDOR = 'vendor', 'Vendor'
+
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        ACTIVE = 'active', 'Active'
+        EXPIRING = 'expiring', 'Expiring Soon'
+        EXPIRED = 'expired', 'Expired'
+        TERMINATED = 'terminated', 'Terminated'
+        COMPLETED = 'completed', 'Completed'
+        RENEWED = 'renewed', 'Renewed'
+
+    class BillingCycle(models.TextChoices):
+        ONE_OFF = 'one_off', 'One-off'
+        WEEKLY = 'weekly', 'Weekly'
+        MONTHLY = 'monthly', 'Monthly'
+        QUARTERLY = 'quarterly', 'Quarterly'
+        YEARLY = 'yearly', 'Yearly'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=250)
+    contract_type = models.CharField(max_length=20, choices=ContractType.choices)
+
+    # Staff contract link
+    staff = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='staff_contracts'
+    )
+
+    # Vendor / customer contract fields
+    vendor_name = models.CharField(max_length=200, blank=True)
+    vendor_email = models.EmailField(blank=True)
+    vendor_phone = models.CharField(max_length=50, blank=True)
+    vendor_company = models.CharField(max_length=200, blank=True)
+    vendor_address = models.TextField(blank=True)
+
+    # Common contract metadata
+    reference = models.CharField(max_length=100, blank=True)
+    description = models.TextField(blank=True)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    renewal_date = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+
+    project = models.ForeignKey(
+        'projects.Project',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='contracts'
+    )
+    budget = models.ForeignKey(
+        'finance.Budget',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='contracts'
+    )
+
+    # Billing / invoice automation
+    standard_cost = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    currency = models.CharField(max_length=10, default='GMD')
+    billing_cycle = models.CharField(max_length=20, choices=BillingCycle.choices, default=BillingCycle.ONE_OFF)
+    auto_generate_invoice = models.BooleanField(default=False)
+    auto_send_invoice = models.BooleanField(default=False)
+    next_invoice_date = models.DateField(null=True, blank=True)
+    last_invoice_date = models.DateField(null=True, blank=True)
+
+    # Alerts
+    alert_days_before_end = models.PositiveIntegerField(default=30)
+    alert_days_before_renewal = models.PositiveIntegerField(default=14)
+    send_expiry_alerts = models.BooleanField(default=True)
+    send_renewal_alerts = models.BooleanField(default=True)
+
+    # Files / ownership
+    document = models.FileField(upload_to='contracts/%Y/%m/', null=True, blank=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_contracts'
+    )
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='updated_contracts'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['end_date', '-created_at']
+
+    def __str__(self):
+        return self.title
+
+    @property
+    def counterparty_name(self):
+        if self.contract_type == self.ContractType.STAFF and self.staff:
+            return getattr(self.staff, 'full_name', str(self.staff))
+        return self.vendor_company or self.vendor_name or '—'
+
+    @property
+    def counterparty_email(self):
+        if self.contract_type == self.ContractType.STAFF and self.staff:
+            return getattr(self.staff, 'email', '')
+        return self.vendor_email or ''
+
+    @property
+    def days_to_end(self):
+        return (self.end_date - timezone.now().date()).days
+
+    @property
+    def is_expiring_soon(self):
+        return self.status in [self.Status.ACTIVE, self.Status.EXPIRING] and self.days_to_end <= self.alert_days_before_end
+
+    @property
+    def is_expired(self):
+        return timezone.now().date() > self.end_date
+
+    def update_status_by_dates(self):
+        today = timezone.now().date()
+        if self.status in [self.Status.TERMINATED, self.Status.COMPLETED]:
+            return self.status
+        if today > self.end_date:
+            self.status = self.Status.EXPIRED
+        elif (self.end_date - today).days <= self.alert_days_before_end:
+            self.status = self.Status.EXPIRING
+        elif self.status in [self.Status.DRAFT, self.Status.RENEWED, self.Status.EXPIRING]:
+            self.status = self.Status.ACTIVE
+        return self.status
+
+
+class ContractAlertLog(models.Model):
+    class AlertType(models.TextChoices):
+        EXPIRY = 'expiry', 'Expiry'
+        RENEWAL = 'renewal', 'Renewal'
+        INVOICE = 'invoice', 'Invoice'
+        GENERAL = 'general', 'General'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    contract = models.ForeignKey(Contract, on_delete=models.CASCADE, related_name='alert_logs')
+    alert_type = models.CharField(max_length=20, choices=AlertType.choices)
+    sent_to = models.TextField(blank=True)
+    message = models.TextField(blank=True)
+    sent_at = models.DateTimeField(auto_now_add=True)
+    sent_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+
+    class Meta:
+        ordering = ['-sent_at']
+
+
+class ContractInvoiceLink(models.Model):
+    """
+    Keeps track of invoices generated from contracts.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    contract = models.ForeignKey(Contract, on_delete=models.CASCADE, related_name='invoice_links')
+    invoice = models.ForeignKey(
+        'finance.IncomingPaymentRequest',
+        on_delete=models.CASCADE,
+        related_name='contract_links'
+    )
+    period_start = models.DateField(null=True, blank=True)
+    period_end = models.DateField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']

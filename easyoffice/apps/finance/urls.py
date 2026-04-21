@@ -32,4 +32,10 @@ urlpatterns = [
     path('invoices/<uuid:pk>/mark-paid/',                   views.IncomingPaymentRequestMarkPaidView.as_view(),  name='incoming_payment_request_mark_paid'),
     path('invoices/<uuid:pk>/add-docs/',                    views.IncomingPaymentRequestAddDocView.as_view(),    name='incoming_payment_request_add_docs'),
     path('invoices/<uuid:pk>/cancel/',                      views.IncomingPaymentRequestCancelView.as_view(),    name='incoming_payment_request_cancel'),
+    path('contracts/', views.ContractDashboardView.as_view(), name='contract_dashboard'),
+    path('contracts/all/', views.ContractListView.as_view(), name='contract_list'),
+    path('contracts/new/', views.ContractCreateView.as_view(), name='contract_create'),
+    path('contracts/<uuid:pk>/', views.ContractDetailView.as_view(), name='contract_detail'),
+    path('contracts/<uuid:pk>/edit/', views.ContractUpdateView.as_view(), name='contract_update'),
+
 ]

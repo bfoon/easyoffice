@@ -1,188 +1,710 @@
-
 {% extends "base.html" %}
-{% block title %}Ticket Detail{% endblock %}
+{% block title %}{{ ticket.ticket_no }} · {{ ticket.subject }}{% endblock %}
 {% block breadcrumb %}<a href="{% url 'customer_service_dashboard' %}">Customer Service</a> / <a href="{% url 'customer_service_ticket_list' %}">Tickets</a> / {{ ticket.ticket_no }}{% endblock %}
 {% block content %}
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title"><i class="bi bi-ticket-perforated"></i> {{ ticket.ticket_no }}</h1>
-    <p class="eo-page-subtitle">{{ ticket.subject }}</p>
+<style>
+  :root {
+    --cs-primary: #2563eb;
+    --cs-success: #10b981;
+    --cs-warning: #f59e0b;
+    --cs-danger: #ef4444;
+    --cs-purple: #8b5cf6;
+  }
+
+  /* Ticket hero */
+  .cs-hero {
+    background: linear-gradient(135deg, #1e3a8a 0%, #4c1d95 100%);
+    color: #fff;
+    border-radius: 16px;
+    padding: 20px 24px;
+    margin-bottom: 16px;
+    box-shadow: 0 10px 30px rgba(30,58,138,.25);
+    position: relative;
+    overflow: hidden;
+  }
+  .cs-hero.cs-hero-resolved { background: linear-gradient(135deg, #065f46 0%, #047857 100%); }
+  .cs-hero.cs-hero-escalated { background: linear-gradient(135deg, #991b1b 0%, #b91c1c 100%); }
+  .cs-hero.cs-hero-closed { background: linear-gradient(135deg, #334155 0%, #475569 100%); }
+  .cs-hero::before {
+    content:''; position: absolute; top:-50%; right:-50%;
+    width:200%; height:200%;
+    background: radial-gradient(circle, rgba(255,255,255,.08) 0%, transparent 50%);
+    pointer-events: none;
+  }
+  .cs-hero-no {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .8rem; opacity: .85;
+    background: rgba(255,255,255,.15); padding: 4px 10px;
+    border-radius: 8px; display: inline-block; margin-bottom: 6px;
+  }
+  .cs-hero-title { font-size: 1.5rem; font-weight: 700; margin: 4px 0 10px 0; line-height: 1.2; }
+  .cs-hero-meta { display: flex; gap: 18px; flex-wrap: wrap; font-size: .85rem; opacity: .92; }
+  .cs-hero-meta strong { opacity: 1; }
+
+  /* Status pills */
+  .cs-status-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    font-size: .78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .cs-status-new { background: #dbeafe; color: #1e40af; }
+  .cs-status-open, .cs-status-assigned, .cs-status-in_progress { background: #fef3c7; color: #92400e; }
+  .cs-status-pending, .cs-status-awaiting_customer { background: #e0e7ff; color: #3730a3; }
+  .cs-status-resolved, .cs-status-closed { background: #d1fae5; color: #065f46; }
+  .cs-status-escalated { background: #fee2e2; color: #991b1b; }
+  .cs-status-cancelled { background: #f1f5f9; color: #64748b; }
+
+  .cs-priority-critical { color: #dc2626; }
+  .cs-priority-high { color: #ea580c; }
+  .cs-priority-medium { color: #2563eb; }
+  .cs-priority-low { color: #64748b; }
+
+  /* Card */
+  .cs-card {
+    background: #fff;
+    border: 1px solid var(--eo-border, #e5e7eb);
+    border-radius: 16px;
+    padding: 18px;
+    margin-bottom: 14px;
+    box-shadow: 0 4px 14px rgba(15,23,42,.03);
+  }
+  .cs-card-title {
+    font-size: .95rem; font-weight: 700;
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 0 14px 0;
+  }
+  .cs-card-title i { color: var(--cs-primary); }
+
+  /* SLA countdown card */
+  .cs-sla-card {
+    background: linear-gradient(135deg, #fff 0%, #f8fafc 100%);
+    border: 2px solid #e2e8f0;
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 12px;
+    text-align: center;
+  }
+  .cs-sla-card.cs-sla-ok { border-color: #86efac; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); }
+  .cs-sla-card.cs-sla-warn { border-color: #fcd34d; background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); }
+  .cs-sla-card.cs-sla-danger {
+    border-color: #fca5a5;
+    background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+    animation: cs-flash 2s ease-in-out infinite;
+  }
+  @keyframes cs-flash {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,.4); }
+    50% { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+  }
+  .cs-sla-label {
+    font-size: .72rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .06em; color: #64748b;
+  }
+  .cs-sla-value {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 1.4rem; font-weight: 800;
+    margin: 4px 0 0 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .cs-sla-card.cs-sla-ok .cs-sla-value { color: #047857; }
+  .cs-sla-card.cs-sla-warn .cs-sla-value { color: #b45309; }
+  .cs-sla-card.cs-sla-danger .cs-sla-value { color: #b91c1c; }
+
+  /* Timeline */
+  .cs-timeline { position: relative; padding-left: 30px; }
+  .cs-timeline::before {
+    content:''; position: absolute;
+    left: 11px; top: 8px; bottom: 8px;
+    width: 2px; background: #e2e8f0;
+  }
+  .cs-timeline-item {
+    position: relative;
+    margin-bottom: 16px;
+  }
+  .cs-timeline-item::before {
+    content:''; position: absolute;
+    left: -23px; top: 6px;
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #fff; border: 2px solid var(--cs-primary);
+  }
+  .cs-timeline-item.cs-type-status_change::before { border-color: var(--cs-warning); }
+  .cs-timeline-item.cs-type-resolution::before { border-color: var(--cs-success); }
+  .cs-timeline-item.cs-type-escalation::before { border-color: var(--cs-danger); background: var(--cs-danger); }
+  .cs-timeline-item.cs-type-note::before { border-color: #94a3b8; }
+
+  .cs-timeline-head {
+    display: flex; align-items: center; gap: 8px;
+    font-size: .85rem; flex-wrap: wrap;
+  }
+  .cs-timeline-type {
+    font-size: .68rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .05em;
+    padding: 2px 8px; border-radius: 999px;
+    background: #f1f5f9; color: #475569;
+  }
+  .cs-timeline-item.cs-type-resolution .cs-timeline-type { background: #d1fae5; color: #065f46; }
+  .cs-timeline-item.cs-type-escalation .cs-timeline-type { background: #fee2e2; color: #991b1b; }
+  .cs-timeline-body {
+    background: #f8fafc;
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-top: 6px;
+    white-space: pre-wrap;
+    font-size: .88rem;
+    line-height: 1.5;
+  }
+
+  /* Info rows */
+  .cs-info-row {
+    display: flex;
+    padding: 8px 0;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: .88rem;
+  }
+  .cs-info-row:last-child { border-bottom: none; }
+  .cs-info-label {
+    flex: 0 0 140px;
+    color: #64748b;
+    font-weight: 600;
+    font-size: .8rem;
+  }
+  .cs-info-value {
+    flex: 1;
+    font-weight: 500;
+    color: #0f172a;
+  }
+
+  /* Quick replies */
+  .cs-quick-replies {
+    display: flex; gap: 6px; flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .cs-quick-reply {
+    padding: 4px 10px;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    font-size: .75rem;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .cs-quick-reply:hover {
+    background: #eff6ff; border-color: var(--cs-primary); color: var(--cs-primary);
+  }
+
+  /* Action tabs */
+  .cs-action-tabs {
+    display: flex; border-bottom: 1px solid var(--eo-border); margin-bottom: 14px;
+  }
+  .cs-action-tab {
+    flex: 1;
+    padding: 8px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-weight: 600;
+    font-size: .8rem;
+    color: #64748b;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .cs-action-tab:hover { color: var(--cs-primary); }
+  .cs-action-tab.active { color: var(--cs-primary); border-bottom-color: var(--cs-primary); }
+
+  /* Customer snapshot */
+  .cs-customer-snap {
+    display: flex; gap: 12px; align-items: center;
+    background: linear-gradient(135deg, #eff6ff 0%, #faf5ff 100%);
+    border: 1px solid #c7d2fe;
+    border-radius: 14px;
+    padding: 12px;
+    margin-bottom: 14px;
+  }
+  .cs-customer-avatar {
+    width: 48px; height: 48px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--cs-primary), var(--cs-purple));
+    color: #fff; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+
+  /* Copy button */
+  .cs-copy-btn {
+    background: transparent;
+    border: none;
+    color: #64748b;
+    cursor: pointer;
+    padding: 2px 6px;
+    font-size: .8rem;
+    margin-left: 6px;
+    border-radius: 4px;
+  }
+  .cs-copy-btn:hover { background: #f1f5f9; color: var(--cs-primary); }
+
+  /* Toast */
+  .cs-toast {
+    position: fixed; bottom: 20px; right: 20px;
+    background: #1e293b; color: #fff;
+    padding: 10px 16px; border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.2);
+    z-index: 9999; display: none;
+  }
+</style>
+
+<!-- ═══════════ HERO ═══════════ -->
+<div class="cs-hero {% if ticket.status == 'resolved' %}cs-hero-resolved{% elif ticket.status == 'escalated' %}cs-hero-escalated{% elif ticket.status == 'closed' %}cs-hero-closed{% endif %}">
+  <div class="cs-hero-no">
+    <i class="bi bi-hash"></i>{{ ticket.ticket_no }}
+    <button class="cs-copy-btn" style="color:rgba(255,255,255,.7)" onclick="csCopy('{{ ticket.ticket_no }}')" title="Copy ticket number">
+      <i class="bi bi-clipboard"></i>
+    </button>
   </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap">
-    <a href="{% url 'customer_service_customer_detail' ticket.customer.pk %}" class="eo-btn eo-btn-secondary"><i class="bi bi-person"></i> Customer</a>
-    <a href="{% url 'customer_service_ticket_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-arrow-left"></i> Back to Tickets</a>
+  <h1 class="cs-hero-title">{{ ticket.subject }}</h1>
+  <div class="cs-hero-meta">
+    <span><i class="bi bi-person"></i> <strong>{{ ticket.customer.display_name }}</strong></span>
+    <span><i class="bi bi-tag"></i> {{ ticket.get_ticket_type_display }}</span>
+    <span><i class="bi bi-flag"></i> {{ ticket.get_priority_display }}</span>
+    {% if ticket.department %}<span><i class="bi bi-building"></i> {{ ticket.department.name }}</span>{% endif %}
+    <span><i class="bi bi-clock"></i> Created {{ ticket.created_at|date:"M j, Y H:i" }}</span>
+  </div>
+
+  <div class="mt-3 d-flex gap-2 flex-wrap">
+    <span class="cs-status-pill cs-status-{{ ticket.status }}" style="background:rgba(255,255,255,.2);color:#fff">
+      <i class="bi bi-circle-fill" style="font-size:.5rem"></i> {{ ticket.get_status_display }}
+    </span>
+    {% if ticket.is_overdue %}
+    <span class="cs-status-pill" style="background:rgba(239,68,68,.3);color:#fff">
+      <i class="bi bi-alarm"></i> OVERDUE
+    </span>
+    {% endif %}
+    {% if ticket.callback_required %}
+    <span class="cs-status-pill" style="background:rgba(255,255,255,.2);color:#fff">
+      <i class="bi bi-telephone-outbound"></i> Callback required
+    </span>
+    {% endif %}
+  </div>
+
+  <div style="position:absolute;top:16px;right:20px;display:flex;gap:6px">
+    <a href="{% url 'customer_service_customer_detail' ticket.customer.pk %}" class="cs-copy-btn" style="color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:.8rem;text-decoration:none">
+      <i class="bi bi-person"></i> Customer
+    </a>
+    <a href="{% url 'customer_service_ticket_list' %}" class="cs-copy-btn" style="color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:.8rem;text-decoration:none">
+      <i class="bi bi-arrow-left"></i> Back
+    </a>
   </div>
 </div>
 
 <div class="row g-3">
+  <!-- ═══════════ MAIN COLUMN ═══════════ -->
   <div class="col-lg-8">
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title">Ticket Overview</h3>
-      <div class="row g-3">
-        <div class="col-md-6"><strong>Customer:</strong> {{ ticket.customer.display_name }}</div>
-        <div class="col-md-6"><strong>Type:</strong> {{ ticket.get_ticket_type_display }}</div>
-        <div class="col-md-6"><strong>Status:</strong> {{ ticket.get_status_display }}</div>
-        <div class="col-md-6"><strong>Priority:</strong> {{ ticket.get_priority_display }}</div>
-        <div class="col-md-6"><strong>Department:</strong> {{ ticket.department.name|default:"—" }}</div>
-        <div class="col-md-6"><strong>Current Owner:</strong> {{ ticket.current_owner.full_name|default:"—" }}</div>
-        <div class="col-md-6"><strong>Response Due:</strong> {{ ticket.response_due_at|date:"M j, Y H:i"|default:"—" }}</div>
-        <div class="col-md-6"><strong>Resolution Due:</strong> {{ ticket.resolution_due_at|date:"M j, Y H:i"|default:"—" }}</div>
+
+    <!-- Customer snapshot -->
+    <div class="cs-customer-snap">
+      {% with full=ticket.customer.full_name %}
+      <div class="cs-customer-avatar">
+        {{ full|slice:":1"|upper }}{% if full|length > 1 %}{{ full|slice:"1:2"|upper }}{% endif %}
+      </div>
+      {% endwith %}
+      <div style="flex:1;min-width:0">
+        <div class="fw-bold">{{ ticket.customer.display_name }}</div>
+        <small class="text-muted d-block text-truncate">
+          {{ ticket.customer.customer_code }}
+          {% if ticket.customer.email %} · {{ ticket.customer.email }}{% endif %}
+        </small>
+        {% if ticket.callback_number %}<small class="text-muted"><i class="bi bi-telephone"></i> {{ ticket.callback_number }}</small>{% endif %}
+      </div>
+      <a href="{% url 'customer_service_customer_detail' ticket.customer.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+        <i class="bi bi-box-arrow-up-right"></i> Open
+      </a>
+    </div>
+
+    <!-- Overview -->
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-info-circle"></i> Ticket Overview</h3>
+      <div class="row">
+        <div class="col-md-6">
+          <div class="cs-info-row">
+            <span class="cs-info-label">Type</span>
+            <span class="cs-info-value">{{ ticket.get_ticket_type_display }}</span>
+          </div>
+          <div class="cs-info-row">
+            <span class="cs-info-label">Priority</span>
+            <span class="cs-info-value cs-priority-{{ ticket.priority }}">
+              <i class="bi bi-flag-fill"></i> {{ ticket.get_priority_display }}
+            </span>
+          </div>
+          <div class="cs-info-row">
+            <span class="cs-info-label">Department</span>
+            <span class="cs-info-value">{{ ticket.department.name|default:"— Unassigned —" }}</span>
+          </div>
+          <div class="cs-info-row">
+            <span class="cs-info-label">Current Owner</span>
+            <span class="cs-info-value">{{ ticket.current_owner.full_name|default:"—" }}</span>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="cs-info-row">
+            <span class="cs-info-label">Created By</span>
+            <span class="cs-info-value">{{ ticket.created_by.full_name|default:"—" }}</span>
+          </div>
+          <div class="cs-info-row">
+            <span class="cs-info-label">Response Due</span>
+            <span class="cs-info-value">{{ ticket.response_due_at|date:"M j, Y H:i"|default:"—" }}</span>
+          </div>
+          <div class="cs-info-row">
+            <span class="cs-info-label">Resolution Due</span>
+            <span class="cs-info-value">{{ ticket.resolution_due_at|date:"M j, Y H:i"|default:"—" }}</span>
+          </div>
+          <div class="cs-info-row">
+            <span class="cs-info-label">Resolved At</span>
+            <span class="cs-info-value">{{ ticket.resolved_at|date:"M j, Y H:i"|default:"—" }}</span>
+          </div>
+        </div>
       </div>
       <hr>
-      <h5>Description</h5>
-      <p style="white-space:pre-wrap">{{ ticket.description }}</p>
+      <h6 style="font-weight:700;color:#334155"><i class="bi bi-file-text"></i> Description</h6>
+      <div style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:10px;border-left:3px solid var(--cs-primary);font-size:.9rem;line-height:1.6">{{ ticket.description }}</div>
     </div>
 
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title">Updates</h3>
-      {% for update in updates %}
-      <div class="border rounded-3 p-3 mb-2">
-        <div class="d-flex justify-content-between align-items-start mb-1">
-          <strong>{{ update.user.full_name|default:"System" }}</strong>
-          <small class="text-muted">{{ update.created_at|date:"M j, Y H:i" }}</small>
+    <!-- Timeline -->
+    <div class="cs-card">
+      <h3 class="cs-card-title">
+        <i class="bi bi-activity"></i> Activity Timeline
+        <span class="text-muted ms-auto small" style="font-weight:500">{{ updates|length }} update{{ updates|length|pluralize }}</span>
+      </h3>
+      {% if updates %}
+      <div class="cs-timeline">
+        <!-- Created event -->
+        <div class="cs-timeline-item cs-type-created">
+          <div class="cs-timeline-head">
+            <strong>{{ ticket.created_by.full_name|default:"System" }}</strong>
+            <span class="cs-timeline-type">Created</span>
+            <small class="text-muted ms-auto">{{ ticket.created_at|date:"M j, Y H:i" }}</small>
+          </div>
+          <div class="cs-timeline-body">Ticket created.</div>
         </div>
-        <div class="small text-uppercase text-muted mb-1">{{ update.get_update_type_display }}</div>
-        <div style="white-space:pre-wrap">{{ update.body }}</div>
-      </div>
-      {% empty %}
-      <div class="text-muted">No updates yet.</div>
-      {% endfor %}
-    </div>
 
-    <div class="eo-card">
-      <h3 class="eo-card-title">Routing & Assignments</h3>
-      {% if routes %}
-      <div class="mb-3">
-        <h6>Routing History</h6>
-        {% for route in routes %}
-        <div class="border rounded-3 p-3 mb-2">
-          <div class="fw-bold">{{ route.get_action_display }}</div>
-          <small class="text-muted">
-            {% if route.from_department %}{{ route.from_department.name }}{% else %}Call Desk{% endif %}
-            → {% if route.to_department %}{{ route.to_department.name }}{% else %}—{% endif %}
-            · {{ route.created_at|date:"M j, H:i" }}
-          </small>
-          {% if route.note %}<div class="mt-1">{{ route.note }}</div>{% endif %}
+        {% for update in updates %}
+        <div class="cs-timeline-item cs-type-{{ update.update_type }}">
+          <div class="cs-timeline-head">
+            <strong>{{ update.user.full_name|default:"System" }}</strong>
+            <span class="cs-timeline-type">{{ update.get_update_type_display }}</span>
+            <small class="text-muted ms-auto">{{ update.created_at|date:"M j, Y H:i" }}</small>
+          </div>
+          <div class="cs-timeline-body">{{ update.body }}</div>
         </div>
         {% endfor %}
       </div>
+      {% else %}
+      <div class="text-center py-3 text-muted"><i class="bi bi-clock-history" style="font-size:1.5rem"></i><div class="mt-2">No updates yet. Be the first to add one.</div></div>
       {% endif %}
+    </div>
 
-      <h6>Assignments</h6>
+    <!-- Routing -->
+    {% if routes %}
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-signpost-split"></i> Routing History</h3>
+      {% for route in routes %}
+      <div class="border rounded-3 p-3 mb-2" style="border-color:#e2e8f0 !important">
+        <div class="d-flex justify-content-between align-items-start mb-1">
+          <strong style="font-size:.9rem">
+            <i class="bi bi-arrow-right-circle"></i> {{ route.get_action_display }}
+          </strong>
+          <small class="text-muted">{{ route.created_at|date:"M j, H:i" }}</small>
+        </div>
+        <div class="small text-muted mb-1">
+          {% if route.from_department %}<span class="badge text-bg-light">{{ route.from_department.name }}</span>{% else %}<span class="badge text-bg-light">Call Desk</span>{% endif %}
+          <i class="bi bi-arrow-right mx-1"></i>
+          {% if route.to_department %}<span class="badge text-bg-primary">{{ route.to_department.name }}</span>{% else %}—{% endif %}
+        </div>
+        {% if route.note %}<div class="small" style="white-space:pre-wrap">{{ route.note }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Assignments -->
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-person-check"></i> Assignments</h3>
       {% for assignment in assignments %}
-      <div class="border rounded-3 p-3 mb-2">
-        <div class="fw-bold">{{ assignment.title }}</div>
-        <small class="text-muted">{{ assignment.department.name }} · {{ assignment.get_status_display }}{% if assignment.assigned_to %} · {{ assignment.assigned_to.full_name }}{% endif %}</small>
-        {% if assignment.instructions %}<div class="mt-1">{{ assignment.instructions }}</div>{% endif %}
-        {% if assignment.task_ref %}<div class="mt-2"><span class="badge text-bg-info">Linked Task: {{ assignment.task_ref.title }}</span></div>{% endif %}
+      <div class="border rounded-3 p-3 mb-2" style="border-color:#e2e8f0 !important">
+        <div class="d-flex justify-content-between align-items-start mb-1 flex-wrap gap-2">
+          <strong style="font-size:.9rem">{{ assignment.title }}</strong>
+          <span class="cs-status-pill cs-status-{{ assignment.status }}">{{ assignment.get_status_display }}</span>
+        </div>
+        <small class="text-muted d-block mb-2">
+          <i class="bi bi-building"></i> {{ assignment.department.name }}
+          {% if assignment.assigned_to %} · <i class="bi bi-person"></i> {{ assignment.assigned_to.full_name }}{% endif %}
+          {% if assignment.sla_due_at %} · <i class="bi bi-clock"></i> Due {{ assignment.sla_due_at|date:"M j, H:i" }}{% endif %}
+        </small>
+        {% if assignment.instructions %}<div class="small" style="white-space:pre-wrap">{{ assignment.instructions }}</div>{% endif %}
+        {% if assignment.task_ref %}<div class="mt-2"><span class="badge text-bg-info"><i class="bi bi-check2-square"></i> Linked Task: {{ assignment.task_ref.title }}</span></div>{% endif %}
       </div>
       {% empty %}
-      <div class="text-muted">No assignments yet.</div>
+      <div class="text-muted text-center py-3"><i class="bi bi-inbox" style="font-size:1.5rem"></i><div class="mt-2">No assignments yet.</div></div>
       {% endfor %}
     </div>
   </div>
 
+  <!-- ═══════════ SIDEBAR ═══════════ -->
   <div class="col-lg-4">
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title">Add Note</h3>
-      <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="add_note">
-        <div class="eo-form-group">
-          <textarea name="body" rows="4" class="eo-form-control" placeholder="Write progress, customer update, callback note, or observation..."></textarea>
-        </div>
-        <button class="eo-btn eo-btn-primary w-100">Save Note</button>
-      </form>
-    </div>
 
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title">Resolve / Close</h3>
-      <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}" class="mb-2">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="resolve">
-        <div class="eo-form-group">
-          <textarea name="resolution_note" rows="4" class="eo-form-control" placeholder="Describe the resolution before marking resolved."></textarea>
-        </div>
-        <button class="eo-btn eo-btn-primary w-100">Resolve Ticket</button>
-      </form>
-      <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="close">
-        <button class="eo-btn eo-btn-secondary w-100">Close Ticket</button>
-      </form>
+    <!-- SLA countdown -->
+    {% if ticket.resolution_due_at and ticket.status != 'resolved' and ticket.status != 'closed' %}
+    <div class="cs-sla-card" id="csSlaCard" data-due="{{ ticket.resolution_due_at|date:'c' }}">
+      <div class="cs-sla-label"><i class="bi bi-stopwatch"></i> Resolution SLA</div>
+      <div class="cs-sla-value" id="csSlaCountdown">--:--:--</div>
+      <small class="text-muted" id="csSlaSubtext">Due {{ ticket.resolution_due_at|date:"M j, H:i" }}</small>
     </div>
+    {% elif ticket.status == 'resolved' or ticket.status == 'closed' %}
+    <div class="cs-sla-card cs-sla-ok">
+      <div class="cs-sla-label"><i class="bi bi-check2-circle"></i> {{ ticket.get_status_display }}</div>
+      <div class="cs-sla-value" style="font-size:1rem">
+        {% if ticket.resolved_at %}{{ ticket.resolved_at|date:"M j, H:i" }}{% else %}—{% endif %}
+      </div>
+    </div>
+    {% endif %}
 
-    {% if can_manage_department %}
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title">Assign to Staff</h3>
-      <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="assign">
-        <div class="eo-form-group">
+    <!-- Action tabs -->
+    <div class="cs-card">
+      <div class="cs-action-tabs" id="csActionTabs">
+        <button type="button" class="cs-action-tab active" data-tab="note"><i class="bi bi-journal-plus"></i> Note</button>
+        <button type="button" class="cs-action-tab" data-tab="resolve"><i class="bi bi-check-circle"></i> Resolve</button>
+        {% if can_manage_department %}
+        <button type="button" class="cs-action-tab" data-tab="assign"><i class="bi bi-person-plus"></i> Assign</button>
+        <button type="button" class="cs-action-tab" data-tab="route"><i class="bi bi-signpost-2"></i> Route</button>
+        {% endif %}
+      </div>
+
+      <!-- Add Note -->
+      <div class="cs-action-panel" data-panel="note">
+        <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="add_note">
+          <div class="cs-quick-replies">
+            <button type="button" class="cs-quick-reply" data-reply="Called the customer — no answer. Will try again later.">📞 No answer</button>
+            <button type="button" class="cs-quick-reply" data-reply="Spoke with the customer. Issue confirmed and working on it.">✅ Spoke to customer</button>
+            <button type="button" class="cs-quick-reply" data-reply="Waiting for customer response before proceeding.">⏳ Waiting customer</button>
+            <button type="button" class="cs-quick-reply" data-reply="Technician dispatched. ETA: ">🛠️ Tech dispatched</button>
+            <button type="button" class="cs-quick-reply" data-reply="Updated customer on progress. Next step: ">💬 Update sent</button>
+          </div>
+          <textarea name="body" id="csNoteBody" rows="4" class="eo-form-control"
+                    placeholder="Write progress, customer update, callback note, or observation..." required></textarea>
+          <button class="eo-btn eo-btn-primary w-100 mt-2">
+            <i class="bi bi-send"></i> Save Note
+          </button>
+        </form>
+      </div>
+
+      <!-- Resolve / Close -->
+      <div class="cs-action-panel" data-panel="resolve" style="display:none">
+        <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="resolve">
+          <div class="cs-quick-replies">
+            <button type="button" class="cs-quick-reply" data-reply-target="resolution_note" data-reply="Issue resolved. Customer confirmed satisfaction.">✅ Resolved & confirmed</button>
+            <button type="button" class="cs-quick-reply" data-reply-target="resolution_note" data-reply="Replaced / repaired item. Customer received in good order.">🔧 Repaired</button>
+            <button type="button" class="cs-quick-reply" data-reply-target="resolution_note" data-reply="Information provided to customer. Query closed.">ℹ️ Info provided</button>
+          </div>
+          <textarea name="resolution_note" rows="4" class="eo-form-control"
+                    placeholder="Describe the resolution before marking resolved." required></textarea>
+          <button class="eo-btn eo-btn-primary w-100 mt-2" style="background:#10b981;border-color:#10b981">
+            <i class="bi bi-check-circle"></i> Resolve Ticket
+          </button>
+        </form>
+        <hr class="my-3">
+        <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}"
+              onsubmit="return confirm('Close this ticket without a resolution note?')">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="close">
+          <button class="eo-btn eo-btn-secondary w-100">
+            <i class="bi bi-archive"></i> Close Ticket
+          </button>
+        </form>
+      </div>
+
+      {% if can_manage_department %}
+      <!-- Assign -->
+      <div class="cs-action-panel" data-panel="assign" style="display:none">
+        <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="assign">
           <label class="eo-form-label">Staff member</label>
-          <select name="assigned_to" class="eo-form-select">
+          <select name="assigned_to" class="eo-form-select mb-2" required>
             <option value="">— select user —</option>
             {% for user in dept_users %}
             <option value="{{ user.id }}">
               {{ user.full_name }}
-              {% if user.staffprofile and user.staffprofile.department %}
-                — {{ user.staffprofile.department.name }}
-              {% endif %}
+              {% if user.staffprofile and user.staffprofile.department %} — {{ user.staffprofile.department.name }}{% endif %}
             </option>
             {% endfor %}
           </select>
-        </div>
-
-        <div class="eo-form-group">
           <label class="eo-form-label">Instructions</label>
-          <textarea name="instructions" rows="3" class="eo-form-control"></textarea>
-        </div>
+          <textarea name="instructions" rows="3" class="eo-form-control mb-2"
+                    placeholder="What does the assignee need to do?"></textarea>
+          <button class="eo-btn eo-btn-primary w-100">
+            <i class="bi bi-person-plus"></i> Assign
+          </button>
+        </form>
+      </div>
 
-        <button class="eo-btn eo-btn-primary w-100">Assign</button>
-      </form>
-    </div>
-
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title">Route / Escalate</h3>
-      <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}" class="mb-2">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="route">
-        <div class="eo-form-group">
+      <!-- Route / Escalate -->
+      <div class="cs-action-panel" data-panel="route" style="display:none">
+        <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}" class="mb-3">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="route">
           <label class="eo-form-label">Route to department</label>
-          <select name="department" class="eo-form-select">
+          <select name="department" class="eo-form-select mb-2" required>
             <option value="">— select department —</option>
-            {% for dept in departments|default_if_none:'' %}
-            <option value="{{ dept.id }}">{{ dept.name }}</option>
+            {% for dept in departments %}
+            <option value="{{ dept.id }}" {% if ticket.department_id == dept.id %}disabled{% endif %}>{{ dept.name }}</option>
             {% endfor %}
           </select>
-        </div>
-        <div class="eo-form-group">
-          <textarea name="note" rows="3" class="eo-form-control" placeholder="Routing note"></textarea>
-        </div>
-        <button class="eo-btn eo-btn-secondary w-100">Route Ticket</button>
-      </form>
+          <textarea name="note" rows="3" class="eo-form-control mb-2" placeholder="Why routing? Any context?"></textarea>
+          <button class="eo-btn eo-btn-secondary w-100">
+            <i class="bi bi-signpost-2"></i> Route Ticket
+          </button>
+        </form>
+        <hr>
+        <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}"
+              onsubmit="return confirm('Escalate this ticket to management?')">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="escalate">
+          <label class="eo-form-label">Escalation reason</label>
+          <textarea name="reason" rows="3" class="eo-form-control mb-2" required
+                    placeholder="Why is this being escalated?"></textarea>
+          <button class="eo-btn eo-btn-primary w-100" style="background:#ef4444;border-color:#ef4444">
+            <i class="bi bi-exclamation-triangle"></i> Escalate Ticket
+          </button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
 
+    {% if can_send_feedback %}
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-envelope-check"></i> Customer Feedback</h3>
+      <p class="text-muted small">Request service quality feedback from the customer by email.</p>
       <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}">
         {% csrf_token %}
-        <input type="hidden" name="action" value="escalate">
-        <div class="eo-form-group">
-          <textarea name="reason" rows="3" class="eo-form-control" placeholder="Why is this being escalated?"></textarea>
-        </div>
-        <button class="eo-btn eo-btn-secondary w-100" style="color:#ef4444;border-color:#ef4444">Escalate Ticket</button>
+        <input type="hidden" name="action" value="send_feedback">
+        <button class="eo-btn eo-btn-secondary w-100">
+          <i class="bi bi-send"></i> Send Feedback Request
+        </button>
       </form>
     </div>
     {% endif %}
 
-    {% if can_send_feedback %}
-    <div class="eo-card">
-      <h3 class="eo-card-title">Customer Feedback</h3>
-      <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="send_feedback">
-        <button class="eo-btn eo-btn-secondary w-100"><i class="bi bi-envelope-check"></i> Send Feedback Request</button>
-      </form>
+    <!-- Callback info -->
+    {% if ticket.callback_required or ticket.callback_number or ticket.callback_email %}
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-telephone-outbound"></i> Callback Details</h3>
+      {% if ticket.callback_number %}
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <i class="bi bi-phone"></i>
+        <a href="tel:{{ ticket.callback_number }}" style="text-decoration:none">{{ ticket.callback_number }}</a>
+        <button class="cs-copy-btn ms-auto" onclick="csCopy('{{ ticket.callback_number }}')">
+          <i class="bi bi-clipboard"></i>
+        </button>
+      </div>
+      {% endif %}
+      {% if ticket.callback_email %}
+      <div class="d-flex align-items-center gap-2">
+        <i class="bi bi-envelope"></i>
+        <a href="mailto:{{ ticket.callback_email }}" style="text-decoration:none">{{ ticket.callback_email }}</a>
+        <button class="cs-copy-btn ms-auto" onclick="csCopy('{{ ticket.callback_email }}')">
+          <i class="bi bi-clipboard"></i>
+        </button>
+      </div>
+      {% endif %}
     </div>
     {% endif %}
   </div>
 </div>
+
+<div id="csToast" class="cs-toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+
+/* Toast */
+function csToast(msg, type='info') {
+  const t = $('#csToast');
+  t.style.background = ({info:'#1e293b',success:'#047857',warn:'#b45309',danger:'#b91c1c'})[type] || '#1e293b';
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(t._tmr);
+  t._tmr = setTimeout(() => t.style.display = 'none', 1800);
+}
+
+/* Copy */
+async function csCopy(text) {
+  try { await navigator.clipboard.writeText(text); csToast('Copied ✓','success'); }
+  catch { csToast('Copy failed','danger'); }
+}
+
+/* Action tabs */
+$$('.cs-action-tab').forEach(t => {
+  t.addEventListener('click', () => {
+    $$('.cs-action-tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    $$('.cs-action-panel').forEach(p => p.style.display = p.dataset.panel === t.dataset.tab ? '' : 'none');
+  });
+});
+
+/* Quick replies */
+$$('.cs-quick-reply').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const targetName = btn.dataset.replyTarget || 'body';
+    const ta = btn.closest('.cs-action-panel').querySelector(`textarea[name="${targetName}"]`);
+    if (ta) {
+      ta.value = (ta.value ? ta.value + '\n\n' : '') + btn.dataset.reply;
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    }
+  });
+});
+
+/* SLA countdown */
+(function(){
+  const card = $('#csSlaCard');
+  if (!card) return;
+  const dueAt = new Date(card.dataset.due).getTime();
+  const val = $('#csSlaCountdown');
+  const sub = $('#csSlaSubtext');
+
+  function tick() {
+    const now = Date.now();
+    const diff = dueAt - now;
+    const abs = Math.abs(diff);
+    const h = Math.floor(abs / 3600000);
+    const m = Math.floor((abs % 3600000) / 60000);
+    const s = Math.floor((abs % 60000) / 1000);
+    const fmt = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+
+    card.classList.remove('cs-sla-ok','cs-sla-warn','cs-sla-danger');
+    if (diff < 0) {
+      val.textContent = '-' + fmt;
+      sub.innerHTML = '<i class="bi bi-exclamation-triangle"></i> <strong>OVERDUE</strong>';
+      card.classList.add('cs-sla-danger');
+    } else if (diff < 60 * 60 * 1000) {
+      val.textContent = fmt;
+      sub.textContent = 'Less than 1 hour left!';
+      card.classList.add('cs-sla-danger');
+    } else if (diff < 4 * 60 * 60 * 1000) {
+      val.textContent = fmt;
+      sub.textContent = 'Approaching deadline';
+      card.classList.add('cs-sla-warn');
+    } else {
+      val.textContent = fmt;
+      card.classList.add('cs-sla-ok');
+    }
+  }
+  tick(); setInterval(tick, 1000);
+})();
+</script>
 {% endblock %}

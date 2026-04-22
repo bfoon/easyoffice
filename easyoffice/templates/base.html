@@ -63,7 +63,97 @@
       padding: var(--eo-page-padding-y) var(--eo-page-padding-x);
       box-sizing: border-box;
     }
+   .eo-notif-main-link{
+    display:flex;
+    gap:12px;
+    text-decoration:none;
+    color:inherit;
+  }
 
+  .eo-notif-actions{
+    display:flex;
+    gap:6px;
+    flex-wrap:wrap;
+    margin-top:8px;
+    margin-left:50px;
+    align-items:center;
+  }
+
+  .eo-notif-action-btn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:5px;
+    min-height:28px;
+    padding:4px 9px;
+    border-radius:999px;
+    font-size:.68rem;
+    font-weight:700;
+    line-height:1;
+    letter-spacing:.01em;
+    text-decoration:none;
+    border:1px solid rgba(148, 163, 184, .24);
+    box-shadow:0 1px 2px rgba(15, 23, 42, .06);
+    transition:all .16s ease;
+    white-space:nowrap;
+  }
+
+  .eo-notif-action-btn i{
+    font-size:.72rem;
+    line-height:1;
+  }
+
+  .eo-notif-action-btn:hover{
+    transform:translateY(-1px);
+    box-shadow:0 4px 12px rgba(15, 23, 42, .10);
+  }
+
+  .eo-notif-action-btn.primary{
+    background:linear-gradient(135deg, #2563eb, #1d4ed8);
+    border-color:#1d4ed8;
+    color:#fff;
+  }
+
+  .eo-notif-action-btn.primary:hover{
+    filter:brightness(1.03);
+    color:#fff;
+  }
+
+  .eo-notif-action-btn.secondary{
+    background:rgba(255,255,255,.92);
+    color:var(--eo-text);
+    border-color:rgba(148, 163, 184, .28);
+  }
+
+  .eo-notif-action-btn.secondary:hover{
+    background:#ffffff;
+    color:var(--eo-text);
+  }
+
+  .eo-notif-action-btn.success{
+    background:linear-gradient(135deg, #10b981, #059669);
+    border-color:#059669;
+    color:#fff;
+  }
+
+  .eo-notif-action-btn.danger{
+    background:linear-gradient(135deg, #ef4444, #dc2626);
+    border-color:#dc2626;
+    color:#fff;
+  }
+
+  @media (max-width: 575.98px){
+    .eo-notif-actions{
+      margin-left:0;
+      margin-top:8px;
+    }
+
+    .eo-notif-action-btn{
+      min-height:26px;
+      padding:4px 8px;
+      font-size:.65rem;
+    }
+  }
     /* Prevent internal wrappers from staying narrow on big screens */
     .eo-main > .container,
     .eo-main > .container-fluid,
@@ -298,19 +388,20 @@
             <button
               type="button"
               id="markNotificationsReadBtn"
-              class="btn btn-link btn-sm p-0 text-decoration-none"
-              data-url="{% url 'mark_notifications_read' %}">
+              class="btn btn-link btn-sm p-0 text-decoration-none">
               Mark all read
             </button>
           </div>
 
           <div id="notificationDropdownList">
-            {% for notif in request.user.core_notifications.all|slice:":20" %}
-              {% if not notif.is_read %}
-              <a
-                class="eo-notif-item unread bell-notification-item"
-                href="{{ notif.link|default:'#' }}"
-                data-notification-id="{{ notif.id }}">
+          {% for notif in request.user.core_notifications.all|slice:":20" %}
+            {% if not notif.is_read %}
+            {# read URL built in JS from notification ID — no {% url %} needed #}
+            <div
+              class="eo-notif-item unread bell-notification-item"
+              data-notification-id="{{ notif.id }}">
+
+              <a class="eo-notif-main-link" href="{{ notif.link|default:'#' }}">
                 <div class="eo-notif-icon eo-notif-{{ notif.notification_type }}">
                   {% if notif.notification_type == 'task' %}
                     <i class="bi bi-check2-square"></i>
@@ -324,29 +415,52 @@
                     <i class="bi bi-calendar-event"></i>
                   {% elif notif.notification_type == 'security' %}
                     <i class="bi bi-shield-lock"></i>
+                  {% elif notif.notification_type == 'sign_request' or notif.notification_type == 'sign_reminder' %}
+                    <i class="bi bi-pen-fill"></i>
+                  {% elif notif.notification_type == 'sign_signed' or notif.notification_type == 'sign_completed' %}
+                    <i class="bi bi-patch-check-fill"></i>
+                  {% elif notif.notification_type == 'sign_declined' %}
+                    <i class="bi bi-x-circle-fill"></i>
                   {% else %}
                     <i class="bi bi-bell"></i>
                   {% endif %}
                 </div>
+
                 <div class="eo-notif-body">
                   <p class="eo-notif-title">{{ notif.title }}</p>
-                  <p class="eo-notif-msg">{{ notif.message|truncatechars:60 }}</p>
+                  <p class="eo-notif-msg">{{ notif.message|truncatechars:80 }}</p>
                   <span class="eo-notif-time">{{ notif.created_at|naturaltime }}</span>
                 </div>
               </a>
+
+              {% if notif.data.actions %}
+                <div class="eo-notif-actions">
+                  {% for action in notif.data.actions %}
+                    <a href="{{ action.url }}"
+                       class="eo-notif-action-btn {{ action.style|default:'secondary' }}"
+                       onclick="event.stopPropagation();">
+                      {% if action.icon %}
+                        <i class="bi {{ action.icon }}"></i>
+                      {% endif %}
+                      {{ action.label }}
+                    </a>
+                  {% endfor %}
+                </div>
               {% endif %}
-            {% endfor %}
-
-            <div
-              class="eo-notif-empty"
-              id="notificationDropdownEmpty"
-              {% if unread_notification_count %}style="display:none"{% endif %}>
-              <i class="bi bi-bell-slash"></i>
-              <p>No notifications</p>
             </div>
-          </div>
+            {% endif %}
+          {% endfor %}
 
-          <a href="{% url 'notifications' %}" class="eo-notif-footer">View all notifications</a>
+          <div
+            class="eo-notif-empty"
+            id="notificationDropdownEmpty"
+            {% if unread_notification_count %}style="display:none"{% endif %}>
+            <i class="bi bi-bell-slash"></i>
+            <p>No notifications</p>
+          </div>
+        </div>
+
+          <a href="#" id="eo-notif-footer-link" class="eo-notif-footer">View all notifications</a>
         </div>
       </div>
 
@@ -468,310 +582,29 @@
 <script src="{% static 'js/easyoffice.js' %}"></script>
 
 {% if request.user.is_authenticated and request.resolver_match.url_name != 'call_window' %}
-<script>
-/* ─────────────────────────────────────────────────────────────────────────
-   GLOBAL INCOMING-CALL BANNER
-   Runs on every authenticated page (except the call popup itself).
-   Polls /messages/call/incoming/ and shows a banner when a ring exists.
-   Clicking Accept opens the popup; Decline clears the ring.
-   ───────────────────────────────────────────────────────────────────────── */
-(function(){
-  'use strict';
-
-  var CURRENT_URL_NAME = '{{ request.resolver_match.url_name|default:""|escapejs }}';
-  var IS_CHAT_ROOM_PAGE = CURRENT_URL_NAME === 'chat_room';
-  var USER_ID = '{{ request.user.id|default:""|escapejs }}';
-  var CSRF = document.querySelector('meta[name="csrf-token"]');
-  var CSRF_TOKEN = CSRF ? CSRF.getAttribute('content') : '';
-
-  var POLL_MS = 4000;
-  var _currentRing = null;     // the ring shown in the banner
-  var _dismissedRingKeys = {}; // avoid re-showing the same ring after user declines
-  var _popupHandle = null;     // window handle if we opened the popup
-  var _tonePlaying = false;
-  var _toneCtx = null;
-  var _toneTimer = null;
-  var _toneNodes = [];
-  var _origTitle = document.title;
-  var _titleTimer = null;
-
-  function byId(id){ return document.getElementById(id); }
-
-  /* ── Cross-tab coordination so we don't ring in 5 tabs simultaneously ── */
-  var _bc = null;
-  try { _bc = new BroadcastChannel('easyoffice-banner'); } catch(_){ _bc = null; }
-  if(_bc){
-    _bc.onmessage = function(ev){
-      if(!ev || !ev.data) return;
-      // Another tab handled this ring — hide here.
-      if(ev.data.type === 'banner-handled' && _currentRing &&
-         String(ev.data.ring_id) === String(_ringKey(_currentRing))){
-        _dismissedRingKeys[_ringKey(_currentRing)] = Date.now();
-        _hideBanner();
-      }
-    };
-  }
-
-  // 🩹 The call popup broadcasts on 'easyoffice-call-<room>' when it
-  // becomes ready/active. If our banner is showing a ring for that
-  // same room, the popup has it under control — drop the banner
-  // instantly instead of waiting for the 4-second /call/incoming/ poll
-  // to notice the ring has been cleared server-side.
-  var _perRoomBCs = {};
-  function _attachPerRoomBC(roomId){
-    if(!roomId || _perRoomBCs[roomId]) return;
-    try {
-      var bc = new BroadcastChannel('easyoffice-call-' + roomId);
-      bc.onmessage = function(ev){
-        if(!ev || !ev.data) return;
-        var t = ev.data.type;
-        if(t !== 'popup-ready' && t !== 'popup-active') return;
-        // If the banner is showing a ring for this exact room, hide it.
-        if(_currentRing && String(_currentRing.room_id) === String(roomId)){
-          _dismissedRingKeys[_ringKey(_currentRing)] = Date.now();
-          _hideBanner();
-        }
-      };
-      _perRoomBCs[roomId] = bc;
-    } catch(_){}
-  }
-
-  function _ringKey(r){
-    return (r && r.room_id ? r.room_id : '') + '|' + (r && r.caller_id ? r.caller_id : '') + '|' + (r && r.started_at ? r.started_at : '');
-  }
-
-  /* ── WebAudio ringtone (no media files) ── */
-  function _toneGetCtx(){
-    if(!_toneCtx){
-      try { var AC = window.AudioContext || window.webkitAudioContext; if(AC) _toneCtx = new AC(); } catch(_){}
-    }
-    if(_toneCtx && _toneCtx.state === 'suspended'){
-      try { _toneCtx.resume(); } catch(_){}
-    }
-    return _toneCtx;
-  }
-  function _tonePlayBurst(freqs, durMs, gain){
-    var ctx = _toneGetCtx(); if(!ctx) return;
-    var g = ctx.createGain(); g.connect(ctx.destination);
-    var now = ctx.currentTime, peak = gain || 0.22;
-    g.gain.setValueAtTime(0, now);
-    g.gain.linearRampToValueAtTime(peak, now + 0.03);
-    g.gain.setValueAtTime(peak, now + (durMs/1000) - 0.05);
-    g.gain.linearRampToValueAtTime(0, now + (durMs/1000));
-    freqs.forEach(function(f){
-      var o = ctx.createOscillator();
-      o.type = 'sine'; o.frequency.value = f;
-      o.connect(g); o.start(now); o.stop(now + (durMs/1000) + 0.02);
-      _toneNodes.push(o);
-    });
-    _toneNodes.push(g);
-  }
-  function _startTone(){
-    if(_tonePlaying) return;
-    if(!_toneGetCtx()) return;
-    _tonePlaying = true;
-    var fire = function(){
-      _tonePlayBurst([880, 660], 400, 0.22);
-      setTimeout(function(){ _tonePlayBurst([880, 660], 400, 0.22); }, 600);
-    };
-    fire();
-    _toneTimer = setInterval(fire, 2500);
-  }
-  function _stopTone(){
-    if(!_tonePlaying) return;
-    _tonePlaying = false;
-    if(_toneTimer){ clearInterval(_toneTimer); _toneTimer = null; }
-    _toneNodes.forEach(function(n){
-      try { n.stop && n.stop(); } catch(_){}
-      try { n.disconnect && n.disconnect(); } catch(_){}
-    });
-    _toneNodes = [];
-  }
-
-  /* ── Tab title flash + browser notification ── */
-  function _startTitleFlash(label){
-    if(_titleTimer) return;
-    var flip = false;
-    _titleTimer = setInterval(function(){
-      flip = !flip;
-      document.title = flip ? ('📞 ' + label) : _origTitle;
-    }, 1000);
-  }
-  function _stopTitleFlash(){
-    if(_titleTimer){ clearInterval(_titleTimer); _titleTimer = null; }
-    document.title = _origTitle;
-  }
-  var _browserNote = null;
-  function _showBrowserNotification(title, body){
-    if(!('Notification' in window)) return;
-    if(Notification.permission !== 'granted') return;
-    try {
-      _browserNote = new Notification(title, {
-        body: body || '',
-        tag: 'eo-incoming-call',
-        requireInteraction: true,
-        silent: false
-      });
-      _browserNote.onclick = function(){
-        try { window.focus(); } catch(_){}
-        try { _browserNote.close(); } catch(_){}
-      };
-    } catch(_){}
-  }
-  function _closeBrowserNotification(){
-    if(_browserNote){ try { _browserNote.close(); } catch(_){} _browserNote = null; }
-  }
-  // Politely ask once, the first time it could matter
-  if(('Notification' in window) && Notification.permission === 'default'){
-    // Only ask on a gesture to avoid Chrome warnings
-    document.addEventListener('click', function once(){
-      try { Notification.requestPermission(); } catch(_){}
-      document.removeEventListener('click', once, true);
-    }, true);
-  }
-
-  /* ── Banner show/hide ── */
-  function _showBanner(ring){
-    _currentRing = ring;
-    // 🩹 Start listening on the room's popup BC so if anybody opens
-    // the popup for this ring we drop the banner instantly.
-    _attachPerRoomBC(ring.room_id);
-    var name = ring.caller_name || 'Someone';
-    var kind = ring.call_kind || 'voice';
-    var nEl = byId('eoCallBannerName');   if(nEl) nEl.textContent = name;
-    var sEl = byId('eoCallBannerSub');    if(sEl) sEl.textContent = 'Incoming ' + kind + ' call…';
-    var aEl = byId('eoCallBannerAvatar'); if(aEl){
-      if(ring.caller_avatar){
-        aEl.innerHTML = '<img src="' + ring.caller_avatar + '" alt=""/>';
-      } else {
-        aEl.textContent = (name.charAt(0) || '?').toUpperCase();
-      }
-    }
-    var b = byId('eoCallBanner');
-    if(b) b.classList.add('active');
-    document.body.classList.add('eo-call-banner-active');
-
-    _startTone();
-    _startTitleFlash('Incoming ' + kind + ' call from ' + name);
-    if(document.visibilityState !== 'visible'){
-      _showBrowserNotification('Incoming ' + kind + ' call', name + ' is calling you');
-    }
-  }
-
-  function _hideBanner(){
-    var b = byId('eoCallBanner');
-    if(b) b.classList.remove('active');
-    document.body.classList.remove('eo-call-banner-active');
-    _currentRing = null;
-    _stopTone();
-    _stopTitleFlash();
-    _closeBrowserNotification();
-  }
-
-  /* ── Accept / Decline ── */
-  window.eoCallBannerAccept = function(){
-    if(!_currentRing) return;
-    var ring = _currentRing;
-    // Let other tabs know we've handled it
-    if(_bc) { try { _bc.postMessage({type:'banner-handled', ring_id:_ringKey(ring)}); } catch(_){} }
-
-    var url = '/messages/call/window/' + ring.room_id + '/?kind=' + encodeURIComponent(ring.call_kind || 'voice') + '&mode=incoming';
-    var features = 'width=960,height=680,menubar=no,toolbar=no,location=no,status=no,resizable=yes';
-    _popupHandle = window.open(url, 'easyoffice-call-' + ring.room_id, features);
-    if(!_popupHandle){
-      alert('Popup blocked. Please allow popups for this site so calls can open.');
-      return;
-    }
-    _hideBanner();
-  };
-
-  window.eoCallBannerDecline = function(){
-    if(!_currentRing) return;
-    var ring = _currentRing;
-    _dismissedRingKeys[_ringKey(ring)] = Date.now();
-    // Clear the ring server-side
-    var body = 'reason=declined&call_kind=' + encodeURIComponent(ring.call_kind || 'voice');
-    fetch('/messages/call/clear/' + ring.room_id + '/', {
-      method: 'POST',
-      headers: {
-        'X-CSRFToken': CSRF_TOKEN,
-        'X-Requested-With': 'XMLHttpRequest',
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      credentials: 'same-origin',
-      body: body
-    }).catch(function(){});
-    if(_bc){ try { _bc.postMessage({type:'banner-handled', ring_id:_ringKey(ring)}); } catch(_){} }
-    _hideBanner();
-  };
-
-  /* ── Poll ── */
-  function _poll(){
-    // If the chat room page is showing its own in-page modal, skip.
-    // Detected by the modal being open.
-    var inPageModal = document.getElementById('incomingCallModal');
-    if(IS_CHAT_ROOM_PAGE && inPageModal && inPageModal.style.display === 'flex'){
-      return;
-    }
-    // If the popup we opened is still alive, don't re-show the banner.
-    if(_popupHandle && !_popupHandle.closed){
-      if(_currentRing) _hideBanner();
-      return;
-    } else if(_popupHandle && _popupHandle.closed){
-      _popupHandle = null;
-    }
-
-    fetch('/messages/call/incoming/', {
-      headers: {'X-Requested-With': 'XMLHttpRequest'},
-      credentials: 'same-origin'
-    })
-    .then(function(r){ return r.ok ? r.json() : null; })
-    .then(function(d){
-      if(!d || !d.ok) return;
-
-      if(!d.ring){
-        // No ring — hide banner if we were showing one
-        if(_currentRing) _hideBanner();
-        return;
-      }
-
-      var key = _ringKey(d.ring);
-      // If we already dismissed this exact ring in this tab, ignore.
-      if(_dismissedRingKeys[key]) return;
-      // If the banner is already showing the same ring, do nothing
-      if(_currentRing && _ringKey(_currentRing) === key) return;
-      _showBanner(d.ring);
-    })
-    .catch(function(){});
-  }
-
-  // Start polling. Note: every authenticated tab hits /call/incoming/
-  // every 4s. For large deployments consider moving to a user-scoped
-  // WebSocket push instead.
-  setInterval(_poll, POLL_MS);
-  // Also poll right away so cold page loads with a live ring show it fast
-  setTimeout(_poll, 500);
-
-  // Stop sounds if user backgrounds-then-returns — avoid stuck tones
-  document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState === 'visible' && _currentRing){
-      // Re-check in case the caller hung up while tab was hidden
-      _poll();
-    }
-  });
-
-  // If user navigates away, clear any tone
-  window.addEventListener('beforeunload', function(){
-    _stopTone();
-    _stopTitleFlash();
-    _closeBrowserNotification();
-  });
-})();
-</script>
-{% endif %}
+{# Single {% url %} tag — all other notification URLs are derived from this in JS #}
+<span id="eo-mark-all-url" style="display:none" aria-hidden="true">{% url 'mark_notifications_read' %}</span>
 <script>
 (function () {
   'use strict';
+
+  // ── Base URL: the one core URL tag that already works everywhere ──────────
+  // All other notification URLs are derived from this so we don't need extra
+  // tags that would crash if the app has a namespace.
+  //
+  // MARK_ALL_URL  e.g.  /auth/notifications/read/
+  // BELL_URL            /auth/notifications/bell/
+  // MARK_ONE_URL        /auth/notifications/read/<uuid>/   (built per-item)
+  // NOTIF_URL           /auth/notifications/
+  //
+  // We embed MARK_ALL_URL once as a JSON string via a hidden <span> so
+  // Django resolves it at render time outside any script string.
+  var MARK_ALL_URL = document.getElementById('eo-mark-all-url')
+                      ? document.getElementById('eo-mark-all-url').textContent.trim()
+                      : '';
+  var _base        = MARK_ALL_URL.replace(/read\/$/, '');        // /auth/notifications/
+  var BELL_URL     = _base + 'bell/';
+  var NOTIF_URL    = _base;
 
   function getCSRFToken() {
     const meta = document.querySelector('meta[name="csrf-token"]');
@@ -780,32 +613,34 @@
     return input ? input.value : '';
   }
 
+  function escapeHtml(value) {
+    return String(value || '').replace(/[&<>"']/g, function (c) {
+      return ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      })[c];
+    });
+  }
+
   function updateNotificationBadge(count) {
     const badge = document.getElementById('notificationBellCount');
     if (!badge) return;
-
     const safeCount = parseInt(count || 0, 10);
     badge.textContent = safeCount;
-
-    if (safeCount > 0) {
-      badge.style.display = '';
-    } else {
-      badge.style.display = 'none';
-    }
+    badge.style.display = safeCount > 0 ? '' : 'none';
   }
 
   function showNotificationEmptyState() {
     const empty = document.getElementById('notificationDropdownEmpty');
-    if (empty) {
-      empty.style.display = '';
-    }
+    if (empty) empty.style.display = '';
   }
 
   function hideNotificationEmptyState() {
     const empty = document.getElementById('notificationDropdownEmpty');
-    if (empty) {
-      empty.style.display = 'none';
-    }
+    if (empty) empty.style.display = 'none';
   }
 
   function removeAllNotificationItems() {
@@ -818,6 +653,8 @@
     return document.querySelectorAll('.bell-notification-item').length;
   }
 
+  // ── POST helpers ────────────────────────────────────────────────────────
+
   async function markAllNotificationsRead(url) {
     const response = await fetch(url, {
       method: 'POST',
@@ -829,66 +666,147 @@
       },
       body: ''
     });
-
-    if (!response.ok) {
-      throw new Error('Failed to mark notifications as read.');
-    }
-
+    if (!response.ok) throw new Error('Failed to mark notifications as read.');
     return response.json();
+  }
+
+  async function markSingleNotificationRead(url) {
+    const response = await fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-CSRFToken': getCSRFToken(),
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+      },
+      body: ''
+    });
+    if (!response.ok) throw new Error('Failed to mark notification as read.');
+    return response.json();
+  }
+
+  // ── Rendering helpers ───────────────────────────────────────────────────
+
+  function getNotificationIconClass(type) {
+    if (type === 'task')    return 'bi-check2-square';
+    if (type === 'message') return 'bi-chat-dots';
+    if (type === 'project') return 'bi-kanban';
+    if (type === 'it')      return 'bi-pc-display';
+    if (type === 'meeting') return 'bi-calendar-event';
+    if (type === 'security') return 'bi-shield-lock';
+    if (type === 'sign_request' || type === 'sign_reminder') return 'bi-pen-fill';
+    if (type === 'sign_signed'  || type === 'sign_completed') return 'bi-patch-check-fill';
+    if (type === 'sign_declined') return 'bi-x-circle-fill';
+    return 'bi-bell';
+  }
+
+  function renderNotificationActions(actions) {
+    if (!Array.isArray(actions) || !actions.length) return '';
+    return `
+      <div class="eo-notif-actions">
+        ${actions.map(function (action) {
+          const style = action.style || 'secondary';
+          const icon  = action.icon ? `<i class="bi ${escapeHtml(action.icon)}"></i>` : '';
+          return `
+            <a href="${escapeHtml(action.url)}"
+               class="eo-notif-action-btn ${escapeHtml(style)}"
+               onclick="event.stopPropagation();">
+              ${icon}${escapeHtml(action.label)}
+            </a>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  function buildNotificationItem(data) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'eo-notif-item unread bell-notification-item';
+    wrapper.dataset.notificationId = data.id || '';
+
+    const iconClass = getNotificationIconClass(data.type || 'default');
+    const actions   = data.actions || (data.data && data.data.actions) || [];
+
+    wrapper.innerHTML = `
+      <a class="eo-notif-main-link" href="${escapeHtml(data.link || '#')}">
+        <div class="eo-notif-icon eo-notif-${escapeHtml(data.type || 'default')}">
+          <i class="bi ${iconClass}"></i>
+        </div>
+        <div class="eo-notif-body">
+          <p class="eo-notif-title">${escapeHtml(data.title || 'Notification')}</p>
+          <p class="eo-notif-msg">${escapeHtml(data.body || '')}</p>
+          <span class="eo-notif-time">Just now</span>
+        </div>
+      </a>
+      ${renderNotificationActions(actions)}
+    `;
+    return wrapper;
   }
 
   function appendNotificationToDropdown(data) {
     const list = document.getElementById('notificationDropdownList');
     if (!list) return;
-
     hideNotificationEmptyState();
-
-    const a = document.createElement('a');
-    a.className = 'eo-notif-item unread bell-notification-item';
-    a.href = data.link || '#';
-    a.dataset.notificationId = data.id || '';
-
-    let iconClass = 'bi-bell';
-    if (data.type === 'task') iconClass = 'bi-check2-square';
-    else if (data.type === 'message') iconClass = 'bi-chat-dots';
-    else if (data.type === 'project') iconClass = 'bi-kanban';
-    else if (data.type === 'it') iconClass = 'bi-pc-display';
-    else if (data.type === 'meeting') iconClass = 'bi-calendar-event';
-    else if (data.type === 'security') iconClass = 'bi-shield-lock';
-
-    a.innerHTML = `
-      <div class="eo-notif-icon eo-notif-${data.type || 'default'}">
-        <i class="bi ${iconClass}"></i>
-      </div>
-      <div class="eo-notif-body">
-        <p class="eo-notif-title">${data.title || 'Notification'}</p>
-        <p class="eo-notif-msg">${data.body || ''}</p>
-        <span class="eo-notif-time">Just now</span>
-      </div>
-    `;
-
-    list.insertBefore(a, list.firstChild);
-
+    list.insertBefore(buildNotificationItem(data), list.firstChild);
     updateNotificationBadge(unreadDropdownCount());
   }
 
-  document.addEventListener('DOMContentLoaded', function () {
-    const markBtn = document.getElementById('markNotificationsReadBtn');
+  // ── Auto-refresh: fetch latest unread from the bell endpoint ────────────
+  // Replaces the entire dropdown list so counts and items always stay
+  // in sync even when notifications arrive outside this browser tab.
 
+  async function refreshNotifications() {
+    try {
+      const res = await fetch(BELL_URL, {
+        credentials: 'same-origin',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+
+      updateNotificationBadge(json.unread_count || 0);
+
+      const list = document.getElementById('notificationDropdownList');
+      if (!list) return;
+
+      // Remove current items, keep the empty-state div
+      removeAllNotificationItems();
+
+      if (json.notifications && json.notifications.length) {
+        hideNotificationEmptyState();
+        // Append in reverse so newest ends up at the top (insertBefore firstChild)
+        json.notifications.slice().reverse().forEach(function (n) {
+          list.insertBefore(buildNotificationItem(n), list.firstChild);
+        });
+      } else {
+        showNotificationEmptyState();
+      }
+    } catch (e) {
+      console.warn('Notification poll failed:', e);
+    }
+  }
+
+  // ── DOMContentLoaded ────────────────────────────────────────────────────
+
+  document.addEventListener('DOMContentLoaded', function () {
+    const markBtn  = document.getElementById('markNotificationsReadBtn');
+    const notifList = document.getElementById('notificationDropdownList');
+    const bellBtn  = document.getElementById('notificationBellBtn');
+
+    // Wire up footer "View all" link and mark-all button with derived URLs
+    var footerLink = document.getElementById('eo-notif-footer-link');
+    if (footerLink && NOTIF_URL) footerLink.href = NOTIF_URL;
+
+    // Mark ALL read
     if (markBtn) {
       markBtn.addEventListener('click', async function (e) {
         e.preventDefault();
-
         try {
-          const data = await markAllNotificationsRead(this.dataset.url);
-
+          const data = await markAllNotificationsRead(MARK_ALL_URL);
           if (data.status === 'ok') {
             removeAllNotificationItems();
             updateNotificationBadge(data.unread_count || 0);
-
-            if ((data.unread_count || 0) <= 0) {
-              showNotificationEmptyState();
-            }
+            if ((data.unread_count || 0) <= 0) showNotificationEmptyState();
           }
         } catch (err) {
           console.error('Notification mark-read failed:', err);
@@ -896,9 +814,49 @@
       });
     }
 
-    // Real-time notification websocket integration
+    // Click a single notification → mark read then navigate
+    if (notifList) {
+      notifList.addEventListener('click', async function (e) {
+        const trigger = e.target.closest('.eo-notif-main-link, .eo-notif-action-btn');
+        if (!trigger) return;
+
+        const item    = trigger.closest('.bell-notification-item');
+        if (!item) return;
+
+        const notifId = item.dataset.notificationId || '';
+        const href    = trigger.getAttribute('href') || '#';
+
+        // Build the single-read URL from the notification UUID and MARK_ALL_URL
+        // e.g. /auth/notifications/read/  +  <uuid>  +  /
+        const readUrl = notifId ? MARK_ALL_URL + notifId + '/' : '';
+        if (!readUrl) return;
+
+        e.preventDefault();
+
+        try {
+          const data = await markSingleNotificationRead(readUrl);
+          item.remove();
+          updateNotificationBadge(data.unread_count || unreadDropdownCount());
+          if (unreadDropdownCount() <= 0) showNotificationEmptyState();
+        } catch (err) {
+          console.error('Single notification read failed:', err);
+        }
+
+        if (href && href !== '#') window.location.href = href;
+      }, true);
+    }
+
+    // Refresh when bell dropdown is opened so items are always fresh
+    if (bellBtn) {
+      bellBtn.addEventListener('show.bs.dropdown', refreshNotifications);
+    }
+
+    // Background polling every 30 seconds
+    setInterval(refreshNotifications, 30000);
+
+    // ── WebSocket for instant push notifications ─────────────────────────
     const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-    const wsUrl = protocol + window.location.host + '/ws/notifications/';
+    const wsUrl    = protocol + window.location.host + '/ws/notifications/';
     let notificationSocket = null;
 
     try {
@@ -908,20 +866,30 @@
     }
 
     if (notificationSocket) {
+      notificationSocket.onopen = function () {
+        console.log('Notification websocket connected.');
+      };
+
       notificationSocket.onmessage = function (event) {
         try {
           const data = JSON.parse(event.data);
-
           appendNotificationToDropdown({
-            id: data.id || '',
-            type: data.type || 'default',
-            title: data.title || 'Notification',
-            body: data.body || '',
-            link: data.link || '#'
+            id:       data.id       || '',
+            read_url: data.read_url || '',
+            type:     data.type     || 'default',
+            title:    data.title    || 'Notification',
+            body:     data.body     || '',
+            link:     data.link     || '#',
+            actions:  data.actions  || [],
+            data:     data.data     || {}
           });
         } catch (err) {
           console.error('Notification socket payload error:', err);
         }
+      };
+
+      notificationSocket.onclose = function () {
+        console.warn('Notification websocket closed.');
       };
 
       notificationSocket.onerror = function (err) {
@@ -931,6 +899,7 @@
   });
 })();
 </script>
+{% endif %}
 {% block extra_js %}{% endblock %}
 </body>
 </html>

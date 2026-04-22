@@ -910,3 +910,68 @@ class MarkNotificationsReadView(LoginRequiredMixin, View):
 
         next_url = request.POST.get('next') or request.META.get('HTTP_REFERER') or '/dashboard/'
         return redirect(next_url)
+
+
+class MarkNotificationReadView(LoginRequiredMixin, View):
+    def post(self, request, pk):
+        notif = get_object_or_404(
+            CoreNotification,
+            pk=pk,
+            recipient=request.user,
+        )
+
+        if not notif.is_read:
+            notif.is_read = True
+            notif.read_at = timezone.now()
+            notif.save(update_fields=['is_read', 'read_at'])
+
+        unread_count = request.user.core_notifications.filter(is_read=False).count()
+
+        if request.headers.get('x-requested-with') == 'XMLHttpRequest':
+            return JsonResponse({
+                'status': 'ok',
+                'notification_id': str(notif.pk),
+                'unread_count': unread_count,
+            })
+
+        next_url = request.POST.get('next') or notif.link or request.META.get('HTTP_REFERER') or '/dashboard/'
+        return redirect(next_url)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Notifications Bell — JSON endpoint for auto-refresh polling
+# ─────────────────────────────────────────────────────────────────────────────
+
+class NotificationsBellView(LoginRequiredMixin, View):
+    """
+    GET /notifications/bell/
+    Returns the latest unread notifications as JSON for the bell dropdown.
+    Used by the 30-second polling loop and the on-open refresh in base.html.
+    """
+    def get(self, request):
+        if request.headers.get('x-requested-with') != 'XMLHttpRequest':
+            return redirect('notifications')
+
+        qs = (
+            request.user.core_notifications
+            .filter(is_read=False)
+            .order_by('-created_at')[:20]
+        )
+
+        notifications = [
+            {
+                'id':       str(n.pk),
+                'read_url': reverse('mark_notification_read', kwargs={'pk': n.pk}),
+                'type':     n.notification_type,
+                'title':    n.title,
+                'body':     n.message,
+                'link':     n.link or '#',
+                'actions':  (n.data or {}).get('actions', []),
+            }
+            for n in qs
+        ]
+
+        return JsonResponse({
+            'unread_count':  qs.count(),
+            'notifications': notifications,
+        })

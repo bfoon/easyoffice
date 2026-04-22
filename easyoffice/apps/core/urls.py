@@ -27,6 +27,8 @@ urlpatterns = [
     path('settings/',           views.UserSettingsView.as_view(),         name='user_settings'),
 
     # ── Notifications ─────────────────────────────────────────────────────────
-    path('notifications/',      views.NotificationsView.as_view(),        name='notifications'),
-    path('notifications/read/', views.MarkNotificationsReadView.as_view(),name='mark_notifications_read'),
+    path('notifications/',                  views.NotificationsView.as_view(),         name='notifications'),
+    path('notifications/bell/',             views.NotificationsBellView.as_view(),     name='notifications_bell'),
+    path('notifications/read/',             views.MarkNotificationsReadView.as_view(), name='mark_notifications_read'),
+    path('notifications/read/<uuid:pk>/',   views.MarkNotificationReadView.as_view(),  name='mark_notification_read'),
 ]

@@ -1,12 +1,364 @@
-
 {% extends "base.html" %}
 {% block title %}Call Desk{% endblock %}
 {% block breadcrumb %}<a href="{% url 'customer_service_dashboard' %}">Customer Service</a> / Call Desk{% endblock %}
 {% block content %}
 <style>
-.cs-lookup-card,.cs-side-card{border:1px solid var(--eo-border);border-radius:16px;background:var(--eo-surface);padding:16px;box-shadow:0 6px 20px rgba(15,23,42,.04)}
-.cs-customer-chip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;font-size:.8rem;font-weight:700}
-.cs-preview-box{border:1px dashed var(--eo-border);border-radius:14px;padding:14px;background:var(--eo-bg);min-height:160px}
+  :root {
+    --cs-primary: #2563eb;
+    --cs-primary-dark: #1d4ed8;
+    --cs-success: #10b981;
+    --cs-warning: #f59e0b;
+    --cs-danger: #ef4444;
+    --cs-info: #06b6d4;
+    --cs-purple: #8b5cf6;
+    --cs-pink: #ec4899;
+    --cs-border: var(--eo-border, #e5e7eb);
+    --cs-surface: var(--eo-surface, #fff);
+    --cs-bg: var(--eo-bg, #f8fafc);
+  }
+
+  /* ---------- Cards & panels ---------- */
+  .cs-card {
+    border: 1px solid var(--cs-border);
+    border-radius: 16px;
+    background: var(--cs-surface);
+    padding: 18px;
+    box-shadow: 0 6px 20px rgba(15, 23, 42, .04);
+  }
+  .cs-card-accent {
+    border-top: 3px solid var(--cs-primary);
+  }
+  .cs-section-title {
+    font-size: .8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #64748b;
+    margin: 0 0 12px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .cs-section-title i { color: var(--cs-primary); }
+
+  /* ---------- Live call banner ---------- */
+  .cs-call-bar {
+    background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
+    color: #fff;
+    border-radius: 16px;
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 8px 28px rgba(30, 58, 138, .25);
+    flex-wrap: wrap;
+  }
+  .cs-call-bar.cs-call-active {
+    background: linear-gradient(135deg, #065f46 0%, #047857 100%);
+    box-shadow: 0 8px 28px rgba(4, 120, 87, .3);
+  }
+  .cs-call-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    font-size: .85rem;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.15);
+    backdrop-filter: blur(6px);
+  }
+  .cs-call-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #f87171;
+  }
+  .cs-call-active .cs-call-dot {
+    background: #4ade80;
+    animation: cs-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes cs-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, .7); }
+    50% { box-shadow: 0 0 0 10px rgba(74, 222, 128, 0); }
+  }
+  .cs-call-timer {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: .05em;
+  }
+  .cs-call-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  .cs-call-btn {
+    background: rgba(255,255,255,.15);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,.25);
+    padding: 8px 14px;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: .85rem;
+    cursor: pointer;
+    transition: all .15s;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .cs-call-btn:hover { background: rgba(255,255,255,.25); transform: translateY(-1px); }
+  .cs-call-btn.cs-call-btn-danger { background: #dc2626; border-color: #dc2626; }
+  .cs-call-btn.cs-call-btn-danger:hover { background: #b91c1c; }
+  .cs-call-btn.cs-call-btn-success { background: #16a34a; border-color: #16a34a; }
+  .cs-call-btn.cs-call-btn-success:hover { background: #15803d; }
+
+  /* ---------- Lookup ---------- */
+  .cs-lookup-wrap {
+    position: relative;
+  }
+  .cs-phone-pills {
+    display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;
+  }
+  .cs-phone-pill {
+    background: #eff6ff; color: #1e40af;
+    border: 1px solid #bfdbfe;
+    padding: 4px 10px; border-radius: 999px;
+    font-size: .75rem; cursor: pointer;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    transition: all .15s;
+  }
+  .cs-phone-pill:hover { background: #dbeafe; }
+
+  /* ---------- Customer chip ---------- */
+  .cs-customer-hero {
+    background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%);
+    border: 1px solid #bfdbfe;
+    border-radius: 14px;
+    padding: 14px;
+    display: flex;
+    gap: 14px;
+    align-items: center;
+  }
+  .cs-customer-hero.cs-new {
+    background: linear-gradient(135deg, #fff7ed 0%, #fef3c7 100%);
+    border-color: #fcd34d;
+  }
+  .cs-avatar {
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--cs-primary), var(--cs-purple));
+    color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 1.2rem;
+    flex-shrink: 0;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, .25);
+  }
+  .cs-customer-hero.cs-new .cs-avatar {
+    background: linear-gradient(135deg, var(--cs-warning), var(--cs-pink));
+  }
+  .cs-health-score {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 999px;
+    font-size: .7rem; font-weight: 700;
+  }
+  .cs-health-good { background: #d1fae5; color: #065f46; }
+  .cs-health-warn { background: #fef3c7; color: #92400e; }
+  .cs-health-bad { background: #fee2e2; color: #991b1b; }
+
+  /* ---------- Preview box ---------- */
+  .cs-preview-box {
+    border: 1px dashed var(--cs-border);
+    border-radius: 14px;
+    padding: 16px;
+    background: var(--cs-bg);
+    min-height: 180px;
+  }
+
+  /* ---------- Quick templates ---------- */
+  .cs-template-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
+  }
+  .cs-template-btn {
+    border: 1px solid var(--cs-border);
+    background: #fff;
+    padding: 10px;
+    border-radius: 10px;
+    font-size: .75rem;
+    text-align: left;
+    cursor: pointer;
+    transition: all .15s;
+    line-height: 1.3;
+  }
+  .cs-template-btn:hover {
+    border-color: var(--cs-primary);
+    background: #eff6ff;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(37,99,235,.1);
+  }
+  .cs-template-btn i { color: var(--cs-primary); }
+
+  /* ---------- Sentiment ---------- */
+  .cs-sentiment-bar {
+    display: flex; gap: 6px; margin-top: 6px;
+  }
+  .cs-sentiment-btn {
+    flex: 1;
+    padding: 10px 8px;
+    border: 1px solid var(--cs-border);
+    background: #fff;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 1.3rem;
+    transition: all .15s;
+  }
+  .cs-sentiment-btn:hover { transform: translateY(-2px); }
+  .cs-sentiment-btn.active {
+    border-width: 2px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.08);
+  }
+  .cs-sentiment-btn[data-mood="angry"].active { border-color: var(--cs-danger); background: #fee2e2; }
+  .cs-sentiment-btn[data-mood="frustrated"].active { border-color: var(--cs-warning); background: #fef3c7; }
+  .cs-sentiment-btn[data-mood="neutral"].active { border-color: #94a3b8; background: #f1f5f9; }
+  .cs-sentiment-btn[data-mood="happy"].active { border-color: #84cc16; background: #ecfccb; }
+  .cs-sentiment-btn[data-mood="delighted"].active { border-color: var(--cs-success); background: #d1fae5; }
+
+  /* ---------- Char counter ---------- */
+  .cs-counter {
+    font-size: .72rem;
+    color: #94a3b8;
+    text-align: right;
+    margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .cs-counter.cs-counter-warn { color: var(--cs-warning); }
+  .cs-counter.cs-counter-danger { color: var(--cs-danger); }
+
+  /* ---------- Priority chips ---------- */
+  .cs-priority-group {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+  .cs-priority-chip {
+    padding: 10px 6px;
+    border-radius: 10px;
+    text-align: center;
+    font-weight: 700;
+    font-size: .78rem;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all .15s;
+  }
+  .cs-priority-chip[data-val="low"] { background: #f1f5f9; color: #475569; }
+  .cs-priority-chip[data-val="medium"] { background: #dbeafe; color: #1e40af; }
+  .cs-priority-chip[data-val="high"] { background: #fed7aa; color: #9a3412; }
+  .cs-priority-chip[data-val="critical"] { background: #fecaca; color: #991b1b; }
+  .cs-priority-chip.active { border-color: currentColor; transform: scale(1.03); }
+
+  /* ---------- Recent call item ---------- */
+  .cs-recent-item {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--cs-border);
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .cs-recent-item:last-child { border-bottom: none; }
+  .cs-recent-icon {
+    width: 34px; height: 34px;
+    border-radius: 10px;
+    background: #eff6ff; color: var(--cs-primary);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+
+  /* ---------- KBD ---------- */
+  kbd {
+    background: #1e293b; color: #fff;
+    padding: 2px 6px; border-radius: 4px;
+    font-size: .7rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    border: none;
+    box-shadow: 0 2px 0 #0f172a;
+  }
+
+  /* ---------- Knowledge panel ---------- */
+  .cs-kb-item {
+    padding: 10px;
+    border: 1px solid var(--cs-border);
+    border-radius: 10px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    font-size: .82rem;
+    transition: all .15s;
+  }
+  .cs-kb-item:hover {
+    border-color: var(--cs-primary);
+    background: #f0f9ff;
+  }
+  .cs-kb-item strong { color: var(--cs-primary); display: block; margin-bottom: 2px; }
+
+  /* ---------- Toast ---------- */
+  .cs-toast {
+    position: fixed;
+    bottom: 20px; right: 20px;
+    background: #1e293b; color: #fff;
+    padding: 12px 18px;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.2);
+    z-index: 9999;
+    display: none;
+    animation: cs-slide-in .3s ease;
+  }
+  @keyframes cs-slide-in {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+
+  /* ---------- Tabs ---------- */
+  .cs-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--cs-border);
+    margin-bottom: 14px;
+  }
+  .cs-tab {
+    padding: 8px 14px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-weight: 600;
+    font-size: .85rem;
+    color: #64748b;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .cs-tab:hover { color: var(--cs-primary); }
+  .cs-tab.active {
+    color: var(--cs-primary);
+    border-bottom-color: var(--cs-primary);
+  }
+
+  /* ---------- Scripts ---------- */
+  .cs-script-card {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-left: 4px solid var(--cs-warning);
+    padding: 12px;
+    border-radius: 10px;
+    font-size: .85rem;
+    line-height: 1.55;
+    margin-bottom: 8px;
+  }
+  .cs-script-card strong { color: #92400e; }
+
+  /* ---------- Empty state ---------- */
+  .cs-empty {
+    text-align: center;
+    padding: 20px;
+    color: #94a3b8;
+    font-size: .85rem;
+  }
+
+  @media (max-width: 768px) {
+    .cs-call-controls { margin-left: 0; width: 100%; }
+    .cs-priority-group { grid-template-columns: repeat(2, 1fr); }
+  }
 </style>
 
 <div class="eo-page-header">
@@ -17,262 +369,823 @@
   <div style="display:flex;gap:8px;flex-wrap:wrap">
     <a href="{% url 'customer_service_customer_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-people"></i> Contacts</a>
     <a href="{% url 'customer_service_ticket_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-ticket-detailed"></i> Tickets</a>
+    <button type="button" class="eo-btn eo-btn-secondary" onclick="csToggleShortcuts()" title="Keyboard shortcuts">
+      <i class="bi bi-keyboard"></i> Shortcuts
+    </button>
+  </div>
+</div>
+
+<!-- ═══════════ LIVE CALL BAR ═══════════ -->
+<div id="csCallBar" class="cs-call-bar mb-3">
+  <div class="cs-call-status">
+    <span class="cs-call-dot"></span>
+    <span id="csCallStatusText">Ready — no active call</span>
+  </div>
+  <div class="cs-call-timer" id="csCallTimer">00:00:00</div>
+  <div class="d-none d-md-block" style="font-size:.8rem;opacity:.85">
+    <div>Agent: <strong>{{ request.user.full_name|default:request.user.username }}</strong></div>
+    <div id="csCallerLabel" style="opacity:.85">Caller: —</div>
+  </div>
+  <div class="cs-call-controls">
+    <button type="button" class="cs-call-btn cs-call-btn-success" id="csStartCallBtn" onclick="csStartCall()">
+      <i class="bi bi-telephone-inbound-fill"></i> Start Call
+    </button>
+    <button type="button" class="cs-call-btn cs-call-btn-danger" id="csEndCallBtn" onclick="csEndCall()" style="display:none">
+      <i class="bi bi-telephone-x-fill"></i> End Call
+    </button>
   </div>
 </div>
 
 <div class="row g-3">
-  <div class="col-lg-8">
-    <div class="cs-lookup-card mb-3">
-      <div class="row g-3 align-items-end">
+  <!-- ═══════════ MAIN COLUMN ═══════════ -->
+  <div class="col-xl-8">
+
+    <!-- LOOKUP -->
+    <div class="cs-card cs-card-accent mb-3">
+      <h3 class="cs-section-title"><i class="bi bi-search"></i> Caller Identification</h3>
+      <div class="row g-2 align-items-end">
         <div class="col-md-8">
           <label class="eo-form-label">Caller number</label>
-          <input type="text" id="lookupPhone" class="eo-form-control" placeholder="e.g. 7xx xxxx or +2207xxxxxx">
+          <div class="cs-lookup-wrap">
+            <input type="text" id="lookupPhone" class="eo-form-control"
+                   placeholder="e.g. 7xxxxxxx or +2207xxxxxxx"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();lookupCustomer()}">
+            <div class="cs-phone-pills" id="csRecentPhones"></div>
+          </div>
         </div>
-        <div class="col-md-4">
-          <button type="button" class="eo-btn eo-btn-primary w-100" onclick="lookupCustomer()">
-            <i class="bi bi-search"></i> Lookup Caller
+        <div class="col-md-4 d-flex gap-2">
+          <button type="button" class="eo-btn eo-btn-primary flex-grow-1" onclick="lookupCustomer()">
+            <i class="bi bi-search"></i> Lookup
+          </button>
+          <button type="button" class="eo-btn eo-btn-secondary" onclick="csClearForm()" title="Clear form (Ctrl+Shift+K)">
+            <i class="bi bi-x-circle"></i>
           </button>
         </div>
       </div>
+      <small class="text-muted d-block mt-2">
+        <i class="bi bi-lightbulb"></i> Tip: press <kbd>/</kbd> to focus the phone field at any time.
+      </small>
     </div>
 
-    <form method="post" class="cs-lookup-card">
+    <!-- CALL FORM -->
+    <form method="post" class="cs-card" id="csCallForm" autocomplete="off">
       {% csrf_token %}
-      <h3 class="eo-card-title mb-3"><i class="bi bi-journal-plus"></i> Log Call</h3>
 
-      <div class="row g-3">
-        <div class="col-md-6">
-          <label class="eo-form-label">Phone number</label>
-          <input type="text" name="phone_number" id="phoneNumberInput" class="eo-form-control" required>
-        </div>
-        <div class="col-md-6">
-          <label class="eo-form-label">Call type</label>
-          <select name="call_type" class="eo-form-select">
-            <option value="sales">Sales Inquiry</option>
-            <option value="maintenance">Maintenance Request</option>
-            <option value="support">Support</option>
-            <option value="complaint">Complaint</option>
-            <option value="callback">Callback Request</option>
-            <option value="followup">Follow Up</option>
-            <option value="general">General Inquiry</option>
-          </select>
-        </div>
+      <!-- Tabs -->
+      <div class="cs-tabs">
+        <button type="button" class="cs-tab active" data-tab="details">
+          <i class="bi bi-journal-text"></i> Call Details
+        </button>
+        <button type="button" class="cs-tab" data-tab="customer">
+          <i class="bi bi-person-vcard"></i> Customer Info
+        </button>
+        <button type="button" class="cs-tab" data-tab="routing">
+          <i class="bi bi-signpost-split"></i> Routing & Actions
+        </button>
+      </div>
 
-        <div class="col-md-6">
-          <label class="eo-form-label">Customer full name</label>
-          <input type="text" name="full_name" id="customerNameInput" class="eo-form-control" placeholder="Required for new callers">
-        </div>
-        <div class="col-md-6">
-          <label class="eo-form-label">Company name</label>
-          <input type="text" name="company_name" id="companyNameInput" class="eo-form-control">
-        </div>
+      <!-- ─── TAB: Call Details ─── -->
+      <div class="cs-tab-panel" data-panel="details">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="eo-form-label">Phone number <span class="text-danger">*</span></label>
+            <input type="text" name="phone_number" id="phoneNumberInput" class="eo-form-control" required>
+          </div>
+          <div class="col-md-6">
+            <label class="eo-form-label">Call type</label>
+            <select name="call_type" id="callTypeInput" class="eo-form-select">
+              <option value="sales"><i class="bi bi-cart"></i> Sales Inquiry</option>
+              <option value="maintenance">Maintenance Request</option>
+              <option value="support">Support</option>
+              <option value="complaint">Complaint</option>
+              <option value="callback">Callback Request</option>
+              <option value="followup">Follow Up</option>
+              <option value="general">General Inquiry</option>
+            </select>
+          </div>
 
-        <div class="col-md-6">
-          <label class="eo-form-label">Email</label>
-          <input type="email" name="email" id="customerEmailInput" class="eo-form-control">
-        </div>
-        <div class="col-md-6">
-          <label class="eo-form-label">Preferred contact method</label>
-          <select name="preferred_contact_method" id="preferredContactInput" class="eo-form-select">
-            <option value="phone">Phone</option>
-            <option value="email">Email</option>
-            <option value="sms">SMS</option>
-            <option value="whatsapp">WhatsApp</option>
-          </select>
-        </div>
+          <div class="col-12">
+            <label class="eo-form-label">Subject <span class="text-danger">*</span></label>
+            <input type="text" name="subject" id="subjectInput" class="eo-form-control"
+                   placeholder="One-line summary of the caller's need" required maxlength="200">
+            <div class="cs-counter" id="csSubjectCounter">0 / 200</div>
+          </div>
 
-        <div class="col-md-4">
-          <label class="eo-form-label">City</label>
-          <input type="text" name="city" id="cityInput" class="eo-form-control">
-        </div>
-        <div class="col-md-4">
-          <label class="eo-form-label">Area</label>
-          <input type="text" name="area" id="areaInput" class="eo-form-control">
-        </div>
-        <div class="col-md-4">
-          <label class="eo-form-label">Department</label>
-          <select name="department" class="eo-form-select">
-            <option value="">— select department —</option>
-            {% for dept in departments %}
-            <option value="{{ dept.id }}">{{ dept.name }}</option>
-            {% endfor %}
-          </select>
-        </div>
+          <div class="col-12">
+            <label class="eo-form-label d-flex justify-content-between align-items-center">
+              <span>Call summary / request <span class="text-danger">*</span></span>
+              <small class="text-muted">Use templates below to speed up logging</small>
+            </label>
+            <textarea name="summary" id="summaryInput" rows="7" class="eo-form-control"
+                      placeholder="Log what the caller wants, what was discussed, and what needs to happen next." required></textarea>
+            <div class="d-flex justify-content-between mt-1">
+              <small class="text-muted" id="csDictationStatus"></small>
+              <div class="cs-counter" id="csSummaryCounter">0 chars · 0 words</div>
+            </div>
+          </div>
 
-        <div class="col-md-8">
-          <label class="eo-form-label">Subject</label>
-          <input type="text" name="subject" class="eo-form-control" required>
-        </div>
-        <div class="col-md-4">
-          <label class="eo-form-label">Priority</label>
-          <select name="priority" class="eo-form-select">
-            <option value="low">Low</option>
-            <option value="medium" selected>Medium</option>
-            <option value="high">High</option>
-            <option value="critical">Critical</option>
-          </select>
-        </div>
+          <!-- Quick templates -->
+          <div class="col-12">
+            <label class="eo-form-label"><i class="bi bi-lightning-charge"></i> Quick Templates</label>
+            <div class="cs-template-grid">
+              <button type="button" class="cs-template-btn" data-tpl="sales_inquiry">
+                <i class="bi bi-cart-plus"></i> <strong>Sales Inquiry</strong><br>
+                <span class="text-muted">Pricing / quote request</span>
+              </button>
+              <button type="button" class="cs-template-btn" data-tpl="complaint">
+                <i class="bi bi-exclamation-triangle"></i> <strong>Complaint</strong><br>
+                <span class="text-muted">Service / product issue</span>
+              </button>
+              <button type="button" class="cs-template-btn" data-tpl="maintenance">
+                <i class="bi bi-tools"></i> <strong>Maintenance</strong><br>
+                <span class="text-muted">Repair / servicing visit</span>
+              </button>
+              <button type="button" class="cs-template-btn" data-tpl="callback">
+                <i class="bi bi-arrow-counterclockwise"></i> <strong>Callback</strong><br>
+                <span class="text-muted">Return call needed</span>
+              </button>
+              <button type="button" class="cs-template-btn" data-tpl="info">
+                <i class="bi bi-info-circle"></i> <strong>Information</strong><br>
+                <span class="text-muted">General inquiry</span>
+              </button>
+              <button type="button" class="cs-template-btn" data-tpl="followup">
+                <i class="bi bi-calendar-check"></i> <strong>Follow-up</strong><br>
+                <span class="text-muted">Checking on prior issue</span>
+              </button>
+            </div>
+          </div>
 
-        <div class="col-12">
-          <label class="eo-form-label">Call summary / request</label>
-          <textarea name="summary" rows="6" class="eo-form-control" placeholder="Log what the caller wants, what was discussed, and what needs to happen next." required></textarea>
-        </div>
+          <!-- Priority picker -->
+          <div class="col-md-8">
+            <label class="eo-form-label">Priority</label>
+            <div class="cs-priority-group" id="csPriorityGroup">
+              <div class="cs-priority-chip" data-val="low">Low</div>
+              <div class="cs-priority-chip active" data-val="medium">Medium</div>
+              <div class="cs-priority-chip" data-val="high">High</div>
+              <div class="cs-priority-chip" data-val="critical">Critical</div>
+            </div>
+            <input type="hidden" name="priority" id="priorityInput" value="medium">
+          </div>
 
-        <div class="col-md-4">
-          <label class="eo-form-label">Immediate outcome</label>
-          <select name="outcome" class="eo-form-select">
-            <option value="">— select outcome —</option>
-            <option value="resolved">Resolved by Agent</option>
-            <option value="routed">Routed</option>
-            <option value="forwarded">Forwarded</option>
-            <option value="callback">Callback Needed</option>
-            <option value="escalated">Escalated</option>
-          </select>
-        </div>
-
-        <div class="col-md-4">
-          <label class="eo-form-label">Callback number</label>
-          <input type="text" name="callback_number" class="eo-form-control">
-        </div>
-        <div class="col-md-4">
-          <label class="eo-form-label">Feedback email</label>
-          <input type="email" name="callback_email" class="eo-form-control">
-        </div>
-
-        <div class="col-md-4">
-          <label class="eo-form-check">
-            <input type="checkbox" class="eo-form-check-input" name="create_ticket" checked>
-            <span class="eo-form-check-label">Create ticket from this call</span>
-          </label>
-        </div>
-        <div class="col-md-4">
-          <label class="eo-form-check">
-            <input type="checkbox" class="eo-form-check-input" name="callback_required">
-            <span class="eo-form-check-label">Customer needs callback</span>
-          </label>
-        </div>
-        <div class="col-md-4">
-          <label class="eo-form-check">
-            <input type="checkbox" class="eo-form-check-input" name="needs_feedback" checked>
-            <span class="eo-form-check-label">Customer wants feedback request</span>
-          </label>
-        </div>
-
-        <div class="col-12">
-          <label class="eo-form-label">Customer notes</label>
-          <textarea name="customer_notes" rows="3" class="eo-form-control" placeholder="Special preference, product history, address guidance, key note, or any relationship context."></textarea>
+          <!-- Sentiment -->
+          <div class="col-md-4">
+            <label class="eo-form-label">Caller mood</label>
+            <div class="cs-sentiment-bar" id="csSentimentBar">
+              <button type="button" class="cs-sentiment-btn" data-mood="angry" title="Angry">😠</button>
+              <button type="button" class="cs-sentiment-btn" data-mood="frustrated" title="Frustrated">😕</button>
+              <button type="button" class="cs-sentiment-btn active" data-mood="neutral" title="Neutral">😐</button>
+              <button type="button" class="cs-sentiment-btn" data-mood="happy" title="Happy">🙂</button>
+              <button type="button" class="cs-sentiment-btn" data-mood="delighted" title="Delighted">😄</button>
+            </div>
+            <input type="hidden" name="caller_mood" id="moodInput" value="neutral">
+          </div>
         </div>
       </div>
 
-      <div class="mt-4 d-flex gap-2 flex-wrap">
-        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-save"></i> Log Call</button>
-        <button type="reset" class="eo-btn eo-btn-secondary"><i class="bi bi-arrow-clockwise"></i> Reset</button>
+      <!-- ─── TAB: Customer Info ─── -->
+      <div class="cs-tab-panel" data-panel="customer" style="display:none">
+        <div id="csCustomerStatus" class="mb-3"></div>
+
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="eo-form-label">Customer full name</label>
+            <input type="text" name="full_name" id="customerNameInput" class="eo-form-control"
+                   placeholder="Required for new callers">
+          </div>
+          <div class="col-md-6">
+            <label class="eo-form-label">Company name</label>
+            <input type="text" name="company_name" id="companyNameInput" class="eo-form-control">
+          </div>
+          <div class="col-md-6">
+            <label class="eo-form-label">Email</label>
+            <input type="email" name="email" id="customerEmailInput" class="eo-form-control">
+          </div>
+          <div class="col-md-6">
+            <label class="eo-form-label">Preferred contact method</label>
+            <select name="preferred_contact_method" id="preferredContactInput" class="eo-form-select">
+              <option value="phone">📞 Phone</option>
+              <option value="email">✉️ Email</option>
+              <option value="sms">💬 SMS</option>
+              <option value="whatsapp">🟢 WhatsApp</option>
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="eo-form-label">City</label>
+            <input type="text" name="city" id="cityInput" class="eo-form-control" list="csCityList">
+            <datalist id="csCityList">
+              <option value="Banjul"><option value="Serrekunda"><option value="Brikama">
+              <option value="Bakau"><option value="Farafenni"><option value="Basse Santa Su">
+            </datalist>
+          </div>
+          <div class="col-md-4">
+            <label class="eo-form-label">Area</label>
+            <input type="text" name="area" id="areaInput" class="eo-form-control">
+          </div>
+          <div class="col-md-4">
+            <label class="eo-form-label">Customer notes</label>
+            <input type="text" name="customer_notes" class="eo-form-control"
+                   placeholder="e.g. prefers morning calls">
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── TAB: Routing ─── -->
+      <div class="cs-tab-panel" data-panel="routing" style="display:none">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="eo-form-label">Department</label>
+            <select name="department" class="eo-form-select">
+              <option value="">— select department —</option>
+              {% for dept in departments %}
+              <option value="{{ dept.id }}">{{ dept.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="eo-form-label">Immediate outcome</label>
+            <select name="outcome" class="eo-form-select">
+              <option value="">— select outcome —</option>
+              <option value="resolved">✅ Resolved by Agent</option>
+              <option value="routed">↗️ Routed to Department</option>
+              <option value="forwarded">📤 Forwarded</option>
+              <option value="callback">🔄 Callback Needed</option>
+              <option value="escalated">🚨 Escalated</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="eo-form-label">Callback number</label>
+            <input type="text" name="callback_number" id="callbackNumberInput" class="eo-form-control">
+          </div>
+          <div class="col-md-6">
+            <label class="eo-form-label">Feedback email</label>
+            <input type="email" name="callback_email" class="eo-form-control">
+          </div>
+
+          <div class="col-12">
+            <div class="cs-card" style="background:#f8fafc;padding:12px">
+              <div class="row g-2">
+                <div class="col-md-4">
+                  <label class="eo-form-check">
+                    <input type="checkbox" class="eo-form-check-input" name="create_ticket" checked>
+                    <span class="eo-form-check-label"><i class="bi bi-ticket"></i> Create ticket from this call</span>
+                  </label>
+                </div>
+                <div class="col-md-4">
+                  <label class="eo-form-check">
+                    <input type="checkbox" class="eo-form-check-input" name="callback_required">
+                    <span class="eo-form-check-label"><i class="bi bi-telephone-outbound"></i> Customer needs callback</span>
+                  </label>
+                </div>
+                <div class="col-md-4">
+                  <label class="eo-form-check">
+                    <input type="checkbox" class="eo-form-check-input" name="needs_feedback" checked>
+                    <span class="eo-form-check-label"><i class="bi bi-star"></i> Send feedback request</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Submit bar -->
+      <div class="mt-4 d-flex gap-2 flex-wrap align-items-center">
+        <button type="submit" class="eo-btn eo-btn-primary">
+          <i class="bi bi-save"></i> Log Call <kbd style="background:rgba(255,255,255,.25);margin-left:6px">Ctrl+↵</kbd>
+        </button>
+        <button type="button" class="eo-btn eo-btn-secondary" onclick="csSaveDraft()">
+          <i class="bi bi-cloud-arrow-down"></i> Save Draft
+        </button>
+        <button type="reset" class="eo-btn eo-btn-secondary" onclick="csClearForm()">
+          <i class="bi bi-arrow-clockwise"></i> Reset
+        </button>
+        <span class="ms-auto text-muted small" id="csAutoSaveLabel"></span>
       </div>
     </form>
   </div>
 
-  <div class="col-lg-4">
-    <div class="cs-side-card mb-3">
-      <h3 class="eo-card-title"><i class="bi bi-person-vcard"></i> Customer Preview</h3>
+  <!-- ═══════════ SIDEBAR ═══════════ -->
+  <div class="col-xl-4">
+    <!-- Customer preview -->
+    <div class="cs-card mb-3">
+      <h3 class="cs-section-title"><i class="bi bi-person-vcard"></i> Customer Preview</h3>
       <div id="lookupResult" class="cs-preview-box text-muted">
-        Lookup a phone number to see existing customer details, recent calls, and open tickets.
+        <div class="text-center py-3">
+          <i class="bi bi-person-lines-fill" style="font-size:2rem;color:#cbd5e1"></i>
+          <div class="mt-2">Look up a phone number to see customer details, call history, and open tickets.</div>
+        </div>
       </div>
     </div>
 
-    <div class="cs-side-card mb-3">
-      <h3 class="eo-card-title"><i class="bi bi-clock-history"></i> Recent Calls</h3>
-      <div class="list-group list-group-flush">
+    <!-- Call scripts -->
+    <div class="cs-card mb-3">
+      <h3 class="cs-section-title"><i class="bi bi-chat-square-quote"></i> Call Scripts</h3>
+      <div class="cs-script-card" onclick="csCopyText(this.querySelector('.cs-script-body').innerText)">
+        <strong>🎯 Greeting</strong>
+        <div class="cs-script-body">Good day, thank you for calling. My name is {{ request.user.first_name|default:request.user.username }}. How may I help you today?</div>
+      </div>
+      <div class="cs-script-card" onclick="csCopyText(this.querySelector('.cs-script-body').innerText)">
+        <strong>📝 Confirm details</strong>
+        <div class="cs-script-body">So that I may assist you properly, could I please confirm your full name and the phone number we should use to reach you?</div>
+      </div>
+      <div class="cs-script-card" onclick="csCopyText(this.querySelector('.cs-script-body').innerText)">
+        <strong>🤝 Handling complaint</strong>
+        <div class="cs-script-body">I completely understand your frustration. Thank you for bringing this to our attention. Let me log this and make sure the right team addresses it today.</div>
+      </div>
+      <div class="cs-script-card" onclick="csCopyText(this.querySelector('.cs-script-body').innerText)">
+        <strong>👋 Closing</strong>
+        <div class="cs-script-body">Thank you for calling. You should receive a confirmation shortly. Is there anything else I can help with today?</div>
+      </div>
+      <small class="text-muted"><i class="bi bi-info-circle"></i> Click any script to copy it.</small>
+    </div>
+
+    <!-- Recent calls -->
+    <div class="cs-card mb-3">
+      <h3 class="cs-section-title"><i class="bi bi-clock-history"></i> Recent Calls</h3>
+      <div>
         {% for call in recent_calls %}
-        <div class="list-group-item px-0">
-          <div class="fw-bold">{{ call.subject }}</div>
-          <small class="text-muted">{% if call.customer %}{{ call.customer.display_name }}{% else %}{{ call.phone_number }}{% endif %} · {{ call.started_at|date:"M j, H:i" }}</small>
+        <div class="cs-recent-item">
+          <div class="cs-recent-icon"><i class="bi bi-telephone-inbound"></i></div>
+          <div style="flex:1;min-width:0">
+            <div class="fw-bold text-truncate">{{ call.subject }}</div>
+            <small class="text-muted d-block text-truncate">
+              {% if call.customer %}{{ call.customer.display_name }}{% else %}{{ call.phone_number }}{% endif %}
+            </small>
+            <small class="text-muted">{{ call.started_at|date:"M j, H:i" }}</small>
+          </div>
         </div>
         {% empty %}
-        <div class="text-muted">No recent calls.</div>
+        <div class="cs-empty">No recent calls.</div>
         {% endfor %}
       </div>
     </div>
 
-    <div class="cs-side-card">
-      <h3 class="eo-card-title"><i class="bi bi-ticket-detailed"></i> Recent Tickets</h3>
-      <div class="list-group list-group-flush">
+    <!-- Recent tickets -->
+    <div class="cs-card">
+      <h3 class="cs-section-title"><i class="bi bi-ticket-detailed"></i> Recent Tickets</h3>
+      <div>
         {% for ticket in recent_tickets %}
-        <a href="{% url 'customer_service_ticket_detail' ticket.pk %}" class="list-group-item list-group-item-action px-0">
-          <div class="fw-bold">{{ ticket.ticket_no }}</div>
-          <small class="text-muted">{{ ticket.subject }}</small>
+        <a href="{% url 'customer_service_ticket_detail' ticket.pk %}" class="cs-recent-item" style="text-decoration:none;color:inherit">
+          <div class="cs-recent-icon" style="background:#f0fdf4;color:#16a34a"><i class="bi bi-ticket"></i></div>
+          <div style="flex:1;min-width:0">
+            <div class="fw-bold">{{ ticket.ticket_no }}</div>
+            <small class="text-muted d-block text-truncate">{{ ticket.subject }}</small>
+          </div>
         </a>
         {% empty %}
-        <div class="text-muted">No recent tickets.</div>
+        <div class="cs-empty">No recent tickets.</div>
         {% endfor %}
       </div>
     </div>
   </div>
 </div>
 
+<!-- Shortcuts modal -->
+<div id="csShortcutsModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:9998;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#fff;border-radius:16px;padding:24px;max-width:480px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h4 class="mb-0"><i class="bi bi-keyboard"></i> Keyboard Shortcuts</h4>
+      <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="csToggleShortcuts()">✕</button>
+    </div>
+    <table class="table table-sm">
+      <tbody>
+        <tr><td><kbd>/</kbd></td><td>Focus phone lookup</td></tr>
+        <tr><td><kbd>Enter</kbd> in phone field</td><td>Run lookup</td></tr>
+        <tr><td><kbd>Ctrl</kbd> + <kbd>Enter</kbd></td><td>Submit call log</td></tr>
+        <tr><td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>K</kbd></td><td>Clear the form</td></tr>
+        <tr><td><kbd>Ctrl</kbd> + <kbd>1/2/3</kbd></td><td>Switch tabs</td></tr>
+        <tr><td><kbd>Alt</kbd> + <kbd>C</kbd></td><td>Start / end call timer</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div id="csToast" class="cs-toast"></div>
+
 <script>
-async function lookupCustomer() {
-  const phone = document.getElementById('lookupPhone').value.trim();
-  const resultBox = document.getElementById('lookupResult');
-  if (!phone) {
-    resultBox.innerHTML = '<div class="text-danger">Enter a phone number first.</div>';
-    return;
-  }
+/* ───────────────────────────────────────────────────────────
+   CALL DESK - advanced interactions
+   ─────────────────────────────────────────────────────────── */
 
-  resultBox.innerHTML = '<div class="text-muted">Checking caller history...</div>';
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-  const url = "{% url 'customer_service_phone_lookup' %}?phone=" + encodeURIComponent(phone);
-  const res = await fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}});
-  const data = await res.json();
-
-  document.getElementById('phoneNumberInput').value = phone;
-
-  if (!data.exists) {
-    resultBox.innerHTML = '<div class="text-warning fw-bold mb-2">New caller</div><div class="text-muted">No customer record found. Fill customer details to create a new contact.</div>';
-    document.getElementById('customerNameInput').value = '';
-    document.getElementById('companyNameInput').value = '';
-    document.getElementById('customerEmailInput').value = '';
-    document.getElementById('cityInput').value = '';
-    document.getElementById('areaInput').value = '';
-    return;
-  }
-
-  document.getElementById('customerNameInput').value = data.customer.full_name || '';
-  document.getElementById('companyNameInput').value = data.customer.company_name || '';
-  document.getElementById('customerEmailInput').value = data.customer.email || '';
-  document.getElementById('cityInput').value = data.customer.city || '';
-  document.getElementById('areaInput').value = data.customer.area || '';
-  document.getElementById('preferredContactInput').value = data.customer.preferred_contact_method || 'phone';
-
-  let html = '<div class="cs-customer-chip mb-3"><i class="bi bi-person-check"></i> Existing customer found</div>';
-  html += '<div class="mb-2"><strong>' + data.customer.display_name + '</strong></div>';
-  if (data.customer.email) html += '<div class="small text-muted mb-1"><i class="bi bi-envelope"></i> ' + data.customer.email + '</div>';
-  if (data.phones && data.phones.length) {
-    html += '<div class="small mb-2"><strong>Numbers:</strong> ' + data.phones.map(p => p.number + (p.primary ? ' (primary)' : '')).join(', ') + '</div>';
-  }
-
-  html += '<hr><div class="small fw-bold mb-1">Open Tickets</div>';
-  if (data.open_tickets.length) {
-    html += '<ul class="small mb-3">';
-    data.open_tickets.forEach(t => {
-      html += '<li><strong>' + t.ticket_no + '</strong> — ' + t.subject + ' <span class="text-muted">(' + t.status + ')</span></li>';
-    });
-    html += '</ul>';
-  } else {
-    html += '<div class="small text-muted mb-3">No open tickets.</div>';
-  }
-
-  html += '<div class="small fw-bold mb-1">Recent Calls</div>';
-  if (data.recent_calls.length) {
-    html += '<ul class="small mb-0">';
-    data.recent_calls.forEach(c => {
-      html += '<li>' + c.subject + ' <span class="text-muted">(' + c.started_at + ')</span></li>';
-    });
-    html += '</ul>';
-  } else {
-    html += '<div class="small text-muted">No call history.</div>';
-  }
-
-  resultBox.innerHTML = html;
+/* ---------- Toast ---------- */
+function csToast(msg, type = 'info') {
+  const t = $('#csToast');
+  const colors = {info:'#1e293b', success:'#047857', warn:'#b45309', danger:'#b91c1c'};
+  t.style.background = colors[type] || colors.info;
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(t._tmr);
+  t._tmr = setTimeout(() => { t.style.display = 'none'; }, 2400);
 }
+
+/* ---------- Tabs ---------- */
+$$('.cs-tab').forEach(tab => {
+  tab.addEventListener('click', () => csSwitchTab(tab.dataset.tab));
+});
+function csSwitchTab(name) {
+  $$('.cs-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  $$('.cs-tab-panel').forEach(p => p.style.display = p.dataset.panel === name ? '' : 'none');
+}
+
+/* ---------- Priority chips ---------- */
+$$('#csPriorityGroup .cs-priority-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    $$('#csPriorityGroup .cs-priority-chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    $('#priorityInput').value = chip.dataset.val;
+  });
+});
+
+/* ---------- Sentiment ---------- */
+$$('#csSentimentBar .cs-sentiment-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    $$('#csSentimentBar .cs-sentiment-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    $('#moodInput').value = btn.dataset.mood;
+  });
+});
+
+/* ---------- Char counters ---------- */
+function csUpdateCounter(inputId, counterId, max, wordMode = false) {
+  const el = $('#' + inputId);
+  const counter = $('#' + counterId);
+  if (!el || !counter) return;
+  el.addEventListener('input', () => {
+    const len = el.value.length;
+    if (wordMode) {
+      const words = el.value.trim() ? el.value.trim().split(/\s+/).length : 0;
+      counter.textContent = `${len} chars · ${words} words`;
+    } else {
+      counter.textContent = `${len} / ${max}`;
+    }
+    counter.classList.toggle('cs-counter-warn', len > max * 0.8);
+    counter.classList.toggle('cs-counter-danger', len >= max);
+  });
+}
+csUpdateCounter('subjectInput', 'csSubjectCounter', 200);
+csUpdateCounter('summaryInput', 'csSummaryCounter', 5000, true);
+
+/* ---------- Recent phone pills (from localStorage) ---------- */
+function csRenderRecentPhones() {
+  const list = JSON.parse(localStorage.getItem('cs_recent_phones') || '[]');
+  const wrap = $('#csRecentPhones');
+  if (!list.length) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = '<small class="text-muted me-1">Recent:</small>' +
+    list.slice(0, 6).map(n => `<span class="cs-phone-pill" onclick="csUsePhone('${n}')">${n}</span>`).join('');
+}
+function csUsePhone(n) {
+  $('#lookupPhone').value = n;
+  lookupCustomer();
+}
+function csRememberPhone(n) {
+  let list = JSON.parse(localStorage.getItem('cs_recent_phones') || '[]');
+  list = [n, ...list.filter(x => x !== n)].slice(0, 10);
+  localStorage.setItem('cs_recent_phones', JSON.stringify(list));
+  csRenderRecentPhones();
+}
+csRenderRecentPhones();
+
+/* ---------- Quick templates ---------- */
+const CS_TEMPLATES = {
+  sales_inquiry: {
+    call_type: 'sales', priority: 'medium',
+    subject: 'Sales inquiry — ',
+    summary: "Caller is interested in:\n• Product / service: \n• Quantity or scope: \n• Budget: \n• Timeline: \n\nNext step: prepare and send a quotation."
+  },
+  complaint: {
+    call_type: 'complaint', priority: 'high',
+    subject: 'Complaint — ',
+    summary: "Issue described by caller:\n\n\nImpact on customer: \nResolution expected: \n\nAction taken during the call: \nFollow-up: "
+  },
+  maintenance: {
+    call_type: 'maintenance', priority: 'medium',
+    subject: 'Maintenance request — ',
+    summary: "Equipment / product: \nProblem description: \nLocation / site: \nPreferred visit time: \n\nNext step: dispatch technician / schedule visit."
+  },
+  callback: {
+    call_type: 'callback', priority: 'medium',
+    subject: 'Callback requested — ',
+    summary: "Reason for callback: \nBest time to reach caller: \nPreferred method (phone / WhatsApp / SMS): \n\nNext step: return the call within agreed window."
+  },
+  info: {
+    call_type: 'general', priority: 'low',
+    subject: 'General inquiry — ',
+    summary: "Caller question: \nInformation provided: \nMaterial to send by email: "
+  },
+  followup: {
+    call_type: 'followup', priority: 'medium',
+    subject: 'Follow-up on — ',
+    summary: "Original ticket / reference: \nStatus update given to caller: \nCaller feedback: \n\nNext step: "
+  }
+};
+$$('.cs-template-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tpl = CS_TEMPLATES[btn.dataset.tpl];
+    if (!tpl) return;
+    if ($('#summaryInput').value.trim() &&
+        !confirm('Overwrite current summary with template?')) return;
+    $('#callTypeInput').value = tpl.call_type;
+    $('#subjectInput').value = tpl.subject;
+    $('#summaryInput').value = tpl.summary;
+    $$('#csPriorityGroup .cs-priority-chip').forEach(c =>
+      c.classList.toggle('active', c.dataset.val === tpl.priority));
+    $('#priorityInput').value = tpl.priority;
+    $('#subjectInput').dispatchEvent(new Event('input'));
+    $('#summaryInput').dispatchEvent(new Event('input'));
+    $('#subjectInput').focus();
+    csToast('Template applied', 'success');
+  });
+});
+
+/* ---------- Lookup ---------- */
+async function lookupCustomer() {
+  const phone = $('#lookupPhone').value.trim();
+  const resultBox = $('#lookupResult');
+  const statusBox = $('#csCustomerStatus');
+  if (!phone) {
+    csToast('Enter a phone number first', 'warn');
+    $('#lookupPhone').focus();
+    return;
+  }
+
+  resultBox.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary" role="status"></div><div class="text-muted mt-2 small">Checking caller history…</div></div>';
+
+  try {
+    const url = "{% url 'customer_service_phone_lookup' %}?phone=" + encodeURIComponent(phone);
+    const res = await fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}});
+    const data = await res.json();
+
+    $('#phoneNumberInput').value = phone;
+    $('#callbackNumberInput').value = phone;
+    csRememberPhone(phone);
+    $('#csCallerLabel').textContent = 'Caller: ' + phone;
+
+    if (!data.exists) {
+      resultBox.innerHTML = `
+        <div class="cs-customer-hero cs-new">
+          <div class="cs-avatar"><i class="bi bi-person-plus"></i></div>
+          <div>
+            <div class="fw-bold">New caller</div>
+            <small class="text-muted">Not in contacts — fill customer info tab to save.</small>
+          </div>
+        </div>
+        <div class="mt-3 small">
+          <i class="bi bi-lightbulb text-warning"></i> Switch to the <strong>Customer Info</strong> tab to capture their name and details.
+        </div>`;
+      statusBox.innerHTML = `<div class="alert alert-warning mb-0 py-2 small">
+        <i class="bi bi-person-plus"></i> <strong>New caller</strong> — please enter the customer's full name below.
+      </div>`;
+      ['customerNameInput','companyNameInput','customerEmailInput','cityInput','areaInput'].forEach(id => $('#'+id).value = '');
+      csToast('New caller — add contact details', 'info');
+      return;
+    }
+
+    // Existing customer — fill form
+    const c = data.customer;
+    $('#customerNameInput').value = c.full_name || '';
+    $('#companyNameInput').value = c.company_name || '';
+    $('#customerEmailInput').value = c.email || '';
+    $('#cityInput').value = c.city || '';
+    $('#areaInput').value = c.area || '';
+    $('#preferredContactInput').value = c.preferred_contact_method || 'phone';
+
+    // Compute "health score"
+    const openTicketCount = (data.open_tickets || []).length;
+    let health = 'good', healthLabel = 'Healthy', healthIcon = 'bi-emoji-smile';
+    if (openTicketCount >= 3) { health = 'bad'; healthLabel = 'At-risk'; healthIcon = 'bi-emoji-frown'; }
+    else if (openTicketCount >= 1) { health = 'warn'; healthLabel = 'Watch'; healthIcon = 'bi-emoji-neutral'; }
+
+    const initials = (c.full_name || c.display_name || '?').split(' ').filter(Boolean).slice(0,2).map(s => s[0]).join('').toUpperCase() || '?';
+
+    let html = `
+      <div class="cs-customer-hero mb-3">
+        <div class="cs-avatar">${initials}</div>
+        <div style="flex:1;min-width:0">
+          <div class="fw-bold text-truncate">${c.display_name}</div>
+          <small class="text-muted d-block text-truncate">${c.email || 'No email on file'}</small>
+          <div class="mt-1 d-flex gap-1 flex-wrap">
+            <span class="cs-health-score cs-health-${health}"><i class="bi ${healthIcon}"></i> ${healthLabel}</span>
+            <span class="cs-health-score" style="background:#f1f5f9;color:#475569">${openTicketCount} open</span>
+          </div>
+        </div>
+      </div>`;
+
+    if (data.phones && data.phones.length) {
+      html += '<div class="small mb-2"><strong>Numbers:</strong> ' +
+        data.phones.map(p => `<span class="cs-phone-pill">${p.number}${p.primary ? ' ★' : ''}</span>`).join(' ') + '</div>';
+    }
+
+    if (c.city || c.area) {
+      html += `<div class="small text-muted mb-2"><i class="bi bi-geo-alt"></i> ${[c.area, c.city].filter(Boolean).join(', ')}</div>`;
+    }
+
+    html += '<hr class="my-2"><div class="small fw-bold mb-1">🎫 Open Tickets</div>';
+    if (data.open_tickets.length) {
+      html += '<div class="small mb-2">';
+      data.open_tickets.forEach(t => {
+        html += `<div class="border rounded p-2 mb-1"><strong>${t.ticket_no}</strong> — ${t.subject} <span class="text-muted">(${t.status})</span></div>`;
+      });
+      html += '</div>';
+    } else {
+      html += '<div class="small text-muted mb-2">No open tickets.</div>';
+    }
+
+    html += '<div class="small fw-bold mb-1">📞 Recent Calls</div>';
+    if (data.recent_calls.length) {
+      html += '<div class="small">';
+      data.recent_calls.forEach(cc => {
+        html += `<div class="border rounded p-2 mb-1">${cc.subject}<br><small class="text-muted">${cc.started_at}${cc.outcome ? ' · ' + cc.outcome : ''}</small></div>`;
+      });
+      html += '</div>';
+    } else {
+      html += '<div class="small text-muted">No call history.</div>';
+    }
+
+    resultBox.innerHTML = html;
+    statusBox.innerHTML = `<div class="alert alert-success mb-0 py-2 small">
+      <i class="bi bi-person-check"></i> <strong>Existing customer:</strong> ${c.display_name} — fields auto-filled.
+    </div>`;
+    csToast('Customer identified', 'success');
+  } catch (err) {
+    resultBox.innerHTML = '<div class="text-danger">Lookup failed. Please try again.</div>';
+    csToast('Lookup failed', 'danger');
+  }
+}
+
+/* ---------- Call timer ---------- */
+let csCallStart = null;
+let csCallTimerInterval = null;
+function csStartCall() {
+  csCallStart = Date.now();
+  $('#csCallBar').classList.add('cs-call-active');
+  $('#csCallStatusText').textContent = 'Call in progress';
+  $('#csStartCallBtn').style.display = 'none';
+  $('#csEndCallBtn').style.display = '';
+  csCallTimerInterval = setInterval(csTickTimer, 1000);
+  csTickTimer();
+  csToast('Call timer started', 'success');
+}
+function csEndCall() {
+  const secs = Math.round((Date.now() - (csCallStart || Date.now())) / 1000);
+  clearInterval(csCallTimerInterval);
+  csCallTimerInterval = null;
+  csCallStart = null;
+  $('#csCallBar').classList.remove('cs-call-active');
+  $('#csCallStatusText').textContent = `Last call: ${csFormatSeconds(secs)}`;
+  $('#csStartCallBtn').style.display = '';
+  $('#csEndCallBtn').style.display = 'none';
+  csToast('Call ended', 'info');
+}
+function csTickTimer() {
+  if (!csCallStart) return;
+  const secs = Math.round((Date.now() - csCallStart) / 1000);
+  $('#csCallTimer').textContent = csFormatSeconds(secs);
+}
+function csFormatSeconds(s) {
+  const h = String(Math.floor(s / 3600)).padStart(2, '0');
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const sec = String(s % 60).padStart(2, '0');
+  return `${h}:${m}:${sec}`;
+}
+
+/* ---------- Clipboard ---------- */
+async function csCopyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    csToast('Copied to clipboard', 'success');
+  } catch { csToast('Copy failed', 'danger'); }
+}
+
+/* ---------- Draft save / autosave ---------- */
+const CS_DRAFT_KEY = 'cs_call_draft';
+const csFieldsToSave = ['phone_number','call_type','full_name','company_name','email','city','area','subject','summary','callback_number','callback_email'];
+
+function csSaveDraft() {
+  const data = {};
+  csFieldsToSave.forEach(n => {
+    const el = document.querySelector(`[name="${n}"]`);
+    if (el) data[n] = el.value;
+  });
+  data.priority = $('#priorityInput').value;
+  data.caller_mood = $('#moodInput').value;
+  data._ts = new Date().toISOString();
+  localStorage.setItem(CS_DRAFT_KEY, JSON.stringify(data));
+  const time = new Date().toLocaleTimeString();
+  $('#csAutoSaveLabel').innerHTML = `<i class="bi bi-cloud-check text-success"></i> Draft saved at ${time}`;
+}
+function csRestoreDraft() {
+  const raw = localStorage.getItem(CS_DRAFT_KEY);
+  if (!raw) return;
+  try {
+    const d = JSON.parse(raw);
+    if (!confirm('A draft call log was found. Restore it?')) {
+      localStorage.removeItem(CS_DRAFT_KEY);
+      return;
+    }
+    csFieldsToSave.forEach(n => {
+      const el = document.querySelector(`[name="${n}"]`);
+      if (el && d[n] !== undefined) el.value = d[n];
+    });
+    if (d.priority) {
+      $('#priorityInput').value = d.priority;
+      $$('#csPriorityGroup .cs-priority-chip').forEach(c => c.classList.toggle('active', c.dataset.val === d.priority));
+    }
+    if (d.caller_mood) {
+      $('#moodInput').value = d.caller_mood;
+      $$('#csSentimentBar .cs-sentiment-btn').forEach(b => b.classList.toggle('active', b.dataset.mood === d.caller_mood));
+    }
+    $('#subjectInput').dispatchEvent(new Event('input'));
+    $('#summaryInput').dispatchEvent(new Event('input'));
+    csToast('Draft restored', 'success');
+  } catch {}
+}
+setInterval(csSaveDraft, 30000);
+window.addEventListener('load', () => setTimeout(csRestoreDraft, 400));
+
+/* Clear draft after successful submit */
+$('#csCallForm').addEventListener('submit', () => {
+  localStorage.removeItem(CS_DRAFT_KEY);
+});
+
+function csClearForm() {
+  if (!confirm('Clear all form fields?')) return;
+  $('#csCallForm').reset();
+  $('#lookupPhone').value = '';
+  $('#priorityInput').value = 'medium';
+  $('#moodInput').value = 'neutral';
+  $$('#csPriorityGroup .cs-priority-chip').forEach(c => c.classList.toggle('active', c.dataset.val === 'medium'));
+  $$('#csSentimentBar .cs-sentiment-btn').forEach(b => b.classList.toggle('active', b.dataset.mood === 'neutral'));
+  $('#lookupResult').innerHTML = '<div class="text-center py-3"><i class="bi bi-person-lines-fill" style="font-size:2rem;color:#cbd5e1"></i><div class="mt-2 text-muted">Look up a phone number to see customer details.</div></div>';
+  $('#csCustomerStatus').innerHTML = '';
+  localStorage.removeItem(CS_DRAFT_KEY);
+  $('#subjectInput').dispatchEvent(new Event('input'));
+  $('#summaryInput').dispatchEvent(new Event('input'));
+  csToast('Form cleared', 'info');
+}
+
+/* ---------- Shortcuts modal ---------- */
+function csToggleShortcuts() {
+  const m = $('#csShortcutsModal');
+  m.style.display = (m.style.display === 'flex') ? 'none' : 'flex';
+}
+$('#csShortcutsModal').addEventListener('click', (e) => {
+  if (e.target.id === 'csShortcutsModal') csToggleShortcuts();
+});
+
+/* ---------- Keyboard shortcuts ---------- */
+document.addEventListener('keydown', (e) => {
+  const tag = document.activeElement?.tagName;
+  const inField = ['INPUT','TEXTAREA','SELECT'].includes(tag);
+
+  // / → focus lookup (unless typing)
+  if (e.key === '/' && !inField) {
+    e.preventDefault(); $('#lookupPhone').focus();
+  }
+
+  // Ctrl+Enter → submit
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    $('#csCallForm').requestSubmit();
+  }
+
+  // Ctrl+Shift+K → clear
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'K' || e.key === 'k')) {
+    e.preventDefault(); csClearForm();
+  }
+
+  // Ctrl+1/2/3 → tabs
+  if ((e.ctrlKey || e.metaKey) && ['1','2','3'].includes(e.key)) {
+    e.preventDefault();
+    csSwitchTab({'1':'details','2':'customer','3':'routing'}[e.key]);
+  }
+
+  // Alt+C → start/end call
+  if (e.altKey && (e.key === 'c' || e.key === 'C')) {
+    e.preventDefault();
+    if (csCallStart) csEndCall(); else csStartCall();
+  }
+
+  // ? → show shortcuts
+  if (e.key === '?' && !inField) {
+    e.preventDefault(); csToggleShortcuts();
+  }
+});
+
+/* ---------- Form validation hint ---------- */
+$('#csCallForm').addEventListener('submit', (e) => {
+  const subject = $('#subjectInput').value.trim();
+  const summary = $('#summaryInput').value.trim();
+  const phone = $('#phoneNumberInput').value.trim();
+  if (!phone || !subject || !summary) {
+    e.preventDefault();
+    csToast('Please fill phone, subject, and summary', 'warn');
+    if (!phone) { csSwitchTab('details'); $('#phoneNumberInput').focus(); }
+    else if (!subject) { csSwitchTab('details'); $('#subjectInput').focus(); }
+    else { csSwitchTab('details'); $('#summaryInput').focus(); }
+  }
+});
 </script>
 {% endblock %}

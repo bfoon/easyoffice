@@ -1,106 +1,529 @@
-
 {% extends "base.html" %}
-{% block title %}Customer Detail{% endblock %}
+{% block title %}{{ customer.display_name }} · Customer{% endblock %}
 {% block breadcrumb %}<a href="{% url 'customer_service_dashboard' %}">Customer Service</a> / <a href="{% url 'customer_service_customer_list' %}">Contacts</a> / {{ customer.display_name }}{% endblock %}
 {% block content %}
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title"><i class="bi bi-person-vcard"></i> {{ customer.display_name }}</h1>
-    <p class="eo-page-subtitle">Contact history, tickets, and service quality feedback for this customer.</p>
+<style>
+  :root {
+    --cs-primary: #2563eb;
+    --cs-success: #10b981;
+    --cs-warning: #f59e0b;
+    --cs-danger: #ef4444;
+    --cs-purple: #8b5cf6;
+  }
+
+  .cs-card {
+    background: #fff;
+    border: 1px solid var(--eo-border, #e5e7eb);
+    border-radius: 16px;
+    padding: 18px;
+    margin-bottom: 14px;
+    box-shadow: 0 4px 14px rgba(15,23,42,.03);
+  }
+  .cs-card-title {
+    font-size: .95rem; font-weight: 700; color: #0f172a;
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 0 14px 0;
+  }
+  .cs-card-title i { color: var(--cs-primary); }
+
+  /* Hero */
+  .cs-customer-hero {
+    background: linear-gradient(135deg, #1e3a8a 0%, #5b21b6 100%);
+    color: #fff;
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 16px;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    box-shadow: 0 10px 30px rgba(30,58,138,.25);
+  }
+  .cs-customer-hero::before {
+    content:''; position: absolute; top:-50%; right:-50%;
+    width:100%; height:200%;
+    background: radial-gradient(circle, rgba(255,255,255,.12) 0%, transparent 50%);
+    pointer-events: none;
+  }
+  .cs-hero-avatar {
+    width: 90px; height: 90px; border-radius: 50%;
+    background: linear-gradient(135deg, #fff 0%, #f1f5f9 100%);
+    color: var(--cs-primary);
+    font-size: 2rem; font-weight: 800;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 6px 20px rgba(0,0,0,.15);
+  }
+  .cs-hero-info { flex: 1; min-width: 0; z-index: 1; }
+  .cs-hero-name { font-size: 1.6rem; font-weight: 700; margin: 0; }
+  .cs-hero-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .8rem;
+    opacity: .8;
+    background: rgba(255,255,255,.15);
+    padding: 2px 10px; border-radius: 8px;
+    display: inline-block; margin-top: 4px;
+  }
+  .cs-hero-meta {
+    display: flex; gap: 16px; flex-wrap: wrap;
+    margin-top: 12px; font-size: .85rem; opacity: .9;
+  }
+
+  /* KPI mini cards */
+  .cs-mini-stats { display: flex; gap: 10px; flex-wrap: wrap; }
+  .cs-mini-stat {
+    flex: 1; min-width: 110px;
+    background: rgba(255,255,255,.15);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,.2);
+    border-radius: 12px;
+    padding: 10px 14px;
+  }
+  .cs-mini-stat .lbl {
+    font-size: .68rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .06em;
+    opacity: .8;
+  }
+  .cs-mini-stat .val {
+    font-size: 1.5rem; font-weight: 800; line-height: 1.2;
+  }
+
+  /* Contact info */
+  .cs-contact-row {
+    padding: 10px 0;
+    display: flex; gap: 10px; align-items: center;
+    border-bottom: 1px dashed #e2e8f0;
+  }
+  .cs-contact-row:last-child { border-bottom: none; }
+  .cs-contact-icon {
+    width: 32px; height: 32px; border-radius: 10px;
+    background: #eff6ff; color: var(--cs-primary);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .cs-contact-copy {
+    background: transparent; border: none;
+    color: #94a3b8; cursor: pointer;
+    padding: 4px 8px; border-radius: 4px;
+    transition: all .15s;
+  }
+  .cs-contact-copy:hover { background: #f1f5f9; color: var(--cs-primary); }
+
+  /* Rating star display */
+  .cs-star-rating { display: inline-flex; gap: 2px; font-size: .9rem; }
+  .cs-star-rating .filled { color: #fbbf24; }
+  .cs-star-rating .empty { color: #e2e8f0; }
+
+  /* Tabs */
+  .cs-tabs {
+    display: flex; gap: 2px;
+    background: #f8fafc;
+    padding: 4px;
+    border-radius: 10px;
+    margin-bottom: 14px;
+  }
+  .cs-tab {
+    flex: 1;
+    padding: 8px 14px;
+    background: transparent;
+    border: none; border-radius: 8px;
+    font-weight: 600; font-size: .85rem;
+    color: #64748b; cursor: pointer;
+    transition: all .15s;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .cs-tab:hover { color: var(--cs-primary); }
+  .cs-tab.active {
+    background: #fff; color: var(--cs-primary);
+    box-shadow: 0 2px 6px rgba(0,0,0,.05);
+  }
+  .cs-tab-count {
+    background: #e2e8f0;
+    padding: 1px 8px; border-radius: 999px;
+    font-size: .7rem; color: #475569;
+  }
+  .cs-tab.active .cs-tab-count {
+    background: var(--cs-primary); color: #fff;
+  }
+
+  /* Status pills */
+  .cs-pill {
+    display: inline-block;
+    padding: 2px 10px; border-radius: 999px;
+    font-size: .72rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  .cs-pill-new { background: #dbeafe; color: #1e40af; }
+  .cs-pill-open, .cs-pill-assigned, .cs-pill-in_progress { background: #fef3c7; color: #92400e; }
+  .cs-pill-resolved, .cs-pill-closed { background: #d1fae5; color: #065f46; }
+  .cs-pill-escalated { background: #fee2e2; color: #991b1b; }
+
+  .cs-empty {
+    text-align: center; padding: 30px 16px;
+    color: #94a3b8;
+  }
+  .cs-empty i { font-size: 2rem; }
+
+  /* Toast */
+  .cs-toast {
+    position: fixed; bottom: 20px; right: 20px;
+    background: #1e293b; color: #fff;
+    padding: 10px 16px; border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.2);
+    z-index: 9999; display: none;
+  }
+
+  /* Rating big */
+  .cs-rating-big {
+    text-align: center;
+    background: linear-gradient(135deg, #fef9c3 0%, #fef3c7 100%);
+    border: 1px solid #fcd34d;
+    border-radius: 14px;
+    padding: 14px;
+  }
+  .cs-rating-big .val {
+    font-size: 2.2rem; font-weight: 800;
+    color: #78350f;
+    font-variant-numeric: tabular-nums;
+  }
+  .cs-rating-big .lbl {
+    font-size: .72rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .06em;
+    color: #92400e;
+  }
+
+  /* Flag badges */
+  .cs-flag {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 8px; border-radius: 999px;
+    font-size: .7rem; font-weight: 600;
+  }
+  .cs-flag-feedback { background: #d1fae5; color: #065f46; }
+  .cs-flag-nofeedback { background: #f1f5f9; color: #64748b; }
+
+  @media (max-width: 768px) {
+    .cs-customer-hero { flex-direction: column; text-align: center; }
+    .cs-mini-stats { width: 100%; }
+  }
+</style>
+
+<!-- ═══════════ HERO ═══════════ -->
+<div class="cs-customer-hero">
+  {% with full=customer.full_name %}
+  <div class="cs-hero-avatar">
+    {{ full|slice:":1"|upper }}{% if full|length > 1 %}{{ full|slice:"1:2"|upper }}{% endif %}
   </div>
-  <a href="{% url 'customer_service_customer_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-arrow-left"></i> Back to Contacts</a>
+  {% endwith %}
+  <div class="cs-hero-info">
+    <h1 class="cs-hero-name">{{ customer.display_name }}</h1>
+    {% if customer.company_name and customer.full_name != customer.company_name %}
+    <div style="opacity:.85">{{ customer.full_name }}</div>
+    {% endif %}
+    <span class="cs-hero-code">{{ customer.customer_code }}</span>
+    <div class="cs-hero-meta">
+      <span><i class="bi bi-tag"></i> {{ customer.get_customer_type_display }}</span>
+      <span><i class="bi bi-chat-dots"></i> Prefers {{ customer.get_preferred_contact_method_display }}</span>
+      {% if customer.city %}<span><i class="bi bi-geo-alt"></i> {{ customer.area|default:"" }}{% if customer.area and customer.city %}, {% endif %}{{ customer.city }}</span>{% endif %}
+      <span>
+        {% if customer.needs_feedback %}
+        <span class="cs-flag cs-flag-feedback"><i class="bi bi-envelope-check"></i> Feedback enabled</span>
+        {% else %}
+        <span class="cs-flag cs-flag-nofeedback"><i class="bi bi-envelope-x"></i> No feedback</span>
+        {% endif %}
+      </span>
+    </div>
+
+    <div class="cs-mini-stats mt-3">
+      <div class="cs-mini-stat">
+        <div class="lbl">Tickets</div>
+        <div class="val">{{ tickets|length }}</div>
+      </div>
+      <div class="cs-mini-stat">
+        <div class="lbl">Calls</div>
+        <div class="val">{{ calls|length }}</div>
+      </div>
+      <div class="cs-mini-stat">
+        <div class="lbl">Ratings</div>
+        <div class="val">{{ ratings|length }}</div>
+      </div>
+      <div class="cs-mini-stat">
+        <div class="lbl">Phones</div>
+        <div class="val">{{ phones|length }}</div>
+      </div>
+    </div>
+  </div>
+  <div style="z-index:1;display:flex;flex-direction:column;gap:8px">
+    <a href="{% url 'customer_service_call_desk' %}" class="eo-btn eo-btn-primary" style="background:#fff;color:var(--cs-primary);border:none">
+      <i class="bi bi-telephone-plus"></i> New Call
+    </a>
+    <a href="{% url 'customer_service_customer_list' %}" class="eo-btn eo-btn-secondary" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3)">
+      <i class="bi bi-arrow-left"></i> All Contacts
+    </a>
+  </div>
 </div>
 
 <div class="row g-3">
+  <!-- ═══════════ LEFT: Profile & Phones ═══════════ -->
   <div class="col-lg-4">
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title">Profile</h3>
-      <p><strong>Name:</strong> {{ customer.full_name }}</p>
-      {% if customer.company_name %}<p><strong>Company:</strong> {{ customer.company_name }}</p>{% endif %}
-      {% if customer.email %}<p><strong>Email:</strong> {{ customer.email }}</p>{% endif %}
-      {% if customer.address %}<p><strong>Address:</strong> {{ customer.address }}</p>{% endif %}
-      <p><strong>Feedback:</strong> {% if customer.needs_feedback %}Yes{% else %}No{% endif %}</p>
+
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-person-vcard"></i> Contact Info</h3>
+
+      {% if customer.email %}
+      <div class="cs-contact-row">
+        <div class="cs-contact-icon"><i class="bi bi-envelope"></i></div>
+        <div style="flex:1;min-width:0">
+          <small class="text-muted">Email</small>
+          <div class="text-truncate"><a href="mailto:{{ customer.email }}" style="text-decoration:none">{{ customer.email }}</a></div>
+        </div>
+        <button class="cs-contact-copy" onclick="csCopy('{{ customer.email }}')" title="Copy"><i class="bi bi-clipboard"></i></button>
+      </div>
+      {% endif %}
+
+      {% if customer.alternate_email %}
+      <div class="cs-contact-row">
+        <div class="cs-contact-icon"><i class="bi bi-envelope-plus"></i></div>
+        <div style="flex:1;min-width:0">
+          <small class="text-muted">Alternate email</small>
+          <div class="text-truncate"><a href="mailto:{{ customer.alternate_email }}" style="text-decoration:none">{{ customer.alternate_email }}</a></div>
+        </div>
+        <button class="cs-contact-copy" onclick="csCopy('{{ customer.alternate_email }}')"><i class="bi bi-clipboard"></i></button>
+      </div>
+      {% endif %}
+
+      {% if customer.address %}
+      <div class="cs-contact-row">
+        <div class="cs-contact-icon"><i class="bi bi-house"></i></div>
+        <div style="flex:1">
+          <small class="text-muted">Address</small>
+          <div>{{ customer.address }}</div>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if customer.notes %}
+      <div class="mt-3 p-3" style="background:#fffbeb;border-radius:10px;border-left:3px solid var(--cs-warning);font-size:.85rem;white-space:pre-wrap">
+        <strong><i class="bi bi-sticky"></i> Notes</strong><br>
+        {{ customer.notes }}
+      </div>
+      {% endif %}
     </div>
 
-    <div class="eo-card">
-      <h3 class="eo-card-title">Phone Numbers</h3>
-      <ul class="mb-0">
-        {% for phone in phones %}
-        <li>{{ phone.phone_number }} — {{ phone.get_phone_type_display }}{% if phone.is_primary %} (primary){% endif %}</li>
-        {% empty %}
-        <li class="text-muted">No phone numbers.</li>
-        {% endfor %}
-      </ul>
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-telephone"></i> Phone Numbers</h3>
+      {% for phone in phones %}
+      <div class="cs-contact-row">
+        <div class="cs-contact-icon" style="background:{% if phone.is_primary %}#d1fae5{% else %}#f1f5f9{% endif %};color:{% if phone.is_primary %}#065f46{% else %}#64748b{% endif %}">
+          <i class="bi bi-{% if phone.phone_type == 'whatsapp' %}whatsapp{% else %}telephone{% endif %}"></i>
+        </div>
+        <div style="flex:1;min-width:0">
+          <small class="text-muted">
+            {{ phone.get_phone_type_display }}
+            {% if phone.is_primary %} · <span class="text-success">★ primary</span>{% endif %}
+          </small>
+          <div><a href="tel:{{ phone.phone_number }}" style="text-decoration:none">{{ phone.phone_number }}</a></div>
+        </div>
+        <button class="cs-contact-copy" onclick="csCopy('{{ phone.phone_number }}')" title="Copy number"><i class="bi bi-clipboard"></i></button>
+      </div>
+      {% empty %}
+      <div class="cs-empty"><i class="bi bi-telephone-x"></i><div class="mt-2 small">No phone numbers on file.</div></div>
+      {% endfor %}
     </div>
+
+    <!-- Customer satisfaction summary -->
+    {% if ratings %}
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-star-fill" style="color:#f59e0b"></i> Satisfaction Summary</h3>
+      {% with avg_service=0 avg_product=0 avg_resp=0 avg_prof=0 %}
+      <div class="cs-rating-big mb-3">
+        <div class="lbl">Average rating</div>
+        <div class="val" id="csAvgRating">—</div>
+        <div class="cs-star-rating" id="csAvgStars"></div>
+        <small class="d-block text-muted mt-1">Based on {{ ratings|length }} rating{{ ratings|length|pluralize }}</small>
+      </div>
+      {% endwith %}
+
+      <div class="small">
+        <div class="d-flex justify-content-between mb-1"><span>Service quality</span><strong id="csAvgSvc">—</strong></div>
+        <div class="d-flex justify-content-between mb-1"><span>Product quality</span><strong id="csAvgPrd">—</strong></div>
+        <div class="d-flex justify-content-between mb-1"><span>Response time</span><strong id="csAvgRsp">—</strong></div>
+        <div class="d-flex justify-content-between"><span>Professionalism</span><strong id="csAvgPro">—</strong></div>
+      </div>
+    </div>
+    {% endif %}
   </div>
 
+  <!-- ═══════════ RIGHT: Tabs ═══════════ -->
   <div class="col-lg-8">
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title">Recent Tickets</h3>
-      <div class="table-responsive">
-        <table class="table align-middle">
-          <thead><tr><th>No</th><th>Subject</th><th>Status</th><th>Department</th><th></th></tr></thead>
-          <tbody>
-            {% for ticket in tickets %}
-            <tr>
-              <td>{{ ticket.ticket_no }}</td>
-              <td>{{ ticket.subject }}</td>
-              <td>{{ ticket.get_status_display }}</td>
-              <td>{{ ticket.department.name|default:"—" }}</td>
-              <td><a href="{% url 'customer_service_ticket_detail' ticket.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">View</a></td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="5" class="text-muted">No tickets yet.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
+    <div class="cs-card">
+      <div class="cs-tabs">
+        <button class="cs-tab active" data-tab="tickets">
+          <i class="bi bi-ticket"></i> Tickets <span class="cs-tab-count">{{ tickets|length }}</span>
+        </button>
+        <button class="cs-tab" data-tab="calls">
+          <i class="bi bi-telephone"></i> Calls <span class="cs-tab-count">{{ calls|length }}</span>
+        </button>
+        <button class="cs-tab" data-tab="ratings">
+          <i class="bi bi-star"></i> Ratings <span class="cs-tab-count">{{ ratings|length }}</span>
+        </button>
       </div>
-    </div>
 
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title">Call History</h3>
-      <div class="table-responsive">
-        <table class="table align-middle">
-          <thead><tr><th>Date</th><th>Type</th><th>Subject</th><th>Handled By</th><th>Outcome</th></tr></thead>
-          <tbody>
-            {% for call in calls %}
-            <tr>
-              <td>{{ call.started_at|date:"M j, Y H:i" }}</td>
-              <td>{{ call.get_call_type_display }}</td>
-              <td>{{ call.subject }}</td>
-              <td>{{ call.handled_by.full_name|default:"—" }}</td>
-              <td>{{ call.get_outcome_display|default:"—" }}</td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="5" class="text-muted">No calls recorded.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
+      <!-- Tickets -->
+      <div class="cs-tab-panel" data-panel="tickets">
+        <div class="table-responsive">
+          <table class="table align-middle">
+            <thead>
+              <tr style="font-size:.72rem;color:#64748b;text-transform:uppercase">
+                <th>No</th><th>Subject</th><th>Status</th><th>Department</th><th>Created</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for ticket in tickets %}
+              <tr>
+                <td style="font-family:ui-monospace,monospace;font-size:.8rem;font-weight:700;color:var(--cs-primary)">{{ ticket.ticket_no }}</td>
+                <td><small>{{ ticket.subject|truncatechars:50 }}</small></td>
+                <td><span class="cs-pill cs-pill-{{ ticket.status }}">{{ ticket.get_status_display }}</span></td>
+                <td><small>{{ ticket.department.name|default:"—" }}</small></td>
+                <td><small class="text-muted">{{ ticket.created_at|date:"M j, Y" }}</small></td>
+                <td>
+                  <a href="{% url 'customer_service_ticket_detail' ticket.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+                    <i class="bi bi-arrow-right"></i>
+                  </a>
+                </td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="6"><div class="cs-empty"><i class="bi bi-ticket-perforated"></i><div class="mt-2">No tickets yet.</div></div></td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
 
-    <div class="eo-card">
-      <h3 class="eo-card-title">Ratings</h3>
-      <div class="table-responsive">
-        <table class="table align-middle">
-          <thead><tr><th>Date</th><th>Service</th><th>Product</th><th>Response</th><th>Professionalism</th><th>Comment</th></tr></thead>
-          <tbody>
-            {% for rating in ratings %}
-            <tr>
-              <td>{{ rating.created_at|date:"M j, Y" }}</td>
-              <td>{{ rating.service_quality }}/5</td>
-              <td>{{ rating.product_quality }}/5</td>
-              <td>{{ rating.response_time }}/5</td>
-              <td>{{ rating.professionalism }}/5</td>
-              <td>{{ rating.comment|default:"—" }}</td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="6" class="text-muted">No ratings yet.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
+      <!-- Calls -->
+      <div class="cs-tab-panel" data-panel="calls" style="display:none">
+        <div class="table-responsive">
+          <table class="table align-middle">
+            <thead>
+              <tr style="font-size:.72rem;color:#64748b;text-transform:uppercase">
+                <th>Date</th><th>Type</th><th>Subject</th><th>Agent</th><th>Outcome</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for call in calls %}
+              <tr>
+                <td><small>{{ call.started_at|date:"M j, Y H:i" }}</small></td>
+                <td><span class="cs-pill cs-pill-new">{{ call.get_call_type_display }}</span></td>
+                <td><small>{{ call.subject|truncatechars:50 }}</small></td>
+                <td><small>{{ call.handled_by.full_name|default:"—" }}</small></td>
+                <td><small>{{ call.get_outcome_display|default:"—" }}</small></td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="5"><div class="cs-empty"><i class="bi bi-telephone-x"></i><div class="mt-2">No calls recorded yet.</div></div></td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Ratings -->
+      <div class="cs-tab-panel" data-panel="ratings" style="display:none">
+        {% for rating in ratings %}
+        <div class="border rounded-3 p-3 mb-2" style="border-color:#e2e8f0 !important">
+          <div class="d-flex justify-content-between align-items-start mb-2">
+            <strong style="font-size:.85rem">{{ rating.created_at|date:"M j, Y" }}</strong>
+            <div class="cs-star-rating">
+              {% with overall=rating.service_quality %}
+              {% for i in "12345"|make_list %}<span class="{% if forloop.counter <= overall %}filled{% else %}empty{% endif %}">★</span>{% endfor %}
+              {% endwith %}
+            </div>
+          </div>
+          <div class="row g-2 small">
+            <div class="col-6 col-md-3"><small class="text-muted d-block">Service</small><strong>{{ rating.service_quality }}/5</strong></div>
+            <div class="col-6 col-md-3"><small class="text-muted d-block">Product</small><strong>{{ rating.product_quality }}/5</strong></div>
+            <div class="col-6 col-md-3"><small class="text-muted d-block">Response</small><strong>{{ rating.response_time }}/5</strong></div>
+            <div class="col-6 col-md-3"><small class="text-muted d-block">Professional</small><strong>{{ rating.professionalism }}/5</strong></div>
+          </div>
+          {% if rating.comment %}
+          <div class="mt-2 p-2" style="background:#f8fafc;border-radius:8px;font-size:.85rem;font-style:italic">
+            <i class="bi bi-quote"></i> {{ rating.comment }}
+          </div>
+          {% endif %}
+        </div>
+        {% empty %}
+        <div class="cs-empty"><i class="bi bi-star"></i><div class="mt-2">No ratings yet.</div></div>
+        {% endfor %}
       </div>
     </div>
   </div>
 </div>
+
+<div id="csToast" class="cs-toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+
+/* Toast */
+function csToast(msg, type='info') {
+  const t = $('#csToast');
+  t.style.background = ({info:'#1e293b',success:'#047857',warn:'#b45309'})[type] || '#1e293b';
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(t._tmr);
+  t._tmr = setTimeout(() => t.style.display = 'none', 1800);
+}
+
+async function csCopy(text) {
+  try { await navigator.clipboard.writeText(text); csToast('Copied ✓','success'); }
+  catch { csToast('Copy failed'); }
+}
+
+/* Tabs */
+$$('.cs-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    $$('.cs-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    $$('.cs-tab-panel').forEach(p => p.style.display = p.dataset.panel === tab.dataset.tab ? '' : 'none');
+  });
+});
+
+/* Average ratings (computed client-side from displayed rows) */
+(function(){
+  const ratings = [];
+  document.querySelectorAll('[data-panel="ratings"] .border').forEach(row => {
+    const cells = row.querySelectorAll('strong');
+    if (cells.length >= 4) {
+      ratings.push({
+        service: parseInt(cells[0].textContent) || 0,
+        product: parseInt(cells[1].textContent) || 0,
+        response: parseInt(cells[2].textContent) || 0,
+        professional: parseInt(cells[3].textContent) || 0,
+      });
+    }
+  });
+  if (ratings.length === 0) return;
+
+  const avg = (key) => ratings.reduce((s,r) => s + r[key], 0) / ratings.length;
+  const svc = avg('service'), prd = avg('product'), rsp = avg('response'), pro = avg('professional');
+  const overall = (svc + prd + rsp + pro) / 4;
+
+  const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setText('csAvgRating', overall.toFixed(1));
+  setText('csAvgSvc', svc.toFixed(1) + ' / 5');
+  setText('csAvgPrd', prd.toFixed(1) + ' / 5');
+  setText('csAvgRsp', rsp.toFixed(1) + ' / 5');
+  setText('csAvgPro', pro.toFixed(1) + ' / 5');
+
+  const starEl = document.getElementById('csAvgStars');
+  if (starEl) {
+    const rounded = Math.round(overall);
+    let html = '';
+    for (let i = 1; i <= 5; i++) {
+      html += `<span class="${i <= rounded ? 'filled' : 'empty'}">★</span>`;
+    }
+    starEl.innerHTML = html;
+  }
+})();
+</script>
 {% endblock %}

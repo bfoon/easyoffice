@@ -1,26 +1,278 @@
-
 {% extends "base.html" %}
 {% block title %}Service Tickets{% endblock %}
 {% block breadcrumb %}<a href="{% url 'customer_service_dashboard' %}">Customer Service</a> / Tickets{% endblock %}
 {% block content %}
+<style>
+  :root {
+    --cs-primary: #2563eb;
+    --cs-success: #10b981;
+    --cs-warning: #f59e0b;
+    --cs-danger: #ef4444;
+  }
+  .cs-card {
+    background: #fff;
+    border: 1px solid var(--eo-border, #e5e7eb);
+    border-radius: 16px;
+    padding: 18px;
+    box-shadow: 0 4px 14px rgba(15,23,42,.03);
+  }
+
+  /* Filter chips */
+  .cs-chips {
+    display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px;
+  }
+  .cs-chip {
+    padding: 6px 12px;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    font-size: .8rem;
+    font-weight: 600;
+    color: #475569;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all .15s;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .cs-chip:hover {
+    background: #eff6ff; border-color: var(--cs-primary); color: var(--cs-primary);
+  }
+  .cs-chip.active {
+    background: var(--cs-primary); color: #fff; border-color: var(--cs-primary);
+  }
+  .cs-chip.cs-chip-danger.active { background: var(--cs-danger); border-color: var(--cs-danger); }
+  .cs-chip.cs-chip-warning.active { background: var(--cs-warning); border-color: var(--cs-warning); }
+  .cs-chip.cs-chip-success.active { background: var(--cs-success); border-color: var(--cs-success); }
+  .cs-chip-count {
+    background: rgba(0,0,0,.15);
+    padding: 1px 6px; border-radius: 999px;
+    font-size: .7rem;
+  }
+  .cs-chip.active .cs-chip-count { background: rgba(255,255,255,.25); }
+
+  /* Status badges */
+  .cs-status-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: .72rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  .cs-status-new { background: #dbeafe; color: #1e40af; }
+  .cs-status-open, .cs-status-assigned, .cs-status-in_progress { background: #fef3c7; color: #92400e; }
+  .cs-status-pending, .cs-status-awaiting_customer { background: #e0e7ff; color: #3730a3; }
+  .cs-status-resolved, .cs-status-closed { background: #d1fae5; color: #065f46; }
+  .cs-status-escalated { background: #fee2e2; color: #991b1b; }
+  .cs-status-cancelled { background: #f1f5f9; color: #64748b; }
+
+  .cs-priority-dot {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%; margin-right: 6px;
+  }
+  .cs-priority-critical { background: #dc2626; box-shadow: 0 0 0 2px rgba(220,38,38,.2); }
+  .cs-priority-high { background: #ea580c; }
+  .cs-priority-medium { background: #2563eb; }
+  .cs-priority-low { background: #94a3b8; }
+
+  /* Table */
+  .cs-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+  .cs-table thead th {
+    font-size: .72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #64748b;
+    padding: 10px 12px;
+    border-bottom: 2px solid #e2e8f0;
+    background: #f8fafc;
+    white-space: nowrap;
+  }
+  .cs-table tbody tr {
+    border-bottom: 1px solid #f1f5f9;
+    transition: background .1s;
+  }
+  .cs-table tbody tr:hover { background: #f8fafc; }
+  .cs-table tbody td {
+    padding: 12px;
+    vertical-align: middle;
+    font-size: .88rem;
+  }
+  .cs-ticket-no {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-weight: 700;
+    color: var(--cs-primary);
+    font-size: .82rem;
+  }
+
+  /* Row overdue */
+  .cs-row-overdue { background: linear-gradient(90deg, #fef2f2 0%, transparent 30%); }
+  .cs-row-overdue:hover { background: linear-gradient(90deg, #fee2e2 0%, #fef2f2 30%); }
+
+  /* View toggle */
+  .cs-view-toggle {
+    display: inline-flex;
+    border: 1px solid var(--eo-border, #e5e7eb);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .cs-view-toggle button {
+    background: #fff; border: none;
+    padding: 6px 12px;
+    font-size: .8rem; cursor: pointer;
+    color: #64748b;
+  }
+  .cs-view-toggle button.active {
+    background: var(--cs-primary); color: #fff;
+  }
+
+  /* Card view */
+  .cs-ticket-card {
+    border: 1px solid var(--eo-border, #e5e7eb);
+    border-radius: 12px;
+    padding: 14px;
+    background: #fff;
+    transition: all .15s;
+    height: 100%;
+    display: flex; flex-direction: column;
+    text-decoration: none; color: inherit;
+  }
+  .cs-ticket-card:hover {
+    border-color: var(--cs-primary);
+    box-shadow: 0 6px 20px rgba(37,99,235,.12);
+    transform: translateY(-2px);
+    color: inherit;
+  }
+  .cs-ticket-card.cs-card-overdue { border-left: 4px solid var(--cs-danger); }
+
+  /* SLA indicator */
+  .cs-sla-mini {
+    font-size: .72rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .cs-sla-mini.ok { background: #d1fae5; color: #065f46; }
+  .cs-sla-mini.warn { background: #fef3c7; color: #92400e; }
+  .cs-sla-mini.danger { background: #fee2e2; color: #991b1b; }
+  .cs-sla-mini.done { background: #f1f5f9; color: #64748b; }
+
+  /* Stats strip */
+  .cs-strip {
+    display: flex; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .cs-strip-item {
+    background: #fff;
+    border: 1px solid var(--eo-border);
+    border-radius: 12px;
+    padding: 10px 14px;
+    min-width: 110px;
+  }
+  .cs-strip-item .lbl {
+    font-size: .68rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .06em;
+    color: #64748b;
+  }
+  .cs-strip-item .val {
+    font-size: 1.3rem; font-weight: 800; line-height: 1.2;
+    color: #0f172a;
+  }
+
+  /* Empty state */
+  .cs-empty {
+    text-align: center; padding: 40px 20px;
+    color: #94a3b8;
+  }
+  .cs-empty i { font-size: 3rem; }
+</style>
+
 <div class="eo-page-header">
   <div>
     <h1 class="eo-page-title"><i class="bi bi-ticket-detailed"></i> Service Tickets</h1>
     <p class="eo-page-subtitle">Track open requests, routing, assignments, and SLA progress across teams.</p>
   </div>
-  <a href="{% url 'customer_service_call_desk' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus-circle"></i> New Call / Ticket</a>
+  <div class="d-flex gap-2 flex-wrap align-items-center">
+    <div class="cs-view-toggle">
+      <button type="button" id="csViewTable" class="active" onclick="csSetView('table')" title="Table view">
+        <i class="bi bi-table"></i>
+      </button>
+      <button type="button" id="csViewCards" onclick="csSetView('cards')" title="Card view">
+        <i class="bi bi-grid-3x3-gap"></i>
+      </button>
+    </div>
+    <button type="button" class="eo-btn eo-btn-secondary" onclick="csExportCsv()">
+      <i class="bi bi-download"></i> Export CSV
+    </button>
+    <a href="{% url 'customer_service_call_desk' %}" class="eo-btn eo-btn-primary">
+      <i class="bi bi-plus-circle"></i> New Call / Ticket
+    </a>
+  </div>
 </div>
 
-<form class="eo-card mb-3">
-  <div class="row g-3 align-items-end">
+<!-- Stats strip -->
+{% with total=tickets|length %}
+<div class="cs-strip">
+  <div class="cs-strip-item">
+    <div class="lbl">Showing</div>
+    <div class="val">{{ total }}</div>
+  </div>
+  <div class="cs-strip-item" style="border-left:3px solid var(--cs-warning)">
+    <div class="lbl">Need attention</div>
+    <div class="val" id="csOverdueCount">—</div>
+  </div>
+  <div class="cs-strip-item" style="border-left:3px solid var(--cs-danger)">
+    <div class="lbl">Escalated</div>
+    <div class="val" id="csEscalatedCount">—</div>
+  </div>
+  <div class="cs-strip-item" style="border-left:3px solid var(--cs-success)">
+    <div class="lbl">Resolved</div>
+    <div class="val" id="csResolvedCount">—</div>
+  </div>
+</div>
+{% endwith %}
+
+<!-- Filters -->
+<form class="cs-card mb-3" id="csFilterForm">
+  <!-- Quick filter chips -->
+  <div class="cs-chips">
+    <a href="{% url 'customer_service_ticket_list' %}" class="cs-chip {% if not status_filter and not mine_filter %}active{% endif %}">
+      <i class="bi bi-list"></i> All
+    </a>
+    <a href="?mine=1" class="cs-chip {% if mine_filter == '1' %}active{% endif %}">
+      <i class="bi bi-person-check"></i> Mine
+    </a>
+    <a href="?status=new" class="cs-chip {% if status_filter == 'new' %}active{% endif %}">
+      <i class="bi bi-stars"></i> New
+    </a>
+    <a href="?status=in_progress" class="cs-chip {% if status_filter == 'in_progress' %}active{% endif %}">
+      <i class="bi bi-arrow-repeat"></i> In Progress
+    </a>
+    <a href="?status=escalated" class="cs-chip cs-chip-danger {% if status_filter == 'escalated' %}active{% endif %}">
+      <i class="bi bi-exclamation-triangle"></i> Escalated
+    </a>
+    <a href="?status=resolved" class="cs-chip cs-chip-success {% if status_filter == 'resolved' %}active{% endif %}">
+      <i class="bi bi-check-circle"></i> Resolved
+    </a>
+    <a href="?status=closed" class="cs-chip {% if status_filter == 'closed' %}active{% endif %}">
+      <i class="bi bi-archive"></i> Closed
+    </a>
+  </div>
+
+  <div class="row g-2 align-items-end">
     <div class="col-md-4">
       <label class="eo-form-label">Search</label>
-      <input type="text" name="q" value="{{ q }}" class="eo-form-control" placeholder="Ticket, subject, customer">
+      <input type="text" name="q" value="{{ q }}" class="eo-form-control"
+             placeholder="🔍 Ticket no, subject, customer name...">
     </div>
-    <div class="col-md-2">
+    <div class="col-md-3">
       <label class="eo-form-label">Status</label>
       <select name="status" class="eo-form-select">
-        <option value="">All</option>
+        <option value="">All statuses</option>
         {% for value,label in status_choices %}
         <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
@@ -29,29 +281,37 @@
     <div class="col-md-3">
       <label class="eo-form-label">Department</label>
       <select name="department" class="eo-form-select">
-        <option value="">All</option>
+        <option value="">All departments</option>
         {% for d in departments %}
         <option value="{{ d.id }}" {% if department_filter == d.id|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
         {% endfor %}
       </select>
     </div>
-    <div class="col-md-1">
-      <label class="eo-form-check">
-        <input type="checkbox" name="mine" value="1" class="eo-form-check-input" {% if mine_filter == "1" %}checked{% endif %}>
-        <span class="eo-form-check-label">Mine</span>
-      </label>
+    <div class="col-md-2 d-flex gap-1">
+      <button class="eo-btn eo-btn-primary flex-grow-1"><i class="bi bi-funnel"></i> Filter</button>
+      {% if q or status_filter or department_filter or mine_filter %}
+      <a href="{% url 'customer_service_ticket_list' %}" class="eo-btn eo-btn-secondary" title="Clear filters">
+        <i class="bi bi-x"></i>
+      </a>
+      {% endif %}
     </div>
-    <div class="col-md-2">
-      <button class="eo-btn eo-btn-primary w-100"><i class="bi bi-funnel"></i> Filter</button>
+    <div class="col-12">
+      <label class="eo-form-check">
+        <input type="checkbox" name="mine" value="1" class="eo-form-check-input" {% if mine_filter == "1" %}checked{% endif %}
+               onchange="this.form.submit()">
+        <span class="eo-form-check-label">Only tickets assigned to me</span>
+      </label>
     </div>
   </div>
 </form>
 
-<div class="eo-card">
+<!-- ═══════════ TABLE VIEW ═══════════ -->
+<div class="cs-card" id="csTableView">
   <div class="table-responsive">
-    <table class="table align-middle">
+    <table class="cs-table" id="csTicketTable">
       <thead>
         <tr>
+          <th style="width:30px"><input type="checkbox" id="csSelectAll"></th>
           <th>Ticket</th>
           <th>Customer</th>
           <th>Type</th>
@@ -59,35 +319,230 @@
           <th>Status</th>
           <th>Department</th>
           <th>Owner</th>
-          <th>Due</th>
+          <th>SLA</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
         {% for ticket in tickets %}
-        <tr>
+        <tr class="cs-ticket-row
+                   {% if ticket.is_overdue %}cs-row-overdue{% endif %}"
+            data-status="{{ ticket.status }}"
+            data-overdue="{{ ticket.is_overdue|yesno:'1,0' }}"
+            data-due="{% if ticket.resolution_due_at %}{{ ticket.resolution_due_at|date:'c' }}{% endif %}">
+          <td><input type="checkbox" class="cs-row-check" value="{{ ticket.pk }}"></td>
           <td>
-            <div class="fw-bold">{{ ticket.ticket_no }}</div>
+            <div class="cs-ticket-no">{{ ticket.ticket_no }}</div>
             <small class="text-muted">{{ ticket.subject|truncatechars:48 }}</small>
           </td>
-          <td>{{ ticket.customer.display_name }}</td>
-          <td>{{ ticket.get_ticket_type_display }}</td>
-          <td>{{ ticket.get_priority_display }}</td>
           <td>
-            <span class="badge {% if ticket.status == 'resolved' or ticket.status == 'closed' %}text-bg-success{% elif ticket.status == 'escalated' %}text-bg-danger{% else %}text-bg-secondary{% endif %}">
-              {{ ticket.get_status_display }}
-            </span>
+            <div style="font-weight:600;font-size:.85rem">{{ ticket.customer.display_name }}</div>
           </td>
-          <td>{{ ticket.department.name|default:"—" }}</td>
-          <td>{{ ticket.current_owner.full_name|default:"—" }}</td>
-          <td>{% if ticket.resolution_due_at %}{{ ticket.resolution_due_at|date:"M j, H:i" }}{% else %}—{% endif %}</td>
-          <td><a href="{% url 'customer_service_ticket_detail' ticket.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">Open</a></td>
+          <td><small class="text-muted">{{ ticket.get_ticket_type_display }}</small></td>
+          <td>
+            <span class="cs-priority-dot cs-priority-{{ ticket.priority }}"></span>
+            <small>{{ ticket.get_priority_display }}</small>
+          </td>
+          <td>
+            <span class="cs-status-pill cs-status-{{ ticket.status }}">{{ ticket.get_status_display }}</span>
+          </td>
+          <td><small>{{ ticket.department.name|default:"—" }}</small></td>
+          <td><small>{{ ticket.current_owner.full_name|default:"—" }}</small></td>
+          <td>
+            {% if ticket.status == 'resolved' or ticket.status == 'closed' %}
+              <span class="cs-sla-mini done"><i class="bi bi-check2"></i> done</span>
+            {% elif ticket.resolution_due_at %}
+              <span class="cs-sla-mini cs-sla-badge"
+                    data-due="{{ ticket.resolution_due_at|date:'c' }}">{{ ticket.resolution_due_at|date:"M j, H:i" }}</span>
+            {% else %}
+              <small class="text-muted">—</small>
+            {% endif %}
+          </td>
+          <td>
+            <a href="{% url 'customer_service_ticket_detail' ticket.pk %}"
+               class="eo-btn eo-btn-secondary eo-btn-sm" title="Open">
+              <i class="bi bi-arrow-right"></i>
+            </a>
+          </td>
         </tr>
         {% empty %}
-        <tr><td colspan="9" class="text-muted">No tickets found.</td></tr>
+        <tr><td colspan="10">
+          <div class="cs-empty">
+            <i class="bi bi-inbox"></i>
+            <h5 class="mt-2">No tickets found</h5>
+            <p class="text-muted small">
+              {% if q or status_filter or department_filter %}
+              Try clearing your filters or <a href="{% url 'customer_service_ticket_list' %}">show all tickets</a>.
+              {% else %}
+              Open the call desk to log a new call and create a ticket.
+              {% endif %}
+            </p>
+            <a href="{% url 'customer_service_call_desk' %}" class="eo-btn eo-btn-primary">
+              <i class="bi bi-plus-circle"></i> New Call
+            </a>
+          </div>
+        </td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  {% if tickets %}
+  <div class="mt-3 text-muted small d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-info-circle"></i> Showing {{ tickets|length }} ticket{{ tickets|length|pluralize }}</span>
+    <span id="csBulkBar" style="display:none">
+      <strong id="csBulkCount">0</strong> selected
+    </span>
+  </div>
+  {% endif %}
 </div>
+
+<!-- ═══════════ CARD VIEW ═══════════ -->
+<div id="csCardView" style="display:none">
+  <div class="row g-3">
+    {% for ticket in tickets %}
+    <div class="col-md-6 col-xl-4">
+      <a href="{% url 'customer_service_ticket_detail' ticket.pk %}"
+         class="cs-ticket-card {% if ticket.is_overdue %}cs-card-overdue{% endif %}">
+        <div class="d-flex justify-content-between align-items-start mb-2 gap-2">
+          <span class="cs-ticket-no">{{ ticket.ticket_no }}</span>
+          <span class="cs-status-pill cs-status-{{ ticket.status }}">{{ ticket.get_status_display }}</span>
+        </div>
+        <h6 style="font-size:.95rem;font-weight:700;margin-bottom:8px">{{ ticket.subject|truncatechars:70 }}</h6>
+        <small class="text-muted d-block mb-2">
+          <i class="bi bi-person"></i> {{ ticket.customer.display_name }}
+        </small>
+        <div class="d-flex flex-wrap gap-1 mb-2">
+          <small class="badge text-bg-light">
+            <span class="cs-priority-dot cs-priority-{{ ticket.priority }}"></span>
+            {{ ticket.get_priority_display }}
+          </small>
+          {% if ticket.department %}
+          <small class="badge text-bg-light"><i class="bi bi-building"></i> {{ ticket.department.name }}</small>
+          {% endif %}
+        </div>
+        <div class="mt-auto d-flex justify-content-between align-items-center small" style="color:#64748b">
+          <span><i class="bi bi-person-check"></i> {{ ticket.current_owner.full_name|default:"Unassigned" }}</span>
+          {% if ticket.resolution_due_at and ticket.status != 'resolved' and ticket.status != 'closed' %}
+            <span class="cs-sla-mini cs-sla-badge" data-due="{{ ticket.resolution_due_at|date:'c' }}">
+              <i class="bi bi-clock"></i> {{ ticket.resolution_due_at|date:"M j" }}
+            </span>
+          {% endif %}
+        </div>
+      </a>
+    </div>
+    {% empty %}
+    <div class="col-12">
+      <div class="cs-card cs-empty">
+        <i class="bi bi-inbox"></i>
+        <h5 class="mt-2">No tickets found</h5>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+
+/* SLA badge colouring + countdown */
+(function(){
+  function updateBadges() {
+    $$('.cs-sla-badge').forEach(b => {
+      const due = new Date(b.dataset.due).getTime();
+      if (!due) return;
+      const diff = due - Date.now();
+      b.classList.remove('ok','warn','danger');
+      if (diff < 0) b.classList.add('danger');
+      else if (diff < 4 * 3600 * 1000) b.classList.add('warn');
+      else b.classList.add('ok');
+    });
+  }
+  updateBadges(); setInterval(updateBadges, 60000);
+})();
+
+/* Live stats */
+(function(){
+  const rows = $$('.cs-ticket-row');
+  let overdue = 0, escalated = 0, resolved = 0;
+  rows.forEach(r => {
+    if (r.dataset.overdue === '1') overdue++;
+    if (r.dataset.status === 'escalated') escalated++;
+    if (r.dataset.status === 'resolved' || r.dataset.status === 'closed') resolved++;
+  });
+  const el = id => document.getElementById(id);
+  if (el('csOverdueCount')) el('csOverdueCount').textContent = overdue;
+  if (el('csEscalatedCount')) el('csEscalatedCount').textContent = escalated;
+  if (el('csResolvedCount')) el('csResolvedCount').textContent = resolved;
+})();
+
+/* View toggle */
+function csSetView(view) {
+  const tbl = $('#csTableView'), cards = $('#csCardView');
+  const btnTbl = $('#csViewTable'), btnCards = $('#csViewCards');
+  if (view === 'cards') {
+    tbl.style.display = 'none'; cards.style.display = '';
+    btnTbl.classList.remove('active'); btnCards.classList.add('active');
+  } else {
+    tbl.style.display = ''; cards.style.display = 'none';
+    btnTbl.classList.add('active'); btnCards.classList.remove('active');
+  }
+  try { localStorage.setItem('cs_ticket_view', view); } catch {}
+}
+try {
+  const saved = localStorage.getItem('cs_ticket_view');
+  if (saved) csSetView(saved);
+} catch {}
+
+/* Bulk selection */
+const selectAll = $('#csSelectAll');
+if (selectAll) {
+  selectAll.addEventListener('change', () => {
+    $$('.cs-row-check').forEach(cb => { cb.checked = selectAll.checked; });
+    csUpdateBulk();
+  });
+}
+$$('.cs-row-check').forEach(cb => cb.addEventListener('change', csUpdateBulk));
+function csUpdateBulk() {
+  const n = $$('.cs-row-check:checked').length;
+  const bar = $('#csBulkBar');
+  if (!bar) return;
+  if (n > 0) { bar.style.display = ''; $('#csBulkCount').textContent = n; }
+  else bar.style.display = 'none';
+}
+
+/* CSV export */
+function csExportCsv() {
+  const rows = [['Ticket No', 'Subject', 'Customer', 'Type', 'Priority', 'Status', 'Department', 'Owner', 'SLA Due']];
+  $$('.cs-ticket-row').forEach(r => {
+    const cells = r.querySelectorAll('td');
+    rows.push([
+      cells[1].querySelector('.cs-ticket-no')?.innerText.trim() || '',
+      cells[1].querySelector('small')?.innerText.trim() || '',
+      cells[2].innerText.trim(),
+      cells[3].innerText.trim(),
+      cells[4].innerText.trim(),
+      cells[5].innerText.trim(),
+      cells[6].innerText.trim(),
+      cells[7].innerText.trim(),
+      cells[8].innerText.trim(),
+    ]);
+  });
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `tickets_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* Keyboard: / to focus search */
+document.addEventListener('keydown', (e) => {
+  if (e.key === '/' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)) {
+    e.preventDefault();
+    document.querySelector('input[name="q"]')?.focus();
+  }
+});
+</script>
 {% endblock %}

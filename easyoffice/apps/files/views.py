@@ -637,42 +637,92 @@ def _send_completion_email(sig_req, base_url):
             pass
 
 
-def _push_notification(user, notif_type, title, body='', link='', icon='bi-bell-fill', color='#3b82f6'):
+def _normalize_notification_actions(actions):
+    normalized = []
+    for action in actions or []:
+        if not isinstance(action, dict):
+            continue
+
+        label = str(action.get('label', '')).strip()
+        url = str(action.get('url', '')).strip()
+        if not label or not url:
+            continue
+
+        normalized.append({
+            'label': label,
+            'url': url,
+            'style': str(action.get('style', 'secondary')).strip() or 'secondary',
+            'icon': str(action.get('icon', '')).strip(),
+        })
+    return normalized
+
+
+def _push_notification(
+    user,
+    notif_type,
+    title,
+    body='',
+    link='',
+    icon='bi-bell-fill',
+    color='#3b82f6',
+    actions=None,
+    extra_data=None,
+):
     """
-    Push a real-time notification to a user via the existing
-    notifications_ws WebSocket channel (group: notifications_{user.id}).
-    Silently skips if Channels / Redis is not running.
+    Push a real-time notification to a user via notifications websocket.
     """
     try:
         from channels.layers import get_channel_layer
         from asgiref.sync import async_to_sync
+
         layer = get_channel_layer()
         if layer is None:
             return
+
+        actions = _normalize_notification_actions(actions)
+        payload_data = dict(extra_data or {})
+        payload_data['actions'] = actions
+
         async_to_sync(layer.group_send)(
             f'notifications_{user.id}',
             {
-                'type': 'send_notification',   # handled by NotificationConsumer.send_notification
+                'type': 'send_notification',
                 'data': {
-                    'type':  notif_type,
+                    'type': notif_type,
                     'title': title,
-                    'body':  body,
-                    'link':  link,
-                    'icon':  icon,
+                    'body': body,
+                    'link': link,
+                    'icon': icon,
                     'color': color,
+                    'actions': actions,
+                    'data': payload_data,
                 },
             }
         )
     except Exception:
         pass
 
-def _store_notification(recipient, sender, notif_type, title, body='', link=''):
+
+def _store_notification(
+    recipient,
+    sender,
+    notif_type,
+    title,
+    body='',
+    link='',
+    actions=None,
+    extra_data=None,
+):
     """
-    Store a persistent in-app notification for the main notification bell.
-    Mirrors what the meetings app is doing with CoreNotification.
+    Store a persistent in-app bell notification.
     """
     try:
         from apps.core.models import CoreNotification
+
+        actions = _normalize_notification_actions(actions)
+        payload_data = dict(extra_data or {})
+        payload_data['actions'] = actions
+
         CoreNotification.objects.create(
             recipient=recipient,
             sender=sender,
@@ -680,11 +730,12 @@ def _store_notification(recipient, sender, notif_type, title, body='', link=''):
             title=title,
             message=body,
             link=link,
+            data=payload_data,
         )
     except Exception:
         pass
 
-# Notification type → (icon, colour) — mirrors the consumer's expected payload
+
 _NOTIF_META = {
     'file_shared':    ('bi-share-fill',         '#3b82f6'),
     'sign_request':   ('bi-pen-fill',           '#8b5cf6'),
@@ -693,10 +744,21 @@ _NOTIF_META = {
     'sign_declined':  ('bi-x-circle-fill',      '#ef4444'),
     'sign_completed': ('bi-patch-check-fill',   '#10b981'),
     'sign_reminder':  ('bi-alarm-fill',         '#f59e0b'),
+    'task_due':       ('bi-alarm-fill',         '#f59e0b'),
+    'task_overdue':   ('bi-exclamation-triangle-fill', '#ef4444'),
 }
 
 
-def _notify(user, notif_type, title, body='', link='', sender=None):
+def _notify(
+    user,
+    notif_type,
+    title,
+    body='',
+    link='',
+    sender=None,
+    actions=None,
+    extra_data=None,
+):
     """
     Send both:
     1. real-time websocket notification
@@ -704,10 +766,18 @@ def _notify(user, notif_type, title, body='', link='', sender=None):
     """
     icon, color = _NOTIF_META.get(notif_type, ('bi-bell-fill', '#64748b'))
 
-    # Real-time / websocket
-    _push_notification(user, notif_type, title, body, link, icon, color)
+    _push_notification(
+        user=user,
+        notif_type=notif_type,
+        title=title,
+        body=body,
+        link=link,
+        icon=icon,
+        color=color,
+        actions=actions,
+        extra_data=extra_data,
+    )
 
-    # Persistent / main bell
     if sender is not None:
         _store_notification(
             recipient=user,
@@ -716,6 +786,8 @@ def _notify(user, notif_type, title, body='', link='', sender=None):
             title=title,
             body=body,
             link=link,
+            actions=actions,
+            extra_data=extra_data,
         )
 
 
@@ -1411,6 +1483,9 @@ def _apply_pdf_letterhead(
     writer.write(output)
     output.seek(0)
     return output
+
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # File Manager
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2999,12 +3074,33 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
                 order=i+1,
             )
             _notify_signer(signer, base_url)   # email (all signers)
-            if user_obj:                        # WS push (internal users only)
+            if user_obj:
                 _notify(
-                    user_obj, 'sign_request',
+                    user_obj,
+                    'sign_request',
                     title=f'Please sign: {sig_req.title}',
                     body=f'Requested by {request.user.full_name}',
                     link=signer.signing_url,
+                    sender=request.user,
+                    actions=[
+                        {
+                            'label': 'Sign Now',
+                            'url': signer.signing_url,
+                            'style': 'primary',
+                            'icon': 'bi-pen-fill',
+                        },
+                        {
+                            'label': 'View Request',
+                            'url': reverse('signature_request_detail', kwargs={'pk': sig_req.pk}),
+                            'style': 'secondary',
+                            'icon': 'bi-eye',
+                        },
+                    ],
+                    extra_data={
+                        'request_id': str(sig_req.pk),
+                        'document_id': str(sig_req.document_id),
+                        'signer_id': str(signer.pk),
+                    },
                 )
 
         _log_audit(sig_req, 'created', request=request,
@@ -3092,12 +3188,33 @@ class SignatureRequestDetailView(LoginRequiredMixin, View):
             signer = get_object_or_404(SignatureRequestSigner, pk=signer_id, request=sig_req)
             base_url = request.build_absolute_uri('/')
             _notify_signer(signer, base_url)   # email
-            if signer.user:                    # WS push
+            if signer.user:
                 _notify(
-                    signer.user, 'sign_reminder',
+                    signer.user,
+                    'sign_reminder',
                     title=f'Reminder: Please sign "{sig_req.title}"',
                     body=f'Requested by {sig_req.created_by.full_name}',
                     link=signer.signing_url,
+                    sender=sig_req.created_by,
+                    actions=[
+                        {
+                            'label': 'Sign Now',
+                            'url': signer.signing_url,
+                            'style': 'primary',
+                            'icon': 'bi-pen-fill',
+                        },
+                        {
+                            'label': 'View Request',
+                            'url': reverse('signature_request_detail', kwargs={'pk': sig_req.pk}),
+                            'style': 'secondary',
+                            'icon': 'bi-eye',
+                        },
+                    ],
+                    extra_data={
+                        'request_id': str(sig_req.pk),
+                        'document_id': str(sig_req.document_id),
+                        'signer_id': str(signer.pk),
+                    },
                 )
             messages.success(request, f'Reminder sent to {signer.email}.')
         return redirect('signature_request_detail', pk=sig_req.pk)

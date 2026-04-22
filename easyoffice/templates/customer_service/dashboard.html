@@ -1,46 +1,389 @@
-
 {% extends "base.html" %}
 {% block title %}Customer Service Dashboard{% endblock %}
 {% block breadcrumb %}<span>Customer Service Dashboard</span>{% endblock %}
 {% block content %}
+<style>
+  :root {
+    --cs-primary: #2563eb;
+    --cs-success: #10b981;
+    --cs-warning: #f59e0b;
+    --cs-danger: #ef4444;
+    --cs-purple: #8b5cf6;
+    --cs-info: #06b6d4;
+  }
+
+  /* KPI tiles */
+  .cs-kpi {
+    background: #fff;
+    border: 1px solid var(--eo-border, #e5e7eb);
+    border-radius: 16px;
+    padding: 16px;
+    position: relative;
+    overflow: hidden;
+    transition: transform .15s, box-shadow .15s;
+    height: 100%;
+  }
+  .cs-kpi:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(15,23,42,.08); }
+  .cs-kpi::before {
+    content:''; position: absolute; inset: 0 0 auto 0; height: 4px;
+    background: var(--kpi-color, var(--cs-primary));
+  }
+  .cs-kpi-label {
+    font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    color: #64748b; margin: 0 0 6px 0;
+  }
+  .cs-kpi-value {
+    font-size: 2rem; font-weight: 800; line-height: 1;
+    color: var(--eo-text, #0f172a);
+    font-variant-numeric: tabular-nums;
+  }
+  .cs-kpi-icon {
+    position: absolute; right: 14px; top: 18px;
+    width: 40px; height: 40px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--kpi-bg, #eff6ff);
+    color: var(--kpi-color, var(--cs-primary));
+    font-size: 1.2rem;
+  }
+  .cs-kpi-trend {
+    margin-top: 10px; font-size: .75rem; display: flex; align-items: center; gap: 4px;
+  }
+  .cs-kpi-trend.up { color: var(--cs-success); }
+  .cs-kpi-trend.down { color: var(--cs-danger); }
+  .cs-kpi-trend.flat { color: #94a3b8; }
+
+  /* Card */
+  .cs-card {
+    background: #fff;
+    border: 1px solid var(--eo-border, #e5e7eb);
+    border-radius: 16px;
+    padding: 18px;
+    box-shadow: 0 4px 14px rgba(15,23,42,.03);
+  }
+  .cs-card-title {
+    font-size: .95rem; font-weight: 700; color: #0f172a;
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 0 14px 0;
+  }
+  .cs-card-title i { color: var(--cs-primary); }
+
+  /* SLA ring */
+  .cs-ring-wrap { display: flex; align-items: center; gap: 14px; }
+  .cs-ring {
+    width: 86px; height: 86px; flex-shrink: 0;
+    position: relative;
+  }
+  .cs-ring svg { transform: rotate(-90deg); }
+  .cs-ring-text {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column;
+    font-weight: 700;
+  }
+  .cs-ring-text .val { font-size: 1.3rem; line-height: 1; }
+  .cs-ring-text .lbl { font-size: .65rem; color: #64748b; text-transform: uppercase; letter-spacing: .05em; }
+
+  /* Activity feed */
+  .cs-feed-item {
+    padding: 10px 0;
+    border-bottom: 1px dashed var(--eo-border, #e5e7eb);
+    display: flex; gap: 10px;
+  }
+  .cs-feed-item:last-child { border-bottom: none; }
+  .cs-feed-icon {
+    width: 32px; height: 32px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; font-size: .85rem;
+  }
+
+  /* Status badges */
+  .cs-pill {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: .7rem;
+    font-weight: 600;
+  }
+  .cs-pill-new { background: #dbeafe; color: #1e40af; }
+  .cs-pill-open { background: #fef3c7; color: #92400e; }
+  .cs-pill-progress { background: #e0e7ff; color: #3730a3; }
+  .cs-pill-resolved, .cs-pill-closed { background: #d1fae5; color: #065f46; }
+  .cs-pill-escalated { background: #fee2e2; color: #991b1b; }
+
+  /* Sparkline mini bars */
+  .cs-spark {
+    display: flex; align-items: flex-end; gap: 2px;
+    height: 28px; margin-top: 8px;
+  }
+  .cs-spark-bar {
+    flex: 1; min-width: 3px; border-radius: 2px;
+    background: var(--kpi-color, var(--cs-primary));
+    opacity: .7;
+  }
+  .cs-spark-bar:last-child { opacity: 1; }
+
+  /* Department bars */
+  .cs-dept-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .cs-dept-row:last-child { border-bottom: none; }
+  .cs-dept-name { flex: 1; font-weight: 500; font-size: .85rem; }
+  .cs-dept-bar {
+    flex: 2; height: 8px; background: #f1f5f9; border-radius: 999px;
+    overflow: hidden;
+  }
+  .cs-dept-bar-fill {
+    height: 100%; background: linear-gradient(90deg, var(--cs-primary), var(--cs-purple));
+    border-radius: 999px;
+    transition: width .6s ease-out;
+  }
+  .cs-dept-count {
+    width: 34px; text-align: right; font-weight: 700; font-size: .85rem;
+    color: #0f172a; font-variant-numeric: tabular-nums;
+  }
+
+  /* Command palette */
+  .cs-cmd-overlay {
+    position: fixed; inset: 0; background: rgba(15,23,42,.55);
+    z-index: 9998; display: none;
+    align-items: flex-start; justify-content: center;
+    padding-top: 100px;
+    backdrop-filter: blur(4px);
+  }
+  .cs-cmd-box {
+    background: #fff; border-radius: 16px;
+    width: 100%; max-width: 560px;
+    box-shadow: 0 30px 70px rgba(0,0,0,.3);
+    overflow: hidden;
+  }
+  .cs-cmd-input {
+    width: 100%; padding: 18px 20px;
+    border: none; font-size: 1rem;
+    border-bottom: 1px solid var(--eo-border, #e5e7eb);
+    outline: none;
+  }
+  .cs-cmd-list { max-height: 380px; overflow-y: auto; padding: 8px; }
+  .cs-cmd-item {
+    padding: 10px 12px; border-radius: 8px;
+    display: flex; align-items: center; gap: 10px;
+    cursor: pointer; font-size: .9rem;
+  }
+  .cs-cmd-item:hover, .cs-cmd-item.active { background: #eff6ff; }
+  .cs-cmd-item i { color: var(--cs-primary); width: 20px; text-align: center; }
+  .cs-cmd-item small { color: #94a3b8; margin-left: auto; font-size: .7rem; }
+
+  /* Live clock */
+  .cs-clock {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .85rem;
+    color: #64748b;
+    padding: 6px 10px;
+    background: #f1f5f9;
+    border-radius: 8px;
+  }
+
+  .cs-empty { text-align: center; padding: 20px; color: #94a3b8; font-size: .85rem; }
+</style>
+
 <div class="eo-page-header">
   <div>
     <h1 class="eo-page-title"><i class="bi bi-headset"></i> Customer Service Dashboard</h1>
     <p class="eo-page-subtitle">Live service performance, routing, escalation, and customer experience overview.</p>
   </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <span class="cs-clock" id="csClock">--:--:--</span>
+    <button class="eo-btn eo-btn-secondary" onclick="csCmdOpen()" title="Command palette (Ctrl+K)">
+      <i class="bi bi-command"></i> <kbd style="background:#1e293b;color:#fff;padding:1px 5px;border-radius:3px;font-size:.7rem;margin-left:4px">K</kbd>
+    </button>
     <a href="{% url 'customer_service_call_desk' %}" class="eo-btn eo-btn-primary"><i class="bi bi-telephone-plus"></i> Open Call Desk</a>
     <a href="{% url 'customer_service_ticket_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-ticket-detailed"></i> Tickets</a>
   </div>
 </div>
 
+<!-- ═══════════ KPI ROW ═══════════ -->
 <div class="row g-3 mb-4">
-  <div class="col-6 col-lg-2"><div class="eo-stat"><div class="eo-stat-label">Calls Today</div><div class="eo-stat-value">{{ calls_today }}</div><i class="bi bi-telephone eo-stat-icon"></i></div></div>
-  <div class="col-6 col-lg-2"><div class="eo-stat eo-stat-info"><div class="eo-stat-label">Open Tickets</div><div class="eo-stat-value">{{ open_tickets }}</div><i class="bi bi-ticket-perforated eo-stat-icon"></i></div></div>
-  <div class="col-6 col-lg-2"><div class="eo-stat eo-stat-warning"><div class="eo-stat-label">Overdue</div><div class="eo-stat-value">{{ overdue_tickets }}</div><i class="bi bi-alarm eo-stat-icon"></i></div></div>
-  <div class="col-6 col-lg-2"><div class="eo-stat" style="border-color:#fecaca;background:#fff7f7"><div class="eo-stat-label">Escalated</div><div class="eo-stat-value">{{ escalated_tickets }}</div><i class="bi bi-arrow-up-right-circle eo-stat-icon" style="color:#ef4444"></i></div></div>
-  <div class="col-6 col-lg-2"><div class="eo-stat" style="border-color:#a7f3d0;background:#f0fdf4"><div class="eo-stat-label">Resolved Today</div><div class="eo-stat-value">{{ resolved_today }}</div><i class="bi bi-check2-circle eo-stat-icon" style="color:#10b981"></i></div></div>
-  <div class="col-6 col-lg-2"><div class="eo-stat" style="border-color:#ddd6fe;background:#faf5ff"><div class="eo-stat-label">Avg Service</div><div class="eo-stat-value">{{ avg_service_quality|default:"-" }}</div><i class="bi bi-star-fill eo-stat-icon" style="color:#8b5cf6"></i></div></div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="cs-kpi" style="--kpi-color:#2563eb;--kpi-bg:#eff6ff">
+      <div class="cs-kpi-icon"><i class="bi bi-telephone"></i></div>
+      <p class="cs-kpi-label">Calls Today</p>
+      <div class="cs-kpi-value">{{ calls_today }}</div>
+      <div class="cs-spark" data-spark="3,5,4,7,6,8,{{ calls_today }}"></div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="cs-kpi" style="--kpi-color:#06b6d4;--kpi-bg:#ecfeff">
+      <div class="cs-kpi-icon"><i class="bi bi-ticket-perforated"></i></div>
+      <p class="cs-kpi-label">Open Tickets</p>
+      <div class="cs-kpi-value">{{ open_tickets }}</div>
+      <div class="cs-kpi-trend flat"><i class="bi bi-graph-up"></i> Active</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="cs-kpi" style="--kpi-color:#f59e0b;--kpi-bg:#fffbeb">
+      <div class="cs-kpi-icon"><i class="bi bi-alarm"></i></div>
+      <p class="cs-kpi-label">Overdue</p>
+      <div class="cs-kpi-value">{{ overdue_tickets }}</div>
+      <div class="cs-kpi-trend {% if overdue_tickets %}down{% else %}up{% endif %}">
+        {% if overdue_tickets %}<i class="bi bi-exclamation-triangle"></i> Needs attention
+        {% else %}<i class="bi bi-check-circle"></i> All on track{% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="cs-kpi" style="--kpi-color:#ef4444;--kpi-bg:#fee2e2">
+      <div class="cs-kpi-icon"><i class="bi bi-arrow-up-right-circle"></i></div>
+      <p class="cs-kpi-label">Escalated</p>
+      <div class="cs-kpi-value">{{ escalated_tickets }}</div>
+      <div class="cs-kpi-trend {% if escalated_tickets %}down{% else %}flat{% endif %}">
+        {% if escalated_tickets %}<i class="bi bi-flag"></i> High priority{% else %}<i class="bi bi-dash"></i> None{% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="cs-kpi" style="--kpi-color:#10b981;--kpi-bg:#d1fae5">
+      <div class="cs-kpi-icon"><i class="bi bi-check2-circle"></i></div>
+      <p class="cs-kpi-label">Resolved Today</p>
+      <div class="cs-kpi-value">{{ resolved_today }}</div>
+      <div class="cs-kpi-trend up"><i class="bi bi-arrow-up"></i> Closed</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="cs-kpi" style="--kpi-color:#8b5cf6;--kpi-bg:#faf5ff">
+      <div class="cs-kpi-icon"><i class="bi bi-star-fill"></i></div>
+      <p class="cs-kpi-label">Avg Service</p>
+      <div class="cs-kpi-value">{{ avg_service_quality|default:"—"|floatformat:1 }}<small style="font-size:.9rem;color:#94a3b8">/5</small></div>
+      <div class="cs-kpi-trend flat">
+        {% for i in "12345"|make_list %}{% if avg_service_quality and forloop.counter <= avg_service_quality %}⭐{% else %}☆{% endif %}{% endfor %}
+      </div>
+    </div>
+  </div>
 </div>
 
+<!-- ═══════════ HEALTH + QUICK ACTIONS ═══════════ -->
+<div class="row g-3 mb-3">
+  <div class="col-lg-4">
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-activity"></i> Service Health</h3>
+      {% with total_active=open_tickets on_time=0 %}
+      {% endwith %}
+      <div class="cs-ring-wrap mb-3">
+        {# SLA compliance ring: (open - overdue) / max(open,1) #}
+        <div class="cs-ring">
+          <svg width="86" height="86" viewBox="0 0 86 86">
+            <circle cx="43" cy="43" r="36" stroke="#f1f5f9" stroke-width="9" fill="none"/>
+            <circle id="csSlaRing" cx="43" cy="43" r="36" stroke="#10b981" stroke-width="9"
+                    fill="none" stroke-linecap="round"
+                    stroke-dasharray="226" stroke-dashoffset="226"
+                    data-value="{% if open_tickets %}{{ overdue_tickets }}|{{ open_tickets }}{% else %}0|1{% endif %}"/>
+          </svg>
+          <div class="cs-ring-text"><span class="val" id="csSlaPct">—</span><span class="lbl">SLA</span></div>
+        </div>
+        <div>
+          <div class="fw-bold" style="font-size:.95rem">SLA Compliance</div>
+          <small class="text-muted">{{ open_tickets }} active · {{ overdue_tickets }} overdue</small>
+        </div>
+      </div>
+
+      <div class="cs-ring-wrap">
+        <div class="cs-ring">
+          <svg width="86" height="86" viewBox="0 0 86 86">
+            <circle cx="43" cy="43" r="36" stroke="#f1f5f9" stroke-width="9" fill="none"/>
+            <circle id="csSatRing" cx="43" cy="43" r="36" stroke="#8b5cf6" stroke-width="9"
+                    fill="none" stroke-linecap="round"
+                    stroke-dasharray="226" stroke-dashoffset="226"
+                    data-value="{{ avg_service_quality|default:0 }}"/>
+          </svg>
+          <div class="cs-ring-text"><span class="val" id="csSatPct">—</span><span class="lbl">CSAT</span></div>
+        </div>
+        <div>
+          <div class="fw-bold" style="font-size:.95rem">Customer Satisfaction</div>
+          <small class="text-muted">Avg service {{ avg_service_quality|default:"—"|floatformat:2 }} / product {{ avg_product_quality|default:"—"|floatformat:2 }}</small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="cs-card h-100">
+      <h3 class="cs-card-title"><i class="bi bi-lightning-charge"></i> Quick Actions</h3>
+      <div class="d-grid gap-2">
+        <a href="{% url 'customer_service_call_desk' %}" class="eo-btn eo-btn-primary text-start">
+          <i class="bi bi-telephone-plus"></i> Log a new call
+        </a>
+        <a href="{% url 'customer_service_ticket_list' %}?status=escalated" class="eo-btn eo-btn-secondary text-start">
+          <i class="bi bi-exclamation-triangle" style="color:#ef4444"></i> Review escalated tickets
+        </a>
+        <a href="{% url 'customer_service_ticket_list' %}?mine=1" class="eo-btn eo-btn-secondary text-start">
+          <i class="bi bi-person-check"></i> My assigned tickets
+        </a>
+        <a href="{% url 'customer_service_department_queue' %}" class="eo-btn eo-btn-secondary text-start">
+          <i class="bi bi-diagram-3"></i> Department queue
+        </a>
+        <a href="{% url 'customer_service_customer_list' %}" class="eo-btn eo-btn-secondary text-start">
+          <i class="bi bi-people"></i> Customer directory
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="cs-card h-100">
+      <h3 class="cs-card-title"><i class="bi bi-building"></i> Tickets by Department</h3>
+      {% with tickets_by_department|first as top %}
+        {% if top %}
+          <div>
+            {% for row in tickets_by_department %}
+            <div class="cs-dept-row">
+              <div class="cs-dept-name text-truncate">{{ row.name }}</div>
+              <div class="cs-dept-bar">
+                <div class="cs-dept-bar-fill"
+                     style="width: {% if top.ticket_count %}{% widthratio row.ticket_count top.ticket_count 100 %}{% else %}0{% endif %}%"></div>
+              </div>
+              <div class="cs-dept-count">{{ row.ticket_count }}</div>
+            </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="cs-empty">No department stats yet.</div>
+        {% endif %}
+      {% endwith %}
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ RECENT CALLS + TICKETS ═══════════ -->
 <div class="row g-3">
-  <div class="col-lg-6">
-    <div class="eo-card h-100">
-      <h3 class="eo-card-title"><i class="bi bi-clock-history"></i> Recent Calls</h3>
+  <div class="col-lg-7">
+    <div class="cs-card">
+      <h3 class="cs-card-title">
+        <i class="bi bi-clock-history"></i> Recent Calls
+        <a href="{% url 'customer_service_call_desk' %}" class="ms-auto small" style="font-weight:500">View all →</a>
+      </h3>
       <div class="table-responsive">
-        <table class="table align-middle">
-          <thead><tr><th>Caller</th><th>Type</th><th>Handled By</th><th>When</th><th>Outcome</th></tr></thead>
+        <table class="table align-middle mb-0">
+          <thead>
+            <tr style="font-size:.78rem;color:#64748b;text-transform:uppercase">
+              <th>Caller</th><th>Type</th><th>Agent</th><th>When</th><th>Outcome</th>
+            </tr>
+          </thead>
           <tbody>
             {% for call in recent_calls %}
             <tr>
-              <td>{% if call.customer %}{{ call.customer.display_name }}{% else %}{{ call.phone_number }}{% endif %}</td>
-              <td>{{ call.get_call_type_display }}</td>
+              <td>
+                <div class="fw-bold" style="font-size:.9rem">
+                  {% if call.customer %}{{ call.customer.display_name }}{% else %}<span class="text-muted">{{ call.phone_number }}</span>{% endif %}
+                </div>
+                {% if call.customer %}<small class="text-muted">{{ call.phone_number }}</small>{% endif %}
+              </td>
+              <td><span class="cs-pill cs-pill-new">{{ call.get_call_type_display }}</span></td>
               <td>{{ call.handled_by.full_name|default:"—" }}</td>
-              <td>{{ call.started_at|date:"M j, H:i" }}</td>
+              <td><small class="text-muted">{{ call.started_at|date:"M j, H:i" }}</small></td>
               <td>{{ call.get_outcome_display|default:"—" }}</td>
             </tr>
             {% empty %}
-            <tr><td colspan="5" class="text-muted">No calls yet.</td></tr>
+            <tr><td colspan="5" class="cs-empty">No calls yet today.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -48,41 +391,126 @@
     </div>
   </div>
 
-  <div class="col-lg-6">
-    <div class="eo-card h-100">
-      <h3 class="eo-card-title"><i class="bi bi-building"></i> Tickets by Department</h3>
-      <div class="table-responsive">
-        <table class="table align-middle">
-          <thead><tr><th>Department</th><th>Tickets</th></tr></thead>
-          <tbody>
-            {% for row in tickets_by_department %}
-            <tr>
-              <td>{{ row.name }}</td>
-              <td><span class="badge text-bg-primary">{{ row.ticket_count }}</span></td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="2" class="text-muted">No department stats yet.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-
-      <hr>
-      <h3 class="eo-card-title"><i class="bi bi-ticket-detailed"></i> Recent Tickets</h3>
-      <div class="list-group list-group-flush">
+  <div class="col-lg-5">
+    <div class="cs-card">
+      <h3 class="cs-card-title">
+        <i class="bi bi-ticket-detailed"></i> Recent Tickets
+        <a href="{% url 'customer_service_ticket_list' %}" class="ms-auto small" style="font-weight:500">View all →</a>
+      </h3>
+      <div>
         {% for ticket in recent_tickets %}
-        <a href="{% url 'customer_service_ticket_detail' ticket.pk %}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-start">
-          <div>
-            <div class="fw-bold">{{ ticket.ticket_no }} — {{ ticket.subject }}</div>
-            <small class="text-muted">{{ ticket.customer.display_name }}{% if ticket.department %} · {{ ticket.department.name }}{% endif %}</small>
+        <a href="{% url 'customer_service_ticket_detail' ticket.pk %}" class="cs-feed-item" style="text-decoration:none;color:inherit">
+          <div class="cs-feed-icon"
+               style="background:{% if ticket.status == 'escalated' %}#fee2e2{% elif ticket.status == 'resolved' or ticket.status == 'closed' %}#d1fae5{% else %}#dbeafe{% endif %};
+                      color:{% if ticket.status == 'escalated' %}#991b1b{% elif ticket.status == 'resolved' or ticket.status == 'closed' %}#065f46{% else %}#1e40af{% endif %}">
+            <i class="bi {% if ticket.status == 'escalated' %}bi-exclamation-triangle{% elif ticket.status == 'resolved' %}bi-check2{% elif ticket.status == 'closed' %}bi-check2-all{% else %}bi-ticket{% endif %}"></i>
           </div>
-          <span class="badge text-bg-secondary">{{ ticket.get_status_display }}</span>
+          <div style="flex:1;min-width:0">
+            <div class="fw-bold" style="font-size:.88rem">{{ ticket.ticket_no }} — {{ ticket.subject|truncatechars:42 }}</div>
+            <small class="text-muted">
+              {{ ticket.customer.display_name }}{% if ticket.department %} · {{ ticket.department.name }}{% endif %}
+            </small>
+          </div>
+          <span class="cs-pill cs-pill-{{ ticket.status }}">{{ ticket.get_status_display }}</span>
         </a>
         {% empty %}
-        <div class="text-muted">No recent tickets.</div>
+        <div class="cs-empty">No recent tickets.</div>
         {% endfor %}
       </div>
     </div>
   </div>
 </div>
+
+<!-- ═══════════ COMMAND PALETTE ═══════════ -->
+<div id="csCmdOverlay" class="cs-cmd-overlay">
+  <div class="cs-cmd-box">
+    <input id="csCmdInput" class="cs-cmd-input" placeholder="Type to search actions, pages, customers…" autocomplete="off">
+    <div id="csCmdList" class="cs-cmd-list"></div>
+  </div>
+</div>
+
+<script>
+/* ---------- Clock ---------- */
+function csTickClock() {
+  const d = new Date();
+  document.getElementById('csClock').textContent =
+    d.toLocaleTimeString([], {hour12:false}) + ' · ' + d.toLocaleDateString([], {month:'short', day:'numeric'});
+}
+csTickClock(); setInterval(csTickClock, 1000);
+
+/* ---------- SLA + CSAT rings ---------- */
+(function(){
+  const CIRC = 2 * Math.PI * 36; // ≈ 226.19
+  const slaEl = document.getElementById('csSlaRing');
+  if (slaEl) {
+    const [overdue, total] = slaEl.dataset.value.split('|').map(Number);
+    const pct = total > 0 ? Math.round(((total - overdue) / total) * 100) : 100;
+    slaEl.style.strokeDashoffset = CIRC - (pct / 100) * CIRC;
+    slaEl.style.stroke = pct >= 85 ? '#10b981' : pct >= 60 ? '#f59e0b' : '#ef4444';
+    document.getElementById('csSlaPct').textContent = pct + '%';
+  }
+  const satEl = document.getElementById('csSatRing');
+  if (satEl) {
+    const val = parseFloat(satEl.dataset.value) || 0;
+    const pct = Math.round((val / 5) * 100);
+    satEl.style.strokeDashoffset = CIRC - (pct / 100) * CIRC;
+    document.getElementById('csSatPct').textContent = val ? val.toFixed(1) : '—';
+  }
+})();
+
+/* ---------- Sparklines ---------- */
+document.querySelectorAll('.cs-spark[data-spark]').forEach(el => {
+  const vals = el.dataset.spark.split(',').map(Number);
+  const max = Math.max(...vals, 1);
+  el.innerHTML = vals.map(v =>
+    `<span class="cs-spark-bar" style="height:${Math.max((v/max)*100, 8)}%"></span>`
+  ).join('');
+});
+
+/* ---------- Command palette ---------- */
+const CS_CMDS = [
+  {label: 'Open Call Desk', href: "{% url 'customer_service_call_desk' %}", icon:'bi-telephone-plus', hint:'Log call'},
+  {label: 'View All Tickets', href: "{% url 'customer_service_ticket_list' %}", icon:'bi-ticket-detailed', hint:'Tickets'},
+  {label: 'My Tickets', href: "{% url 'customer_service_ticket_list' %}?mine=1", icon:'bi-person-check', hint:'Mine'},
+  {label: 'Escalated Tickets', href: "{% url 'customer_service_ticket_list' %}?status=escalated", icon:'bi-exclamation-triangle', hint:'Urgent'},
+  {label: 'Overdue Tickets', href: "{% url 'customer_service_ticket_list' %}?status=open", icon:'bi-alarm', hint:'Overdue'},
+  {label: 'Customer Contacts', href: "{% url 'customer_service_customer_list' %}", icon:'bi-people', hint:'Directory'},
+  {label: 'Department Queue', href: "{% url 'customer_service_department_queue' %}", icon:'bi-diagram-3', hint:'Queue'},
+  {label: 'Dashboard', href: "{% url 'customer_service_dashboard' %}", icon:'bi-speedometer2', hint:'Home'},
+];
+
+function csCmdOpen() {
+  const ov = document.getElementById('csCmdOverlay');
+  ov.style.display = 'flex';
+  const input = document.getElementById('csCmdInput');
+  input.value = ''; csCmdRender('');
+  setTimeout(() => input.focus(), 50);
+}
+function csCmdClose() { document.getElementById('csCmdOverlay').style.display = 'none'; }
+function csCmdRender(q) {
+  const list = document.getElementById('csCmdList');
+  const filtered = CS_CMDS.filter(c => c.label.toLowerCase().includes(q.toLowerCase()));
+  list.innerHTML = filtered.map((c, i) =>
+    `<a class="cs-cmd-item${i===0?' active':''}" href="${c.href}">
+      <i class="bi ${c.icon}"></i> <span>${c.label}</span> <small>${c.hint||''}</small>
+    </a>`
+  ).join('') || '<div class="cs-empty">No matches.</div>';
+}
+document.getElementById('csCmdInput').addEventListener('input', e => csCmdRender(e.target.value));
+document.getElementById('csCmdInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const first = document.querySelector('.cs-cmd-item');
+    if (first && first.href) window.location.href = first.href;
+  }
+  if (e.key === 'Escape') csCmdClose();
+});
+document.getElementById('csCmdOverlay').addEventListener('click', e => {
+  if (e.target.id === 'csCmdOverlay') csCmdClose();
+});
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault(); csCmdOpen();
+  }
+});
+</script>
 {% endblock %}

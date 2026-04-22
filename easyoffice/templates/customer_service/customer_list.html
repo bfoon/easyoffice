@@ -1,59 +1,411 @@
-
 {% extends "base.html" %}
 {% block title %}Customer Contacts{% endblock %}
 {% block breadcrumb %}<a href="{% url 'customer_service_dashboard' %}">Customer Service</a> / Contacts{% endblock %}
 {% block content %}
+<style>
+:root{
+  --cs-primary:#2563eb; --cs-success:#10b981; --cs-warning:#f59e0b;
+  --cs-danger:#ef4444; --cs-purple:#8b5cf6; --cs-slate:#64748b;
+}
+.cs-card{border:1px solid var(--eo-border);border-radius:16px;background:var(--eo-surface);padding:18px;box-shadow:0 6px 20px rgba(15,23,42,.04)}
+.cs-card-title{font-size:.95rem;font-weight:700;color:var(--eo-text);margin:0 0 12px 0;display:flex;align-items:center;gap:8px}
+
+/* Search bar with live stats */
+.cs-search-wrap{position:relative}
+.cs-search-wrap input{padding-left:42px;padding-right:110px;height:52px;font-size:1rem;border-radius:14px;border:2px solid var(--eo-border);transition:all .2s}
+.cs-search-wrap input:focus{border-color:var(--cs-primary);box-shadow:0 0 0 4px rgba(37,99,235,.08);outline:none}
+.cs-search-icon{position:absolute;left:16px;top:50%;transform:translateY(-50%);color:var(--cs-slate);font-size:1.2rem;pointer-events:none}
+.cs-search-badge{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:#f1f5f9;color:#475569;padding:4px 10px;border-radius:8px;font-size:.75rem;font-weight:700}
+
+/* Filter chips */
+.cs-chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.cs-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:999px;border:1px solid var(--eo-border);background:var(--eo-surface);color:var(--eo-text);font-size:.8rem;font-weight:600;cursor:pointer;transition:all .15s;user-select:none}
+.cs-chip:hover{border-color:var(--cs-primary);color:var(--cs-primary)}
+.cs-chip.active{background:var(--cs-primary);color:#fff;border-color:var(--cs-primary)}
+.cs-chip .cs-chip-count{background:rgba(255,255,255,.25);padding:1px 8px;border-radius:999px;font-size:.7rem}
+.cs-chip:not(.active) .cs-chip-count{background:#f1f5f9;color:#475569}
+
+/* View toggle */
+.cs-view-toggle{display:inline-flex;background:#f1f5f9;padding:3px;border-radius:10px;gap:2px}
+.cs-view-btn{border:0;background:transparent;padding:6px 12px;border-radius:8px;font-size:.85rem;font-weight:600;color:#64748b;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:6px}
+.cs-view-btn.active{background:#fff;color:var(--cs-primary);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+
+/* A-Z jump strip */
+.cs-az-strip{display:flex;flex-wrap:wrap;gap:2px;padding:8px 0;border-top:1px solid var(--eo-border);border-bottom:1px solid var(--eo-border);margin:10px 0}
+.cs-az-letter{width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;color:#94a3b8;border-radius:6px;cursor:pointer;transition:all .1s;user-select:none}
+.cs-az-letter.has-results{color:var(--cs-primary);background:#eff6ff}
+.cs-az-letter.has-results:hover{background:var(--cs-primary);color:#fff}
+.cs-az-letter.disabled{pointer-events:none;opacity:.4}
+
+/* Avatar */
+.cs-avatar{width:40px;height:40px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:.9rem;flex-shrink:0;background-size:cover}
+.cs-avatar-lg{width:56px;height:56px;font-size:1.1rem}
+
+/* Card grid */
+.cs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.cs-person-card{border:1px solid var(--eo-border);border-radius:14px;padding:16px;background:var(--eo-surface);transition:all .2s;position:relative;overflow:hidden;cursor:pointer;text-decoration:none;color:inherit;display:block}
+.cs-person-card:hover{border-color:var(--cs-primary);box-shadow:0 10px 30px rgba(37,99,235,.12);transform:translateY(-2px);color:inherit;text-decoration:none}
+.cs-person-card .cs-type-tag{position:absolute;top:12px;right:12px;font-size:.65rem;font-weight:700;padding:3px 8px;border-radius:6px;text-transform:uppercase;letter-spacing:.04em}
+.cs-person-card .cs-type-tag.individual{background:#eff6ff;color:#2563eb}
+.cs-person-card .cs-type-tag.business{background:#faf5ff;color:#8b5cf6}
+.cs-person-head{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+.cs-person-name{font-weight:700;font-size:1rem;color:var(--eo-text);margin:0;line-height:1.2}
+.cs-person-code{font-size:.72rem;color:#94a3b8;font-family:monospace;margin-top:2px}
+.cs-person-meta{font-size:.82rem;color:#64748b;line-height:1.6;padding-top:10px;border-top:1px dashed var(--eo-border)}
+.cs-person-meta .cs-meta-row{display:flex;gap:8px;align-items:center;margin-bottom:3px}
+.cs-person-meta i{color:var(--cs-slate);width:14px;text-align:center}
+
+/* Table */
+.cs-table{width:100%;border-collapse:separate;border-spacing:0}
+.cs-table thead th{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:#64748b;font-weight:700;padding:10px 12px;background:#f8fafc;border-bottom:1px solid var(--eo-border);position:sticky;top:0}
+.cs-table tbody td{padding:12px;border-bottom:1px solid var(--eo-border);vertical-align:middle;font-size:.9rem}
+.cs-table tbody tr{transition:background .12s}
+.cs-table tbody tr:hover{background:#f8fafc;cursor:pointer}
+.cs-pref-pill{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:6px;font-size:.72rem;font-weight:600;background:#f1f5f9;color:#475569}
+.cs-pref-pill.phone{background:#dbeafe;color:#1e40af}
+.cs-pref-pill.email{background:#f3e8ff;color:#6b21a8}
+.cs-pref-pill.sms{background:#dcfce7;color:#166534}
+.cs-pref-pill.whatsapp{background:#d1fae5;color:#065f46}
+
+/* Empty */
+.cs-empty{text-align:center;padding:60px 20px;color:#94a3b8}
+.cs-empty i{font-size:3rem;color:#cbd5e1;margin-bottom:12px;display:block}
+
+/* Toast */
+.cs-toast{position:fixed;bottom:24px;right:24px;background:#0f172a;color:#fff;padding:12px 18px;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.25);z-index:10000;opacity:0;transform:translateY(20px);transition:all .25s;font-size:.9rem;font-weight:600;display:flex;align-items:center;gap:8px}
+.cs-toast.show{opacity:1;transform:translateY(0)}
+
+/* Hide elements without matches */
+.cs-hidden{display:none !important}
+.cs-row-hidden{display:none !important}
+</style>
+
 <div class="eo-page-header">
   <div>
-    <h1 class="eo-page-title"><i class="bi bi-people"></i> Customer Contacts</h1>
-    <p class="eo-page-subtitle">Search callers, service contacts, and customers already known to the system.</p>
+    <h1 class="eo-page-title"><i class="bi bi-people-fill"></i> Customer Contacts</h1>
+    <p class="eo-page-subtitle">Find, filter, and manage your customer relationships in one place.</p>
   </div>
-  <a href="{% url 'customer_service_call_desk' %}" class="eo-btn eo-btn-primary"><i class="bi bi-telephone"></i> Back to Call Desk</a>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <button class="eo-btn eo-btn-secondary" onclick="exportCSV()"><i class="bi bi-download"></i> Export CSV</button>
+    <a href="{% url 'customer_service_call_desk' %}" class="eo-btn eo-btn-primary"><i class="bi bi-telephone-plus"></i> New Call</a>
+  </div>
 </div>
 
-<form class="eo-card mb-3">
-  <div class="row g-3 align-items-end">
-    <div class="col-md-10">
-      <label class="eo-form-label">Search</label>
-      <input type="text" name="q" value="{{ q }}" class="eo-form-control" placeholder="Name, company, email, customer code, or phone">
+<!-- Search + server-side form -->
+<form class="cs-card mb-3" method="get" id="searchForm">
+  <div class="cs-search-wrap">
+    <i class="bi bi-search cs-search-icon"></i>
+    <input type="text" name="q" id="searchInput" value="{{ q }}" class="eo-form-control"
+           placeholder="Search by name, company, email, customer code, or phone number..."
+           autocomplete="off">
+    <span class="cs-search-badge" id="searchBadge">{{ customers|length }} record{{ customers|length|pluralize }}</span>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-3">
+    <div class="cs-chips" id="typeChips">
+      <span class="cs-chip active" data-filter="all">All <span class="cs-chip-count" id="countAll">0</span></span>
+      <span class="cs-chip" data-filter="individual"><i class="bi bi-person"></i> Individual <span class="cs-chip-count" id="countIndividual">0</span></span>
+      <span class="cs-chip" data-filter="business"><i class="bi bi-building"></i> Business <span class="cs-chip-count" id="countBusiness">0</span></span>
+      <span class="cs-chip" data-filter="with-email"><i class="bi bi-envelope"></i> Has Email <span class="cs-chip-count" id="countEmail">0</span></span>
+      <span class="cs-chip" data-filter="with-phone"><i class="bi bi-telephone"></i> Has Phone <span class="cs-chip-count" id="countPhone">0</span></span>
     </div>
-    <div class="col-md-2">
-      <button class="eo-btn eo-btn-primary w-100"><i class="bi bi-search"></i> Search</button>
+
+    <div class="cs-view-toggle" role="group">
+      <button type="button" class="cs-view-btn active" data-view="grid" id="viewGridBtn"><i class="bi bi-grid-3x3-gap"></i> Cards</button>
+      <button type="button" class="cs-view-btn" data-view="table" id="viewTableBtn"><i class="bi bi-list-ul"></i> Table</button>
     </div>
   </div>
+
+  <!-- A-Z jump strip -->
+  <div class="cs-az-strip" id="azStrip"></div>
 </form>
 
-<div class="eo-card">
+<!-- Card Grid View -->
+<div class="cs-grid" id="gridView">
+  {% for customer in customers %}
+  <a href="{% url 'customer_service_customer_detail' customer.pk %}"
+     class="cs-person-card cs-customer-item"
+     data-name="{{ customer.display_name|lower }}"
+     data-email="{{ customer.email|default:''|lower }}"
+     data-code="{{ customer.customer_code|lower }}"
+     data-type="{{ customer.customer_type }}"
+     data-letter="{{ customer.display_name|slice:':1'|upper }}"
+     data-has-email="{% if customer.email %}1{% else %}0{% endif %}"
+     data-has-phone="{% if customer.phones.all %}1{% else %}0{% endif %}">
+    <span class="cs-type-tag {{ customer.customer_type }}">{{ customer.get_customer_type_display }}</span>
+    <div class="cs-person-head">
+      <div class="cs-avatar" style="background:linear-gradient(135deg,
+        {% if customer.customer_type == 'business' %}#8b5cf6,#6366f1{% else %}#3b82f6,#06b6d4{% endif %})">
+        {{ customer.display_name|slice:":2"|upper }}
+      </div>
+      <div style="min-width:0;flex:1">
+        <h4 class="cs-person-name">{{ customer.display_name }}</h4>
+        <div class="cs-person-code">{{ customer.customer_code }}</div>
+      </div>
+    </div>
+    <div class="cs-person-meta">
+      {% with p=customer.phones.all|first %}
+      {% if p %}
+      <div class="cs-meta-row"><i class="bi bi-telephone"></i> <span>{{ p.phone_number }}</span></div>
+      {% endif %}
+      {% endwith %}
+      {% if customer.email %}
+      <div class="cs-meta-row"><i class="bi bi-envelope"></i> <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ customer.email }}</span></div>
+      {% endif %}
+      <div class="cs-meta-row">
+        <i class="bi bi-chat-dots"></i>
+        <span class="cs-pref-pill {{ customer.preferred_contact_method }}">{{ customer.get_preferred_contact_method_display }}</span>
+      </div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+
+<!-- Table View -->
+<div class="cs-card cs-hidden" id="tableView" style="padding:0;overflow:hidden">
   <div class="table-responsive">
-    <table class="table align-middle">
+    <table class="cs-table">
       <thead>
         <tr>
+          <th style="width:36px"><input type="checkbox" id="selectAll"></th>
           <th>Customer</th>
-          <th>Primary Phone</th>
+          <th>Phone</th>
           <th>Email</th>
           <th>Type</th>
           <th>Preference</th>
-          <th></th>
+          <th style="width:80px"></th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="tableBody">
         {% for customer in customers %}
-        <tr>
+        <tr class="cs-customer-item-row"
+            data-name="{{ customer.display_name|lower }}"
+            data-email="{{ customer.email|default:''|lower }}"
+            data-code="{{ customer.customer_code|lower }}"
+            data-type="{{ customer.customer_type }}"
+            data-letter="{{ customer.display_name|slice:':1'|upper }}"
+            data-has-email="{% if customer.email %}1{% else %}0{% endif %}"
+            data-has-phone="{% if customer.phones.all %}1{% else %}0{% endif %}"
+            onclick="window.location='{% url 'customer_service_customer_detail' customer.pk %}'">
+          <td onclick="event.stopPropagation()"><input type="checkbox" class="cs-row-check"></td>
           <td>
-            <div class="fw-bold">{{ customer.display_name }}</div>
-            <small class="text-muted">{{ customer.customer_code }}</small>
+            <div style="display:flex;align-items:center;gap:10px">
+              <div class="cs-avatar" style="width:34px;height:34px;font-size:.8rem;background:linear-gradient(135deg,
+                {% if customer.customer_type == 'business' %}#8b5cf6,#6366f1{% else %}#3b82f6,#06b6d4{% endif %})">
+                {{ customer.display_name|slice:":2"|upper }}
+              </div>
+              <div style="min-width:0">
+                <div class="fw-bold">{{ customer.display_name }}</div>
+                <div style="font-size:.72rem;color:#94a3b8;font-family:monospace">{{ customer.customer_code }}</div>
+              </div>
+            </div>
           </td>
-          <td>{% with p=customer.phones.all|first %}{% if p %}{{ p.phone_number }}{% else %}—{% endif %}{% endwith %}</td>
+          <td>{% with p=customer.phones.all|first %}{% if p %}<span style="font-family:monospace">{{ p.phone_number }}</span>{% else %}<span class="text-muted">—</span>{% endif %}{% endwith %}</td>
           <td>{{ customer.email|default:"—" }}</td>
           <td>{{ customer.get_customer_type_display }}</td>
-          <td>{{ customer.get_preferred_contact_method_display }}</td>
-          <td><a href="{% url 'customer_service_customer_detail' customer.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">Open</a></td>
+          <td><span class="cs-pref-pill {{ customer.preferred_contact_method }}">{{ customer.get_preferred_contact_method_display }}</span></td>
+          <td onclick="event.stopPropagation()"><a href="{% url 'customer_service_customer_detail' customer.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">Open</a></td>
         </tr>
-        {% empty %}
-        <tr><td colspan="6" class="text-muted">No customers found.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
+
+<!-- Empty state (hidden by default) -->
+<div class="cs-empty cs-hidden" id="emptyState">
+  <i class="bi bi-person-x"></i>
+  <h4>No customers match your filters</h4>
+  <p>Try a different search term or clear the active filters.</p>
+  <button class="eo-btn eo-btn-secondary" onclick="clearFilters()"><i class="bi bi-x-circle"></i> Clear filters</button>
+</div>
+
+{% if not customers %}
+<div class="cs-empty">
+  <i class="bi bi-people"></i>
+  <h4>No customers yet</h4>
+  <p>Log your first call from the Call Desk and customer records will appear here.</p>
+  <a href="{% url 'customer_service_call_desk' %}" class="eo-btn eo-btn-primary"><i class="bi bi-telephone-plus"></i> Open Call Desk</a>
+</div>
+{% endif %}
+
+<div class="cs-toast" id="toast"><i class="bi bi-check-circle-fill"></i> <span id="toastMsg">Saved</span></div>
+
+<script>
+(function(){
+  const gridItems = Array.from(document.querySelectorAll('.cs-customer-item'));
+  const tableRows = Array.from(document.querySelectorAll('.cs-customer-item-row'));
+  const allItems = [...gridItems, ...tableRows];
+  const searchInput = document.getElementById('searchInput');
+  const searchBadge = document.getElementById('searchBadge');
+  const emptyState = document.getElementById('emptyState');
+  const gridView = document.getElementById('gridView');
+  const tableView = document.getElementById('tableView');
+  const azStrip = document.getElementById('azStrip');
+  const chips = document.querySelectorAll('#typeChips .cs-chip');
+
+  let currentFilter = 'all';
+  let currentLetter = null;
+
+  // Build A-Z strip
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  const letterSet = new Set(gridItems.map(el => el.dataset.letter));
+  azStrip.innerHTML = '<span class="cs-az-letter has-results" data-letter="">All</span>' +
+    letters.map(l => `<span class="cs-az-letter ${letterSet.has(l) ? 'has-results' : 'disabled'}" data-letter="${l}">${l}</span>`).join('');
+
+  azStrip.querySelectorAll('.cs-az-letter').forEach(el => {
+    el.addEventListener('click', () => {
+      if (el.classList.contains('disabled')) return;
+      azStrip.querySelectorAll('.cs-az-letter').forEach(x => x.style.background = '');
+      if (currentLetter === el.dataset.letter) {
+        currentLetter = null;
+      } else {
+        currentLetter = el.dataset.letter;
+        el.style.background = currentLetter === '' ? '' : 'var(--cs-primary)';
+        if (currentLetter !== '') el.style.color = '#fff';
+      }
+      applyFilters();
+    });
+  });
+
+  // Counts
+  function updateCounts(){
+    document.getElementById('countAll').textContent = gridItems.length;
+    document.getElementById('countIndividual').textContent = gridItems.filter(e => e.dataset.type === 'individual').length;
+    document.getElementById('countBusiness').textContent = gridItems.filter(e => e.dataset.type === 'business').length;
+    document.getElementById('countEmail').textContent = gridItems.filter(e => e.dataset.hasEmail === '1').length;
+    document.getElementById('countPhone').textContent = gridItems.filter(e => e.dataset.hasPhone === '1').length;
+  }
+  updateCounts();
+
+  // Chip handlers
+  chips.forEach(chip => {
+    chip.addEventListener('click', () => {
+      chips.forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      currentFilter = chip.dataset.filter;
+      applyFilters();
+    });
+  });
+
+  // Live search
+  function matchesSearch(el, q){
+    if (!q) return true;
+    return el.dataset.name.includes(q) || el.dataset.email.includes(q) || el.dataset.code.includes(q);
+  }
+  function matchesFilter(el){
+    if (currentFilter === 'all') return true;
+    if (currentFilter === 'individual') return el.dataset.type === 'individual';
+    if (currentFilter === 'business') return el.dataset.type === 'business';
+    if (currentFilter === 'with-email') return el.dataset.hasEmail === '1';
+    if (currentFilter === 'with-phone') return el.dataset.hasPhone === '1';
+    return true;
+  }
+  function matchesLetter(el){
+    if (!currentLetter) return true;
+    return el.dataset.letter === currentLetter;
+  }
+
+  function applyFilters(){
+    const q = searchInput.value.trim().toLowerCase();
+    let visible = 0;
+    allItems.forEach(el => {
+      const show = matchesSearch(el, q) && matchesFilter(el) && matchesLetter(el);
+      if (el.classList.contains('cs-customer-item')) {
+        el.classList.toggle('cs-hidden', !show);
+        if (show) visible++;
+      } else {
+        el.classList.toggle('cs-row-hidden', !show);
+      }
+    });
+    searchBadge.textContent = visible + ' match' + (visible === 1 ? '' : 'es');
+    emptyState.classList.toggle('cs-hidden', visible > 0 || allItems.length === 0);
+  }
+
+  searchInput.addEventListener('input', applyFilters);
+
+  // Prevent form submit on Enter (we're using live search)
+  document.getElementById('searchForm').addEventListener('submit', e => {
+    if (e.submitter && e.submitter.type === 'submit') return;
+    e.preventDefault();
+  });
+
+  // View toggle
+  const savedView = localStorage.getItem('cs_customer_view') || 'grid';
+  setView(savedView);
+  document.getElementById('viewGridBtn').addEventListener('click', () => setView('grid'));
+  document.getElementById('viewTableBtn').addEventListener('click', () => setView('table'));
+  function setView(v){
+    localStorage.setItem('cs_customer_view', v);
+    document.getElementById('viewGridBtn').classList.toggle('active', v === 'grid');
+    document.getElementById('viewTableBtn').classList.toggle('active', v === 'table');
+    gridView.classList.toggle('cs-hidden', v !== 'grid');
+    tableView.classList.toggle('cs-hidden', v !== 'table');
+  }
+
+  // Select-all in table
+  const selectAll = document.getElementById('selectAll');
+  if (selectAll) {
+    selectAll.addEventListener('change', () => {
+      document.querySelectorAll('.cs-row-check').forEach(cb => cb.checked = selectAll.checked);
+    });
+  }
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement !== searchInput) {
+      e.preventDefault();
+      searchInput.focus();
+      searchInput.select();
+    }
+    if (e.key === 'Escape' && document.activeElement === searchInput) {
+      searchInput.value = '';
+      applyFilters();
+      searchInput.blur();
+    }
+  });
+
+  window.clearFilters = function(){
+    searchInput.value = '';
+    currentFilter = 'all';
+    currentLetter = null;
+    chips.forEach(c => c.classList.toggle('active', c.dataset.filter === 'all'));
+    azStrip.querySelectorAll('.cs-az-letter').forEach(x => { x.style.background = ''; x.style.color = ''; });
+    applyFilters();
+  };
+
+  // Export visible rows to CSV
+  window.exportCSV = function(){
+    const rows = [['Customer Code','Name','Email','Type','Preference','Phone']];
+    gridItems.forEach(el => {
+      if (el.classList.contains('cs-hidden')) return;
+      const name = el.querySelector('.cs-person-name').textContent.trim();
+      const code = el.querySelector('.cs-person-code').textContent.trim();
+      const phoneEl = el.querySelector('.cs-meta-row i.bi-telephone');
+      const phone = phoneEl ? phoneEl.nextElementSibling.textContent.trim() : '';
+      const emailEl = el.querySelector('.cs-meta-row i.bi-envelope');
+      const email = emailEl ? emailEl.nextElementSibling.textContent.trim() : '';
+      const type = el.dataset.type;
+      const pref = el.querySelector('.cs-pref-pill').textContent.trim();
+      rows.push([code,name,email,type,pref,phone]);
+    });
+    const csv = rows.map(r => r.map(c => `"${(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'customers_'+new Date().toISOString().slice(0,10)+'.csv';
+    a.click(); URL.revokeObjectURL(url);
+    toast('Exported ' + (rows.length-1) + ' customer' + (rows.length === 2 ? '' : 's'));
+  };
+
+  function toast(msg){
+    const t = document.getElementById('toast');
+    document.getElementById('toastMsg').textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  applyFilters();
+})();
+</script>
 {% endblock %}

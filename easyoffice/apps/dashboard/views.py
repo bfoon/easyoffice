@@ -20,11 +20,16 @@ class DashboardView(LoginRequiredMixin, TemplateView):
     def _get_staff_profile(self, user):
         return getattr(user, 'staffprofile', None)
 
+    def dispatch(self, request, *args, **kwargs):
+        # IMPORTANT:
+        # admin users should go to the real admin dashboard
+        # because that is where all_active_tasks and the full office view are built
+        if self._is_admin_user(request.user):
+            return redirect('admin_dashboard')
+        return super().dispatch(request, *args, **kwargs)
+
     def get_template_names(self):
         user = self.request.user
-
-        if self._is_admin_user(user):
-            return ['dashboard/admin_dashboard.html']
 
         profile = self._get_staff_profile(user)
         if profile and profile.is_supervisor_role:
@@ -130,44 +135,10 @@ class DashboardView(LoginRequiredMixin, TemplateView):
 
             ctx['team_members'] = [sp.user for sp in supervisee_profiles[:8]]
 
-            # ADD THIS IF SUPERVISORS SHOULD SEE THE FEED
             ctx['opportunity_match_count'] = OpportunityMatch.objects.filter(is_read=False).count()
             ctx['recent_opportunity_matches'] = OpportunityMatch.objects.select_related(
                 'source', 'keyword'
             ).order_by('-detected_at')[:6]
-            ctx['active_monitor_sources'] = OpportunitySource.objects.filter(is_active=True).count()
-
-        if self._is_admin_user(user):
-            total_staff_qs = User.objects.filter(is_active=True, status='active')
-            total_projects_qs = Project.objects.all()
-            total_open_tasks_qs = Task.objects.filter(status__in=['todo', 'in_progress', 'review'])
-
-            ctx['total_staff'] = total_staff_qs.count()
-            ctx['total_active_projects'] = total_projects_qs.filter(status='active').count()
-            ctx['total_tasks_open'] = total_open_tasks_qs.count()
-            ctx['total_tasks_overdue'] = total_open_tasks_qs.filter(due_date__lt=now).count()
-
-            ctx['projects_by_status'] = total_projects_qs.values('status').annotate(
-                count=Count('id')
-            ).order_by('status')
-
-            ctx['latest_projects'] = total_projects_qs.select_related(
-                'project_manager'
-            ).order_by('-created_at')[:5]
-
-            ctx['office_pending_leave_requests'] = LeaveRequest.objects.filter(
-                status='pending'
-            ).count()
-
-            ctx['office_recent_leave_requests'] = LeaveRequest.objects.select_related(
-                'staff', 'leave_type', 'approved_by'
-            ).order_by('-created_at')[:8]
-
-            # ADD THIS
-            ctx['opportunity_match_count'] = OpportunityMatch.objects.filter(is_read=False).count()
-            ctx['recent_opportunity_matches'] = OpportunityMatch.objects.select_related(
-                'source', 'keyword'
-            ).order_by('-detected_at')[:10]
             ctx['active_monitor_sources'] = OpportunitySource.objects.filter(is_active=True).count()
 
         return ctx
@@ -242,7 +213,6 @@ class AdminDashboardView(LoginRequiredMixin, TemplateView):
         task_list = list(filtered_tasks[:50])
         for task in task_list:
             task.progress_pct = task.progress_pct or 0
-            task.is_overdue = bool(task.due_date and task.due_date < now and task.status not in ['done', 'cancelled'])
 
         total_staff_qs = User.objects.filter(is_active=True, status='active')
         total_projects_qs = Project.objects.all()

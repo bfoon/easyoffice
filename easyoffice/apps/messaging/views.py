@@ -844,6 +844,19 @@ class ChatRoomView(LoginRequiredMixin, View):
             project_files    = _get_project_chat_files_for_user(request.user, room.project, room=room)
             can_link_project = _user_can_link_project_room(request.user, room.project)
 
+        # Personal pins — IDs (as strings) of messages this user has bookmarked
+        # in this room. Used by the template to render the filled-pin icon.
+        try:
+            from apps.messaging.models import ChatMessagePin
+            my_pinned_ids = set(
+                str(mid) for mid in
+                ChatMessagePin.objects
+                .filter(user=request.user, room=room)
+                .values_list('message_id', flat=True)
+            )
+        except Exception:
+            my_pinned_ids = set()
+
         ctx = {
             'room':             room,
             'chat_messages':    chat_messages,
@@ -859,6 +872,7 @@ class ChatRoomView(LoginRequiredMixin, View):
             'project_files':    project_files,
             'can_link_project': can_link_project,
             'managed_projects': _managed_projects_for_user(request.user),
+            'my_pinned_ids':    my_pinned_ids,
         }
         return render(request, self.template_name, ctx)
 
@@ -3073,13 +3087,41 @@ class NotificationPollView(LoginRequiredMixin, View):
 
     def _serialize_notif(self, kind, msg, viewer):
         room = msg.room
+
+        room_avatar_url = ''
         if room.room_type == 'direct':
             other = room.members.exclude(id=viewer.id).first()
             room_name = self._safe_full_name(other) if other else 'Direct message'
+            try:
+                if other and getattr(other, 'avatar', None):
+                    room_avatar_url = other.avatar.url
+            except Exception:
+                room_avatar_url = ''
         else:
             room_name = room.name or 'Chat'
+            try:
+                if getattr(room, 'avatar', None) and room.avatar:
+                    room_avatar_url = room.avatar.url
+            except Exception:
+                room_avatar_url = ''
 
-        # content is plaintext after ORM load (post_init decrypts).
+        sender = msg.sender
+        sender_avatar_url = ''
+        sender_initials = ''
+        try:
+            if sender and getattr(sender, 'avatar', None) and sender.avatar:
+                sender_avatar_url = sender.avatar.url
+        except Exception:
+            sender_avatar_url = ''
+        try:
+            if sender and getattr(sender, 'initials', None):
+                sender_initials = sender.initials or ''
+        except Exception:
+            sender_initials = ''
+        if not sender_initials and sender:
+            name = self._safe_full_name(sender).strip()
+            sender_initials = ''.join(p[:1] for p in name.split()[:2]).upper() or '?'
+
         preview = (msg.content or '').strip()
         if msg.message_type == 'file' and not preview:
             preview = '📎 File'
@@ -3095,7 +3137,10 @@ class NotificationPollView(LoginRequiredMixin, View):
             'room_id': str(room.id),
             'room_name': room_name,
             'room_type': room.room_type,
-            'sender_name': self._safe_full_name(msg.sender) if msg.sender else 'Someone',
+            'room_avatar_url': room_avatar_url,
+            'sender_name': self._safe_full_name(sender) if sender else 'Someone',
+            'sender_avatar_url': sender_avatar_url,
+            'sender_initials': sender_initials,
             'preview': preview,
             'kind': kind,
             'created_at': msg.created_at.isoformat(),
@@ -3109,3 +3154,430 @@ class NotificationPollView(LoginRequiredMixin, View):
             return user.full_name or user.get_full_name() or user.username
         except Exception:
             return str(user)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 📌 PERSONAL PINS — private bookmarks (requires ChatMessagePin model)
+# ─────────────────────────────────────────────────────────────────────────────
+class TogglePinMessageView(LoginRequiredMixin, View):
+    """
+    POST /messages/<room_id>/message/<message_id>/pin/
+    Toggles the current user's PRIVATE bookmark on a message.
+    """
+    def post(self, request, room_id, message_id):
+        from apps.messaging.models import ChatMessagePin
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        msg = get_object_or_404(ChatMessage, id=message_id, room=room, is_deleted=False)
+
+        existing = ChatMessagePin.objects.filter(message=msg, user=request.user).first()
+        if existing:
+            existing.delete()
+            is_pinned = False
+            action = 'unpinned'
+        else:
+            ChatMessagePin.objects.create(message=msg, user=request.user, room=room)
+            is_pinned = True
+            action = 'pinned'
+
+        return JsonResponse({
+            'ok': True,
+            'message_id': str(msg.id),
+            'is_pinned': is_pinned,
+            'action': action,
+        })
+
+
+class PinnedMessagesListView(LoginRequiredMixin, View):
+    """
+    GET /messages/<room_id>/pinned/
+    Returns THIS USER's pinned messages in this room.
+    """
+    def get(self, request, room_id):
+        from apps.messaging.models import ChatMessagePin
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        pins = (
+            ChatMessagePin.objects
+            .filter(user=request.user, room=room, message__is_deleted=False)
+            .select_related('message', 'message__sender', 'message__linked_file')
+            .order_by('-pinned_at')
+        )
+
+        items = []
+        for pin in pins:
+            msg = pin.message
+            preview = (msg.content or '').strip()
+            if msg.message_type == 'file' and not preview:
+                preview = '📎 ' + (msg.effective_file_name or 'File')
+            elif msg.message_type == 'image' and not preview:
+                preview = '🖼️ Image'
+            elif msg.message_type == 'poll' and not preview:
+                preview = '📊 Poll'
+            if len(preview) > 140:
+                preview = preview[:137] + '…'
+
+            sender = msg.sender
+            sender_avatar = ''
+            try:
+                if sender and getattr(sender, 'avatar', None) and sender.avatar:
+                    sender_avatar = sender.avatar.url
+            except Exception:
+                pass
+            sender_initials = ''
+            try:
+                if sender:
+                    sender_initials = getattr(sender, 'initials', '') or ''
+            except Exception:
+                pass
+            if not sender_initials and sender:
+                name = (sender.full_name or sender.username or '').strip()
+                sender_initials = ''.join(p[:1] for p in name.split()[:2]).upper() or '?'
+
+            items.append({
+                'id': str(msg.id),
+                'preview': preview,
+                'sender_name': (sender.full_name if sender else 'Unknown') or (
+                    sender.username if sender else 'Unknown'
+                ),
+                'sender_avatar': sender_avatar,
+                'sender_initials': sender_initials,
+                'created_at': msg.created_at.isoformat(),
+                'pinned_at': pin.pinned_at.isoformat(),
+                'message_type': msg.message_type,
+            })
+
+        return JsonResponse({'ok': True, 'pinned': items, 'count': len(items)})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 📎 FILES & LINKS shared in a room
+# ─────────────────────────────────────────────────────────────────────────────
+class ChatRoomSharedItemsView(LoginRequiredMixin, View):
+    _URL_RX = None
+
+    @classmethod
+    def _url_rx(cls):
+        if cls._URL_RX is None:
+            import re
+            cls._URL_RX = re.compile(r'https?://[^\s<>"\']+', re.IGNORECASE)
+        return cls._URL_RX
+
+    def get(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        file_msgs = (
+            room.messages
+            .filter(is_deleted=False)
+            .exclude(file='', linked_file=None)
+            .select_related('sender', 'linked_file')
+            .order_by('-created_at')[:200]
+        )
+
+        files = []
+        for msg in file_msgs:
+            url = msg.effective_file_url or ''
+            name = msg.effective_file_name or ''
+            size = msg.effective_file_size or 0
+            if not url and not name:
+                continue
+            is_image = bool(
+                msg.message_type == 'image' or
+                (name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg')))
+            )
+            sender_name = ''
+            if msg.sender:
+                sender_name = msg.sender.full_name or msg.sender.username or ''
+            files.append({
+                'message_id': str(msg.id),
+                'name': name or 'File',
+                'url': url,
+                'size': size,
+                'is_image': is_image,
+                'sender_name': sender_name,
+                'created_at': msg.created_at.isoformat(),
+            })
+
+        text_msgs = (
+            room.messages
+            .filter(is_deleted=False, message_type='text')
+            .select_related('sender')
+            .order_by('-created_at')[:300]
+        )
+
+        seen_urls = set()
+        links = []
+        url_rx = self._url_rx()
+        for msg in text_msgs:
+            content = msg.content or ''
+            if '://' not in content:
+                continue
+            for raw in url_rx.findall(content):
+                cleaned = raw.rstrip('.,;:!?)>]\'"')
+                if not cleaned or cleaned in seen_urls:
+                    continue
+                seen_urls.add(cleaned)
+                try:
+                    from urllib.parse import urlparse
+                    host = urlparse(cleaned).netloc or cleaned
+                except Exception:
+                    host = cleaned
+                sender_name = ''
+                if msg.sender:
+                    sender_name = msg.sender.full_name or msg.sender.username or ''
+                links.append({
+                    'message_id': str(msg.id),
+                    'url': cleaned,
+                    'host': host,
+                    'sender_name': sender_name,
+                    'created_at': msg.created_at.isoformat(),
+                })
+                if len(links) >= 100: break
+            if len(links) >= 100: break
+
+        return JsonResponse({
+            'ok': True,
+            'files': files,
+            'links': links,
+            'file_count': len(files),
+            'link_count': len(links),
+        })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🔎 MESSAGE SEARCH
+#
+# Because ChatMessage.content is ENCRYPTED at rest (Fernet), we can't push
+# text matching into the DB. Strategy:
+#   1. Apply cheap SQL filters first (room scope, sender, date, has-file,
+#      message type) to narrow candidates.
+#   2. Load remaining rows (decryption happens via post_init) and filter
+#      by text substring in Python.
+#   3. Cap hard at MAX_CANDIDATES rows scanned so large rooms stay fast.
+#
+# This endpoint serves BOTH scopes:
+#   scope=room  → search within one room (requires room_id)
+#   scope=all   → search across every room the user belongs to
+# ─────────────────────────────────────────────────────────────────────────────
+class MessageSearchView(LoginRequiredMixin, View):
+    """
+    GET /messages/search/
+    Params:
+      q            text query (optional; if empty, other filters alone are used)
+      scope        "room" | "all"  (default: "all")
+      room_id      required if scope=room
+      sender_id    filter by sender user id (optional)
+      from_date    ISO date/datetime — messages at or after (optional)
+      to_date      ISO date/datetime — messages at or before (optional)
+      has          "file" | "image" | "link" (optional)
+      limit        max results, default 50, hard-capped at 100
+    """
+    MAX_CANDIDATES = 2000
+    DEFAULT_LIMIT = 50
+    MAX_LIMIT = 100
+
+    def get(self, request):
+        from django.utils.dateparse import parse_datetime, parse_date
+        import re
+
+        user = request.user
+        q = (request.GET.get('q') or '').strip()
+        scope = (request.GET.get('scope') or 'all').strip().lower()
+        room_id = (request.GET.get('room_id') or '').strip()
+        sender_id = (request.GET.get('sender_id') or '').strip()
+        from_raw = (request.GET.get('from_date') or '').strip()
+        to_raw = (request.GET.get('to_date') or '').strip()
+        has = (request.GET.get('has') or '').strip().lower()
+        try:
+            limit = min(int(request.GET.get('limit') or self.DEFAULT_LIMIT), self.MAX_LIMIT)
+        except Exception:
+            limit = self.DEFAULT_LIMIT
+
+        # ── Base queryset: only messages in rooms I'm a member of ──────────
+        qs = (
+            ChatMessage.objects
+            .filter(is_deleted=False, room__members=user)
+            .select_related('sender', 'room', 'linked_file')
+        )
+
+        # Scope
+        if scope == 'room':
+            if not room_id:
+                return JsonResponse({'ok': False, 'error': 'room_id required for scope=room'}, status=400)
+            try:
+                room = ChatRoom.objects.get(id=room_id, members=user)
+            except (ChatRoom.DoesNotExist, ValueError):
+                return JsonResponse({'ok': False, 'error': 'room not found'}, status=404)
+            qs = qs.filter(room=room)
+
+        # Sender
+        if sender_id:
+            try:
+                qs = qs.filter(sender_id=sender_id)
+            except Exception:
+                pass
+
+        # Date range — accept date or datetime
+        def _parse_bound(s):
+            if not s:
+                return None
+            dt = parse_datetime(s)
+            if dt:
+                return dt
+            d = parse_date(s)
+            if d:
+                return timezone.datetime.combine(d, timezone.datetime.min.time())
+            return None
+
+        from_dt = _parse_bound(from_raw)
+        to_dt = _parse_bound(to_raw)
+        if from_dt:
+            qs = qs.filter(created_at__gte=from_dt)
+        if to_dt:
+            # If only a date was supplied, include through end of day
+            if to_raw and 'T' not in to_raw:
+                to_dt = to_dt.replace(hour=23, minute=59, second=59)
+            qs = qs.filter(created_at__lte=to_dt)
+
+        # Has-file / has-image
+        if has == 'file':
+            qs = qs.exclude(file='', linked_file=None)
+        elif has == 'image':
+            qs = qs.filter(message_type='image')
+        elif has == 'link':
+            # Can't SQL-filter the encrypted content for URLs; we'll apply
+            # this in the Python pass below. Limit to text messages.
+            qs = qs.filter(message_type='text')
+
+        # Newest-first is what chat search should show; we'll cap the
+        # candidate scan and then return the top N after text filtering.
+        qs = qs.order_by('-created_at')[:self.MAX_CANDIDATES]
+
+        # ── Python text match + link filter ────────────────────────────────
+        q_lower = q.lower() if q else ''
+        url_rx = re.compile(r'https?://', re.IGNORECASE)
+        results = []
+
+        for msg in qs:
+            content = msg.content or ''
+            # has=link requires a URL in the content
+            if has == 'link' and not url_rx.search(content):
+                continue
+            # text query: match in content OR in file name
+            if q_lower:
+                hay = content.lower()
+                fname = (msg.effective_file_name or '').lower()
+                if q_lower not in hay and q_lower not in fname:
+                    continue
+
+            results.append(self._serialize_hit(msg, q_lower, user))
+            if len(results) >= limit:
+                break
+
+        return JsonResponse({
+            'ok': True,
+            'scope': scope,
+            'query': q,
+            'count': len(results),
+            'results': results,
+            'truncated': len(results) >= limit,
+        })
+
+    def _serialize_hit(self, msg, q_lower, viewer):
+        """Build a single search-result row with a snippet and jump URL."""
+        room = msg.room
+
+        # Room display name for cross-room results
+        if room.room_type == 'direct':
+            other = room.members.exclude(id=viewer.id).first()
+            room_name = (other.full_name if other else '') or room.name or 'Direct message'
+        else:
+            room_name = room.name or 'Chat'
+
+        content = msg.content or ''
+        is_file_hit = (not content) and msg.message_type in ('file', 'image')
+        if is_file_hit:
+            label = msg.effective_file_name or ('Image' if msg.message_type == 'image' else 'File')
+            snippet = ('🖼️ ' if msg.message_type == 'image' else '📎 ') + label
+            match_start = 0
+            match_end = 0
+        else:
+            snippet, match_start, match_end = self._make_snippet(content, q_lower)
+
+        sender = msg.sender
+        sender_name = ''
+        if sender:
+            sender_name = sender.full_name or sender.username or ''
+        sender_avatar = ''
+        try:
+            if sender and getattr(sender, 'avatar', None) and sender.avatar:
+                sender_avatar = sender.avatar.url
+        except Exception:
+            pass
+        sender_initials = ''
+        try:
+            if sender:
+                sender_initials = getattr(sender, 'initials', '') or ''
+        except Exception:
+            pass
+        if not sender_initials and sender_name:
+            sender_initials = ''.join(p[:1] for p in sender_name.split()[:2]).upper() or '?'
+
+        return {
+            'id': str(msg.id),
+            'room_id': str(room.id),
+            'room_name': room_name,
+            'room_type': room.room_type,
+            'sender_id': str(sender.id) if sender else '',
+            'sender_name': sender_name or 'Unknown',
+            'sender_avatar': sender_avatar,
+            'sender_initials': sender_initials,
+            'message_type': msg.message_type,
+            'snippet': snippet,
+            'match_start': match_start,
+            'match_end': match_end,
+            'created_at': msg.created_at.isoformat(),
+            'jump_url': f'/messages/{room.id}/#msg-{msg.id}',
+        }
+
+    @staticmethod
+    def _make_snippet(content, q_lower, radius=60, max_len=180):
+        """
+        Return (snippet, match_start, match_end) where indices point into
+        the returned snippet string (not the original content). Used by the
+        client to bold the matched span.
+        """
+        if not content:
+            return '', 0, 0
+        if not q_lower:
+            # No query — return the start of the message
+            out = content.strip()
+            if len(out) > max_len:
+                out = out[:max_len - 1] + '…'
+            return out, 0, 0
+
+        lower = content.lower()
+        idx = lower.find(q_lower)
+        if idx < 0:
+            # Shouldn't happen if the caller already matched, but handle it
+            out = content.strip()[:max_len]
+            return out, 0, 0
+
+        start = max(0, idx - radius)
+        end = min(len(content), idx + len(q_lower) + radius)
+
+        prefix = '…' if start > 0 else ''
+        suffix = '…' if end < len(content) else ''
+        snippet = prefix + content[start:end] + suffix
+
+        match_start = len(prefix) + (idx - start)
+        match_end = match_start + len(q_lower)
+
+        if len(snippet) > max_len:
+            # Trim from the end if we got too long, preserving the match
+            over = len(snippet) - max_len
+            snippet = snippet[:-over - 1] + '…'
+            if match_end > len(snippet):
+                match_end = len(snippet)
+                if match_start > match_end:
+                    match_start = match_end
+
+        return snippet, match_start, match_end

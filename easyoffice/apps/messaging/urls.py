@@ -30,6 +30,26 @@ urlpatterns = [
     path('poll/<uuid:poll_id>/close/', views.ClosePollView.as_view(), name='close_chat_poll'),
 
     path('notifications/poll/', views.NotificationPollView.as_view(), name='notifications_poll'),
+
+    # ─────────────────────────────────────────────
+    # 📌 PIN MESSAGES + 📎 SHARED ITEMS (files+links)
+    # ─────────────────────────────────────────────
+    path('<uuid:room_id>/message/<uuid:message_id>/pin/',
+         views.TogglePinMessageView.as_view(),
+         name='toggle_pin_message'),
+    path('<uuid:room_id>/pinned/',
+         views.PinnedMessagesListView.as_view(),
+         name='pinned_messages_list'),
+    path('<uuid:room_id>/shared-items/',
+         views.ChatRoomSharedItemsView.as_view(),
+         name='chat_shared_items'),
+
+    # ─────────────────────────────────────────────
+    # 🔎 MESSAGE SEARCH (both in-room and global)
+    # ─────────────────────────────────────────────
+    path('search/',
+         views.MessageSearchView.as_view(),
+         name='chat_message_search'),
     # ─────────────────────────────────────────────
     # REACTIONS
     # ─────────────────────────────────────────────

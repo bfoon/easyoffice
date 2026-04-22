@@ -173,6 +173,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
         await self.send(text_data=json.dumps(event['payload']))
 
+    async def chat_pin(self, event):
+        """Broadcast pin/unpin events to every open client in the room."""
+        await self.send(text_data=json.dumps(event['payload']))
+
     # --------------------------------------------------
     # DB HELPERS
     # --------------------------------------------------

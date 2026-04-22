@@ -755,197 +755,69 @@ class TicketDetailView(LoginRequiredMixin, DetailView):
         return ctx
 
 
-class TicketActionView(LoginRequiredMixin, View):
+class TicketActionView(View):
     def post(self, request, pk):
         ticket = get_object_or_404(ServiceTicket, pk=pk)
-        if not _can_view_ticket(request.user, ticket):
-            return HttpResponseForbidden("Permission denied.")
-
-        action = request.POST.get("action", "").strip()
-
-        if action == "add_note":
-            body = request.POST.get("body", "").strip()
-            if body:
-                ServiceTicketUpdate.objects.create(ticket=ticket, user=request.user, update_type="note", body=body)
-                messages.success(request, "Update added.")
-            else:
-                messages.error(request, "Please write a note.")
-            return redirect("customer_service_ticket_detail", pk=pk)
-
-        if action == "route":
-            if not _can_manage_department_ticket(request.user, ticket) and not _is_sales_rep(request.user):
-                return HttpResponseForbidden("Permission denied.")
-            department_id = (request.POST.get("department") or "").strip()
-            note = request.POST.get("note", "").strip()
-
-            if not department_id:
-                messages.error(request, "Please select a department.")
-                return redirect("customer_service_ticket_detail", pk=pk)
-
-            to_department = Department.objects.filter(id=department_id, is_active=True).first()
-            if not to_department:
-                messages.error(request, "Please select a valid department.")
-                return redirect("customer_service_ticket_detail", pk=pk)
-
-            from_department = ticket.department
-            ticket.department = to_department
-            ticket.status = "assigned"
-            ticket.current_owner = to_department.head
-            ticket.save(update_fields=["department", "status", "current_owner", "updated_at"])
-            _apply_sla(ticket)
-
-            ServiceTicketRouting.objects.create(
-                ticket=ticket,
-                action="route",
-                from_department=from_department,
-                to_department=to_department,
-                from_user=request.user,
-                to_user=to_department.head,
-                note=note,
-            )
-            ServiceTicketUpdate.objects.create(ticket=ticket, user=request.user, update_type="status_change", body=f"Ticket routed to {to_department.name}.")
-            ServiceTicketAssignment.objects.create(
-                ticket=ticket,
-                department=to_department,
-                assigned_by=request.user,
-                assigned_to=to_department.head if to_department.head_id else None,
-                title=f"{ticket.ticket_no} - {ticket.subject}",
-                instructions=note or ticket.description,
-                status="assigned" if to_department.head_id else "new",
-                sla_due_at=ticket.resolution_due_at,
-            )
-            if to_department.head:
-                _notify(
-                    to_department.head,
-                    f"Ticket {ticket.ticket_no} routed to your department",
-                    f"{ticket.subject} has been routed to {to_department.name}.",
-                    link=reverse("customer_service_ticket_detail", kwargs={"pk": ticket.pk}),
-                    sender=request.user,
-                )
-
-            _send_department_ticket_email(
-                ticket=ticket,
-                department=to_department,
-                sender=request.user,
-                note=note,
-                notify_all=True,   # set False if only department head should get email
-            )
-
-            messages.success(request, f"Ticket routed to {to_department.name}.")
-            return redirect("customer_service_ticket_detail", pk=pk)
+        action = request.POST.get("action")
 
         if action == "assign":
-            if not _can_manage_department_ticket(request.user, ticket):
-                return HttpResponseForbidden("Permission denied.")
+            department = None
+            assigned_to = None
 
-            assignee = User.objects.filter(pk=request.POST.get("assigned_to"), is_active=True).first()
-            instructions = request.POST.get("instructions", "").strip() or ticket.description
-            if not assignee:
-                messages.error(request, "Please choose a staff member.")
-                return redirect("customer_service_ticket_detail", pk=pk)
+            department_id = request.POST.get("department")
+            assigned_to_id = request.POST.get("assigned_to")
 
-            assignment = ServiceTicketAssignment.objects.create(
-                ticket=ticket,
-                department=ticket.department,
-                assigned_by=request.user,
-                assigned_to=assignee,
-                title=f"{ticket.ticket_no} - {ticket.subject}",
-                instructions=instructions,
-                status="assigned",
-                sla_due_at=ticket.resolution_due_at,
-            )
-            _maybe_create_task(assignment, request.user)
-            ticket.current_owner = assignee
-            ticket.status = "assigned"
-            ticket.save(update_fields=["current_owner", "status", "updated_at"])
-            ServiceTicketUpdate.objects.create(ticket=ticket, user=request.user, update_type="status_change", body=f"Assigned to {assignee.full_name}.")
-            _notify(
-                assignee,
-                f"Customer service task assigned: {ticket.ticket_no}",
-                ticket.subject,
-                link=reverse("customer_service_ticket_detail", kwargs={"pk": ticket.pk}),
-                sender=request.user,
-            )
+            # get department from POST first
+            if department_id:
+                from apps.organization.models import Department
+                department = Department.objects.filter(pk=department_id).first()
 
-            _send_assignment_email(
-                ticket=ticket,
-                assignee=assignee,
-                sender=request.user,
-                instructions=instructions,
-            )
+            # fallback to ticket.department
+            if not department:
+                department = ticket.department
 
-            messages.success(request, f"Ticket assigned to {assignee.full_name}.")
-            return redirect("customer_service_ticket_detail", pk=pk)
+            # hard stop instead of IntegrityError
+            if not department:
+                messages.error(request, "Please select a department before assigning this ticket.")
+                return redirect("customer_service_ticket_detail", pk=ticket.pk)
 
-        if action == "resolve":
-            resolution = request.POST.get("resolution_note", "").strip()
-            if not resolution:
-                messages.error(request, "Please write the resolution note.")
-                return redirect("customer_service_ticket_detail", pk=pk)
+            if assigned_to_id:
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                assigned_to = User.objects.filter(pk=assigned_to_id).first()
 
-            ticket.status = "resolved"
-            ticket.resolved_at = timezone.now()
-            ticket.resolved_by = request.user
-            ticket.current_owner = request.user
-            ticket.save(update_fields=["status", "resolved_at", "resolved_by", "current_owner", "updated_at"])
-            ServiceTicketUpdate.objects.create(ticket=ticket, user=request.user, update_type="resolution", body=resolution)
+            with transaction.atomic():
+                # keep ticket and assignment aligned
+                ticket.department = department
+                ticket.current_owner = assigned_to or ticket.current_owner
+                ticket.status = "assigned"
+                ticket.save()
 
-            for assignment in ticket.assignments.exclude(status__in=["resolved", "closed"]):
-                assignment.status = "resolved"
-                assignment.completed_at = timezone.now()
-                assignment.save(update_fields=["status", "completed_at", "updated_at"])
-                if assignment.task_ref:
-                    assignment.task_ref.status = Task.Status.DONE
-                    assignment.task_ref.completed_at = timezone.now()
-                    assignment.task_ref.save(update_fields=["status", "completed_at", "updated_at"])
-
-            if ticket.requires_feedback:
-                _send_feedback_email(ticket, request)
-
-            messages.success(request, "Ticket resolved.")
-            return redirect("customer_service_ticket_detail", pk=pk)
-
-        if action == "close":
-            ticket.status = "closed"
-            ticket.closed_at = timezone.now()
-            ticket.save(update_fields=["status", "closed_at", "updated_at"])
-            ServiceTicketUpdate.objects.create(ticket=ticket, user=request.user, update_type="status_change", body="Ticket closed.")
-            messages.success(request, "Ticket closed.")
-            return redirect("customer_service_ticket_detail", pk=pk)
-
-        if action == "escalate":
-            reason = request.POST.get("reason", "").strip() or "Escalated by user."
-            ticket.status = "escalated"
-            ticket.escalated_at = timezone.now()
-            ticket.save(update_fields=["status", "escalated_at", "updated_at"])
-            ServiceTicketRouting.objects.create(
-                ticket=ticket,
-                action="escalate",
-                from_department=ticket.department,
-                to_department=ticket.department,
-                from_user=request.user,
-                to_user=ticket.department.head if ticket.department else None,
-                note=reason,
-            )
-            ServiceTicketUpdate.objects.create(ticket=ticket, user=request.user, update_type="escalation", body=reason)
-            if ticket.department and ticket.department.head:
-                _notify(
-                    ticket.department.head,
-                    f"Ticket {ticket.ticket_no} escalated",
-                    reason,
-                    link=reverse("customer_service_ticket_detail", kwargs={"pk": ticket.pk}),
-                    sender=request.user,
+                ServiceTicketAssignment.objects.create(
+                    ticket=ticket,
+                    department=department,
+                    assigned_by=request.user,
+                    assigned_to=assigned_to,
+                    title=f"{ticket.ticket_no} - {ticket.subject}",
+                    instructions=ticket.description or "",
+                    status="assigned",
+                    sla_due_at=ticket.resolution_due_at,
                 )
-            messages.warning(request, "Ticket escalated.")
-            return redirect("customer_service_ticket_detail", pk=pk)
 
-        if action == "send_feedback":
-            _send_feedback_email(ticket, request)
-            messages.success(request, "Feedback request sent.")
-            return redirect("customer_service_ticket_detail", pk=pk)
+                ServiceTicketUpdate.objects.create(
+                    ticket=ticket,
+                    user=request.user,
+                    update_type="status_change",
+                    body=f"Ticket assigned to {department}" + (
+                        f" and {assigned_to}" if assigned_to else ""
+                    ),
+                )
+
+            messages.success(request, "Ticket assigned successfully.")
+            return redirect("customer_service_ticket_detail", pk=ticket.pk)
 
         messages.error(request, "Invalid action.")
-        return redirect("customer_service_ticket_detail", pk=pk)
+        return redirect("customer_service_ticket_detail", pk=ticket.pk)
 
 
 # ── Department queue ──────────────────────────────────────────────────────

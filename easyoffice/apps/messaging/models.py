@@ -156,6 +156,50 @@ class ChatMessageMention(models.Model):
         return f'@{self.user} in {self.message_id}'
 
 
+class ChatMessagePin(models.Model):
+    """
+    Personal per-user pin on a ChatMessage.
+
+    Pins are PRIVATE — each user only sees their own bookmarks in the
+    sidebar. Pinning or unpinning a message does not affect anyone else.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    message = models.ForeignKey(
+        ChatMessage,
+        on_delete=models.CASCADE,
+        related_name='user_pins',
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='chat_message_pins',
+    )
+    # Denormalized for cheap room-scoped queries: "give me all my pins
+    # in room X". Populated from message.room on save().
+    room = models.ForeignKey(
+        ChatRoom,
+        on_delete=models.CASCADE,
+        related_name='user_pins',
+    )
+    pinned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [('message', 'user')]
+        ordering = ['-pinned_at']
+        indexes = [
+            models.Index(fields=['user', 'room', '-pinned_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.user} pinned {self.message_id}'
+
+    def save(self, *args, **kwargs):
+        # Keep room in sync with the pinned message — saves a join later
+        if not self.room_id and self.message_id:
+            self.room_id = self.message.room_id
+        super().save(*args, **kwargs)
+
+
 class ChatRoomFile(models.Model):
     room = models.ForeignKey('ChatRoom', on_delete=models.CASCADE, related_name='room_files')
     file = models.ForeignKey('files.SharedFile', on_delete=models.CASCADE, related_name='room_shares')

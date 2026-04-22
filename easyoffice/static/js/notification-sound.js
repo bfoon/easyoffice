@@ -329,26 +329,321 @@
     injectDropdownStyles();
 
     // ------------------------------------------------------------------
-    // Desktop notification
     // ------------------------------------------------------------------
-    function showDesktopNotif(n) {
+    // IN-PAGE TOAST PILL
+    // Small avatar+name+preview pill in the bottom-right corner when a
+    // DM or @-mention arrives and the user isn't viewing that room.
+    // Click = jump to that room. Auto-dismisses after 6s.
+    // ------------------------------------------------------------------
+    var TOAST_CONTAINER_ID = 'ns-toast-stack';
+    var TOAST_DISMISS_MS   = 6000;
+    var MAX_TOASTS         = 3;
+
+    function injectToastStyles() {
+        if (document.getElementById('ns-toast-styles')) return;
+        var s = document.createElement('style');
+        s.id = 'ns-toast-styles';
+        s.textContent = [
+            '#' + TOAST_CONTAINER_ID + '{',
+              'position:fixed;right:18px;bottom:18px;z-index:100000;',
+              'display:flex;flex-direction:column-reverse;gap:10px;',
+              'pointer-events:none;font-family:system-ui,-apple-system,sans-serif;',
+              'max-width:360px;',
+            '}',
+            '.ns-toast{',
+              'pointer-events:auto;display:flex;align-items:center;gap:12px;',
+              'background:#fff;color:#111;padding:10px 14px 10px 10px;',
+              'border-radius:999px;box-shadow:0 10px 28px rgba(0,0,0,.18);',
+              'border:1px solid rgba(0,0,0,.06);cursor:pointer;',
+              'transform:translateY(20px) scale(.96);opacity:0;',
+              'transition:transform .28s cubic-bezier(.2,.9,.25,1.15),opacity .22s;',
+              'min-width:260px;max-width:360px;',
+            '}',
+            '.ns-toast.show{ transform:translateY(0) scale(1); opacity:1; }',
+            '.ns-toast:hover{ box-shadow:0 12px 34px rgba(0,0,0,.23); }',
+            '.ns-toast-avatar{',
+              'flex:0 0 auto;width:40px;height:40px;border-radius:50%;',
+              'background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;',
+              'display:flex;align-items:center;justify-content:center;',
+              'font-weight:700;font-size:.78rem;overflow:hidden;position:relative;',
+            '}',
+            '.ns-toast-avatar img{ width:100%;height:100%;object-fit:cover; }',
+            '.ns-toast-kind{',
+              'position:absolute;bottom:-2px;right:-2px;width:18px;height:18px;',
+              'border-radius:50%;background:#fff;color:#2563eb;',
+              'display:flex;align-items:center;justify-content:center;',
+              'font-size:9px;font-weight:800;border:2px solid #fff;',
+              'box-shadow:0 1px 3px rgba(0,0,0,.25);',
+            '}',
+            '.ns-toast-kind.mention{ background:#ef4444;color:#fff; }',
+            '.ns-toast-body{ flex:1;min-width:0;padding-right:4px; }',
+            '.ns-toast-title{',
+              'font-size:.82rem;font-weight:600;color:#111;',
+              'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;',
+              'display:flex;align-items:center;gap:6px;',
+            '}',
+            '.ns-toast-badge{',
+              'display:inline-block;font-size:.58rem;font-weight:700;',
+              'padding:1px 6px;border-radius:8px;background:#eef2ff;color:#4338ca;',
+              'text-transform:uppercase;letter-spacing:.03em;flex-shrink:0;',
+            '}',
+            '.ns-toast-badge.mention{ background:#fef2f2;color:#b91c1c; }',
+            '.ns-toast-preview{',
+              'font-size:.74rem;color:#4b5563;margin-top:1px;',
+              'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;',
+            '}',
+            '.ns-toast-close{',
+              'flex:0 0 auto;width:22px;height:22px;border-radius:50%;',
+              'background:transparent;border:0;color:#9ca3af;cursor:pointer;',
+              'display:flex;align-items:center;justify-content:center;',
+              'font-size:14px;transition:background .1s,color .1s;',
+            '}',
+            '.ns-toast-close:hover{ background:#f3f4f6;color:#111; }',
+            '@media (prefers-color-scheme: dark){',
+              '.ns-toast{ background:#1f2937;color:#f3f4f6;border-color:rgba(255,255,255,.08); }',
+              '.ns-toast-title{ color:#f3f4f6; }',
+              '.ns-toast-preview{ color:#9ca3af; }',
+              '.ns-toast-kind{ background:#1f2937; }',
+              '.ns-toast-badge{ background:#312e81;color:#c7d2fe; }',
+              '.ns-toast-badge.mention{ background:#7f1d1d;color:#fecaca; }',
+              '.ns-toast-close:hover{ background:#374151;color:#f9fafb; }',
+            '}',
+            '@media (max-width:480px){',
+              '#' + TOAST_CONTAINER_ID + '{ right:10px;bottom:10px;left:10px;max-width:none; }',
+              '.ns-toast{ min-width:0; }',
+            '}'
+        ].join('');
+        document.head.appendChild(s);
+    }
+
+    function getToastStack() {
+        injectToastStyles();
+        var stack = document.getElementById(TOAST_CONTAINER_ID);
+        if (!stack) {
+            stack = document.createElement('div');
+            stack.id = TOAST_CONTAINER_ID;
+            document.body.appendChild(stack);
+        }
+        return stack;
+    }
+
+    function escText(s) {
+        return String(s || '').replace(/[&<>"']/g, function(c){
+            return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+        });
+    }
+
+    function showToastPill(n) {
+        try {
+            var stack = getToastStack();
+
+            // De-dupe by message id — if already showing, skip.
+            if (stack.querySelector('[data-msg-id="' + n.id + '"]')) return;
+
+            // Trim old toasts so we never stack more than MAX_TOASTS
+            var existing = stack.querySelectorAll('.ns-toast');
+            for (var i = 0; i <= existing.length - MAX_TOASTS; i++) {
+                try { existing[i].remove(); } catch (_) {}
+            }
+
+            var toast = document.createElement('div');
+            toast.className = 'ns-toast';
+            toast.setAttribute('data-msg-id', n.id || '');
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'polite');
+
+            var isMention = n.kind === 'mention';
+            var avatarInner = (n.sender_avatar_url)
+                ? '<img src="' + escText(n.sender_avatar_url) + '" alt="">'
+                : escText(n.sender_initials || (n.sender_name || '?').charAt(0).toUpperCase());
+            var kindBadge = isMention ? '@' : '💬';
+            var kindClass = isMention ? ' mention' : '';
+
+            toast.innerHTML =
+                '<div class="ns-toast-avatar">' +
+                    avatarInner +
+                    '<span class="ns-toast-kind' + kindClass + '">' + kindBadge + '</span>' +
+                '</div>' +
+                '<div class="ns-toast-body">' +
+                    '<div class="ns-toast-title">' +
+                        '<span style="overflow:hidden;text-overflow:ellipsis">' + escText(n.sender_name || 'New message') + '</span>' +
+                        (isMention
+                            ? '<span class="ns-toast-badge mention">mentioned you</span>'
+                            : (n.room_type && n.room_type !== 'direct'
+                                ? '<span class="ns-toast-badge">' + escText(n.room_name || '') + '</span>'
+                                : '')) +
+                    '</div>' +
+                    '<div class="ns-toast-preview">' + escText(n.preview || '') + '</div>' +
+                '</div>' +
+                '<button type="button" class="ns-toast-close" aria-label="Dismiss">&times;</button>';
+
+            // Click body → open room
+            toast.addEventListener('click', function(e) {
+                if (e.target.closest('.ns-toast-close')) return;
+                try {
+                    window.location.href = '/messages/' + n.room_id + '/';
+                } catch (_) {}
+            });
+            // Click × → dismiss only
+            var closeBtn = toast.querySelector('.ns-toast-close');
+            closeBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                dismissToast(toast);
+            });
+
+            stack.appendChild(toast);
+            // Trigger the entrance animation on next frame
+            requestAnimationFrame(function(){ toast.classList.add('show'); });
+
+            // Auto-dismiss
+            var dismissTimer = setTimeout(function(){ dismissToast(toast); }, TOAST_DISMISS_MS);
+
+            // Pause auto-dismiss on hover
+            toast.addEventListener('mouseenter', function(){
+                if (dismissTimer) { clearTimeout(dismissTimer); dismissTimer = null; }
+            });
+            toast.addEventListener('mouseleave', function(){
+                dismissTimer = setTimeout(function(){ dismissToast(toast); }, TOAST_DISMISS_MS);
+            });
+        } catch (e) {
+            // no-op — toast failure should never break polling
+        }
+    }
+
+    function dismissToast(toast) {
+        if (!toast || !toast.parentNode) return;
+        toast.classList.remove('show');
+        setTimeout(function(){
+            try { toast.remove(); } catch (_) {}
+        }, 260);
+    }
+
+    // ------------------------------------------------------------------
+    // NATIVE DESKTOP NOTIFICATION
+    // Shown ONLY when the tab is hidden/not focused — the toast pill is
+    // enough while the user is looking at the page. When the tab is in
+    // the background, the OS-level notification is what actually gets
+    // the user's attention.
+    //
+    // If several messages arrive at once we consolidate them into a
+    // single notification rather than spamming.
+    // ------------------------------------------------------------------
+    function canUseDesktopNotif() {
+        try {
+            return ('Notification' in window) &&
+                   Notification.permission === 'granted';
+        } catch (e) { return false; }
+    }
+
+    function tabInForeground() {
+        try {
+            // Truly "in front of the user" needs BOTH: tab visible AND window focused.
+            return !document.hidden && document.hasFocus();
+        } catch (e) {
+            return !document.hidden;
+        }
+    }
+
+    // Request permission on first page load if not yet decided. Silent: we
+    // never nag the user — one polite ask, then honor whatever they pick.
+    function maybeRequestPermission() {
         try {
             if (!('Notification' in window)) return;
-            if (Notification.permission !== 'granted') return;
-            var title = n.kind === 'mention'
-                ? n.sender_name + ' mentioned you'
-                : 'New message from ' + n.sender_name;
-            var notif = new Notification(title, {
-                body: n.preview || '',
-                tag: 'msg-' + n.room_id,
-                silent: true
-            });
+            if (Notification.permission !== 'default') return;
+            // Don't pop the permission dialog until the user has clicked
+            // somewhere — browsers ignore it before a user gesture anyway,
+            // and it feels less ambushy.
+            var asked = false;
+            var askOnce = function () {
+                if (asked) return;
+                asked = true;
+                try { Notification.requestPermission(); } catch (e) {}
+                window.removeEventListener('click', askOnce, true);
+                window.removeEventListener('keydown', askOnce, true);
+            };
+            window.addEventListener('click', askOnce, true);
+            window.addEventListener('keydown', askOnce, true);
+        } catch (e) {}
+    }
+    maybeRequestPermission();
+
+    /**
+     * Show a single native OS notification for one or more new messages.
+     * @param {Array} notifs  List of notification payload objects.
+     */
+    function showDesktopNotification(notifs) {
+        if (!canUseDesktopNotif()) return;
+        if (!notifs || !notifs.length) return;
+
+        try {
+            var title, body, tag, roomId;
+
+            if (notifs.length === 1) {
+                var n = notifs[0];
+                title = (n.kind === 'mention')
+                    ? n.sender_name + ' mentioned you'
+                    : 'New message from ' + n.sender_name;
+                // Include room name as context for group chats/mentions
+                if (n.kind === 'mention' && n.room_type !== 'direct' && n.room_name) {
+                    title += ' in ' + n.room_name;
+                }
+                body = n.preview || '';
+                tag  = 'msg-' + n.room_id;           // collapses further msgs for same room
+                roomId = n.room_id;
+            } else {
+                // Consolidate — one notification covering everything new.
+                // Count distinct rooms for a friendlier summary.
+                var rooms = {};
+                notifs.forEach(function (n) { rooms[n.room_id] = n.sender_name; });
+                var roomKeys = Object.keys(rooms);
+                title = notifs.length + ' new messages';
+                if (roomKeys.length === 1) {
+                    title = notifs.length + ' new messages from ' + rooms[roomKeys[0]];
+                    roomId = roomKeys[0];
+                } else {
+                    // Mixed senders — linking to the first is reasonable
+                    roomId = notifs[0].room_id;
+                }
+                // Show the most recent preview for a taste of the content
+                var last = notifs[notifs.length - 1];
+                body = last.sender_name + ': ' + (last.preview || '');
+                tag  = 'msg-multi';
+            }
+
+            var options = {
+                body: body,
+                tag: tag,
+                silent: true,   // we play our own sound via Web Audio
+                renotify: true  // re-alert even if same tag
+            };
+
+            // Use sender/room avatar as the icon when we can
+            var icon = (notifs.length === 1)
+                ? (notifs[0].sender_avatar_url || notifs[0].room_avatar_url || '')
+                : '';
+            if (icon) options.icon = icon;
+
+            var notif = new Notification(title, options);
             notif.onclick = function () {
-                window.focus();
-                window.location.href = '/messages/' + n.room_id + '/';
+                try { window.focus(); } catch (e) {}
+                try { window.location.href = '/messages/' + roomId + '/'; } catch (e) {}
                 notif.close();
             };
-        } catch (e) {}
+
+            // Auto-close after ~8s so it doesn't sit in the notification
+            // tray forever (some OSes already do this; belt-and-suspenders).
+            setTimeout(function () {
+                try { notif.close(); } catch (e) {}
+            }, 8000);
+        } catch (e) {
+            // Notifications can throw on some mobile browsers / blocked states
+            // — fail quietly, the toast pill is still doing its job.
+        }
+    }
+
+    // Legacy name preserved so the poll loop keeps working.
+    function showDesktopNotif(n) {
+        showToastPill(n);
     }
 
     // ------------------------------------------------------------------
@@ -389,14 +684,16 @@
                 }));
             } catch (e) {}
 
-            // ── SOUND (only if enabled & there are NEW items) ──────────
+            // ── SOUND + TOAST + DESKTOP (only if enabled & NEW items) ──
             if (!prefEnabled()) return;
             var notifs = data.notifications || [];
             if (!notifs.length) return;
 
             var viewingRoom = currentRoomId();
             var shouldRing = false;
-            var firstToShow = null;
+            var toastCount = 0;
+            var desktopCandidates = [];   // accumulate for the single OS notif
+            var tabFocused = tabInForeground();
 
             for (var i = 0; i < notifs.length; i++) {
                 var n = notifs[i];
@@ -404,7 +701,23 @@
                     continue; // already looking at it
                 }
                 shouldRing = true;
-                if (!firstToShow) { firstToShow = n; showDesktopNotif(n); }
+
+                // In-page pill toast — always (capped at 3 per cycle)
+                if (toastCount < 3) {
+                    showToastPill(n);
+                    toastCount++;
+                }
+
+                // Desktop OS notif — only when tab is NOT focused,
+                // otherwise the toast is enough and we'd be double-pinging.
+                if (!tabFocused) {
+                    desktopCandidates.push(n);
+                }
+            }
+
+            // One consolidated desktop notification per poll cycle
+            if (desktopCandidates.length) {
+                showDesktopNotification(desktopCandidates);
             }
             if (shouldRing) playSound(prefSound());
         })
@@ -551,6 +864,8 @@
             localStorage.setItem(LS_ENABLED, enabled ? '1' : '0');
             localStorage.setItem(LS_SOUND, soundEl.value);
             localStorage.setItem(LS_VOLUME, String(volEl.value));
+            // If the user just enabled notifications and hasn't decided on
+            // desktop permission yet, ask now (this IS a user gesture).
             if (enabled && 'Notification' in window &&
                 Notification.permission === 'default') {
                 try { Notification.requestPermission(); } catch (e) {}

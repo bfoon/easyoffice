@@ -54,6 +54,9 @@ def _is_sales_rep(user):
     return _is_admin_like(user) or user.groups.filter(name__in=["Customer Service", "Sales Rep", "Sales"]).exists()
 
 
+def _can_route_ticket(user, ticket):
+    return _can_manage_department_ticket(user, ticket) or _is_sales_rep(user)
+
 def _can_view_contacts(user):
     return _is_sales_rep(user) or _is_admin_like(user)
 
@@ -101,6 +104,140 @@ def _notify(recipient, title, message, link="", sender=None):
     except Exception:
         pass
 
+def _user_display_name(user):
+    if not user:
+        return "System"
+
+    full_name = ""
+    try:
+        full_name = getattr(user, "full_name", "") or ""
+    except Exception:
+        full_name = ""
+
+    if str(full_name).strip():
+        return str(full_name).strip()
+
+    first = getattr(user, "first_name", "") or ""
+    last = getattr(user, "last_name", "") or ""
+    fallback = f"{first} {last}".strip()
+    if fallback:
+        return fallback
+
+    return getattr(user, "email", "") or getattr(user, "username", "") or "System"
+
+def _send_service_email(subject, message, recipients):
+    recipients = [r for r in recipients if r]
+    if not recipients:
+        return
+
+    try:
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
+            recipient_list=list(dict.fromkeys(recipients)),
+            fail_silently=True,
+        )
+    except Exception:
+        pass
+
+
+def _department_users(department):
+    if not department:
+        return User.objects.none()
+
+    return User.objects.filter(
+        is_active=True,
+        staffprofile__department=department,
+    ).distinct()
+
+
+def _department_emails(department, exclude_user_ids=None):
+    exclude_user_ids = exclude_user_ids or []
+    qs = _department_users(department).exclude(id__in=exclude_user_ids)
+    return [u.email for u in qs if u.email]
+
+
+def _send_assignment_email(ticket, assignee, sender, instructions="", request=None):
+    if not assignee or not assignee.email:
+        return
+
+    if request:
+        detail_url = request.build_absolute_uri(
+            reverse("customer_service_ticket_detail", kwargs={"pk": ticket.pk})
+        )
+    else:
+        detail_url = reverse("customer_service_ticket_detail", kwargs={"pk": ticket.pk})
+
+    subject = f"Customer Service Assignment: {ticket.ticket_no}"
+
+    message = f"""Hello {_user_display_name(assignee)},
+
+You have been assigned a customer service ticket.
+
+Ticket No: {ticket.ticket_no}
+Customer: {ticket.customer.display_name}
+Subject: {ticket.subject}
+Priority: {ticket.get_priority_display()}
+Department: {ticket.department.name if ticket.department else "—"}
+Assigned By: {_user_display_name(sender)}
+SLA Due: {ticket.resolution_due_at.strftime("%d %b %Y %H:%M") if ticket.resolution_due_at else "—"}
+
+Instructions:
+{instructions or ticket.description}
+
+Open in EasyOffice:
+{detail_url}
+"""
+
+    _send_service_email(subject, message, [assignee.email])
+
+
+def _send_department_ticket_email(ticket, department, sender, note="", notify_all=False, request=None):
+    if not department:
+        return
+
+    recipients = []
+
+    if department.head and department.head.email:
+        recipients.append(department.head.email)
+
+    if notify_all:
+        recipients.extend(_department_emails(department, exclude_user_ids=[sender.id]))
+
+    recipients = list(dict.fromkeys([r for r in recipients if r]))
+    if not recipients:
+        return
+
+    if request:
+        detail_url = request.build_absolute_uri(
+            reverse("customer_service_ticket_detail", kwargs={"pk": ticket.pk})
+        )
+    else:
+        detail_url = reverse("customer_service_ticket_detail", kwargs={"pk": ticket.pk})
+
+    subject = f"New Customer Service Ticket for {department.name}: {ticket.ticket_no}"
+
+    message = f"""Hello {department.name} Team,
+
+A customer service ticket has been routed to your department.
+
+Ticket No: {ticket.ticket_no}
+Customer: {ticket.customer.display_name}
+Subject: {ticket.subject}
+Type: {ticket.get_ticket_type_display()}
+Priority: {ticket.get_priority_display()}
+Created By: {_user_display_name(sender)}
+SLA Due: {ticket.resolution_due_at.strftime("%d %b %Y %H:%M") if ticket.resolution_due_at else "—"}
+
+Routing Note:
+{note or ticket.description}
+
+Open in EasyOffice:
+{detail_url}
+"""
+
+    _send_service_email(subject, message, recipients)
 
 def _send_feedback_email(ticket, request):
     target = ticket.callback_email or ticket.customer.email
@@ -395,6 +532,14 @@ class CallDeskView(LoginRequiredMixin, TemplateView):
                     note="Initial routing from call desk.",
                 )
 
+            _send_department_ticket_email(
+                ticket=ticket,
+                department=department,
+                sender=request.user,
+                note=summary,
+                notify_all=True,  # change to False if you only want the head
+            )
+
         if created_customer:
             messages.success(request, f"New customer {customer.display_name} created and call logged.")
         elif ticket:
@@ -585,17 +730,26 @@ class TicketDetailView(LoginRequiredMixin, DetailView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ticket = self.object
-        dept_users = User.objects.filter(
-            is_active=True,
-            staffprofile__department=ticket.department,
-        ).order_by("first_name", "last_name") if ticket.department else User.objects.none()
+
+        if ticket.department:
+            dept_users = User.objects.filter(
+                is_active=True,
+                staffprofile__department=ticket.department,
+            ).select_related("staffprofile").order_by("first_name", "last_name")
+        else:
+            dept_users = User.objects.filter(
+                is_active=True,
+                staffprofile__department__isnull=False,
+            ).select_related("staffprofile", "staffprofile__department").order_by("first_name", "last_name")
 
         ctx.update({
             "updates": ticket.updates.select_related("user"),
             "routes": ticket.routes.select_related("from_department", "to_department", "from_user", "to_user"),
             "assignments": ticket.assignments.select_related("department", "assigned_by", "assigned_to", "task_ref"),
             "dept_users": dept_users,
+            "departments": Department.objects.filter(is_active=True).order_by("name"),
             "can_manage_department": _can_manage_department_ticket(self.request.user, ticket),
+            "can_route_ticket": _can_route_ticket(self.request.user, ticket),
             "can_send_feedback": _is_admin_like(self.request.user) or ticket.created_by_id == self.request.user.id,
         })
         return ctx
@@ -621,10 +775,16 @@ class TicketActionView(LoginRequiredMixin, View):
         if action == "route":
             if not _can_manage_department_ticket(request.user, ticket) and not _is_sales_rep(request.user):
                 return HttpResponseForbidden("Permission denied.")
-            to_department = Department.objects.filter(pk=request.POST.get("department"), is_active=True).first()
+            department_id = (request.POST.get("department") or "").strip()
             note = request.POST.get("note", "").strip()
-            if not to_department:
+
+            if not department_id:
                 messages.error(request, "Please select a department.")
+                return redirect("customer_service_ticket_detail", pk=pk)
+
+            to_department = Department.objects.filter(id=department_id, is_active=True).first()
+            if not to_department:
+                messages.error(request, "Please select a valid department.")
                 return redirect("customer_service_ticket_detail", pk=pk)
 
             from_department = ticket.department
@@ -662,6 +822,15 @@ class TicketActionView(LoginRequiredMixin, View):
                     link=reverse("customer_service_ticket_detail", kwargs={"pk": ticket.pk}),
                     sender=request.user,
                 )
+
+            _send_department_ticket_email(
+                ticket=ticket,
+                department=to_department,
+                sender=request.user,
+                note=note,
+                notify_all=True,   # set False if only department head should get email
+            )
+
             messages.success(request, f"Ticket routed to {to_department.name}.")
             return redirect("customer_service_ticket_detail", pk=pk)
 
@@ -697,6 +866,14 @@ class TicketActionView(LoginRequiredMixin, View):
                 link=reverse("customer_service_ticket_detail", kwargs={"pk": ticket.pk}),
                 sender=request.user,
             )
+
+            _send_assignment_email(
+                ticket=ticket,
+                assignee=assignee,
+                sender=request.user,
+                instructions=instructions,
+            )
+
             messages.success(request, f"Ticket assigned to {assignee.full_name}.")
             return redirect("customer_service_ticket_detail", pk=pk)
 

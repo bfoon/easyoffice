@@ -130,6 +130,13 @@ class DashboardView(LoginRequiredMixin, TemplateView):
 
             ctx['team_members'] = [sp.user for sp in supervisee_profiles[:8]]
 
+            # ADD THIS IF SUPERVISORS SHOULD SEE THE FEED
+            ctx['opportunity_match_count'] = OpportunityMatch.objects.filter(is_read=False).count()
+            ctx['recent_opportunity_matches'] = OpportunityMatch.objects.select_related(
+                'source', 'keyword'
+            ).order_by('-detected_at')[:6]
+            ctx['active_monitor_sources'] = OpportunitySource.objects.filter(is_active=True).count()
+
         if self._is_admin_user(user):
             total_staff_qs = User.objects.filter(is_active=True, status='active')
             total_projects_qs = Project.objects.all()
@@ -155,6 +162,13 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             ctx['office_recent_leave_requests'] = LeaveRequest.objects.select_related(
                 'staff', 'leave_type', 'approved_by'
             ).order_by('-created_at')[:8]
+
+            # ADD THIS
+            ctx['opportunity_match_count'] = OpportunityMatch.objects.filter(is_read=False).count()
+            ctx['recent_opportunity_matches'] = OpportunityMatch.objects.select_related(
+                'source', 'keyword'
+            ).order_by('-detected_at')[:10]
+            ctx['active_monitor_sources'] = OpportunitySource.objects.filter(is_active=True).count()
 
         return ctx
 

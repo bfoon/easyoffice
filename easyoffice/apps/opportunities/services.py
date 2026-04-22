@@ -346,6 +346,7 @@ def fetch_detail_fields(session, detail_url):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
+        # Try heading first
         title_node = soup.find(['h1', 'h2'])
         if title_node:
             raw_title = clean_text(title_node.get_text(" ", strip=True))
@@ -369,6 +370,36 @@ def fetch_detail_fields(session, detail_url):
             if len(" ".join(summary_bits)) > 1200:
                 break
         result['summary'] = " ".join(summary_bits)[:2000]
+
+        # NEW:
+        # If the summary/body contains the flattened procurement text, parse it too.
+        full_page_text = clean_text(soup.get_text(" ", strip=True))
+        if (
+            'Ref No' in full_page_text
+            and 'UNDP Office/Country' in full_page_text
+            and 'Process' in full_page_text
+            and 'Deadline' in full_page_text
+            and 'Posted' in full_page_text
+        ):
+            parsed_page = parse_compound_procurement_text(full_page_text)
+
+            if parsed_page.get('title') and not result['title']:
+                result['title'] = parsed_page['title']
+            if parsed_page.get('reference_no') and not result['reference_no']:
+                result['reference_no'] = parsed_page['reference_no']
+            if parsed_page.get('office_country_raw') and not result['office_country_raw']:
+                result['office_country_raw'] = parsed_page['office_country_raw']
+            if parsed_page.get('office') and not result['office']:
+                result['office'] = parsed_page['office']
+            if parsed_page.get('country') and not result['country']:
+                result['country'] = parsed_page['country']
+            if parsed_page.get('procurement_process') and not result['procurement_process']:
+                result['procurement_process'] = parsed_page['procurement_process']
+            if parsed_page.get('posted_date') and not result['posted_date']:
+                result['posted_date'] = parsed_page['posted_date']
+                result['published_at'] = parsed_page['posted_date']
+            if parsed_page.get('deadline') and not result['deadline']:
+                result['deadline'] = parsed_page['deadline']
 
         ref_value = extract_labeled_value_from_soup(
             soup,
@@ -451,19 +482,60 @@ def scan_undp_table_source(source):
         posted_date = parse_undp_datetime(posted_text)
 
         link_tag = cells[0].find('a', href=True)
-        detail_url = urljoin(source.url, link_tag['href']) if link_tag else source.url
 
-        detail = fetch_detail_fields(session, detail_url)
+        # IMPORTANT:
+        # only fetch detail page if the row really has its own detail link
+        detail = {}
+        detail_url = source.url
+        if link_tag and link_tag.get('href'):
+            detail_url = urljoin(source.url, link_tag['href'])
+            detail = fetch_detail_fields(session, detail_url)
+        else:
+            detail = {
+                'title': '',
+                'summary': '',
+                'reference_no': '',
+                'office_country_raw': '',
+                'office': '',
+                'country': '',
+                'procurement_process': '',
+                'posted_date': None,
+                'deadline': None,
+                'published_at': None,
+            }
 
-        final_title = detail['title'] or title_text
-        final_reference = detail['reference_no'] or ref_text
-        final_office = detail['office'] or office
-        final_country = detail['country'] or country
-        final_process = detail['procurement_process'] or process_text
-        final_posted_date = detail['posted_date'] or posted_date
-        final_deadline = detail['deadline'] or deadline
+        # Prefer row/table values first because UNDP listing is already structured
+        final_title = title_text
+        final_reference = normalize_reference(ref_text)
+        final_office = office
+        final_country = country
+        final_process = process_text
+        final_posted_date = posted_date
+        final_deadline = deadline
 
-        final_summary = detail['summary'] or clean_text(
+        # Only use detail values to fill missing gaps, not to overwrite good table data
+        if detail.get('title') and len(detail['title']) < len(final_title):
+            final_title = detail['title']
+
+        if detail.get('reference_no') and not final_reference:
+            final_reference = normalize_reference(detail['reference_no'])
+
+        if detail.get('office') and not final_office:
+            final_office = detail['office']
+
+        if detail.get('country') and not final_country:
+            final_country = detail['country']
+
+        if detail.get('procurement_process') and not final_process:
+            final_process = detail['procurement_process']
+
+        if detail.get('posted_date') and not final_posted_date:
+            final_posted_date = detail['posted_date']
+
+        if detail.get('deadline') and not final_deadline:
+            final_deadline = detail['deadline']
+
+        final_summary = detail.get('summary') or clean_text(
             f"{title_text} | Ref: {ref_text} | Office/Country: {office_country_text} | "
             f"Process: {process_text} | Deadline: {deadline_text} | Posted: {posted_text}"
         )
@@ -484,7 +556,7 @@ def scan_undp_table_source(source):
             keyword=keyword,
             title=final_title,
             summary=final_summary,
-            link=detail_url,
+            link=detail_url if detail_url else source.url,
             deadline=final_deadline,
             reference_no=final_reference,
             country=final_country,
@@ -513,11 +585,9 @@ def scan_html_source(source):
 
     for block in candidates:
         text = " ".join(block.stripped_strings)
-        if not text or len(text) < 20:
-            continue
+        text = clean_text(text)
 
-        keyword = find_matching_keyword(text)
-        if not keyword:
+        if not text or len(text) < 20:
             continue
 
         link = block.get('href') if block.name == 'a' else None
@@ -526,6 +596,73 @@ def scan_html_source(source):
             link = anchor['href'] if anchor else source.url
 
         full_link = urljoin(source.url, link)
+
+        # NEW:
+        # If the block contains a flattened UNDP procurement row, parse it properly.
+        parsed = None
+        if (
+            'Ref No' in text
+            and 'UNDP Office/Country' in text
+            and 'Process' in text
+            and 'Deadline' in text
+            and 'Posted' in text
+        ):
+            parsed = parse_compound_procurement_text(text)
+
+        if parsed:
+            final_title = clean_text(parsed.get('title', ''))
+            final_reference = normalize_reference(parsed.get('reference_no', ''))
+            final_office = clean_text(parsed.get('office', ''))
+            final_country = clean_text(parsed.get('country', ''))
+            final_process = clean_text(parsed.get('procurement_process', ''))
+            final_deadline = parsed.get('deadline')
+            final_posted_date = parsed.get('posted_date')
+            final_summary = text[:1000]
+
+            combined_text = " ".join([
+                final_title,
+                final_reference,
+                final_office,
+                final_country,
+                final_process,
+                final_summary,
+            ])
+
+            keyword = find_matching_keyword(combined_text)
+            if not keyword:
+                keyword = find_matching_keyword(final_title)
+
+            if not final_title:
+                continue
+
+            dedupe_key = (final_title, full_link, final_reference)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+
+            match = create_match_if_new(
+                source=source,
+                keyword=keyword,
+                title=final_title,
+                summary=final_summary,
+                link=full_link,
+                published_at=final_posted_date,
+                deadline=final_deadline,
+                reference_no=final_reference,
+                country=final_country,
+                office=final_office,
+                procurement_process=final_process,
+                posted_date=final_posted_date,
+            )
+            if match:
+                created += 1
+            continue
+
+        # Existing generic HTML logic
+        keyword = find_matching_keyword(text)
+        if not keyword:
+            continue
+
         title = clean_text(text[:300])
 
         if (title, full_link) in seen:

@@ -29,6 +29,7 @@ urlpatterns = [
     # 🔥 NEW → CLOSE POLL
     path('poll/<uuid:poll_id>/close/', views.ClosePollView.as_view(), name='close_chat_poll'),
 
+    path('notifications/poll/', views.NotificationPollView.as_view(), name='notifications_poll'),
     # ─────────────────────────────────────────────
     # REACTIONS
     # ─────────────────────────────────────────────

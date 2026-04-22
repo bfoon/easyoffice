@@ -2908,3 +2908,204 @@ class CallWindowView(LoginRequiredMixin, View):
             'ring_is_stale':   ring_is_stale,
         }
         return render(request, 'messaging/call_window.html', ctx)
+
+
+class NotificationPollView(LoginRequiredMixin, View):
+    """
+    GET /messages/notifications/poll/?since=<iso8601>
+
+    Response schema:
+        {
+            "ok": true,
+            "now": "2026-04-22T10:00:00Z",
+            "total_unread": 7,
+            "rooms_unread": { "<room_uuid>": 3, ... },
+            "notifications": [  # new since `since` — triggers sound
+                { "id", "room_id", "room_name", "room_type",
+                  "sender_name", "preview", "kind", "created_at" }
+            ],
+            "recent": [  # last 10 DM/mention messages — for dropdown panel
+                { "id", "room_id", "room_name", "sender_name",
+                  "preview", "kind", "created_at", "is_unread" }
+            ]
+        }
+    """
+
+    def get(self, request):
+        user = request.user
+        now = timezone.now()
+
+        since_raw = (request.GET.get('since') or '').strip()
+        since = None
+        if since_raw:
+            try:
+                from django.utils.dateparse import parse_datetime
+                since = parse_datetime(since_raw)
+            except Exception:
+                since = None
+
+        # Fallback: anything in the last 30 seconds. Prevents a flood of old
+        # messages the first time the client calls us.
+        if since is None:
+            since = now - timezone.timedelta(seconds=30)
+
+        # ── 1. Per-room unread counts (sidebar badges) + total ─────────────
+        memberships = (
+            ChatRoomMember.objects
+            .filter(user=user, room__is_archived=False)
+            .select_related('room')
+        )
+
+        rooms_unread = {}
+        total_unread = 0
+        dm_room_ids = []
+
+        for m in memberships:
+            room = m.room
+            last_read = m.last_read
+
+            unread_qs = room.messages.filter(is_deleted=False).exclude(sender=user)
+            if last_read:
+                unread_qs = unread_qs.filter(created_at__gt=last_read)
+
+            cnt = unread_qs.count()
+            if cnt:
+                rooms_unread[str(room.id)] = cnt
+                total_unread += cnt
+
+            if room.room_type == 'direct':
+                dm_room_ids.append(room.id)
+
+        # ── 2. New DM/mention notifications since `since` (for SOUND) ──────
+        base_qs = (
+            ChatMessage.objects
+            .filter(created_at__gt=since, is_deleted=False)
+            .exclude(sender=user)
+            .select_related('sender', 'room')
+            .order_by('created_at')
+        )
+
+        dm_msgs = base_qs.filter(room_id__in=dm_room_ids)
+
+        mention_msg_ids = list(
+            ChatMessageMention.objects
+            .filter(user=user, message__created_at__gt=since, message__is_deleted=False)
+            .values_list('message_id', flat=True)
+        )
+        mention_msgs = base_qs.filter(id__in=mention_msg_ids)
+
+        seen = {}
+        for msg in dm_msgs:
+            seen[msg.id] = ('dm', msg)
+        for msg in mention_msgs:
+            seen[msg.id] = ('mention', msg)
+
+        new_ordered = sorted(seen.values(), key=lambda t: t[1].created_at)[-25:]
+
+        notifications = [
+            self._serialize_notif(kind, msg, user)
+            for kind, msg in new_ordered
+        ]
+
+        # ── 3. Recent (for dropdown panel) — last 10 DM/mention msgs ───────
+        # Always populated, regardless of `since`. Used to render the dropdown
+        # without a second HTTP call.
+        recent_cutoff = now - timezone.timedelta(days=7)
+
+        recent_dm = (
+            ChatMessage.objects
+            .filter(
+                room_id__in=dm_room_ids,
+                created_at__gt=recent_cutoff,
+                is_deleted=False,
+            )
+            .exclude(sender=user)
+            .select_related('sender', 'room')
+            .order_by('-created_at')[:15]
+        )
+
+        recent_mention_ids = list(
+            ChatMessageMention.objects
+            .filter(user=user, message__created_at__gt=recent_cutoff,
+                    message__is_deleted=False)
+            .values_list('message_id', flat=True)[:15]
+        )
+        recent_mention = (
+            ChatMessage.objects
+            .filter(id__in=recent_mention_ids)
+            .exclude(sender=user)
+            .select_related('sender', 'room')
+            .order_by('-created_at')
+        )
+
+        recent_seen = {}
+        for msg in recent_dm:
+            recent_seen[msg.id] = ('dm', msg)
+        for msg in recent_mention:
+            recent_seen[msg.id] = ('mention', msg)
+
+        recent_ordered = sorted(
+            recent_seen.values(),
+            key=lambda t: t[1].created_at,
+            reverse=True,
+        )[:10]
+
+        # Map: room_id -> last_read for the "is_unread" flag
+        last_read_map = {str(m.room_id): m.last_read for m in memberships}
+
+        recent = []
+        for kind, msg in recent_ordered:
+            item = self._serialize_notif(kind, msg, user)
+            lr = last_read_map.get(str(msg.room_id))
+            item['is_unread'] = bool(lr is None or msg.created_at > lr)
+            recent.append(item)
+
+        return JsonResponse({
+            'ok': True,
+            'now': now.isoformat(),
+            'total_unread': total_unread,
+            'rooms_unread': rooms_unread,
+            'notifications': notifications,
+            'recent': recent,
+        })
+
+    # ── helpers ────────────────────────────────────────────────────────────
+
+    def _serialize_notif(self, kind, msg, viewer):
+        room = msg.room
+        if room.room_type == 'direct':
+            other = room.members.exclude(id=viewer.id).first()
+            room_name = self._safe_full_name(other) if other else 'Direct message'
+        else:
+            room_name = room.name or 'Chat'
+
+        # content is plaintext after ORM load (post_init decrypts).
+        preview = (msg.content or '').strip()
+        if msg.message_type == 'file' and not preview:
+            preview = '📎 File'
+        elif msg.message_type == 'image' and not preview:
+            preview = '🖼️ Image'
+        elif msg.message_type == 'poll' and not preview:
+            preview = '📊 Poll'
+        if len(preview) > 120:
+            preview = preview[:117] + '…'
+
+        return {
+            'id': str(msg.id),
+            'room_id': str(room.id),
+            'room_name': room_name,
+            'room_type': room.room_type,
+            'sender_name': self._safe_full_name(msg.sender) if msg.sender else 'Someone',
+            'preview': preview,
+            'kind': kind,
+            'created_at': msg.created_at.isoformat(),
+        }
+
+    @staticmethod
+    def _safe_full_name(user):
+        if not user:
+            return ''
+        try:
+            return user.full_name or user.get_full_name() or user.username
+        except Exception:
+            return str(user)

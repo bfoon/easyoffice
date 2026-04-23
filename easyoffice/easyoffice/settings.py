@@ -55,7 +55,8 @@ LOCAL_APPS = [
     'apps.letterhead',
     'apps.invoices',
     'apps.opportunities',
-    'apps.customer_service'
+    'apps.customer_service',
+    'apps.user_admin',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -71,6 +72,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'apps.core.middleware.ActiveUserMiddleware',
     'apps.core.middleware.OfficeBrandingMiddleware',
+    'apps.user_admin.middleware.PasswordChangeRequiredMiddleware',
 ]
 
 ROOT_URLCONF = 'easyoffice.urls'
@@ -99,6 +101,7 @@ TEMPLATES = [
                 'apps.core.context_processors.office_settings',
                 'apps.core.context_processors.unread_notifications',
                 'apps.messaging.context_processors.unread_messages',
+                'apps.user_admin.context_processors.admin_flags',
             ],
         },
     },

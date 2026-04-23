@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}New user{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'user_admin:dashboard' %}">User Administration</a>
+  <i class="bi bi-chevron-right mx-2" style="font-size:.7rem"></i>
+  <span>New user</span>
+{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Create new user</h1>
+    <p class="eo-page-subtitle">Send an invitation or create the account directly with a temporary password</p>
+  </div>
+  <a href="{% url 'user_admin:dashboard' %}" class="eo-btn eo-btn-secondary">
+    <i class="bi bi-arrow-left"></i> Back
+  </a>
+</div>
+
+{% if messages %}
+  {% for m in messages %}
+    <div class="eo-alert eo-alert-{{ m.tags|default:'info' }}">{{ m }}</div>
+  {% endfor %}
+{% endif %}
+
+<form method="post" class="eo-card" style="padding:20px;max-width:720px">
+  {% csrf_token %}
+
+  <!-- Mode picker -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
+    <label class="mode-card">
+      <input type="radio" name="mode" value="invite" checked>
+      <div>
+        <strong><i class="bi bi-envelope-check"></i> Email invite</strong>
+        <div class="text-muted" style="font-size:.82rem">They click a link in their email and set their own password.</div>
+      </div>
+    </label>
+    <label class="mode-card">
+      <input type="radio" name="mode" value="temp_pw">
+      <div>
+        <strong><i class="bi bi-key"></i> Temporary password</strong>
+        <div class="text-muted" style="font-size:.82rem">Create the account now. You tell them the password; they change it on first login.</div>
+      </div>
+    </label>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-md-6">
+      <label class="eo-label">Email <span style="color:#dc2626">*</span></label>
+      <input type="email" name="email" required class="eo-input">
+    </div>
+    <div class="col-md-6">
+      <label class="eo-label">Employee ID</label>
+      <input type="text" name="employee_id" class="eo-input">
+    </div>
+    <div class="col-md-6">
+      <label class="eo-label">First name</label>
+      <input type="text" name="first_name" class="eo-input">
+    </div>
+    <div class="col-md-6">
+      <label class="eo-label">Last name</label>
+      <input type="text" name="last_name" class="eo-input">
+    </div>
+    <div class="col-12">
+      <label class="eo-label">Groups (access roles)</label>
+      <select name="group_names" class="eo-input" multiple style="min-height:120px" id="groupsSelect">
+        {% for g in all_groups %}
+          <option value="{{ g.name }}">{{ g.name }}</option>
+        {% endfor %}
+      </select>
+      <small class="text-muted">Hold Ctrl/Cmd to pick multiple. Leave empty for no special groups.</small>
+    </div>
+
+    <!-- Mode-specific options -->
+    <div class="col-12 mode-invite-only">
+      <label class="eo-label">Personal note (optional)</label>
+      <textarea name="message" class="eo-input" rows="3"
+                placeholder="Welcome to the team!"></textarea>
+    </div>
+    <div class="col-md-4 mode-invite-only">
+      <label class="eo-label">Invitation expires in</label>
+      <select name="expires_days" class="eo-input">
+        <option value="1">1 day</option>
+        <option value="3">3 days</option>
+        <option value="7" selected>7 days</option>
+        <option value="14">14 days</option>
+        <option value="30">30 days</option>
+      </select>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
+    <a href="{% url 'user_admin:dashboard' %}" class="eo-btn eo-btn-secondary">Cancel</a>
+    <button type="submit" class="eo-btn eo-btn-primary">
+      <i class="bi bi-check2"></i> Create
+    </button>
+  </div>
+</form>
+
+<style>
+  .mode-card{
+    display:flex;gap:10px;align-items:flex-start;padding:14px;
+    border:1px solid var(--eo-border);border-radius:10px;cursor:pointer;
+    transition:border-color .15s,background .15s;
+  }
+  .mode-card:hover{ background:var(--eo-bg); }
+  .mode-card input[type=radio]{ margin-top:2px; }
+  .mode-card input[type=radio]:checked + div{ color:var(--eo-accent); }
+  .mode-card:has(input[type=radio]:checked){ border-color:var(--eo-accent); background:color-mix(in srgb,var(--eo-accent) 6%,transparent); }
+  /* Groups multi-select on small screens needs its own wrapping so tags don't shove */
+  select[multiple]{ padding:6px !important; }
+</style>
+
+<script>
+(function(){
+  // Hide the invite-only fields when "temp_pw" is selected.
+  function sync(){
+    var mode = document.querySelector('input[name="mode"]:checked');
+    if (!mode) return;
+    var isInvite = (mode.value === 'invite');
+    document.querySelectorAll('.mode-invite-only').forEach(function(el){
+      el.style.display = isInvite ? '' : 'none';
+    });
+  }
+  document.querySelectorAll('input[name="mode"]').forEach(function(r){
+    r.addEventListener('change', sync);
+  });
+  sync();
+
+  // Because the backend expects a comma-separated string, join the
+  // multi-select values into a hidden input on submit.
+  var form = document.querySelector('form');
+  form.addEventListener('submit', function(){
+    var sel = document.getElementById('groupsSelect');
+    if (!sel) return;
+    var vals = Array.from(sel.selectedOptions).map(function(o){ return o.value; });
+    // Replace the existing multi-select's name so the server sees the joined value
+    var hidden = document.createElement('input');
+    hidden.type = 'hidden';
+    hidden.name = 'group_names';
+    hidden.value = vals.join(',');
+    sel.name = '';   // stop the multi-select from submitting its own value
+    form.appendChild(hidden);
+  });
+})();
+</script>
+{% endblock %}

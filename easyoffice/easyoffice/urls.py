@@ -52,6 +52,7 @@ urlpatterns = [
     path('invoices/', include('apps.invoices.urls')),
     path('opportunities/', include('apps.opportunities.urls')),
     path('customer-service/', include('apps.customer_service.urls')),
+    path('users/', include('apps.user_admin.urls', namespace='user_admin')),
 
 ]
 

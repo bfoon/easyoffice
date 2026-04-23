@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}User Administration{% endblock %}
+{% block breadcrumb %}<span>User Administration</span>{% endblock %}
+
+{% block extra_css %}
+<style>
+  .ua-toolbar{display:flex;gap:8px;flex-wrap:wrap}
+  .ua-avatar{
+    width:48px;height:48px;min-width:48px;border-radius:50%;overflow:hidden;
+    display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(135deg,#1d4ed8,#2563eb);color:#fff;font-weight:700;
+    box-shadow:0 10px 24px rgba(37,99,235,.18);
+  }
+  .ua-avatar img{width:100%;height:100%;object-fit:cover;display:block}
+  .ua-user-name{font-weight:700;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ua-user-email{font-size:.8rem;color:var(--eo-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ua-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+  .ua-meta span{font-size:.72rem;color:var(--eo-text-muted);background:var(--eo-bg);padding:3px 8px;border-radius:999px}
+  .ua-group-cell{max-width:260px}
+  .ua-chip-row{display:flex;gap:4px;flex-wrap:wrap}
+  .ua-chip-more{font-size:.72rem;color:var(--eo-text-muted)}
+  .ua-table td{vertical-align:middle}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">User Administration</h1>
+    <p class="eo-page-subtitle">Create accounts, manage access, and review user roles and profile placement.</p>
+  </div>
+  <div class="ua-toolbar">
+    <a href="{% url 'user_admin:create_user' %}" class="eo-btn eo-btn-primary">
+      <i class="bi bi-person-plus"></i> New user
+    </a>
+    <a href="{% url 'user_admin:invitation_list' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-envelope"></i> Invitations
+      {% if stats.pending_invites %}<span class="eo-badge">{{ stats.pending_invites }}</span>{% endif %}
+    </a>
+    <a href="{% url 'user_admin:registration_links' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-link-45deg"></i> Registration links
+      {% if stats.active_links %}<span class="eo-badge">{{ stats.active_links }}</span>{% endif %}
+    </a>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3 col-lg-2"><div class="eo-stat eo-stat-info"><div class="eo-stat-label">Total users</div><div class="eo-stat-value">{{ stats.total }}</div><i class="bi bi-people eo-stat-icon"></i></div></div>
+  <div class="col-6 col-md-3 col-lg-2"><div class="eo-stat" style="border-left-color:#10b981"><div class="eo-stat-label">Active</div><div class="eo-stat-value">{{ stats.active }}</div><i class="bi bi-person-check eo-stat-icon" style="color:#10b981"></i></div></div>
+  <div class="col-6 col-md-3 col-lg-2"><div class="eo-stat" style="border-left-color:#f59e0b"><div class="eo-stat-label">On leave</div><div class="eo-stat-value">{{ stats.on_leave }}</div><i class="bi bi-briefcase eo-stat-icon" style="color:#f59e0b"></i></div></div>
+  <div class="col-6 col-md-3 col-lg-2"><div class="eo-stat" style="border-left-color:#ef4444"><div class="eo-stat-label">Suspended</div><div class="eo-stat-value">{{ stats.suspended }}</div><i class="bi bi-slash-circle eo-stat-icon" style="color:#ef4444"></i></div></div>
+  <div class="col-6 col-md-3 col-lg-2"><div class="eo-stat" style="border-left-color:#64748b"><div class="eo-stat-label">Terminated</div><div class="eo-stat-value">{{ stats.terminated }}</div><i class="bi bi-person-x eo-stat-icon" style="color:#64748b"></i></div></div>
+  <div class="col-6 col-md-3 col-lg-2"><div class="eo-stat" style="border-left-color:#dc2626"><div class="eo-stat-label">Locked</div><div class="eo-stat-value">{{ stats.locked }}</div><i class="bi bi-lock eo-stat-icon" style="color:#dc2626"></i></div></div>
+</div>
+
+<form method="get" class="eo-card p-3 mb-3" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+  <div style="flex:2;min-width:220px">
+    <label class="eo-label">Search</label>
+    <input type="search" name="q" value="{{ q }}" class="eo-input" placeholder="Name, email, employee ID, department, unit…">
+  </div>
+  <div style="flex:1;min-width:150px">
+    <label class="eo-label">Status</label>
+    <select name="status" class="eo-input">
+      <option value="">All</option>
+      {% for v, label in all_statuses %}
+        <option value="{{ v }}" {% if status_f == v %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div style="flex:1;min-width:150px">
+    <label class="eo-label">Group</label>
+    <select name="group" class="eo-input">
+      <option value="">All</option>
+      {% for g in all_groups %}
+        <option value="{{ g.name }}" {% if group_f == g.name %}selected{% endif %}>{{ g.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="eo-label" style="display:flex;gap:6px;align-items:center;cursor:pointer">
+      <input type="checkbox" name="locked" value="1" {% if locked_f %}checked{% endif %}> Locked only
+    </label>
+  </div>
+  <div style="display:flex;gap:8px">
+    <button class="eo-btn eo-btn-primary" type="submit"><i class="bi bi-search"></i> Filter</button>
+    <a href="{% url 'user_admin:dashboard' %}" class="eo-btn eo-btn-secondary">Reset</a>
+  </div>
+</form>
+
+<div class="eo-card ua-table">
+  <div style="padding:12px 14px;border-bottom:1px solid var(--eo-border);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+    <strong>{{ total_matches }} user{{ total_matches|pluralize }}</strong>
+    {% if total_matches > 500 %}<span class="text-muted" style="font-size:.85rem">Showing first 500 — narrow with filters</span>{% endif %}
+  </div>
+
+  <div class="eo-table-wrap">
+    <table class="eo-table">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Status</th>
+          <th>Groups</th>
+          <th>Last seen</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>
+            <div style="display:flex;align-items:center;gap:12px;min-width:0">
+              <div class="ua-avatar">
+                {% if u.avatar %}<img src="{{ u.avatar.url }}" alt="{{ u.full_name|default:u.email }}">{% else %}{{ u.initials }}{% endif %}
+              </div>
+              <div style="min-width:0">
+                <div class="ua-user-name">{{ u.full_name|default:u.email }}</div>
+                <div class="ua-user-email">{{ u.email }}</div>
+                <div class="ua-meta">
+                  {% if u.employee_id %}<span>ID: {{ u.employee_id }}</span>{% endif %}
+                  {% if u.staffprofile.position %}<span>{{ u.staffprofile.position }}</span>{% endif %}
+                  {% if u.staffprofile.department %}<span>{{ u.staffprofile.department.name }}</span>{% endif %}
+                  {% if u.staffprofile.unit %}<span>{{ u.staffprofile.unit.name }}</span>{% endif %}
+                </div>
+              </div>
+            </div>
+          </td>
+          <td>
+            <span class="eo-chip" style="background:{% if u.status == 'active' %}#d1fae5{% elif u.status == 'suspended' %}#fee2e2{% elif u.status == 'terminated' %}#e5e7eb{% elif u.status == 'on_leave' %}#fef3c7{% else %}#e0e7ff{% endif %};color:#1e293b">
+              {{ u.get_status_display }}
+            </span>
+            {% if u.is_locked_out %}<span class="eo-chip" style="background:#fee2e2;color:#991b1b;margin-left:4px"><i class="bi bi-lock-fill"></i> Locked</span>{% endif %}
+            {% if u.is_online %}<div style="margin-top:6px"><span class="eo-chip" style="background:#dcfce7;color:#166534">Online</span></div>{% endif %}
+          </td>
+          <td class="ua-group-cell">
+            <div class="ua-chip-row">
+              {% for g in u.groups.all %}
+                <span class="eo-chip">{{ g.name }}</span>
+              {% empty %}
+                <span class="text-muted">No groups</span>
+              {% endfor %}
+            </div>
+          </td>
+          <td style="font-size:.82rem;color:var(--eo-text-muted)">
+            {% if u.last_seen %}
+              {{ u.last_seen|naturaltime }}<br>
+              <small>{{ u.last_seen|date:"M d, Y H:i" }}</small>
+            {% else %}
+              Never
+            {% endif %}
+          </td>
+          <td>
+            <a href="{% url 'user_admin:user_detail' u.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">Manage</a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" style="text-align:center;padding:28px;color:var(--eo-text-muted)">No users match these filters.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

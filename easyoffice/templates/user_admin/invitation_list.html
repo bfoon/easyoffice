@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Invitations{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'user_admin:dashboard' %}">User Administration</a>
+  <i class="bi bi-chevron-right mx-2" style="font-size:.7rem"></i>
+  <span>Invitations</span>
+{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Invitations</h1>
+    <p class="eo-page-subtitle">Pending and historical email invitations</p>
+  </div>
+  <a href="{% url 'user_admin:create_user' %}" class="eo-btn eo-btn-primary">
+    <i class="bi bi-envelope-plus"></i> New invitation
+  </a>
+</div>
+
+{% if messages %}
+  {% for m in messages %}
+    <div class="eo-alert eo-alert-{{ m.tags|default:'info' }}">{{ m }}</div>
+  {% endfor %}
+{% endif %}
+
+<div class="eo-card">
+  <div class="eo-table-wrap">
+    <table class="eo-table">
+      <thead>
+        <tr>
+          <th>Email</th>
+          <th>Name</th>
+          <th>Status</th>
+          <th>Invited by</th>
+          <th>Expires</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inv in invitations %}
+        <tr>
+          <td>{{ inv.email }}</td>
+          <td>{{ inv.first_name }} {{ inv.last_name }}</td>
+          <td>
+            <span class="eo-chip" style="background:{% if inv.status == 'pending' %}#dbeafe{% elif inv.status == 'accepted' %}#d1fae5{% else %}#e5e7eb{% endif %}">
+              {{ inv.get_status_display }}
+            </span>
+          </td>
+          <td>{{ inv.invited_by|default:"—" }}</td>
+          <td style="font-size:.85rem;color:var(--eo-text-muted)">
+            {{ inv.expires_at|date:"M d, Y" }}
+            <br><small>{{ inv.expires_at|naturaltime }}</small>
+          </td>
+          <td style="white-space:nowrap">
+            {% if inv.status == 'pending' or inv.status == 'expired' %}
+              <form method="post" action="{% url 'user_admin:invitation_action' inv.pk %}" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="resend">
+                <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm" title="Resend">
+                  <i class="bi bi-arrow-clockwise"></i>
+                </button>
+              </form>
+            {% endif %}
+            {% if inv.status == 'pending' %}
+              <form method="post" action="{% url 'user_admin:invitation_action' inv.pk %}"
+                    style="display:inline"
+                    onsubmit="return confirm('Revoke invitation for {{ inv.email|escapejs }}?');">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="revoke">
+                <button type="submit" class="eo-btn eo-btn-sm" style="background:#ef4444;color:#fff" title="Revoke">
+                  <i class="bi bi-x-circle"></i>
+                </button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% empty %}
+          <tr><td colspan="6" style="text-align:center;padding:28px;color:var(--eo-text-muted)">
+            No invitations yet. Click "New invitation" to send one.
+          </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

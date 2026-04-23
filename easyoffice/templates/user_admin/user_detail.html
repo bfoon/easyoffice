@@ -1,0 +1,274 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ target.full_name|default:target.email }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'user_admin:dashboard' %}">User Administration</a>
+  <i class="bi bi-chevron-right mx-2" style="font-size:.7rem"></i>
+  <span>{{ target.full_name|default:target.email }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div style="display:flex;align-items:center;gap:14px">
+    <div class="eo-avatar-lg">
+      {% if target.avatar %}<img src="{{ target.avatar.url }}" alt="">{% else %}{{ target.initials }}{% endif %}
+    </div>
+    <div>
+      <h1 class="eo-page-title" style="margin-bottom:0">{{ target.full_name|default:target.email }}</h1>
+      <p class="eo-page-subtitle" style="margin-bottom:0">{{ target.email }}</p>
+    </div>
+  </div>
+  <a href="{% url 'user_admin:dashboard' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-arrow-left"></i> Back</a>
+</div>
+
+{% if messages %}
+  {% for m in messages %}
+    <div class="eo-alert eo-alert-{{ m.tags|default:'info' }}">{{ m }}</div>
+  {% endfor %}
+{% endif %}
+
+{# ═══════════════════ One-shot temp-password banner ═══════════════════ #}
+{% if request.session.temp_pw_flash and request.session.temp_pw_flash.user_id == target.pk|stringformat:'s' %}
+<div class="eo-card" style="padding:18px;margin-bottom:20px;border-left:4px solid #f59e0b;background:#fffbeb">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+    <div>
+      <strong><i class="bi bi-key-fill"></i> Temporary password — show it now, only once</strong>
+      <div style="font-family:monospace;font-size:1.2rem;font-weight:700;margin-top:6px;letter-spacing:.08em">
+        {{ request.session.temp_pw_flash.password }}
+      </div>
+      <div class="text-muted" style="font-size:.82rem;margin-top:4px">
+        The user will be forced to change it the first time they sign in.
+      </div>
+    </div>
+    <button type="button" onclick="navigator.clipboard.writeText('{{ request.session.temp_pw_flash.password }}')"
+            class="eo-btn eo-btn-secondary">
+      <i class="bi bi-clipboard"></i> Copy
+    </button>
+  </div>
+</div>
+{# Clear the flash immediately after rendering so refresh doesn't re-show it. #}
+{% with _=request.session.pop %}{% endwith %}
+<script>
+  // Belt-and-suspenders: wipe the flash from the session via a tiny fetch
+  // as soon as the page loads, so hitting refresh never shows it again.
+  fetch('{% url "user_admin:dashboard" %}', {credentials:'same-origin'});
+</script>
+{% endif %}
+
+<div class="row g-3">
+  {# ═══════════════════════ Actions panel ═══════════════════════ #}
+  <div class="col-lg-7">
+
+    {# Identity summary #}
+    <div class="eo-card" style="padding:16px;margin-bottom:14px">
+      <h3 style="font-size:1rem;margin-bottom:12px">Identity</h3>
+      <div class="row g-2" style="font-size:.88rem">
+        <div class="col-sm-6"><span class="text-muted">Username:</span> {{ target.username }}</div>
+        <div class="col-sm-6"><span class="text-muted">Employee ID:</span> {{ target.employee_id|default:"—" }}</div>
+        <div class="col-sm-6"><span class="text-muted">Phone:</span> {{ target.phone|default:"—" }}</div>
+        <div class="col-sm-6"><span class="text-muted">Joined:</span> {{ target.date_joined|date:"M d, Y" }}</div>
+        <div class="col-sm-6"><span class="text-muted">Last seen:</span>
+          {% if target.last_seen %}{{ target.last_seen|naturaltime }}{% else %}Never{% endif %}
+        </div>
+        <div class="col-sm-6"><span class="text-muted">Active:</span>
+          {% if target.is_active %}<span style="color:#10b981">Yes</span>{% else %}<span style="color:#ef4444">No</span>{% endif %}
+        </div>
+      </div>
+    </div>
+
+    {# Password actions #}
+    <div class="eo-card" style="padding:16px;margin-bottom:14px">
+      <h3 style="font-size:1rem;margin-bottom:12px"><i class="bi bi-key"></i> Password</h3>
+      {% if must_change_pw %}
+        <div class="eo-alert eo-alert-warning" style="margin-bottom:12px">
+          <i class="bi bi-exclamation-triangle"></i> User is required to change their password on next login.
+        </div>
+      {% endif %}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="reset_email">
+          <button class="eo-btn eo-btn-secondary" type="submit">
+            <i class="bi bi-envelope"></i> Email password-reset link
+          </button>
+        </form>
+        <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0"
+              onsubmit="return confirm('Generate a new temporary password? The current password will stop working immediately.');">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="reset_temp">
+          <button class="eo-btn eo-btn-secondary" type="submit">
+            <i class="bi bi-key"></i> Generate temp password
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {# Status + access #}
+    <div class="eo-card" style="padding:16px;margin-bottom:14px">
+      <h3 style="font-size:1rem;margin-bottom:12px"><i class="bi bi-shield-lock"></i> Access</h3>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+        <span class="eo-chip" style="background:{% if target.status == 'active' %}#d1fae5{% elif target.status == 'suspended' %}#fee2e2{% else %}#e5e7eb{% endif %}">
+          {{ target.get_status_display }}
+        </span>
+        {% if is_locked %}
+          <span class="eo-chip" style="background:#fee2e2;color:#991b1b">
+            <i class="bi bi-lock-fill"></i> Locked out
+          </span>
+        {% endif %}
+      </div>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+        {% if target.is_active and target.status != 'suspended' %}
+          <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0"
+                onsubmit="return confirm('Block {{ target.email|escapejs }}? They will be unable to sign in.');">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="block">
+            <button class="eo-btn" style="background:#ef4444;color:#fff" type="submit">
+              <i class="bi bi-slash-circle"></i> Block user
+            </button>
+          </form>
+        {% else %}
+          <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="unblock">
+            <button class="eo-btn eo-btn-primary" type="submit">
+              <i class="bi bi-check2-circle"></i> Unblock / reactivate
+            </button>
+          </form>
+        {% endif %}
+
+        {% if is_locked %}
+          <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="unlock">
+            <button class="eo-btn eo-btn-secondary" type="submit">
+              <i class="bi bi-unlock"></i> Clear lockout
+            </button>
+          </form>
+        {% endif %}
+
+        {% if target.status != 'terminated' %}
+          <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0"
+                onsubmit="return confirm('Mark {{ target.email|escapejs }} as terminated? This disables their account.');">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="terminate">
+            <button class="eo-btn" style="background:#64748b;color:#fff" type="submit">
+              <i class="bi bi-person-x"></i> Terminate
+            </button>
+          </form>
+        {% endif %}
+      </div>
+
+      {# Status changer #}
+      <form method="post" action="{% url 'user_admin:user_action' target.pk %}"
+            style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:14px">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="change_status">
+        <div style="flex:1;min-width:180px">
+          <label class="eo-label">Change status to</label>
+          <select name="status" class="eo-input">
+            {% for v, label in target.Status.choices %}
+              <option value="{{ v }}" {% if target.status == v %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button class="eo-btn eo-btn-secondary" type="submit">Update status</button>
+      </form>
+
+      {# Groups #}
+      <form method="post" action="{% url 'user_admin:user_action' target.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="set_groups">
+        <label class="eo-label">Groups</label>
+        <select name="groups" class="eo-input" multiple style="min-height:120px">
+          {% for g in all_groups %}
+            <option value="{{ g.name }}" {% if g.name in user_groups %}selected{% endif %}>{{ g.name }}</option>
+          {% endfor %}
+        </select>
+        <small class="text-muted">Hold Ctrl/Cmd to pick multiple.</small>
+        <div style="margin-top:10px">
+          <button class="eo-btn eo-btn-secondary" type="submit">Save groups</button>
+        </div>
+      </form>
+    </div>
+
+    {% if request.user.is_superuser %}
+    <div class="eo-card" style="padding:16px;border-left:4px solid #dc2626">
+      <h3 style="font-size:1rem;margin-bottom:10px;color:#991b1b">
+        <i class="bi bi-exclamation-octagon"></i> Danger zone
+      </h3>
+      <p class="text-muted" style="font-size:.85rem">
+        Hard-deleting a user removes their profile. Messages and tickets they created
+        may remain (the user FK is set to NULL in most places).
+      </p>
+      <form method="post" action="{% url 'user_admin:user_action' target.pk %}"
+            onsubmit="return confirm('PERMANENTLY DELETE {{ target.email|escapejs }}?\n\nThis cannot be undone. Type the email to confirm:') && prompt('Type the email to confirm:') === '{{ target.email|escapejs }}';">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="delete">
+        <button class="eo-btn" style="background:#dc2626;color:#fff" type="submit">
+          <i class="bi bi-trash"></i> Delete permanently
+        </button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ═══════════════════════ Sidebar: history ═══════════════════════ #}
+  <div class="col-lg-5">
+    <div class="eo-card" style="padding:16px;margin-bottom:14px">
+      <h3 style="font-size:1rem;margin-bottom:12px"><i class="bi bi-shield"></i> Recent security events</h3>
+      {% if recent_events %}
+        <ul style="list-style:none;padding:0;margin:0;font-size:.85rem">
+          {% for e in recent_events %}
+            <li style="padding:6px 0;border-bottom:1px solid var(--eo-border)">
+              <div style="display:flex;justify-content:space-between;gap:8px">
+                <span>{{ e.get_event_type_display }}</span>
+                <span class="text-muted" style="font-size:.75rem">{{ e.created_at|naturaltime }}</span>
+              </div>
+              {% if e.city or e.country %}
+                <div class="text-muted" style="font-size:.75rem">
+                  {{ e.city }}{% if e.city and e.country %}, {% endif %}{{ e.country }}
+                </div>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="text-muted" style="font-size:.82rem">No recent events.</div>
+      {% endif %}
+    </div>
+
+    <div class="eo-card" style="padding:16px">
+      <h3 style="font-size:1rem;margin-bottom:12px"><i class="bi bi-clock-history"></i> Admin audit trail</h3>
+      {% if audit_logs %}
+        <ul style="list-style:none;padding:0;margin:0;font-size:.85rem">
+          {% for a in audit_logs %}
+            <li style="padding:6px 0;border-bottom:1px solid var(--eo-border)">
+              <div style="display:flex;justify-content:space-between;gap:8px">
+                <strong>{{ a.get_action_display }}</strong>
+                <span class="text-muted" style="font-size:.75rem">{{ a.timestamp|naturaltime }}</span>
+              </div>
+              <div class="text-muted" style="font-size:.78rem">
+                by {{ a.user|default:"—" }}
+              </div>
+              {% if a.notes %}<div style="font-size:.78rem;margin-top:2px">{{ a.notes }}</div>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="text-muted" style="font-size:.82rem">No admin actions recorded for this user yet.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<style>
+  .eo-avatar-lg{
+    width:60px;height:60px;border-radius:50%;background:var(--eo-accent);color:#fff;
+    font-weight:700;font-size:1.3rem;display:flex;align-items:center;justify-content:center;
+    overflow:hidden;flex-shrink:0;
+  }
+  .eo-avatar-lg img{width:100%;height:100%;object-fit:cover}
+</style>
+{% endblock %}

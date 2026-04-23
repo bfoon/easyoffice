@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Registration links{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'user_admin:dashboard' %}">User Administration</a>
+  <i class="bi bi-chevron-right mx-2" style="font-size:.7rem"></i>
+  <span>Registration links</span>
+{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Registration links</h1>
+    <p class="eo-page-subtitle">Shareable links. Each link can be used up to N times before expiring.</p>
+  </div>
+</div>
+
+{% if messages %}
+  {% for m in messages %}
+    <div class="eo-alert eo-alert-{{ m.tags|default:'info' }}">{{ m }}</div>
+  {% endfor %}
+{% endif %}
+
+<!-- Create form -->
+<form method="post" action="{% url 'user_admin:create_registration_link' %}"
+      class="eo-card" style="padding:18px;margin-bottom:18px">
+  {% csrf_token %}
+  <h3 style="font-size:1rem;margin-bottom:12px">Create a new link</h3>
+  <div class="row g-2 align-items-end">
+    <div class="col-md-4">
+      <label class="eo-label">Label</label>
+      <input type="text" name="label" required class="eo-input" placeholder="e.g. Jan 2026 Interns">
+    </div>
+    <div class="col-md-3">
+      <label class="eo-label">Groups (comma-separated)</label>
+      <input type="text" name="group_names" class="eo-input" placeholder="e.g. Staff, Interns">
+    </div>
+    <div class="col-md-2">
+      <label class="eo-label">Max uses</label>
+      <input type="number" name="max_uses" value="5" min="1" max="100" class="eo-input">
+    </div>
+    <div class="col-md-2">
+      <label class="eo-label">Expires in</label>
+      <select name="expires_days" class="eo-input">
+        <option value="1">1 day</option>
+        <option value="3">3 days</option>
+        <option value="7" selected>7 days</option>
+        <option value="14">14 days</option>
+        <option value="30">30 days</option>
+        <option value="60">60 days</option>
+      </select>
+    </div>
+    <div class="col-md-1">
+      <button type="submit" class="eo-btn eo-btn-primary" style="width:100%"><i class="bi bi-plus-lg"></i></button>
+    </div>
+  </div>
+</form>
+
+<div class="eo-card">
+  <div class="eo-table-wrap">
+    <table class="eo-table">
+      <thead>
+        <tr>
+          <th>Label</th>
+          <th>URL</th>
+          <th>Usage</th>
+          <th>Status</th>
+          <th>Expires</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in links %}
+        <tr>
+          <td>
+            <strong>{{ item.obj.label }}</strong>
+            {% if item.obj.group_names %}
+              <div class="text-muted" style="font-size:.75rem">Groups: {{ item.obj.group_names }}</div>
+            {% endif %}
+          </td>
+          <td style="max-width:280px">
+            <div style="display:flex;gap:6px;align-items:center">
+              <code style="font-size:.78rem;background:var(--eo-bg);padding:3px 6px;border-radius:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;max-width:240px" title="{{ item.url }}">
+                {{ item.url }}
+              </code>
+              <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm"
+                      onclick="navigator.clipboard.writeText('{{ item.url|escapejs }}'); this.innerHTML='<i class=&quot;bi bi-check2&quot;></i>'"
+                      title="Copy link">
+                <i class="bi bi-clipboard"></i>
+              </button>
+            </div>
+          </td>
+          <td>{{ item.obj.use_count }} / {{ item.obj.max_uses }}</td>
+          <td>
+            <span class="eo-chip" style="background:{% if item.obj.status == 'active' %}#d1fae5{% elif item.obj.status == 'revoked' %}#fee2e2{% else %}#e5e7eb{% endif %}">
+              {{ item.obj.get_status_display }}
+            </span>
+          </td>
+          <td style="font-size:.82rem;color:var(--eo-text-muted)">
+            {{ item.obj.expires_at|date:"M d, Y H:i" }}
+          </td>
+          <td style="white-space:nowrap">
+            {% if item.obj.status == 'active' %}
+              <form method="post" action="{% url 'user_admin:registration_link_action' item.obj.pk %}"
+                    style="display:inline"
+                    onsubmit="return confirm('Revoke this registration link?');">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="revoke">
+                <button class="eo-btn eo-btn-sm" style="background:#ef4444;color:#fff" type="submit" title="Revoke">
+                  <i class="bi bi-x-circle"></i>
+                </button>
+              </form>
+            {% endif %}
+            {% if item.obj.status == 'expired' or item.obj.status == 'active' %}
+              <form method="post" action="{% url 'user_admin:registration_link_action' item.obj.pk %}" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="extend">
+                <input type="hidden" name="days" value="7">
+                <button class="eo-btn eo-btn-secondary eo-btn-sm" type="submit" title="Extend by 7 days">
+                  <i class="bi bi-calendar-plus"></i>
+                </button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% empty %}
+          <tr><td colspan="6" style="text-align:center;padding:28px;color:var(--eo-text-muted)">
+            No registration links yet. Create one above.
+          </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -489,8 +489,42 @@
   opacity:.85;
 }
 .chat-mention{
+  display:inline-block;
+  padding:0 5px;
+  border-radius:4px;
+  background:rgba(99,102,241,.14);
   color:#4338ca;
-  font-weight:700;
+  font-weight:600;
+  text-decoration:none;
+  line-height:1.4;
+}
+.chat-mention.self{
+  background:rgba(245,158,11,.18);
+  color:#b45309;
+}
+/* Inside "my own" (outgoing) bubbles the text is white — keep mentions readable */
+.bubble-out .chat-mention{
+  background:rgba(255,255,255,.22);
+  color:#fff;
+}
+.bubble-out .chat-mention.self{
+  background:rgba(255,221,120,.35);
+  color:#fff;
+}
+/* Clickable links inside chat bubbles */
+.chat-link{
+  color:#2563eb;
+  text-decoration:underline;
+  word-break:break-all;
+}
+.bubble-out .chat-link{
+  color:#fff;
+  text-decoration:underline;
+}
+/* Thumbnail preview shown in the attach strip when an image is selected / pasted */
+.selected-file-preview .attach-thumb{
+  width:36px;height:36px;border-radius:6px;object-fit:cover;
+  flex-shrink:0;border:1px solid rgba(0,0,0,.08);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -574,6 +608,121 @@
   font-size:.8rem;
   font-style:italic;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   💡 EMOJI SUGGESTION HINT (WhatsApp-style, non-invasive)
+   A tiny floating chip that appears above the textarea when the
+   user types a keyword like "coffee", "lol", "cry". Tap the chip
+   to append the emoji at the caret. Always dismissable via × and
+   never auto-replaces text.
+   ═══════════════════════════════════════════════════════════════ */
+.emoji-hint{
+  position:absolute;
+  left:10px;
+  bottom:calc(100% + 6px);
+  z-index:240;
+  display:none;
+  align-items:center;
+  gap:6px;
+  padding:5px 8px 5px 10px;
+  background:var(--eo-surface, #fff);
+  border:1px solid var(--eo-border, #e5e7eb);
+  border-radius:999px;
+  box-shadow:0 4px 14px rgba(0,0,0,.10);
+  font-size:.78rem;
+  color:var(--eo-text, #111);
+  animation:emoji-hint-in .15s ease-out;
+  max-width:calc(100% - 20px);
+}
+.emoji-hint.open{ display:inline-flex; }
+@keyframes emoji-hint-in{
+  from{ opacity:0; transform:translateY(4px); }
+  to  { opacity:1; transform:translateY(0); }
+}
+.emoji-hint .emoji-hint-emojis{
+  display:inline-flex;
+  align-items:center;
+  gap:2px;
+}
+.emoji-hint .emoji-hint-chip{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:26px;
+  height:26px;
+  border-radius:50%;
+  font-size:1.05rem;
+  line-height:1;
+  background:transparent;
+  border:none;
+  cursor:pointer;
+  transition:background .12s, transform .08s;
+  padding:0;
+}
+.emoji-hint .emoji-hint-chip:hover,
+.emoji-hint .emoji-hint-chip:focus{
+  background:var(--eo-bg, #f3f4f6);
+  outline:none;
+}
+.emoji-hint .emoji-hint-chip:active{ transform:scale(.92); }
+.emoji-hint .emoji-hint-word{
+  color:var(--eo-text-muted, #6b7280);
+  font-weight:500;
+  max-width:90px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.emoji-hint .emoji-hint-close{
+  background:none;
+  border:none;
+  color:var(--eo-text-muted, #9ca3af);
+  cursor:pointer;
+  font-size:1rem;
+  line-height:1;
+  padding:0 2px;
+  margin-left:2px;
+  transition:color .12s;
+}
+.emoji-hint .emoji-hint-close:hover{ color:var(--eo-text, #111); }
+
+/* ═══════════════════════════════════════════════════════════════
+   ⏳ LOAD EARLIER MESSAGES BUTTON
+   Inserted at the top of #chatMessages when the room has more
+   history than the initial render limit. Keeps first paint snappy.
+   ═══════════════════════════════════════════════════════════════ */
+.chat-load-earlier{
+  display:flex;
+  justify-content:center;
+  padding:10px 0 14px;
+}
+.chat-load-earlier button{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  padding:7px 14px;
+  background:var(--eo-surface, #fff);
+  border:1px solid var(--eo-border, #e5e7eb);
+  border-radius:999px;
+  color:var(--eo-text, #111);
+  font-size:.78rem;
+  font-weight:600;
+  cursor:pointer;
+  box-shadow:0 1px 3px rgba(0,0,0,.04);
+  transition:background .12s, box-shadow .12s, border-color .12s;
+}
+.chat-load-earlier button:hover{
+  background:var(--eo-bg, #f3f4f6);
+  border-color:var(--eo-text-muted, #9ca3af);
+}
+.chat-load-earlier button i{ font-size:.85rem; }
+.chat-load-earlier.loading button{
+  opacity:.75;
+  cursor:wait;
+}
+/* A message that hasn't been rendered yet gets this class on load.
+   We toggle it off when revealing older history. */
+.chat-msg.deferred{ display:none !important; }
 
 /* ═══════════════════════════════════════════════════════════════
    📌 PIN + JUMP-TO-MESSAGE
@@ -1321,6 +1470,195 @@
     z-index:5;
     background:var(--eo-surface);
   }
+
+  /* ═══════════════════════════════════════════════════════════════
+     📱 MOBILE COMPACT LAYOUT (WhatsApp-style)
+     Reclaim every pixel of horizontal space for the message area
+     and the text input:
+       • Kill the rooms sidebar (already a dedicated /messages page)
+       • Kill the members panel side (open via drawer icon instead)
+       • Compact the header: icons only, no button labels
+       • Replace the cluttered input row with a single + button
+         that expands a horizontal tool tray above the textarea
+     ═══════════════════════════════════════════════════════════════ */
+
+  /* Hide the left rooms sidebar on phones; the "<" back button in
+     the header already takes the user back to /messages/ */
+  .msg-sidebar{ display:none !important; }
+
+  /* Hide the full members-list panel frame on phones — it's a drawer */
+  .msg-members-panel{ display:none; }
+  .msg-members-panel.open,
+  .msg-members-panel.collapsed{ display:flex; }
+
+  /* Chat header: compact, icons-only */
+  .chat-header{
+    padding:8px 10px;
+    gap:6px;
+  }
+  /* Tighter mobile header buttons */
+  .chat-header .eo-btn-icon,
+  .chat-header .eo-btn-sm{
+    min-width:36px;
+    min-height:36px;
+    padding:0 8px;
+  }
+  /* Hide text labels on header action buttons (Call, Video, Status) */
+  .chat-header .hide-on-mobile{ display:none !important; }
+  /* When a parent button becomes icon-only, tighten its padding */
+  .chat-header #myStatusBtn{ padding:0 8px; }
+
+  /* Hide the desktop "Call" + "Video" buttons — replaced by one call menu */
+  .chat-header #btnStartVoiceCall,
+  .chat-header #btnStartVideoCall{ display:none !important; }
+  /* Show the mobile-only combined call menu trigger */
+  .chat-header .call-menu-wrap{ display:inline-flex !important; }
+  .chat-header #callMenuBtnMobile{ display:inline-flex !important; }
+
+  /* Hide the DM "position · Direct Message · last seen" subtitle to
+     save vertical space — users can check from the members drawer */
+  .chat-header-subtitle{ display:none; }
+
+  /* Hide the inline pinned-strip in the header (takes 300px sideways).
+     Pinned messages are still accessible via the pinned panel. */
+  .chat-header-pinned{ display:none !important; }
+
+  /* Larger messages area, tighter padding */
+  .chat-messages{ padding:10px 8px; }
+  .chat-body{ max-width:94%; }
+  .bubble-image img{ max-width:220px; max-height:180px; }
+
+  /* ── Input row: single + toggle, wide textarea ─────────────── */
+  .chat-input-area{ padding:8px 8px calc(8px + env(safe-area-inset-bottom)); }
+  .input-row{
+    gap:4px;
+    padding:4px 6px;
+    align-items:center;
+  }
+  /* Hide every individual tool button in the input row on mobile.
+     They're re-shown inside the expandable #mobileAttachTray. */
+  .input-row > .chat-attach-btn,
+  .input-row > label.chat-attach-btn,
+  .input-row > .emoji-wrap{
+    display:none;
+  }
+  /* But the + toggle must remain visible */
+  .input-row > #mobileAttachToggle{ display:inline-flex !important; }
+  /* Always keep the send button and the textarea */
+  .input-row .chat-textarea{
+    flex:1 1 auto;
+    padding:8px 6px;
+    font-size:1rem;   /* prevents iOS zoom-on-focus */
+    max-height:110px;
+  }
+  .chat-send-btn{
+    width:38px;
+    height:38px;
+    flex-shrink:0;
+  }
+  #mobileAttachToggle{
+    width:38px;
+    height:38px;
+    flex-shrink:0;
+  }
+
+  /* Horizontal expandable toolbar — appears above the input row */
+  .mobile-attach-tray{
+    display:flex;
+    flex-wrap:nowrap;
+    overflow-x:auto;
+    gap:6px;
+    padding:6px 8px;
+    margin-bottom:6px;
+    background:var(--eo-bg);
+    border:1px solid var(--eo-border);
+    border-radius:12px;
+    max-height:0;
+    opacity:0;
+    transform:translateY(6px);
+    pointer-events:none;
+    transition:max-height .2s ease, opacity .15s, transform .15s, padding .15s, margin-bottom .15s;
+    scrollbar-width:none;
+  }
+  .mobile-attach-tray::-webkit-scrollbar{ display:none; }
+  .mobile-attach-tray.open{
+    max-height:72px;
+    opacity:1;
+    transform:translateY(0);
+    pointer-events:auto;
+    padding:8px;
+    margin-bottom:8px;
+  }
+  .mobile-attach-tray .tray-btn{
+    flex:0 0 auto;
+    display:inline-flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:2px;
+    min-width:58px;
+    padding:6px 4px;
+    background:var(--eo-surface);
+    border:1px solid var(--eo-border);
+    border-radius:10px;
+    color:var(--eo-text);
+    font-size:.62rem;
+    font-weight:600;
+    cursor:pointer;
+  }
+  .mobile-attach-tray .tray-btn i{ font-size:1.05rem; }
+  .mobile-attach-tray .tray-btn:hover,
+  .mobile-attach-tray .tray-btn:active{
+    background:var(--eo-border);
+  }
+  /* When the tray is open, position emoji picker above the tray
+     instead of overlapping the input */
+  .mobile-attach-tray.open ~ .input-row #emojiPicker{ bottom:auto; top:42px; }
+
+  /* Mobile call menu dropdown (voice/video) */
+  #callMenuDropdown{
+    position:absolute;
+    right:6px;
+    top:calc(100% + 4px);
+    background:var(--eo-surface);
+    border:1px solid var(--eo-border);
+    border-radius:10px;
+    box-shadow:0 8px 24px rgba(0,0,0,.12);
+    padding:4px 0;
+    min-width:170px;
+    z-index:200;
+  }
+  #callMenuDropdown button{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    width:100%;
+    padding:10px 14px;
+    background:none;
+    border:none;
+    text-align:left;
+    font-size:.85rem;
+    color:var(--eo-text);
+    cursor:pointer;
+  }
+  #callMenuDropdown button:hover{ background:var(--eo-bg); }
+  #callMenuDropdown button i{
+    font-size:1rem;
+    color:var(--eo-accent);
+    width:18px;
+  }
+
+  /* Emoji picker width should fit phone screen */
+  #emojiPicker{ width:min(92vw, 300px) !important; }
+}
+
+/* Hide the mobile-only UI on desktop */
+@media(min-width:641px){
+  #mobileAttachToggle,
+  #callMenuBtnMobile,
+  #callMenuDropdown,
+  .call-menu-wrap{ display:none !important; }
+  #mobileAttachTray{ display:none !important; }
 }
 </style>
 
@@ -1413,27 +1751,44 @@
            class="eo-btn eo-btn-secondary eo-btn-sm"
            style="gap:5px;display:inline-flex;align-items:center">
            <i class="bi bi-telephone-fill"></i>
-           <span style="font-size:.75rem">Call</span>
+           <span class="hide-on-mobile" style="font-size:.75rem">Call</span>
          </button>
                <button id="btnStartVideoCall" onclick="callStart('video')" title="Video call"
            class="eo-btn eo-btn-secondary eo-btn-sm"
            style="gap:5px;display:inline-flex;align-items:center">
            <i class="bi bi-camera-video-fill"></i>
-           <span style="font-size:.75rem">Video</span>
+           <span class="hide-on-mobile" style="font-size:.75rem">Video</span>
          </button>
+
+          <!-- Mobile-only combined call menu (voice + video) — toggled by CSS -->
+          <div class="call-menu-wrap" id="callMenuWrap" style="position:relative">
+            <button type="button" id="callMenuBtnMobile" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"
+                    title="Call" onclick="toggleCallMenu(event)">
+              <i class="bi bi-telephone-fill"></i>
+            </button>
+            <div id="callMenuDropdown" style="display:none">
+              <button type="button" onclick="callStart('voice'); closeCallMenu()">
+                <i class="bi bi-telephone-fill"></i><span>Voice call</span>
+              </button>
+              <button type="button" onclick="callStart('video'); closeCallMenu()">
+                <i class="bi bi-camera-video-fill"></i><span>Video call</span>
+              </button>
+            </div>
+          </div>
+
             <span id="dmPresenceBadge" style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0">
               <span id="dmPresenceDot" style="width:7px;height:7px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
               <span id="dmPresenceLabel">…</span>
             </span>
           </div>
-          <div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:2px">
+          <div class="chat-header-subtitle" style="font-size:.75rem;color:var(--eo-text-muted);margin-top:2px">
             {% if m.staffprofile.position %}{{ m.staffprofile.position.title }} &nbsp;·&nbsp; {% endif %}Direct Message
             <span id="dmLastSeenText" style="margin-left:4px"></span>
           </div>
           {% endif %}{% endfor %}
         {% else %}
           <div style="font-weight:700;font-size:.95rem;color:var(--eo-text)">{{ room.name }}</div>
-          <div style="font-size:.75rem;color:var(--eo-text-muted)">
+          <div class="chat-header-subtitle" style="font-size:.75rem;color:var(--eo-text-muted)">
             {{ members.count }} member{{ members.count|pluralize }}
             &nbsp;·&nbsp; {{ room.get_room_type_display }}
             {% if room.project_id %}&nbsp;·&nbsp; Project: {{ room.project }}{% endif %}
@@ -1443,7 +1798,7 @@
       </div>
 
       {% if room.pinned_message %}
-      <div style="flex:1;max-width:300px;padding:6px 12px;background:var(--eo-bg);border-radius:8px;border-left:3px solid var(--eo-accent);font-size:.76rem;cursor:pointer">
+      <div class="chat-header-pinned" style="flex:1;max-width:300px;padding:6px 12px;background:var(--eo-bg);border-radius:8px;border-left:3px solid var(--eo-accent);font-size:.76rem;cursor:pointer">
         <div style="font-size:.65rem;color:var(--eo-text-muted);font-weight:600;margin-bottom:2px">
           <i class="bi bi-pin-angle-fill me-1"></i>Pinned
         </div>
@@ -1456,8 +1811,8 @@
         <button class="eo-btn eo-btn-secondary eo-btn-sm" id="myStatusBtn" title="Set your status"
                 onclick="toggleStatusPicker()" style="gap:5px;display:inline-flex;align-items:center">
           <span id="myStatusDot" style="width:8px;height:8px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
-          <span id="myStatusLabel" style="font-size:.75rem">Status</span>
-          <i class="bi bi-chevron-down" style="font-size:.6rem;opacity:.6"></i>
+          <span id="myStatusLabel" class="hide-on-mobile" style="font-size:.75rem">Status</span>
+          <i class="bi bi-chevron-down hide-on-mobile" style="font-size:.6rem;opacity:.6"></i>
         </button>
         <div id="statusPickerMenu" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:190px;z-index:200;padding:4px 0">
           <div style="padding:6px 12px 4px;font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted)">Your status</div>
@@ -1939,9 +2294,41 @@
     <div id="chatSpellPopup" style="display:none;"></div>
     <div class="chat-command-palette" id="chatCommandPalette"></div>
     <div class="mention-autocomplete" id="mentionAutocomplete" role="listbox" aria-label="Mention a member"></div>
+    <!-- 💡 Emoji suggestion hint — rendered by updateEmojiHint() -->
+    <div class="emoji-hint" id="emojiHint" role="status" aria-live="polite"></div>
+  </div>
+
+  <!-- 📱 MOBILE: horizontal tool tray, toggled by the + button below.
+       On desktop it's hidden entirely (see @media(min-width:641px) above). -->
+  <div class="mobile-attach-tray" id="mobileAttachTray" role="toolbar" aria-label="Attach tools">
+    <label class="tray-btn" title="Upload file">
+      <i class="bi bi-paperclip"></i><span>File</span>
+      <input type="file" id="fileInputMobile" accept="*/*" style="display:none" onchange="handleFileSelect(this); closeMobileTray()"/>
+    </label>
+    <button type="button" class="tray-btn" title="Attach from Files app"
+            onclick="openFilePicker(); closeMobileTray()">
+      <i class="bi bi-folder2-open"></i><span>Files</span>
+    </button>
+    <button type="button" class="tray-btn" title="Create poll"
+            onclick="openModal('pollModal'); closeMobileTray()">
+      <i class="bi bi-bar-chart"></i><span>Poll</span>
+    </button>
+    <button type="button" class="tray-btn" id="trayEmojiBtn" title="Emoji">
+      <span style="font-size:1.05rem;line-height:1">😊</span><span>Emoji</span>
+    </button>
+    <button type="button" class="tray-btn" id="traySpellBtn" title="Text suggestions">
+      <i class="bi bi-spellcheck"></i><span>Spell</span>
+    </button>
   </div>
 
   <div class="input-row">
+    <!-- 📱 MOBILE: + toggle — expands/collapses #mobileAttachTray -->
+    <button type="button" class="chat-attach-btn" id="mobileAttachToggle"
+            title="Attachments" aria-expanded="false" aria-controls="mobileAttachTray"
+            onclick="toggleMobileTray()">
+      <i class="bi bi-plus-lg"></i>
+    </button>
+
     <label class="chat-attach-btn" title="Upload file from device" style="cursor:pointer">
       <i class="bi bi-paperclip"></i>
       <input type="file" id="fileInput" accept="*/*" style="display:none" onchange="handleFileSelect(this)"/>
@@ -1955,7 +2342,7 @@
       <i class="bi bi-bar-chart"></i>
     </button>
 
-    <div style="position:relative">
+    <div class="emoji-wrap" style="position:relative">
       <button type="button" class="chat-attach-btn" id="emojiBtn" title="Emoji" style="font-size:1.05rem">😊</button>
       <div id="emojiPicker" style="display:none;position:absolute;bottom:42px;left:0;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:10px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);z-index:200;width:260px">
         <div id="emojiGrid" style="display:flex;flex-wrap:wrap;gap:4px;max-height:180px;overflow-y:auto"></div>
@@ -2867,6 +3254,74 @@
       .replace(/'/g,'&#039;');
   }
 
+  /* ═══════════════════════════════════════════════════════════════
+     Rich-text renderer for message bubbles.
+     Converts a plain text string into safe HTML that:
+       • Escapes all HTML special chars (XSS-safe)
+       • Turns URLs (http://, https://, www.) into clickable <a> links
+       • Wraps @mentions in a styled span (like Teams/Slack)
+     The @mention regex matches the SAME token shape the server uses
+     in _parse_mentions_from_text(): @([A-Za-z0-9._-]+).
+     ═══════════════════════════════════════════════════════════════ */
+  var _ROOM_MEMBERS_INDEX = null;
+  function _getRoomMembersIndex(){
+    if(_ROOM_MEMBERS_INDEX) return _ROOM_MEMBERS_INDEX;
+    _ROOM_MEMBERS_INDEX = { byToken: {}, selfTokens: {} };
+    try{
+      var raw = document.getElementById('roomMembersData');
+      if(!raw) return _ROOM_MEMBERS_INDEX;
+      var list = JSON.parse(raw.textContent || '[]');
+      for(var i=0;i<list.length;i++){
+        var m = list[i];
+        ['username','first_name','last_name'].forEach(function(k){
+          var tok = (m[k] || '').trim();
+          if(tok){
+            _ROOM_MEMBERS_INDEX.byToken[tok.toLowerCase()] = m;
+            if(m.is_self) _ROOM_MEMBERS_INDEX.selfTokens[tok.toLowerCase()] = true;
+          }
+        });
+      }
+    }catch(e){ /* ignore */ }
+    return _ROOM_MEMBERS_INDEX;
+  }
+
+  function renderRichText(raw){
+    if(raw === null || raw === undefined) return '';
+    // 1) Escape first — everything below works on escaped text.
+    var s = esc(raw);
+
+    // 2) Linkify URLs.  Also catch bare "www." URLs and prepend http://
+    //    Careful with trailing punctuation like ).,!? — strip it from the
+    //    match and re-append it afterwards so "See https://x.com." works.
+    var urlRx = /(\bhttps?:\/\/[^\s<]+|\bwww\.[^\s<]+)/gi;
+    s = s.replace(urlRx, function(match){
+      var trail = '';
+      var m = match.match(/[.,;:!?)\]}'"]+$/);
+      if(m){ trail = m[0]; match = match.slice(0, match.length - trail.length); }
+      var href = /^https?:\/\//i.test(match) ? match : ('http://' + match);
+      return '<a href="' + href + '" class="chat-link" target="_blank" rel="noopener noreferrer">' +
+             match + '</a>' + trail;
+    });
+
+    // 3) Style @mentions.  Only wrap when the token resolves to a room member,
+    //    otherwise leave it as plain text (so "email me @ foo" won't false-match).
+    //    We must NOT match inside an <a href="..."> that we just built — use a
+    //    simple guard: the @ must be at start-of-string or after whitespace.
+    var idx = _getRoomMembersIndex();
+    s = s.replace(/(^|\s)@([A-Za-z0-9._-]+)/g, function(full, pre, tok){
+      var member = idx.byToken[tok.toLowerCase()];
+      if(!member) return full; // not a real member — leave untouched
+      var cls = 'chat-mention' + (idx.selfTokens[tok.toLowerCase()] ? ' self' : '');
+      var label = esc(member.full_name || member.username || tok);
+      return pre + '<span class="' + cls + '" data-user-id="' +
+             esc(member.id) + '" title="' + label + '">@' + esc(tok) + '</span>';
+    });
+
+    return s;
+  }
+  // Expose for debugging / other scripts
+  window.renderRichText = renderRichText;
+
   function initials(n){
     if(!n) return '?';
     return String(n).trim().split(/\s+/).slice(0,2).map(function(p){
@@ -2956,7 +3411,14 @@
       if(_scrollThrottle) return;
       _scrollThrottle = setTimeout(function(){
         _scrollThrottle = null;
-        if(isNearBottom()) hideScrollArrow();
+        if(isNearBottom()){
+          hideScrollArrow();
+        } else {
+          // User is scrolled up — show the jump-to-bottom arrow
+          // even if there are no unread messages yet. We pass 0 so
+          // the unread badge doesn't increment.
+          showScrollArrow(0);
+        }
       }, 120);
     }, { passive: true });
   })();
@@ -2968,14 +3430,214 @@
     btn.disabled = !(input.value.trim() || pendingFile || pickedFileData);
   }
 
+  /* ═══════════════════════════════════════════════════════════════
+     ⚡ FAST INITIAL PAINT
+     ──────────────────────────────────────────────────────────────
+     The Django template renders ALL room history in one shot, which
+     can be hundreds of messages. To keep the first paint snappy we:
+       1. On page load, hide all but the last N messages.
+       2. Insert a "Load earlier messages" button at the top.
+       3. Only run rich-text rendering (links, mentions) on the
+          visible batch — so the heavy DOM work for old messages
+          is deferred.
+       4. When the user clicks the button, reveal the next batch
+          (and enrich just that batch). Also trigger auto-reveal
+          when the user scrolls close to the top.
+     ═══════════════════════════════════════════════════════════════ */
+  var INITIAL_MESSAGE_LIMIT = 40;   // show last 40 on first paint
+  var LOAD_MORE_BATCH       = 40;   // reveal 40 more per click
+
   function bootstrapExistingMessages(){
-    document.querySelectorAll('#chatMessages [id^="msg-"]').forEach(function(node){
+    var container = byId('chatMessages');
+    if(!container) return;
+
+    // 1) Register all server-rendered msg IDs with the dedupe set so
+    //    the poller doesn't re-append them.
+    var allMsgs = container.querySelectorAll('[id^="msg-"]');
+    allMsgs.forEach(function(node){
       renderedIds.add(node.id.replace('msg-',''));
     });
-    var nodes = document.querySelectorAll('#chatMessages [id^="msg-"]');
-    if(nodes.length) {
-      lastSeenId = nodes[nodes.length - 1].id.replace('msg-','');
+    if(allMsgs.length){
+      lastSeenId = allMsgs[allMsgs.length - 1].id.replace('msg-','');
     }
+
+    // 2) Defer everything older than the last INITIAL_MESSAGE_LIMIT.
+    //    We apply the .deferred class which sets `display:none !important`
+    //    — the browser still skips layout/paint for these so the first
+    //    scroll-to-bottom is instant even with thousands of history msgs.
+    //    We also walk *backward* from the cutoff until we find a message
+    //    that is NOT .grouped, so the first visible message always shows
+    //    the sender header (template omits header for .grouped msgs).
+    var total = allMsgs.length;
+    if(total > INITIAL_MESSAGE_LIMIT){
+      var deferUpTo = total - INITIAL_MESSAGE_LIMIT;
+      // Never defer a message whose immediately-following message is
+      // grouped — otherwise the visible batch starts with a grouped
+      // bubble that has no sender header. Walk back until safe.
+      while(deferUpTo > 0 && allMsgs[deferUpTo] &&
+            allMsgs[deferUpTo].classList.contains('grouped')){
+        deferUpTo--;
+      }
+      for(var i=0;i<deferUpTo;i++){
+        allMsgs[i].classList.add('deferred');
+      }
+      if(deferUpTo > 0){
+        _insertLoadEarlierButton(deferUpTo);
+      }
+    }
+
+    // 3) Enrich only the VISIBLE batch. Old deferred messages get
+    //    enriched lazily when they're revealed.
+    enrichServerRenderedBubbles();
+  }
+
+  function _insertLoadEarlierButton(remaining){
+    var container = byId('chatMessages');
+    if(!container) return;
+    var old = byId('chatLoadEarlier');
+    if(old) old.remove();
+
+    var wrap = document.createElement('div');
+    wrap.id = 'chatLoadEarlier';
+    wrap.className = 'chat-load-earlier';
+    wrap.innerHTML =
+      '<button type="button" title="Load earlier messages">' +
+        '<i class="bi bi-arrow-up-circle"></i>' +
+        '<span>Load ' + Math.min(remaining, LOAD_MORE_BATCH) +
+        ' earlier message' + (Math.min(remaining, LOAD_MORE_BATCH) === 1 ? '' : 's') + '</span>' +
+      '</button>';
+    container.insertBefore(wrap, container.firstChild);
+
+    wrap.querySelector('button').addEventListener('click', function(){
+      revealOlderMessages();
+    });
+  }
+
+  function revealOlderMessages(){
+    var container = byId('chatMessages');
+    if(!container) return;
+    var wrap = byId('chatLoadEarlier');
+    if(!wrap) return;
+
+    wrap.classList.add('loading');
+
+    // Capture current scroll anchor so the viewport stays put after
+    // we reveal older messages above the current scroll position.
+    var prevHeight = container.scrollHeight;
+    var prevTop    = container.scrollTop;
+
+    // Reveal the next batch (closest to the visible area)
+    var hidden = container.querySelectorAll('.chat-msg.deferred');
+    var n = hidden.length;
+    if(!n){
+      wrap.remove();
+      return;
+    }
+
+    // The deferred messages are the OLDEST (top of the list); reveal the
+    // most recent of those first — which are the ones right above the
+    // current visible batch. Those are the LAST items in the hidden list.
+    var start = Math.max(0, n - LOAD_MORE_BATCH);
+    // Walk `start` backwards so the next-still-hidden message (at
+    // index start-1) is NOT grouped — i.e. the next batch will have
+    // a clean header boundary. And make sure the message we begin
+    // revealing from carries its own header (so our newly-first
+    // visible bubble shows the sender name).
+    while(start > 0 && hidden[start] && hidden[start].classList.contains('grouped')){
+      start--;
+    }
+    var revealed = [];
+    for(var i=start;i<n;i++){
+      hidden[i].classList.remove('deferred');
+      revealed.push(hidden[i]);
+    }
+
+    // Enrich the newly-visible bubbles
+    enrichServerRenderedBubbles();
+
+    // Restore scroll position so it feels stable for the user.
+    // (scrollHeight just grew; shift scrollTop by the delta.)
+    var newHeight = container.scrollHeight;
+    container.scrollTop = prevTop + (newHeight - prevHeight);
+
+    // Update / remove the load-earlier button based on what's left
+    var stillHidden = container.querySelectorAll('.chat-msg.deferred').length;
+    if(stillHidden > 0){
+      wrap.classList.remove('loading');
+      var span = wrap.querySelector('span');
+      var count = Math.min(stillHidden, LOAD_MORE_BATCH);
+      if(span){
+        span.textContent = 'Load ' + count + ' earlier message' + (count === 1 ? '' : 's');
+      }
+    } else {
+      wrap.remove();
+    }
+  }
+  window.revealOlderMessages = revealOlderMessages;
+
+  // Auto-load when the user scrolls to within ~80px of the top.
+  (function(){
+    var container = byId('chatMessages');
+    if(!container) return;
+    var throttle = null;
+    container.addEventListener('scroll', function(){
+      if(throttle) return;
+      throttle = setTimeout(function(){
+        throttle = null;
+        if(container.scrollTop < 80 && byId('chatLoadEarlier')){
+          revealOlderMessages();
+        }
+      }, 200);
+    }, { passive: true });
+  })();
+
+  /* ═══════════════════════════════════════════════════════════════
+     Walk the server-rendered bubbles and re-render their text through
+     renderRichText(). We rewrite each text node in place so we:
+       • don't disturb nested elements (reactions, meta, buttons),
+       • don't double-render on repeat calls (we skip nodes whose
+         parent already contains an .chat-link or .chat-mention child).
+     Targets text bubbles, image captions, and file captions.
+     ═══════════════════════════════════════════════════════════════ */
+  function enrichServerRenderedBubbles(){
+    var selectors = [
+      '#chatMessages .bubble-in',
+      '#chatMessages .bubble-out',
+      '#chatMessages .bubble-file-caption'
+    ];
+    document.querySelectorAll(selectors.join(',')).forEach(function(el){
+      // Skip poll bubbles — they contain structured children, not text
+      if(el.querySelector('.poll-box')) return;
+      // Skip already-processed bubbles
+      if(el.dataset.richRendered === '1') return;
+      // Skip deferred (hidden) bubbles — enrich them when revealed
+      if(el.closest && el.closest('.chat-msg.deferred')) return;
+
+      // For image bubbles, only enrich the caption <div> (the <a><img></a>
+      // is a sibling child that must be left alone).
+      if(el.classList.contains('bubble-image')){
+        el.querySelectorAll(':scope > div').forEach(function(cap){
+          _enrichElementText(cap);
+        });
+        el.dataset.richRendered = '1';
+        return;
+      }
+      _enrichElementText(el);
+      el.dataset.richRendered = '1';
+    });
+  }
+
+  function _enrichElementText(el){
+    // Only touch elements whose children are pure text (no <a>, <span> etc).
+    // This avoids corrupting already-rendered HTML like reply quotes.
+    var onlyText = true;
+    for(var i=0;i<el.childNodes.length;i++){
+      if(el.childNodes[i].nodeType !== Node.TEXT_NODE){ onlyText = false; break; }
+    }
+    if(!onlyText) return;
+    var raw = el.textContent;
+    if(!raw || !raw.trim()) return;
+    el.innerHTML = renderRichText(raw);
   }
 
   window.toggleProjectSelect = function(type){
@@ -3659,24 +4321,41 @@ function stopPollStatePolling(){
     }
   });
 
+  // Track blob URLs we created for previews so we can revoke them
+  // when the user clears the attachment or the message is sent.
+  var _pendingBlobUrls = [];
+  function _revokePendingBlobs(){
+    _pendingBlobUrls.forEach(function(u){ try{ URL.revokeObjectURL(u); }catch(_){} });
+    _pendingBlobUrls = [];
+  }
+
   window.handleFileSelect = function(input){
     if(!input.files || !input.files.length) return;
     pickedFileData = null;
     pendingFile = input.files[0];
-    showAttachStrip(pendingFile.name, null);
+    var thumb = null;
+    if(pendingFile.type && pendingFile.type.indexOf('image/') === 0){
+      try { thumb = URL.createObjectURL(pendingFile); } catch(_){ thumb = null; }
+      if(thumb) _pendingBlobUrls.push(thumb);
+    }
+    showAttachStrip(pendingFile.name, null, thumb);
     setSendEnabled();
   };
 
-  function showAttachStrip(name, sub){
+  function showAttachStrip(name, sub, thumbUrl){
     var old = byId('selectedFilePreview');
     if(old) old.remove();
 
     var p = document.createElement('div');
     p.id = 'selectedFilePreview';
     p.className = 'selected-file-preview';
+    var thumbHtml = thumbUrl
+      ? '<img class="attach-thumb" src="' + esc(thumbUrl) + '" alt="">'
+      : '';
     p.innerHTML =
+      thumbHtml +
       '<span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600">' +
-      '<i class="bi bi-paperclip me-1"></i>' + esc(name) +
+      (thumbHtml ? '' : '<i class="bi bi-paperclip me-1"></i>') + esc(name) +
       (sub ? ' <span style="font-weight:400;color:#6b7280">— ' + esc(sub) + '</span>' : '') +
       '</span>' +
       '<button type="button" style="background:none;border:none;color:var(--eo-text-muted);cursor:pointer;padding:0 4px;font-size:1rem;flex-shrink:0">&times;</button>';
@@ -3694,6 +4373,7 @@ function stopPollStatePolling(){
   function clearSelectedFile(){
     pendingFile = null;
     pickedFileData = null;
+    _revokePendingBlobs();
     ['fileInput','fileUploadInput'].forEach(function(id){
       var e = byId(id);
       if(e) e.value = '';
@@ -4101,6 +4781,113 @@ function stopPollStatePolling(){
     }
   })();
 
+  /* ═══════════════════════════════════════════════════════════════
+     📱 MOBILE UI TOGGLES
+     ───────────────────────────────────────────────────────────────
+     • toggleMobileTray() — expand/collapse the horizontal row of
+       attach tools (file, folder, poll, emoji, spell). The +
+       button in .input-row is the trigger; the tray is above.
+     • toggleCallMenu()   — DMs only. Tiny dropdown with Voice/Video.
+     Both close on outside-click and on Escape.
+     ═══════════════════════════════════════════════════════════════ */
+  function toggleMobileTray(){
+    var tray = byId('mobileAttachTray');
+    var btn  = byId('mobileAttachToggle');
+    if(!tray) return;
+    var isOpen = tray.classList.toggle('open');
+    if(btn) btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    // Close other popovers to avoid overlap
+    var ep = byId('emojiPicker');
+    if(ep && isOpen) ep.style.display = 'none';
+    closeCallMenu();
+  }
+  window.toggleMobileTray = toggleMobileTray;
+
+  function closeMobileTray(){
+    var tray = byId('mobileAttachTray');
+    var btn  = byId('mobileAttachToggle');
+    if(tray) tray.classList.remove('open');
+    if(btn) btn.setAttribute('aria-expanded', 'false');
+  }
+  window.closeMobileTray = closeMobileTray;
+
+  function toggleCallMenu(e){
+    if(e){ try{ e.stopPropagation(); }catch(_){} }
+    var dd = byId('callMenuDropdown');
+    if(!dd) return;
+    var isOpen = dd.style.display === 'block';
+    dd.style.display = isOpen ? 'none' : 'block';
+  }
+  window.toggleCallMenu = toggleCallMenu;
+
+  function closeCallMenu(){
+    var dd = byId('callMenuDropdown');
+    if(dd) dd.style.display = 'none';
+  }
+  window.closeCallMenu = closeCallMenu;
+
+  // Outside-click closers for tray and call menu
+  document.addEventListener('click', function(e){
+    // Close attach tray when clicking outside the tray or its toggle
+    var tray = byId('mobileAttachTray');
+    var toggle = byId('mobileAttachToggle');
+    if(tray && tray.classList.contains('open')){
+      if(!tray.contains(e.target) && e.target !== toggle && !(toggle && toggle.contains(e.target))){
+        // Don't close if user clicked one of the tray buttons — those close it themselves
+        // But if the click was truly outside, collapse.
+        closeMobileTray();
+      }
+    }
+    // Close call menu on outside click
+    var cd = byId('callMenuDropdown');
+    var cb = byId('callMenuBtnMobile');
+    if(cd && cd.style.display === 'block'){
+      if(!cd.contains(e.target) && e.target !== cb && !(cb && cb.contains(e.target))){
+        closeCallMenu();
+      }
+    }
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape'){ closeMobileTray(); closeCallMenu(); if(typeof _hideEmojiHint === 'function') _hideEmojiHint(); }
+  });
+
+  // Tray's emoji button proxies to the desktop emoji button (reuses the picker)
+  (function(){
+    var tb = byId('trayEmojiBtn');
+    if(tb){
+      tb.addEventListener('click', function(e){
+        e.stopPropagation();
+        var picker = byId('emojiPicker');
+        if(!picker) return;
+        // On mobile the normal .emoji-wrap parent is hidden, so position the
+        // picker relative to the viewport instead and anchor it above the input.
+        if (window.innerWidth <= 640){
+          picker.style.position = 'fixed';
+          picker.style.left = '50%';
+          picker.style.transform = 'translateX(-50%)';
+          // Sit just above the input area
+          var ia = document.querySelector('.chat-input-area');
+          var rect = ia ? ia.getBoundingClientRect() : null;
+          picker.style.bottom = rect ? (window.innerHeight - rect.top + 8) + 'px' : '70px';
+          picker.style.top = 'auto';
+          picker.style.display = picker.style.display === 'block' ? 'none' : 'block';
+          closeMobileTray();
+        } else {
+          // Desktop path — delegate to the existing button
+          var btn = byId('emojiBtn');
+          if(btn){ closeMobileTray(); btn.click(); }
+        }
+      });
+    }
+    var ts = byId('traySpellBtn');
+    if(ts){
+      ts.addEventListener('click', function(){
+        var btn = byId('spellcheckToggleBtn');
+        if(btn){ closeMobileTray(); btn.click(); }
+      });
+    }
+  })();
+
   function insertEmoji(em){
     var inp = byId('chatInput');
     if(!inp) return;
@@ -4114,6 +4901,238 @@ function stopPollStatePolling(){
     if(picker) picker.style.display = 'none';
   }
 
+  /* ═══════════════════════════════════════════════════════════════
+     💡 EMOJI SUGGESTION HINT
+     ──────────────────────────────────────────────────────────────
+     Non-invasive WhatsApp-style emoji suggestions. As the user
+     types, look at the last completed or in-progress word; if it
+     matches a known keyword, show a small chip above the input
+     with the emoji. Clicking the chip APPENDS the emoji next to
+     the matched word — never replaces text, never auto-corrects.
+     The chip is one-tap dismissable via × and auto-hides when:
+       • the user keeps typing past the match
+       • the input is emptied or send happens
+       • the user has already included that emoji in the text
+     ═══════════════════════════════════════════════════════════════ */
+  var EMOJI_KEYWORDS = {
+    // feelings
+    'lol': ['😂','🤣'], 'lmao': ['🤣','😂'], 'rofl': ['🤣','😂'],
+    'haha': ['😄','😂'], 'hehe': ['😄'],
+    'cry': ['😢','😭'], 'crying': ['😭','😢'], 'sad': ['😢','😔'],
+    'love': ['❤️','😍'], 'heart': ['❤️','💕'], 'hearts': ['💕','❤️'],
+    'kiss': ['😘','💋'], 'hug': ['🤗'], 'hugs': ['🤗','💕'],
+    'happy': ['😊','😃'], 'smile': ['😊','🙂'], 'smiling': ['😊'],
+    'angry': ['😡','😠'], 'mad': ['😡','😤'], 'annoyed': ['😒'],
+    'tired': ['😴','😮‍💨'], 'sleepy': ['😴'], 'sleep': ['😴','💤'],
+    'bored': ['😐','🥱'], 'yawn': ['🥱'],
+    'shocked': ['😱','😲'], 'wow': ['😮','🤩'], 'omg': ['😱','😮'],
+    'scared': ['😨','😰'], 'sick': ['🤒','🤢'], 'cool': ['😎','🆒'],
+    'wink': ['😉'], 'thinking': ['🤔'], 'confused': ['😕','🤨'],
+    // reactions
+    'ok': ['👌','✅'], 'okay': ['👌','✅'], 'yes': ['✅','👍'],
+    'no': ['❌','🙅'], 'nope': ['❌','🙅'],
+    'thanks': ['🙏','❤️'], 'thank': ['🙏'], 'thx': ['🙏'], 'ty': ['🙏'],
+    'please': ['🙏'], 'sorry': ['🙏','😔'], 'congrats': ['🎉','🥳'],
+    'congratulations': ['🎉','🥳'],
+    'welcome': ['🙌','😊'], 'bye': ['👋','🙋'], 'hi': ['👋','😊'],
+    'hello': ['👋','😊'], 'hey': ['👋'], 'good': ['👍','👌'],
+    'great': ['🎉','👏'], 'awesome': ['🤩','🎉'], 'amazing': ['🤩','✨'],
+    'perfect': ['💯','👌'], 'nice': ['👍','😊'], 'bad': ['👎','😞'],
+    // gestures / signals
+    'clap': ['👏'], 'clapping': ['👏'], 'wave': ['👋'],
+    'thumbs': ['👍'], 'thumbsup': ['👍'], 'up': ['👍'],
+    'fire': ['🔥'], 'hot': ['🔥','🥵'], 'cold': ['🥶','❄️'],
+    'check': ['✅'], 'done': ['✅','🎉'], 'finished': ['✅'],
+    'working': ['💻','⚡'], 'busy': ['🏃','💼'],
+    // things
+    'coffee': ['☕'], 'tea': ['🍵'], 'beer': ['🍺'], 'wine': ['🍷'],
+    'drink': ['🍹','🥤'], 'water': ['💧','🚰'],
+    'food': ['🍽️','🍴'], 'hungry': ['🍽️','😋'], 'pizza': ['🍕'],
+    'burger': ['🍔'], 'rice': ['🍚'], 'chicken': ['🍗'],
+    'breakfast': ['🍳','☕'], 'lunch': ['🍱'], 'dinner': ['🍽️'],
+    'cake': ['🎂'], 'birthday': ['🎂','🎉'], 'party': ['🎉','🥳'],
+    'gift': ['🎁'], 'present': ['🎁'],
+    'money': ['💰','💵'], 'cash': ['💵'], 'dollar': ['💵'],
+    'work': ['💼','💻'], 'office': ['🏢','💼'], 'meeting': ['🧑‍💼','📅'],
+    'idea': ['💡'], 'thought': ['💭'], 'brain': ['🧠'],
+    'book': ['📚','📖'], 'reading': ['📖'], 'study': ['📚','✍️'],
+    'music': ['🎵','🎶'], 'song': ['🎶'], 'singing': ['🎤'],
+    'movie': ['🎬','🍿'], 'film': ['🎬'],
+    'game': ['🎮','🎲'], 'gaming': ['🎮'],
+    'car': ['🚗'], 'bus': ['🚌'], 'plane': ['✈️'], 'travel': ['✈️','🧳'],
+    'trip': ['✈️','🧳'], 'home': ['🏠','🏡'], 'house': ['🏡'],
+    'rain': ['🌧️','☔'], 'sun': ['☀️'], 'sunny': ['☀️','😎'],
+    'snow': ['❄️','⛄'], 'storm': ['⛈️'],
+    'flower': ['🌸','🌹'], 'rose': ['🌹'], 'tree': ['🌳'],
+    'cat': ['🐱','🐈'], 'dog': ['🐶','🐕'], 'puppy': ['🐶'],
+    'time': ['⏰','🕐'], 'clock': ['⏰'], 'now': ['⏱️'],
+    'day': ['☀️'], 'night': ['🌙'], 'morning': ['🌅','☕'],
+    'phone': ['📱','☎️'], 'call': ['📞','☎️'], 'mail': ['📧'],
+    'email': ['📧','✉️'], 'message': ['💬'], 'chat': ['💬'],
+    'heart_eyes': ['😍'],
+    // specific slang
+    'eh': ['🤷'], 'meh': ['😐','🤷'], 'shrug': ['🤷']
+  };
+
+  var _emojiHintState = {
+    dismissed: {},     // key: token that was just dismissed (don't re-show until typed again)
+    lastToken: '',
+    lastSuggestion: null
+  };
+
+  function _getCurrentWord(inp){
+    // Returns {word, start, end} for the word at/just-before the caret.
+    // Treats whitespace and most punctuation as word boundaries.
+    var pos = inp.selectionStart || 0;
+    var v = inp.value || '';
+    // Walk back from caret to the start of the word
+    var start = pos;
+    while(start > 0 && /[A-Za-z0-9'_-]/.test(v.charAt(start - 1))) start--;
+    // Walk forward to end of word
+    var end = pos;
+    while(end < v.length && /[A-Za-z0-9'_-]/.test(v.charAt(end))) end++;
+    return { word: v.slice(start, end), start: start, end: end };
+  }
+
+  function updateEmojiHint(){
+    var inp = byId('chatInput');
+    var hint = byId('emojiHint');
+    if(!inp || !hint) return;
+
+    var val = inp.value || '';
+    if(!val.trim()){ _hideEmojiHint(); return; }
+
+    // Grab the word being typed and the word just before the caret
+    // so we catch "lol" while typing AND "lol " after a space.
+    var cur = _getCurrentWord(inp);
+    var token = (cur.word || '').toLowerCase();
+
+    // If caret is right after a space, also check the preceding word.
+    // e.g. value = "yes ", caret at end → word="", check "yes" instead.
+    if(!token){
+      var v = val;
+      var pos = inp.selectionStart || 0;
+      // Skip one trailing space and look at the word before it
+      if(pos > 0 && /\s/.test(v.charAt(pos - 1))){
+        var end2 = pos - 1;
+        var start2 = end2;
+        while(start2 > 0 && /[A-Za-z0-9'_-]/.test(v.charAt(start2 - 1))) start2--;
+        token = v.slice(start2, end2).toLowerCase();
+        cur = { word: v.slice(start2, end2), start: start2, end: end2 };
+      }
+    }
+
+    if(!token || token.length < 2){ _hideEmojiHint(); return; }
+
+    // Has the user already dismissed this exact word recently?
+    if(_emojiHintState.dismissed[token]){ _hideEmojiHint(); return; }
+
+    var emojis = EMOJI_KEYWORDS[token];
+    if(!emojis){ _hideEmojiHint(); return; }
+
+    // If any of the suggested emojis is ALREADY in the text, skip the hint.
+    for(var i=0;i<emojis.length;i++){
+      if(val.indexOf(emojis[i]) !== -1){ _hideEmojiHint(); return; }
+    }
+
+    _showEmojiHint(token, cur, emojis);
+  }
+
+  function _showEmojiHint(token, position, emojis){
+    var hint = byId('emojiHint');
+    if(!hint) return;
+
+    _emojiHintState.lastToken = token;
+    _emojiHintState.lastSuggestion = { token: token, end: position.end, emojis: emojis };
+
+    hint.innerHTML = '';
+
+    var word = document.createElement('span');
+    word.className = 'emoji-hint-word';
+    word.textContent = token;
+    hint.appendChild(word);
+
+    var group = document.createElement('span');
+    group.className = 'emoji-hint-emojis';
+    emojis.slice(0, 3).forEach(function(em){
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'emoji-hint-chip';
+      b.textContent = em;
+      b.title = 'Add ' + em;
+      b.setAttribute('aria-label', 'Add ' + em + ' after ' + token);
+      b.addEventListener('click', function(ev){
+        ev.preventDefault(); ev.stopPropagation();
+        _applyEmojiSuggestion(em);
+      });
+      group.appendChild(b);
+    });
+    hint.appendChild(group);
+
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'emoji-hint-close';
+    close.innerHTML = '&times;';
+    close.title = 'Dismiss';
+    close.setAttribute('aria-label', 'Dismiss emoji suggestion');
+    close.addEventListener('click', function(ev){
+      ev.preventDefault(); ev.stopPropagation();
+      _emojiHintState.dismissed[token] = true;
+      _hideEmojiHint();
+    });
+    hint.appendChild(close);
+
+    hint.classList.add('open');
+  }
+
+  function _hideEmojiHint(){
+    var hint = byId('emojiHint');
+    if(hint){ hint.classList.remove('open'); hint.innerHTML = ''; }
+    _emojiHintState.lastSuggestion = null;
+  }
+  window._hideEmojiHint = _hideEmojiHint;
+
+  function _applyEmojiSuggestion(em){
+    var inp = byId('chatInput');
+    var sug = _emojiHintState.lastSuggestion;
+    if(!inp || !sug) return;
+
+    var v = inp.value || '';
+    // Insert at the end of the matched word, with a leading space if needed.
+    var insertAt = Math.min(sug.end, v.length);
+    var before = v.slice(0, insertAt);
+    var after  = v.slice(insertAt);
+    var needSpace = before.length && !/\s$/.test(before) ? '' : '';
+    var toInsert = (before.length && !/\s$/.test(before) && !/^\s/.test(after) ? ' ' : '') + em;
+    inp.value = before + toInsert + after;
+    var newPos = insertAt + toInsert.length;
+    inp.selectionStart = inp.selectionEnd = newPos;
+    inp.focus();
+    inp.dispatchEvent(new Event('input'));
+
+    _emojiHintState.dismissed[sug.token] = true;   // don't immediately re-prompt for same word
+    _hideEmojiHint();
+  }
+
+  // Debounce so we don't recompute on every keystroke
+  var _emojiHintTimer = null;
+  function debounceEmojiHint(){
+    clearTimeout(_emojiHintTimer);
+    _emojiHintTimer = setTimeout(updateEmojiHint, 180);
+  }
+  window.debounceEmojiHint = debounceEmojiHint;
+
+  // When input is emptied, clear the dismissed set so the user can get
+  // fresh suggestions on their next message.
+  function _clearEmojiHintStateIfEmpty(){
+    var inp = byId('chatInput');
+    if(inp && !(inp.value || '').trim()){
+      _emojiHintState.dismissed = {};
+      _hideEmojiHint();
+    }
+  }
+  window._clearEmojiHintStateIfEmpty = _clearEmojiHintStateIfEmpty;
+
   var chatInput = byId('chatInput');
   var sendBtn = byId('sendBtn');
 
@@ -4123,6 +5142,8 @@ function stopPollStatePolling(){
       this.style.height = Math.min(this.scrollHeight, 120) + 'px';
       setSendEnabled();
       debounceSpellCheck();
+      debounceEmojiHint();
+      _clearEmojiHintStateIfEmpty();
 
       if (socket && socket.readyState === WebSocket.OPEN) {
         try { socket.send(JSON.stringify({ type: 'typing' })); } catch (_) {}
@@ -4146,6 +5167,64 @@ function stopPollStatePolling(){
           hideSpellPopup();
         }
       }, 180);
+    });
+
+    /* ═══════════════════════════════════════════════════════════════
+       PASTE-TO-ATTACH
+       If the user pastes an image (e.g. a screenshot from the OS
+       clipboard), capture it as a pending file attachment instead of
+       letting the binary data land in the text. Text pastes are left
+       alone so copy/paste of URLs and regular text still works.
+       ═══════════════════════════════════════════════════════════════ */
+    chatInput.addEventListener('paste', function(e){
+      var cd = e.clipboardData || window.clipboardData;
+      if(!cd) return;
+
+      // Look for an image in the clipboard items
+      var items = cd.items || [];
+      var imageFile = null;
+      for(var i=0;i<items.length;i++){
+        var it = items[i];
+        if(it && it.kind === 'file' && it.type && it.type.indexOf('image/') === 0){
+          imageFile = it.getAsFile();
+          if(imageFile) break;
+        }
+      }
+      // Some browsers expose files directly
+      if(!imageFile && cd.files && cd.files.length){
+        for(var j=0;j<cd.files.length;j++){
+          var f = cd.files[j];
+          if(f && f.type && f.type.indexOf('image/') === 0){
+            imageFile = f; break;
+          }
+        }
+      }
+      if(!imageFile) return;  // plain text paste — leave it alone
+
+      // Only one pending file at a time; replace any existing one.
+      e.preventDefault();
+      _revokePendingBlobs();
+      pickedFileData = null;
+
+      // Give the pasted blob a friendly filename with an extension
+      var ext = (imageFile.type.split('/')[1] || 'png').split(';')[0];
+      var name = imageFile.name && imageFile.name !== 'image.png' && imageFile.name !== 'blob'
+        ? imageFile.name
+        : ('pasted-' + Date.now() + '.' + ext);
+
+      // Rebuild as a File so .name is guaranteed
+      try {
+        pendingFile = new File([imageFile], name, { type: imageFile.type });
+      } catch(_err) {
+        pendingFile = imageFile;  // IE/old-Safari fallback
+      }
+
+      var thumb = null;
+      try { thumb = URL.createObjectURL(pendingFile); } catch(_){ thumb = null; }
+      if(thumb) _pendingBlobUrls.push(thumb);
+
+      showAttachStrip(name, 'pasted image', thumb);
+      setSendEnabled();
     });
   }
 
@@ -4815,6 +5894,7 @@ function stopPollStatePolling(){
         chatInput.style.height = 'auto';
         clearReply();
         setSendEnabled();
+        _hideEmojiHint();
         isSending = false;
       });
       return;
@@ -4833,6 +5913,7 @@ function stopPollStatePolling(){
       chatInput.style.height = 'auto';
       setSendEnabled();
       clearReply();
+      _hideEmojiHint();
       isSending = false;
     } else {
       // WS unavailable — fall back to fetch (no page reload)
@@ -4858,6 +5939,7 @@ function stopPollStatePolling(){
         chatInput.style.height = 'auto';
         clearReply();
         setSendEnabled();
+        _hideEmojiHint();
         isSending = false;
       });
     }
@@ -4923,7 +6005,7 @@ function stopPollStatePolling(){
       var iw = document.createElement('div');
       iw.className = 'bubble ' + (isOwn ? 'bubble-out' : 'bubble-in') + ' bubble-image';
       iw.innerHTML = '<a href="' + esc(data.file_url) + '" download="' + esc(data.file_name || 'image') + '"><img src="' + esc(data.file_url) + '" alt="' + esc(data.file_name || 'image') + '"></a>' +
-        (text ? '<div style="margin-top:6px;font-size:.85rem">' + esc(text) + '</div>' : '');
+        (text ? '<div style="margin-top:6px;font-size:.85rem">' + renderRichText(text) + '</div>' : '');
       body.appendChild(iw);
 
     } else if(mtype === 'file' && data.file_url){
@@ -4942,7 +6024,7 @@ function stopPollStatePolling(){
       if(text){
         var cap = document.createElement('div');
         cap.className = 'bubble-file-caption';
-        cap.textContent = text;
+        cap.innerHTML = renderRichText(text);
         fw.appendChild(cap);
       }
       body.appendChild(fw);
@@ -4957,7 +6039,8 @@ function stopPollStatePolling(){
     } else {
       var tb = document.createElement('div');
       tb.className = 'bubble ' + (isOwn ? 'bubble-out' : 'bubble-in');
-      tb.textContent = text;
+      // Render links and @mentions; renderRichText escapes HTML first.
+      tb.innerHTML = renderRichText(text);
       body.appendChild(tb);
     }
 
@@ -5356,6 +6439,7 @@ function stopPollStatePolling(){
           chatInput.style.height = 'auto';
         }
         setSendEnabled();
+        if(typeof _hideEmojiHint === 'function') _hideEmojiHint();
       },
       function(){
         isSending = false;

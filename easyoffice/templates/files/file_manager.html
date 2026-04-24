@@ -29,8 +29,7 @@
   pointer-events: all;
 }
 
-/* When a drawing tool is active, the SVG canvas captures mouse events.
-   The toolbar/panels keep their own pointer-events above. */
+/* NON-PDF: global SVG canvas captures mouse when tool active */
 .ann-overlay.ann-active .ann-canvas {
   pointer-events: all;
   cursor: crosshair;
@@ -41,10 +40,56 @@
 .ann-overlay.ann-tool-bookmark  .ann-canvas { cursor: pointer; }
 .ann-overlay.ann-tool-erase     .ann-canvas { cursor: not-allowed; }
 
-/* Existing rendered DOM annotations (pins, stamps, bookmarks) stay clickable */
+/* PDF MODE OVERRIDE: when annOverlay has .ann-pdf-mode class,
+   the global .ann-canvas must NEVER capture events — tools work through
+   pdfjsViewer event listeners instead. Without this, the global SVG
+   sits on top of the PDF at z-index:30 and swallows all clicks. */
+.ann-overlay.ann-pdf-mode .ann-canvas,
+.ann-overlay.ann-pdf-mode.ann-active .ann-canvas {
+  pointer-events: none !important;
+}
+
+/* PDF mode: hide the global SVG canvas entirely — we use per-page canvases */
+.ann-overlay.ann-pdf-mode .ann-canvas {
+  display: none;
+}
+
+/* PDF mode: per-page canvases capture mouse when a tool is active.
+   The body gets a class to signal this so CSS can change the page's cursor
+   without relying on the ann-overlay class (which is outside pdfjsViewer). */
+body.ann-tool-active .pdfjs-page-wrap { cursor: crosshair; }
+body.ann-tool-highlight-active .pdfjs-page-wrap { cursor: text; }
+body.ann-tool-comment-active   .pdfjs-page-wrap,
+body.ann-tool-stamp-active     .pdfjs-page-wrap,
+body.ann-tool-bookmark-active  .pdfjs-page-wrap { cursor: cell; }
+body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
+
+/* Per-page SVG sits inside each page wrap */
+.ann-page-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;   /* annotations are visual — interactivity handled by page itself */
+  overflow: visible;
+  z-index: 10;
+}
+
+/* Per-page DOM container for pins / stamps / bookmarks */
+.ann-page-dom {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 11;
+}
+
+/* Existing rendered DOM annotations stay clickable (for erase + click-to-view) */
 .ann-overlay .ann-pin,
 .ann-overlay .ann-bookmark-flag,
-.ann-overlay .ann-stamp-text {
+.ann-overlay .ann-stamp-text,
+.ann-page-dom .ann-pin,
+.ann-page-dom .ann-bookmark-flag,
+.ann-page-dom .ann-stamp-text {
   pointer-events: all;
 }
 
@@ -4262,6 +4307,22 @@
     const viewer2 = document.getElementById('pdfjsViewer');
     if (viewer2) {
       viewer2.addEventListener('scroll', _pdfOnScroll, { passive: true });
+
+      /* Pages now exist — re-bind annotation events to the PDF viewer and
+         re-render any annotations that were loaded before pages were ready */
+      if (typeof annBindOverlayEvents === 'function') {
+        const overlay = document.getElementById('annOverlay');
+        if (overlay) {
+          /* Remove any existing bindings first (in case of re-render) */
+          viewer2.removeEventListener('mousedown', annOnDown);
+          viewer2.removeEventListener('click',     annOnClick);
+          viewer2.addEventListener('mousedown', annOnDown);
+          viewer2.addEventListener('click',     annOnClick);
+        }
+      }
+      if (typeof annRenderAll === 'function' && _annAnnotations && _annAnnotations.length) {
+        annRenderAll();
+      }
     }
   }
 
@@ -4389,12 +4450,83 @@
   /* ── Annotation helpers ── */
   function annGenId()  { return 'ann-' + Math.random().toString(36).slice(2, 11); }
 
+  /* Return {x, y} as 0–100% within the given element */
   function annPctPos(el, e) {
     const r = el.getBoundingClientRect();
     return {
       x: Math.max(0, Math.min(100, (e.clientX - r.left) / r.width  * 100)),
       y: Math.max(0, Math.min(100, (e.clientY - r.top)  / r.height * 100)),
     };
+  }
+
+  /* Which PDF page is the user currently interacting with?
+     Returns the .pdfjs-page-wrap element under the mouse, or null for non-PDF. */
+  function annGetPageWrap(e) {
+    const viewer = document.getElementById('pdfjsViewer');
+    if (!viewer) return null;
+    /* Walk up from the event target to find the page wrap */
+    let el = e.target;
+    while (el && el !== viewer) {
+      if (el.classList && el.classList.contains('pdfjs-page-wrap')) return el;
+      el = el.parentElement;
+    }
+    /* Fall back: find which wrap is under the cursor */
+    const wraps = viewer.querySelectorAll('.pdfjs-page-wrap');
+    for (const wrap of wraps) {
+      const r = wrap.getBoundingClientRect();
+      if (e.clientX >= r.left && e.clientX <= r.right &&
+          e.clientY >= r.top  && e.clientY <= r.bottom) {
+        return wrap;
+      }
+    }
+    return null;
+  }
+
+  /* Get the current page number from the event (1-based), 0 for non-PDF */
+  function annGetPage(e) {
+    const wrap = annGetPageWrap(e);
+    return wrap ? parseInt(wrap.dataset.pageN || '1', 10) : 0;
+  }
+
+  /* Get or create a per-page SVG overlay inside a page wrap */
+  function annGetPageSvg(pageN) {
+    const viewer = document.getElementById('pdfjsViewer');
+    if (!viewer) {
+      /* Non-PDF: use the single global SVG */
+      return document.getElementById('annSvgCanvas');
+    }
+    const wrap = viewer.querySelector(`.pdfjs-page-wrap[data-page-n="${pageN}"]`);
+    if (!wrap) return null;
+    let svg = wrap.querySelector('.ann-page-canvas');
+    if (!svg) {
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 100 100');
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.classList.add('ann-page-canvas');
+      svg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:10;';
+      wrap.style.position = 'relative';
+      wrap.appendChild(svg);
+    }
+    return svg;
+  }
+
+  /* Get or create the DOM container for absolute-positioned annotations on a page */
+  function annGetPageDom(pageN) {
+    const viewer = document.getElementById('pdfjsViewer');
+    if (!viewer) {
+      return document.getElementById('annOverlay');
+    }
+    const wrap = viewer.querySelector(`.pdfjs-page-wrap[data-page-n="${pageN}"]`);
+    if (!wrap) return null;
+    let dom = wrap.querySelector('.ann-page-dom');
+    if (!dom) {
+      dom = document.createElement('div');
+      dom.className = 'ann-page-dom';
+      dom.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:11;';
+      wrap.style.position = 'relative';
+      wrap.appendChild(dom);
+    }
+    return dom;
   }
 
   function hexToRgba(hex, a) {
@@ -4481,24 +4613,38 @@
   /* ── Render all ── */
   function annRenderAll() {
     const overlay = document.getElementById('annOverlay');
-    if (!overlay) return;
-    overlay.querySelectorAll('[data-ann-id]').forEach(el => el.remove());
-    const svg = overlay.querySelector('.ann-canvas');
-    if (svg) svg.innerHTML = '';
+    const viewer  = document.getElementById('pdfjsViewer');
+
+    if (viewer) {
+      /* PDF mode: clear per-page annotation layers */
+      viewer.querySelectorAll('.ann-page-canvas').forEach(s => { s.innerHTML = ''; });
+      viewer.querySelectorAll('.ann-page-dom [data-ann-id]').forEach(el => el.remove());
+    } else if (overlay) {
+      /* Non-PDF mode: clear global overlay */
+      overlay.querySelectorAll('[data-ann-id]').forEach(el => el.remove());
+      const svg = overlay.querySelector('.ann-canvas');
+      if (svg) svg.innerHTML = '';
+    }
     _annAnnotations.forEach(a => annRenderOne(a));
   }
 
   function annRenderOne(a) {
-    const overlay = document.getElementById('annOverlay');
-    if (!overlay) return;
-    const svg = overlay.querySelector('.ann-canvas');
+    const pageN = a.page || 0;   /* 0 = non-PDF (global overlay) */
+
+    /* Get the right SVG surface and DOM container for this annotation */
+    const svg = pageN > 0 ? annGetPageSvg(pageN)  : (() => {
+      const ov = document.getElementById('annOverlay');
+      return ov ? ov.querySelector('.ann-canvas') : null;
+    })();
+    const dom = pageN > 0 ? annGetPageDom(pageN)  : document.getElementById('annOverlay');
+
     switch (a.tool) {
       case 'highlight': annRenderHighlight(svg, a); break;
       case 'draw':      annRenderDraw(svg, a);      break;
       case 'rect':      annRenderRect(svg, a);      break;
-      case 'comment':   annRenderComment(overlay, a); break;
-      case 'stamp':     annRenderStamp(overlay, a);   break;
-      case 'bookmark':  annRenderBookmark(overlay, a); break;
+      case 'comment':   annRenderComment(dom, a);   break;
+      case 'stamp':     annRenderStamp(dom, a);     break;
+      case 'bookmark':  annRenderBookmark(dom, a);  break;
     }
   }
 
@@ -4558,23 +4704,26 @@
     svg.appendChild(poly);
   }
 
-  function annRenderComment(overlay, a) {
+  function annRenderComment(container, a) {
+    if (!container) return;
     const pin = document.createElement('div');
     pin.className         = 'ann-pin';
     pin.dataset.annId     = a.id;
     pin.style.left        = a.x + '%';
     pin.style.top         = a.y + '%';
     pin.style.background  = a.color || '#3b82f6';
+    pin.style.pointerEvents = 'all';
     pin.title             = a.text || '';
     pin.innerHTML         = `<div class="ann-pin-inner"></div>`;
     pin.addEventListener('click', e => {
       if (_annSettings.active_tool === 'erase') { annRemove(a.id); return; }
       annShowCommentView(e, a);
     });
-    overlay.appendChild(pin);
+    container.appendChild(pin);
   }
 
-  function annRenderStamp(overlay, a) {
+  function annRenderStamp(container, a) {
+    if (!container) return;
     const el = document.createElement('div');
     el.className          = 'ann-stamp-text';
     el.dataset.annId      = a.id;
@@ -4583,23 +4732,26 @@
     el.style.color        = a.color || '#ef4444';
     el.style.borderColor  = a.color || '#ef4444';
     el.style.opacity      = a.opacity ?? 0.85;
+    el.style.pointerEvents = 'all';
     el.textContent        = a.text || 'DRAFT';
     el.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
-    overlay.appendChild(el);
+    container.appendChild(el);
   }
 
-  function annRenderBookmark(overlay, a) {
+  function annRenderBookmark(container, a) {
+    if (!container) return;
     const bk = document.createElement('div');
     bk.className      = 'ann-bookmark-flag';
     bk.dataset.annId  = a.id;
     bk.style.left     = a.x + '%';
     bk.style.top      = '0';
+    bk.style.pointerEvents = 'all';
     bk.title          = a.text || '';
     bk.innerHTML      = `<svg viewBox="0 0 24 30" xmlns="http://www.w3.org/2000/svg">
       <path d="M0 0h24v30l-12-8L0 30V0z" fill="${a.color || '#06b6d4'}" opacity="${a.opacity ?? 1}"/>
     </svg>`;
     bk.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
-    overlay.appendChild(bk);
+    container.appendChild(bk);
   }
 
   /* ── Comment popup ── */
@@ -4615,16 +4767,32 @@
     popup.querySelector('textarea').focus();
   }
 
-  function annOpenCommentInput(pos, overlay) {
+  function annOpenCommentInput(pos, container, pageN) {
     const popup = document.getElementById('annCommentPopup');
     if (!popup) return;
     popup.querySelector('textarea').value = '';
     delete popup.dataset.annId;
-    popup.dataset.pendingX = pos.x;
-    popup.dataset.pendingY = pos.y;
-    const r = overlay.getBoundingClientRect();
-    popup.style.left = (pos.x / 100 * r.width  + 12) + 'px';
-    popup.style.top  = (pos.y / 100 * r.height - 20) + 'px';
+    popup.dataset.pendingX    = pos.x;
+    popup.dataset.pendingY    = pos.y;
+    popup.dataset.pendingPage = pageN || 0;
+
+    /* Position the popup near the cursor, relative to the page or overlay.
+       Fall back to previewSurface if neither container has offsetParent
+       suitable for absolute-positioning the popup. */
+    const surface = document.getElementById('previewSurface');
+    const anchor  = surface || container;
+    const r       = anchor.getBoundingClientRect();
+
+    /* pos is a % of container; convert to pixels relative to anchor */
+    const cr = container.getBoundingClientRect();
+    const pxX = (pos.x / 100 * cr.width)  + (cr.left - r.left);
+    const pxY = (pos.y / 100 * cr.height) + (cr.top  - r.top);
+
+    /* Move popup into the anchor so its coordinates are relative */
+    if (popup.parentElement !== anchor) anchor.appendChild(popup);
+
+    popup.style.left = (pxX + 12) + 'px';
+    popup.style.top  = Math.max(8, pxY - 40) + 'px';
     popup.classList.add('open');
     popup.querySelector('textarea').focus();
   }
@@ -4639,6 +4807,7 @@
     } else if (txt) {
       annAdd({
         tool: 'comment',
+        page: parseInt(popup.dataset.pendingPage || '0', 10),
         color: _annSettings.color, opacity: _annSettings.opacity,
         x: parseFloat(popup.dataset.pendingX || 50),
         y: parseFloat(popup.dataset.pendingY || 50),
@@ -4650,15 +4819,16 @@
   }
 
   /* ── Stamp picker ── */
-  function annOpenStampPicker(pos, overlay) {
+  function annOpenStampPicker(pos, container, pageN) {
     document.getElementById('annStampMenu')?.remove();
     const menu = document.createElement('div');
     menu.id = 'annStampMenu';
+    /* Position absolutely within the container (page or overlay) */
     menu.style.cssText = `
       position:absolute;left:${pos.x}%;top:${pos.y}%;
       background:#fff;border:1px solid var(--eo-border);border-radius:10px;
       box-shadow:0 8px 24px rgba(0,0,0,.18);padding:6px;z-index:70;
-      display:flex;flex-direction:column;gap:3px;min-width:140px;
+      display:flex;flex-direction:column;gap:3px;min-width:140px;pointer-events:all;
     `;
     STAMP_LABELS.forEach(label => {
       const btn = document.createElement('button');
@@ -4672,53 +4842,91 @@
       btn.onmouseenter = () => btn.style.background = 'var(--eo-bg)';
       btn.onmouseleave = () => btn.style.background = 'none';
       btn.onclick = () => {
-        annAdd({ tool:'stamp', color:_annSettings.color, opacity:_annSettings.opacity, x:pos.x, y:pos.y, text:label });
+        annAdd({
+          tool:'stamp', page: pageN || 0,
+          color:_annSettings.color, opacity:_annSettings.opacity,
+          x:pos.x, y:pos.y, text:label,
+        });
         menu.remove();
       };
       menu.appendChild(btn);
     });
-    overlay.appendChild(menu);
+    container.appendChild(menu);
     setTimeout(() => document.addEventListener('click', function rm(e) {
       if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', rm); }
     }), 50);
   }
 
-  /* ── Mouse handlers — bound to the SVG canvas, not the whole overlay ── */
-  function annBindOverlayEvents(overlay) {
-    /* We bind to the overlay div for mousedown/move/up so drag works even
-       when the cursor briefly leaves the canvas during fast movement.
-       But we use e.target checks to ignore clicks on toolbar/panel children. */
-    const svg = overlay.querySelector('.ann-canvas');
-    if (!svg) return;
+  /* ── Mouse handlers ── */
 
-    svg.addEventListener('mousedown', annOnDown);
-    /* move and up on window so drag finishes even if mouse leaves svg */
+  /* The target for mouse events differs between PDF and non-PDF:
+     PDF:     each page wrap's SVG canvas (one per page)
+     Non-PDF: the global ann-canvas SVG in annOverlay             */
+
+  let _annActivePageN  = 0;    /* which PDF page is being drawn on */
+  let _annActiveWrap   = null; /* the page wrap element for the current stroke */
+
+  function annBindOverlayEvents(overlay) {
+    const viewer = document.getElementById('pdfjsViewer');
+
+    if (viewer) {
+      /* PDF mode: bind events to the viewer container.
+         We use the viewer as the event root so a drag that starts on a page
+         canvas and moves slightly off it still fires correctly.           */
+      viewer.addEventListener('mousedown', annOnDown);
+      viewer.addEventListener('click',     annOnClick);
+    } else {
+      /* Non-PDF mode: bind to the SVG canvas as before */
+      const svg = overlay.querySelector('.ann-canvas');
+      if (svg) {
+        svg.addEventListener('mousedown', annOnDown);
+        svg.addEventListener('click',     annOnClick);
+      }
+    }
+    /* move and up on window so drag completes even when cursor leaves */
     window.addEventListener('mousemove', annOnMove);
     window.addEventListener('mouseup',   annOnUp);
-    svg.addEventListener('click', annOnClick);
   }
 
   function annOnDown(e) {
     if (e.button !== 0) return;
     const tool = _annSettings.active_tool;
-    if (tool === 'draw' || tool === 'rect' || tool === 'highlight') {
+    if (tool !== 'draw' && tool !== 'rect' && tool !== 'highlight') return;
+
+    const viewer = document.getElementById('pdfjsViewer');
+    if (viewer) {
+      /* PDF: find which page was clicked */
+      const wrap = annGetPageWrap(e);
+      if (!wrap) return;
+      _annActivePageN = parseInt(wrap.dataset.pageN || '1', 10);
+      _annActiveWrap  = wrap;
+      _annDrawing     = true;
+      _annDrawStart   = annPctPos(wrap, e);
+    } else {
+      /* Non-PDF: use global overlay */
       const overlay = document.getElementById('annOverlay');
       if (!overlay) return;
+      _annActivePageN = 0;
+      _annActiveWrap  = overlay;
       _annDrawing     = true;
       _annDrawStart   = annPctPos(overlay, e);
-      _annCurrentPath = [[_annDrawStart.x, _annDrawStart.y]];
-      e.preventDefault();
     }
+    _annCurrentPath = [[_annDrawStart.x, _annDrawStart.y]];
+    e.preventDefault();
   }
 
   function annOnMove(e) {
-    if (!_annDrawing) return;
-    const overlay = document.getElementById('annOverlay');
-    if (!overlay) return;
-    const svg  = overlay.querySelector('.ann-canvas');
+    if (!_annDrawing || !_annActiveWrap) return;
+
+    const posEl = _annActiveWrap; /* always relative to the element we started on */
+    const pos   = annPctPos(posEl, e);
+    const tool  = _annSettings.active_tool;
+
+    /* Get the right SVG for this stroke */
+    const svg = _annActivePageN > 0
+      ? annGetPageSvg(_annActivePageN)
+      : (() => { const ov = document.getElementById('annOverlay'); return ov ? ov.querySelector('.ann-canvas') : null; })();
     if (!svg) return;
-    const pos  = annPctPos(overlay, e);
-    const tool = _annSettings.active_tool;
 
     if (tool === 'draw') {
       _annCurrentPath.push([pos.x, pos.y]);
@@ -4760,18 +4968,25 @@
   function annOnUp(e) {
     if (!_annDrawing) return;
     _annDrawing = false;
-    const overlay = document.getElementById('annOverlay');
-    if (!overlay) return;
-    const pos  = annPctPos(overlay, e);
+    const wrap  = _annActiveWrap;
+    const pageN = _annActivePageN;
+    _annActiveWrap  = null;
+    _annActivePageN = 0;
+
+    if (!wrap) { _annCurrentPath = []; _annDrawStart = null; return; }
+
+    const pos  = annPctPos(wrap, e);
     const tool = _annSettings.active_tool;
 
     if (_annTempEl) { _annTempEl.remove(); _annTempEl = null; }
 
     if (tool === 'draw' && _annCurrentPath.length > 2) {
       annAdd({
-        tool: 'draw', color: _annSettings.color,
-        opacity: _annSettings.opacity, stroke_width: _annSettings.stroke_width || 3,
-        paths: _annCurrentPath, x: _annDrawStart.x, y: _annDrawStart.y,
+        tool: 'draw', page: pageN,
+        color: _annSettings.color, opacity: _annSettings.opacity,
+        stroke_width: _annSettings.stroke_width || 3,
+        paths: _annCurrentPath,
+        x: _annDrawStart.x, y: _annDrawStart.y,
       });
     } else if (tool === 'rect' || tool === 'highlight') {
       const x = Math.min(_annDrawStart.x, pos.x);
@@ -4779,7 +4994,7 @@
       const w = Math.abs(pos.x - _annDrawStart.x);
       const h = Math.abs(pos.y - _annDrawStart.y);
       if (w > 0.5 && h > 0.3) {
-        annAdd({ tool, color: _annSettings.color, opacity: _annSettings.opacity, x, y, w, h });
+        annAdd({ tool, page: pageN, color: _annSettings.color, opacity: _annSettings.opacity, x, y, w, h });
       }
     }
     _annCurrentPath = [];
@@ -4787,15 +5002,35 @@
   }
 
   function annOnClick(e) {
-    /* Ignore if this click finished a drag */
     if (_annDrawing) return;
-    const tool    = _annSettings.active_tool;
-    const overlay = document.getElementById('annOverlay');
-    if (!overlay) return;
-    const pos = annPctPos(overlay, e);
-    if      (tool === 'comment')  annOpenCommentInput(pos, overlay);
-    else if (tool === 'stamp')    annOpenStampPicker(pos, overlay);
-    else if (tool === 'bookmark') annAdd({ tool:'bookmark', color:_annSettings.color, opacity:_annSettings.opacity, x:pos.x, y:pos.y });
+    const tool = _annSettings.active_tool;
+    if (!tool || tool === 'none' || tool === 'erase') return;
+
+    const viewer = document.getElementById('pdfjsViewer');
+    let posEl, pageN, domContainer;
+
+    if (viewer) {
+      const wrap = annGetPageWrap(e);
+      if (!wrap) return;
+      posEl        = wrap;
+      pageN        = parseInt(wrap.dataset.pageN || '1', 10);
+      domContainer = annGetPageDom(pageN);
+    } else {
+      posEl        = document.getElementById('annOverlay');
+      pageN        = 0;
+      domContainer = posEl;
+    }
+    if (!posEl) return;
+
+    const pos = annPctPos(posEl, e);
+
+    if (tool === 'comment') {
+      annOpenCommentInput(pos, domContainer, pageN);
+    } else if (tool === 'stamp') {
+      annOpenStampPicker(pos, domContainer, pageN);
+    } else if (tool === 'bookmark') {
+      annAdd({ tool: 'bookmark', page: pageN, color: _annSettings.color, opacity: _annSettings.opacity, x: pos.x, y: pos.y });
+    }
   }
 
   /* ── Annotation list panel ── */
@@ -4857,12 +5092,25 @@
     document.querySelectorAll('.ann-tool-btn[data-tool]').forEach(btn =>
       btn.classList.toggle('active', btn.dataset.tool === _annSettings.active_tool)
     );
-    /* Update overlay class — CSS targets .ann-canvas inside for pointer-events */
+    /* Update overlay class — CSS targets .ann-canvas inside for pointer-events.
+       Preserve the ann-pdf-mode class if it was set at init time. */
     const overlay = document.getElementById('annOverlay');
+    const tool = _annSettings.active_tool;
     if (overlay) {
-      const tool = _annSettings.active_tool;
+      const pdfMode = overlay.classList.contains('ann-pdf-mode');
       overlay.className = 'ann-overlay' +
+        (pdfMode ? ' ann-pdf-mode' : '') +
         (tool && tool !== 'none' ? ` ann-active ann-tool-${tool}` : '');
+    }
+    /* Update body classes for PDF page cursors (outside overlay) */
+    document.body.classList.remove(
+      'ann-tool-active', 'ann-tool-highlight-active',
+      'ann-tool-comment-active', 'ann-tool-stamp-active',
+      'ann-tool-bookmark-active', 'ann-tool-erase-active',
+      'ann-tool-draw-active', 'ann-tool-rect-active'
+    );
+    if (tool && tool !== 'none') {
+      document.body.classList.add('ann-tool-active', `ann-tool-${tool}-active`);
     }
   }
 
@@ -5048,6 +5296,14 @@
     const overlay     = document.createElement('div');
     overlay.id        = 'annOverlay';
     overlay.className = 'ann-overlay';
+
+    /* If the PDF.js viewer is (or will be) inside this surface, mark the
+       overlay so its global .ann-canvas never captures events.
+       We check both the current state AND the file extension via currentFileExt. */
+    if (document.getElementById('pdfjsViewer') || currentFileExt === 'pdf') {
+      overlay.classList.add('ann-pdf-mode');
+    }
+
     surface.appendChild(overlay);
 
     annBuildUI(overlay);
@@ -5061,23 +5317,40 @@
     if (_annDirty) annFlush();
     clearTimeout(_annSaveTimer);
 
-    /* Remove window-level drag listeners added in annBindOverlayEvents */
+    /* Remove window-level drag listeners */
     window.removeEventListener('mousemove', annOnMove);
     window.removeEventListener('mouseup',   annOnUp);
+
+    /* Remove PDF-viewer mouse listeners if they were bound */
+    const viewer = document.getElementById('pdfjsViewer');
+    if (viewer) {
+      viewer.removeEventListener('mousedown', annOnDown);
+      viewer.removeEventListener('click',     annOnClick);
+    }
+
+    /* Remove body classes added by annApplySettings */
+    document.body.classList.remove(
+      'ann-tool-active', 'ann-tool-highlight-active',
+      'ann-tool-comment-active', 'ann-tool-stamp-active',
+      'ann-tool-bookmark-active', 'ann-tool-erase-active',
+      'ann-tool-draw-active', 'ann-tool-rect-active'
+    );
 
     const overlay = document.getElementById('annOverlay');
     if (overlay) {
       if (overlay._outsideListener) document.removeEventListener('click', overlay._outsideListener);
       overlay.remove();
     }
-    _annFileId      = null;
-    _annAnnotations = [];
-    _annDirty       = false;
-    _annSaveTimer   = null;
-    _annDrawing     = false;
-    _annDrawStart   = null;
-    _annCurrentPath = [];
-    _annTempEl      = null;
+    _annFileId        = null;
+    _annAnnotations   = [];
+    _annDirty         = false;
+    _annSaveTimer     = null;
+    _annDrawing       = false;
+    _annDrawStart     = null;
+    _annCurrentPath   = [];
+    _annTempEl        = null;
+    _annActivePageN   = 0;
+    _annActiveWrap    = null;
   }
 
   /* ══════════════════════════════════════════════════════════════════════
@@ -5597,12 +5870,12 @@
   }
 
   /* ── Render remote tool event on viewer overlay ── */
-  let _lpPendingToolEvents = [];   /* queued until annOverlay is ready */
+  let _lpPendingToolEvents = [];   /* queued until annOverlay and pages are ready */
 
   function lpRenderRemoteToolEvent(payload) {
     if (!payload || !payload.action) return;
 
-    /* Queue events if annOverlay doesn't exist yet, flush when ready */
+    /* Queue events if annOverlay doesn't exist yet */
     if (!document.getElementById('annOverlay')) {
       _lpPendingToolEvents.push(payload);
       lpWaitForOverlayThen(() => {
@@ -5610,6 +5883,26 @@
         q.forEach(p => lpRenderRemoteToolEvent(p));
       });
       return;
+    }
+
+    /* For PDF annotations, also wait until the target page wrap exists */
+    const viewer = document.getElementById('pdfjsViewer');
+    if (viewer && payload.data && payload.data.page) {
+      const pageWrap = viewer.querySelector(`.pdfjs-page-wrap[data-page-n="${payload.data.page}"]`);
+      if (!pageWrap) {
+        /* PDF is still rendering — queue and retry shortly */
+        _lpPendingToolEvents.push(payload);
+        setTimeout(() => {
+          const v = document.getElementById('pdfjsViewer');
+          const w = v && payload.data && payload.data.page
+            ? v.querySelector(`.pdfjs-page-wrap[data-page-n="${payload.data.page}"]`) : null;
+          if (w || !v) {
+            const q = _lpPendingToolEvents.splice(0);
+            q.forEach(p => lpRenderRemoteToolEvent(p));
+          }
+        }, 200);
+        return;
+      }
     }
 
     const { action, data } = payload;

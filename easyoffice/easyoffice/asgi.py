@@ -3,6 +3,7 @@ from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
 from channels.security.websocket import AllowedHostsOriginValidator
+from apps.files import routing as files_routing
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'easyoffice.settings')
 
@@ -17,7 +18,8 @@ application = ProtocolTypeRouter({
         AuthMiddlewareStack(
             URLRouter(
                 messaging_routing.websocket_urlpatterns +
-                notification_routing.websocket_urlpatterns
+                notification_routing.websocket_urlpatterns +
+                files_routing.websocket_urlpatterns
             )
         )
     ),

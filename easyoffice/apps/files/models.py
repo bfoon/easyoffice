@@ -749,3 +749,115 @@ class FileNoteShare(models.Model):
             self.SCOPE_DEPARTMENT: 'Department',
             self.SCOPE_OFFICE: 'Office-wide',
         }.get(self.scope, self.scope)
+
+
+# ── File Annotations ──────────────────────────────────────────────────────────
+
+class FileAnnotation(models.Model):
+    """
+    Stores all per-user annotations on a file (highlights, comments, drawings,
+    stamps, bookmarks).  Saved as a single JSON blob — one row per user per file.
+    Auto-saved via AJAX; the frontend debounces writes.
+
+    JSON schema (annotations field):
+    [
+      {
+        "id":      "<uuid>",
+        "tool":    "highlight" | "comment" | "draw" | "rect" | "stamp" | "bookmark",
+        "page":    1,                    # for PDF (0 for image/text)
+        "x":       0.0,                  # % of surface width
+        "y":       0.0,                  # % of surface height
+        "w":       0.0,                  # % width (highlight/rect)
+        "h":       0.0,                  # % height
+        "color":   "#fbbf24",
+        "opacity": 0.5,
+        "text":    "",                   # comment body / stamp text
+        "paths":   [[x,y], ...],         # freehand draw points (% coords)
+        "created_at": "ISO-8601"
+      },
+      ...
+    ]
+
+    tool_settings field stores last-used tool preferences:
+    {
+      "active_tool": "highlight",
+      "color": "#fbbf24",
+      "opacity": 0.5,
+      "stroke_width": 3
+    }
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    file = models.ForeignKey(
+        'SharedFile', on_delete=models.CASCADE,
+        related_name='annotations'
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='file_annotations'
+    )
+    annotations = models.JSONField(default=list, blank=True)
+    tool_settings = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('file', 'author')
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        count = len(self.annotations) if isinstance(self.annotations, list) else 0
+        return f'Annotations by {self.author} on {self.file.name!r} ({count} items)'
+
+
+# ── Live Preview Session ──────────────────────────────────────────────────────
+
+class LivePreviewSession(models.Model):
+    """
+    Ephemeral record that lives only while a live preview sharing session is
+    active.  Deleted (or marked ended) the moment the presenter closes.
+
+    token          — URL-safe UUID used in the WebSocket path and invite links
+    presenter      — user who started the session
+    file           — the file being previewed
+    viewers        — M2M of users who accepted the invite
+    invited        — M2M of users who were sent an invite (may not have joined)
+    created_at     — when the session started
+    ended_at       — null while active; set when presenter disconnects
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    token = models.UUIDField(default=uuid.uuid4, unique=True, db_index=True)
+    presenter = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='presented_preview_sessions'
+    )
+    file = models.ForeignKey(
+        'SharedFile', on_delete=models.CASCADE,
+        related_name='live_preview_sessions'
+    )
+    viewers = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        related_name='joined_preview_sessions', blank=True
+    )
+    invited = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        related_name='invited_preview_sessions', blank=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        status = 'active' if self.ended_at is None else 'ended'
+        return f'LivePreview {self.token} by {self.presenter} [{status}]'
+
+    @property
+    def is_active(self):
+        return self.ended_at is None
+
+    @property
+    def ws_path(self):
+        return f'/ws/files/live-preview/{self.token}/'
+
+

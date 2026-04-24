@@ -38,7 +38,7 @@ from apps.files.models import (
     FilePinnedItem,
     SignatureCC,
     FilePublicToken,
-    FileNote, FileNoteShare,
+    FileNote, FileNoteShare, LivePreviewSession, FileAnnotation,
 )
 
 
@@ -639,13 +639,15 @@ def _send_completion_email(sig_req, base_url):
 
 def _normalize_notification_actions(actions):
     normalized = []
+
     for action in actions or []:
         if not isinstance(action, dict):
             continue
 
         label = str(action.get('label', '')).strip()
         url = str(action.get('url', '')).strip()
-        if not label or not url:
+
+        if not label:
             continue
 
         normalized.append({
@@ -653,7 +655,9 @@ def _normalize_notification_actions(actions):
             'url': url,
             'style': str(action.get('style', 'secondary')).strip() or 'secondary',
             'icon': str(action.get('icon', '')).strip(),
+            'data': action.get('data', {}) if isinstance(action.get('data', {}), dict) else {},
         })
+
     return normalized
 
 
@@ -790,6 +794,65 @@ def _notify(
             extra_data=extra_data,
         )
 
+def _notify_user(
+    user,
+    notif_type,
+    title,
+    body='',
+    link='',
+    sender=None,
+    icon='bi-bell-fill',
+    color='#64748b',
+    actions=None,
+    extra_data=None,
+    store=True,
+    push=True,
+):
+    """
+    Safe notification helper for Files/live-preview.
+    Sends websocket notification + stores bell notification.
+    """
+    actions = _normalize_notification_actions(actions)
+
+    payload_data = dict(extra_data or {})
+    payload_data['actions'] = actions
+
+    if push:
+        try:
+            _push_notification(
+                user=user,
+                notif_type=notif_type,
+                title=title,
+                body=body,
+                link=link,
+                icon=icon,
+                color=color,
+                actions=actions,
+                extra_data=payload_data,
+            )
+        except Exception as e:
+            print('[notify_user push failed]', e)
+
+    if store:
+        try:
+            from apps.core.models import CoreNotification
+
+            create_kwargs = {
+                'recipient': user,
+                'notification_type': notif_type,
+                'title': title,
+                'message': body,
+                'link': link,
+                'data': payload_data,
+            }
+
+            if sender is not None:
+                create_kwargs['sender'] = sender
+
+            CoreNotification.objects.create(**create_kwargs)
+
+        except Exception as e:
+            print('[notify_user store failed]', e)
 
 def _get_sig_font_path(font_name='Dancing Script'):
     """
@@ -5532,6 +5595,72 @@ class FileNoteView(LoginRequiredMixin, View):
             'updated_at': note.updated_at.isoformat(),
         })
 
+# ── File Annotation API View ──────────────────────────────────────────────────
+
+class FileAnnotationView(LoginRequiredMixin, View):
+    """
+    GET  /files/<uuid:pk>/annotations/   → return user's annotations + tool_settings
+    POST /files/<uuid:pk>/annotations/   → full save (replaces annotations list)
+    PATCH /files/<uuid:pk>/annotations/  → save tool_settings only
+    """
+
+    def _get_record(self, request, pk):
+        f = get_object_or_404(SharedFile, pk=pk)
+        if not _file_permission_for(request.user, f):
+            raise Http404
+        return f
+
+    def get(self, request, pk):
+        f = self._get_record(request, pk)
+        record = FileAnnotation.objects.filter(file=f, author=request.user).first()
+        return JsonResponse({
+            'ok': True,
+            'annotations': record.annotations if record else [],
+            'tool_settings': record.tool_settings if record else {},
+        })
+
+    def post(self, request, pk):
+        """Full save — replaces annotations list."""
+        f = self._get_record(request, pk)
+        try:
+            body = json.loads(request.body)
+        except (ValueError, TypeError):
+            return JsonResponse({'ok': False, 'error': 'Invalid JSON'}, status=400)
+
+        annotations = body.get('annotations', [])
+        tool_settings = body.get('tool_settings', {})
+
+        if not isinstance(annotations, list):
+            return JsonResponse({'ok': False, 'error': 'annotations must be a list'}, status=400)
+
+        record, _ = FileAnnotation.objects.get_or_create(
+            file=f, author=request.user,
+            defaults={'annotations': [], 'tool_settings': {}}
+        )
+        record.annotations = annotations
+        if tool_settings:
+            record.tool_settings = tool_settings
+        record.save(update_fields=['annotations', 'tool_settings', 'updated_at'])
+
+        return JsonResponse({'ok': True, 'count': len(annotations)})
+
+    def patch(self, request, pk):
+        """Save tool_settings only (no annotation data)."""
+        f = self._get_record(request, pk)
+        try:
+            body = json.loads(request.body)
+        except (ValueError, TypeError):
+            return JsonResponse({'ok': False, 'error': 'Invalid JSON'}, status=400)
+
+        tool_settings = body.get('tool_settings', {})
+        record, _ = FileAnnotation.objects.get_or_create(
+            file=f, author=request.user,
+            defaults={'annotations': [], 'tool_settings': {}}
+        )
+        record.tool_settings = tool_settings
+        record.save(update_fields=['tool_settings', 'updated_at'])
+        return JsonResponse({'ok': True})
+
 
 TYPING_WINDOW_SECONDS = 5  # consider "typing" if ping received within last 5 s
 
@@ -5936,3 +6065,190 @@ class LetterheadApplyToolView(LoginRequiredMixin, TemplateView):
                     os.unlink(letter_tmp)
             except Exception:
                 pass
+
+
+# ── Live Preview: Start / Invite ──────────────────────────────────────────────
+
+class LivePreviewStartView(LoginRequiredMixin, View):
+    """
+    POST /files/<uuid:pk>/live-preview/start/
+    Body: { "invite_user_ids": ["uuid", ...] }
+
+    Creates a new LivePreviewSession, sends invite notifications to the chosen
+    users via the existing notify_user() helper, and returns the session token
+    so the presenter can open their WebSocket.
+    """
+
+    def post(self, request, pk):
+        f = get_object_or_404(SharedFile, pk=pk)
+        if not _file_permission_for(request.user, f):
+            raise Http404
+
+        try:
+            body = json.loads(request.body)
+        except (ValueError, TypeError):
+            return JsonResponse({'ok': False, 'error': 'Invalid JSON'}, status=400)
+
+        invite_ids = body.get('invite_user_ids', [])
+        if not invite_ids:
+            return JsonResponse({'ok': False, 'error': 'No users selected'}, status=400)
+
+        from apps.core.models import User as AppUser
+        from apps.files.models import LivePreviewSession
+
+        # Close any previous active session by this presenter on this file
+        LivePreviewSession.objects.filter(
+            presenter=request.user, file=f, ended_at__isnull=True
+        ).update(ended_at=timezone.now())
+
+        session = LivePreviewSession.objects.create(
+            presenter=request.user,
+            file=f,
+        )
+
+        # Resolve invitees — only users who can see this file
+        invitees = AppUser.objects.filter(id__in=invite_ids)
+        for invitee in invitees:
+            session.invited.add(invitee)
+            # Send a real-time invite notification
+            _notify_user(
+                user=invitee,
+                notif_type='live_preview_invite',
+                title=f'{request.user.get_full_name()} is sharing a live preview',
+                body=f'"{f.name}" — click to join',
+                link='',
+                icon='bi-cast',
+                color='#8b5cf6',
+                actions=[
+                    {
+                        'label': 'Join',
+                        'url': '',
+                        'style': 'primary',
+                        'data': {
+                            'action': 'live_preview_accept',
+                            'session_token': str(session.token),
+                            'file_id': str(f.id),
+                            'file_name': f.name,
+                            'file_ext': f.extension,
+                            'presenter_name': request.user.get_full_name(),
+                        },
+                    },
+                    {
+                        'label': 'Decline',
+                        'url': '',
+                        'style': 'secondary',
+                        'data': {'action': 'live_preview_decline'},
+                    },
+                ],
+            )
+
+        return JsonResponse({
+            'ok': True,
+            'session_token': str(session.token),
+            'ws_path': session.ws_path,
+        })
+
+
+class LivePreviewAcceptView(LoginRequiredMixin, View):
+    """
+    POST /files/live-preview/<uuid:token>/accept/
+
+    Called by the viewer after they click "Join" in the notification.
+    Adds them to the viewers M2M and returns the file info + WS path
+    so the frontend can open the preview modal and connect.
+    """
+
+    def post(self, request, token):
+        from apps.files.models import LivePreviewSession
+        session = get_object_or_404(
+            LivePreviewSession, token=token, ended_at__isnull=True
+        )
+
+        # Must have been invited
+        if not session.invited.filter(id=request.user.id).exists():
+            return JsonResponse({'ok': False, 'error': 'Not invited'}, status=403)
+
+        session.viewers.add(request.user)
+
+        f = session.file
+        return JsonResponse({
+            'ok': True,
+            'session_token': str(session.token),
+            'ws_path': session.ws_path,
+            'file_id': str(f.id),
+            'file_name': f.name,
+            'file_ext': f.extension,
+            'presenter_name': session.presenter.get_full_name(),
+        })
+
+
+class LivePreviewEndView(LoginRequiredMixin, View):
+    """
+    POST /files/live-preview/<uuid:token>/end/
+
+    Presenter-only: explicitly ends the session (in case they close via button
+    rather than closing the WebSocket).  The consumer's disconnect() also does
+    this, so both paths are covered.
+    """
+
+    def post(self, request, token):
+        from apps.files.models import LivePreviewSession
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+
+        session = get_object_or_404(
+            LivePreviewSession, token=token, presenter=request.user
+        )
+        session.ended_at = timezone.now()
+        session.save(update_fields=['ended_at'])
+
+        # Also push session_end over the channel in case the WS is still open
+        try:
+            layer = get_channel_layer()
+            if layer:
+                async_to_sync(layer.group_send)(
+                    f'preview_{token}',
+                    {'type': 'session_end'}
+                )
+        except Exception:
+            pass
+
+        return JsonResponse({'ok': True})
+
+
+class LivePreviewUsersView(LoginRequiredMixin, View):
+    """
+    GET /files/<uuid:pk>/live-preview/users/
+
+    Returns a list of staff users the presenter can invite (excludes self).
+    Used to populate the invite picker.
+    """
+
+    def get(self, request, pk):
+        f = get_object_or_404(SharedFile, pk=pk)
+        if not _file_permission_for(request.user, f):
+            raise Http404
+
+        from apps.core.models import User as AppUser
+        q = request.GET.get('q', '').strip()
+        qs = AppUser.objects.exclude(id=request.user.id).filter(is_active=True)
+        if q:
+            qs = qs.filter(
+                Q(first_name__icontains=q) |
+                Q(last_name__icontains=q) |
+                Q(email__icontains=q)
+            )
+        qs = qs.order_by('first_name', 'last_name')[:30]
+
+        return JsonResponse({
+            'ok': True,
+            'users': [
+                {
+                    'id': str(u.id),
+                    'name': u.get_full_name() or u.username,
+                    'email': u.email,
+                }
+                for u in qs
+            ],
+        })
+

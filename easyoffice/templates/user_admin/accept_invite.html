@@ -2,77 +2,269 @@
 {% block title %}Accept invitation{% endblock %}
 {% block breadcrumb %}<span>Accept invitation</span>{% endblock %}
 
-{% block content %}
-<div style="max-width:520px;margin:30px auto">
-  <div class="eo-card" style="padding:28px">
-    {% if invite.is_active %}
-      <h1 style="font-size:1.5rem;margin-bottom:6px">Welcome aboard</h1>
-      <p class="text-muted" style="margin-bottom:18px">
-        You've been invited to join as <strong>{{ invite.email }}</strong>.
-        Fill in your details below to finish setup.
-      </p>
-
-      {% if invite.message %}
-      <div class="eo-alert eo-alert-info" style="margin-bottom:18px">
-        <strong>From {{ invite.invited_by|default:"the team" }}:</strong> {{ invite.message }}
-      </div>
-      {% endif %}
-
-      <form method="post">
-        {% csrf_token %}
-        {% if form.non_field_errors %}
-          <div class="eo-alert eo-alert-danger">{{ form.non_field_errors }}</div>
-        {% endif %}
-
-        <div class="row g-3">
-          <div class="col-md-6">
-            <label class="eo-label">First name</label>
-            {{ form.first_name }}
-          </div>
-          <div class="col-md-6">
-            <label class="eo-label">Last name</label>
-            {{ form.last_name }}
-          </div>
-          <div class="col-12">
-            <label class="eo-label">Phone (optional)</label>
-            {{ form.phone }}
-          </div>
-          <div class="col-md-6">
-            <label class="eo-label">Password</label>
-            {{ form.password1 }}
-            {% if form.password1.errors %}
-              <div style="color:#dc2626;font-size:.8rem">{{ form.password1.errors|join:", " }}</div>
-            {% endif %}
-          </div>
-          <div class="col-md-6">
-            <label class="eo-label">Confirm password</label>
-            {{ form.password2 }}
-          </div>
-        </div>
-
-        <button type="submit" class="eo-btn eo-btn-primary" style="margin-top:18px;width:100%">
-          Create my account
-        </button>
-      </form>
-    {% else %}
-      <h1 style="font-size:1.4rem">This invitation is no longer active.</h1>
-      <p class="text-muted">
-        Status: <strong>{{ invite.get_status_display }}</strong>.
-        Contact the person who invited you for a new link.
-      </p>
-      <a href="/easyoffice/static" class="eo-btn eo-btn-secondary">Back to home</a>
-    {% endif %}
-  </div>
-</div>
+{% block extra_css %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
 <style>
-  /* Django's form widgets don't have our eo-input class by default —
-     give the generated <input>s sensible styling. */
-  form input[type="text"], form input[type="password"], form input[type="email"]{
-    width:100%;padding:10px 12px;border:1px solid var(--eo-border);
-    border-radius:8px;font-size:.9rem;background:var(--eo-surface);
-    color:var(--eo-text);box-sizing:border-box;
+  .ai-scope{
+    --ua-ink:#0b0f14; --ua-ink-2:#1c2530; --ua-ink-3:#475569; --ua-ink-4:#94a3b8;
+    --ua-paper:#fafaf7; --ua-paper-2:#f3f2ec; --ua-surface:#fff;
+    --ua-line:#e5e4dd; --ua-line-2:#cfcec4;
+    --ua-accent:#1e40af; --ua-gold:#a97b2f;
+    --ua-red:#b91c1c;
+    --ua-display:'Instrument Serif', serif;
+    --ua-sans:'Inter Tight', sans-serif;
+    --ua-mono:'JetBrains Mono', monospace;
+    color: var(--ua-ink); font-family: var(--ua-sans);
+    font-feature-settings:"ss01","cv11","tnum";
   }
-  form input:focus{ outline:none;border-color:var(--eo-accent); }
+  .ai-scope *{ box-sizing:border-box; }
+
+  .ai-wrap{
+    max-width: 580px;
+    margin: 40px auto;
+  }
+
+  .ai-card{
+    background: var(--ua-surface);
+    border: 1px solid var(--ua-line);
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 10px 40px -20px rgba(11,15,20,.18);
+  }
+
+  /* ─── Masthead strip ─── */
+  .ai-head{
+    background: var(--ua-ink);
+    color: #fff;
+    padding: 32px 32px 28px;
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .ai-head::before{
+    content:""; position:absolute; inset:0; z-index:-1;
+    background:
+      radial-gradient(ellipse 500px 280px at 100% 120%, rgba(59,91,219,.32), transparent 55%),
+      radial-gradient(ellipse 400px 200px at 0% -20%, rgba(169,123,47,.22), transparent 55%);
+  }
+  .ai-head::after{
+    content:""; position:absolute; inset:0; z-index:-1;
+    background-image:
+      linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+    background-size: 26px 26px;
+    mask-image: linear-gradient(180deg, rgba(0,0,0,.5), transparent 75%);
+  }
+  .ai-eyebrow{
+    font-family: var(--ua-mono);
+    font-size: .68rem; letter-spacing: .22em;
+    text-transform: uppercase; color:#cbd5e1;
+    margin-bottom: 12px;
+    display:flex; align-items:center; gap:10px;
+  }
+  .ai-eyebrow::before{ content:""; width:22px; height:1px; background:#64748b; }
+  .ai-title{
+    font-family: var(--ua-display);
+    font-size: 2.3rem;
+    font-weight: 400; line-height: 1;
+    margin: 0 0 8px 0; letter-spacing: -.02em;
+  }
+  .ai-title em{ font-style: italic; color:#fbbf24; }
+  .ai-tagline{
+    color:#cbd5e1; font-size: .94rem;
+    line-height: 1.55; margin: 0;
+  }
+  .ai-tagline strong{
+    font-family: var(--ua-mono); font-weight: 500;
+    font-size: .85rem; color:#fff;
+    background: rgba(255,255,255,.1);
+    padding: 1px 7px; border-radius: 4px;
+    border: 1px solid rgba(255,255,255,.14);
+  }
+
+  /* ─── Body ─── */
+  .ai-body{ padding: 28px 32px 32px; }
+
+  .ai-msg{
+    background: #eef2ff; border-left: 3px solid var(--ua-accent);
+    padding: 14px 16px; border-radius: 10px;
+    font-size: .88rem; color: var(--ua-ink-2);
+    margin-bottom: 22px; line-height: 1.5;
+  }
+  .ai-msg-from{
+    font-family: var(--ua-mono); font-size: .7rem;
+    letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ua-accent); margin-bottom: 4px;
+    display:block;
+  }
+
+  .ai-err{
+    padding: 11px 14px; border-radius: 8px;
+    background:#fee2e2; color: var(--ua-red);
+    border: 1px solid #fecaca;
+    font-size: .85rem; margin-bottom: 14px;
+  }
+
+  /* Form */
+  .ai-row{ display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 480px){ .ai-row{ grid-template-columns: 1fr; } }
+  .ai-field{ display:flex; flex-direction:column; gap:6px; margin-bottom: 14px; }
+  .ai-label{
+    font-family: var(--ua-mono);
+    font-size: .66rem; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--ua-ink-3);
+  }
+  .ai-field input{
+    font-family: var(--ua-sans); font-size: .94rem;
+    padding: 11px 13px;
+    border: 1px solid var(--ua-line-2); border-radius: 8px;
+    background: var(--ua-surface); color: var(--ua-ink);
+    transition: all .15s; width: 100%;
+  }
+  .ai-field input:focus{
+    outline:none; border-color: var(--ua-ink);
+    box-shadow: 0 0 0 3px rgba(30,64,175,.12);
+  }
+  .ai-field-err{ color: var(--ua-red); font-size: .78rem; }
+
+  .ai-submit{
+    width: 100%;
+    background: var(--ua-ink); color: #fff; border: 1px solid var(--ua-ink);
+    padding: 13px 16px; border-radius: 10px;
+    font-family: var(--ua-sans); font-size: .95rem; font-weight: 500;
+    cursor: pointer; transition: all .15s;
+    margin-top: 8px;
+    display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  }
+  .ai-submit:hover{ background: var(--ua-accent); border-color: var(--ua-accent); transform: translateY(-1px); }
+
+  .ai-footnote{
+    text-align: center;
+    font-family: var(--ua-mono);
+    font-size: .7rem; letter-spacing: .1em;
+    color: var(--ua-ink-4); margin-top: 16px;
+  }
+
+  /* ─── Inactive state ─── */
+  .ai-inactive{
+    padding: 40px 32px;
+    text-align: center;
+  }
+  .ai-inactive-icon{
+    width: 60px; height: 60px;
+    border-radius: 50%;
+    background: #fee2e2; color: var(--ua-red);
+    display:flex; align-items:center; justify-content:center;
+    font-size: 1.6rem; margin: 0 auto 18px;
+  }
+  .ai-inactive-title{
+    font-family: var(--ua-display);
+    font-size: 1.7rem; line-height: 1.1;
+    color: var(--ua-ink); margin-bottom: 10px;
+  }
+  .ai-inactive-desc{
+    color: var(--ua-ink-3); font-size: .92rem;
+    line-height: 1.5; max-width: 380px; margin: 0 auto 22px;
+  }
+  .ai-inactive-desc strong{
+    font-family: var(--ua-mono); font-size: .8rem;
+    padding: 2px 8px; border-radius: 4px;
+    background: var(--ua-paper-2); color: var(--ua-ink-2);
+  }
+  .ai-backhome{
+    display:inline-flex; align-items:center; gap: 7px;
+    padding: 9px 16px; border-radius: 8px;
+    border: 1px solid var(--ua-line-2);
+    background: var(--ua-surface); color: var(--ua-ink-2);
+    font-size: .86rem; font-weight: 500;
+    text-decoration: none; transition: all .15s;
+  }
+  .ai-backhome:hover{ background: var(--ua-paper); border-color: var(--ua-ink); }
 </style>
+{% endblock %}
+
+{% block content %}
+<div class="ai-scope">
+  <div class="ai-wrap">
+    <div class="ai-card">
+      {% if invite.is_active %}
+        <div class="ai-head">
+          <div class="ai-eyebrow">You've been invited</div>
+          <h1 class="ai-title">Welcome <em>aboard</em></h1>
+          <p class="ai-tagline">
+            Your invitation was sent to <strong>{{ invite.email }}</strong>. Complete the details below to finish setting up your account.
+          </p>
+        </div>
+
+        <div class="ai-body">
+          {% if invite.message %}
+          <div class="ai-msg">
+            <span class="ai-msg-from">Message from {{ invite.invited_by|default:"the team" }}</span>
+            {{ invite.message }}
+          </div>
+          {% endif %}
+
+          <form method="post">
+            {% csrf_token %}
+            {% if form.non_field_errors %}
+              <div class="ai-err">{{ form.non_field_errors }}</div>
+            {% endif %}
+
+            <div class="ai-row">
+              <div class="ai-field">
+                <label class="ai-label">First name</label>
+                {{ form.first_name }}
+              </div>
+              <div class="ai-field">
+                <label class="ai-label">Last name</label>
+                {{ form.last_name }}
+              </div>
+            </div>
+
+            <div class="ai-field">
+              <label class="ai-label">Phone <span style="color:var(--ua-ink-4);letter-spacing:0;text-transform:none;font-family:var(--ua-sans)">— optional</span></label>
+              {{ form.phone }}
+            </div>
+
+            <div class="ai-row">
+              <div class="ai-field">
+                <label class="ai-label">Password</label>
+                {{ form.password1 }}
+                {% if form.password1.errors %}
+                  <div class="ai-field-err">{{ form.password1.errors|join:", " }}</div>
+                {% endif %}
+              </div>
+              <div class="ai-field">
+                <label class="ai-label">Confirm password</label>
+                {{ form.password2 }}
+              </div>
+            </div>
+
+            <button type="submit" class="ai-submit">
+              Create my account <i class="bi bi-arrow-right"></i>
+            </button>
+          </form>
+
+          <div class="ai-footnote">Secure · encrypted · one-time link</div>
+        </div>
+
+      {% else %}
+        <div class="ai-inactive">
+          <div class="ai-inactive-icon"><i class="bi bi-hourglass-bottom"></i></div>
+          <div class="ai-inactive-title">This invitation is no longer active</div>
+          <div class="ai-inactive-desc">
+            Status: <strong>{{ invite.get_status_display }}</strong>.<br>
+            Please contact the person who invited you to request a new link.
+          </div>
+          <a href="/easyoffice/static" class="ai-backhome">
+            <i class="bi bi-arrow-left"></i> Back to home
+          </a>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
 {% endblock %}

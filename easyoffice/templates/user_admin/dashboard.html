@@ -4,160 +4,676 @@
 {% block breadcrumb %}<span>User Administration</span>{% endblock %}
 
 {% block extra_css %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
 <style>
-  .ua-toolbar{display:flex;gap:8px;flex-wrap:wrap}
-  .ua-avatar{
-    width:48px;height:48px;min-width:48px;border-radius:50%;overflow:hidden;
-    display:flex;align-items:center;justify-content:center;
-    background:linear-gradient(135deg,#1d4ed8,#2563eb);color:#fff;font-weight:700;
-    box-shadow:0 10px 24px rgba(37,99,235,.18);
+  /* ═══════════════════════════════════════════════════════════════════════
+     User Admin — shared design tokens (scoped via .ua-scope)
+     ─────────────────────────────────────────────────────────────────────── */
+  .ua-scope{
+    --ua-ink:        #0b0f14;
+    --ua-ink-2:      #1c2530;
+    --ua-ink-3:      #475569;
+    --ua-ink-4:      #94a3b8;
+    --ua-paper:      #fafaf7;
+    --ua-paper-2:    #f3f2ec;
+    --ua-surface:    #ffffff;
+    --ua-line:       #e5e4dd;
+    --ua-line-2:     #cfcec4;
+
+    --ua-accent:     #1e40af;   /* deep cobalt */
+    --ua-accent-2:   #3b5bdb;
+    --ua-accent-soft:#eef2ff;
+
+    --ua-gold:       #a97b2f;
+    --ua-gold-soft:  #fbf4e3;
+    --ua-green:      #15803d;
+    --ua-green-soft: #dcfce7;
+    --ua-red:        #b91c1c;
+    --ua-red-soft:   #fee2e2;
+    --ua-amber:      #b45309;
+    --ua-amber-soft: #fef3c7;
+
+    --ua-display:    'Instrument Serif', ui-serif, Georgia, serif;
+    --ua-sans:       'Inter Tight', -apple-system, BlinkMacSystemFont, sans-serif;
+    --ua-mono:       'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    color: var(--ua-ink);
+    font-family: var(--ua-sans);
+    font-feature-settings: "ss01", "cv11", "tnum";
+    letter-spacing: -0.005em;
   }
-  .ua-avatar img{width:100%;height:100%;object-fit:cover;display:block}
-  .ua-user-name{font-weight:700;color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .ua-user-email{font-size:.8rem;color:var(--eo-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .ua-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
-  .ua-meta span{font-size:.72rem;color:var(--eo-text-muted);background:var(--eo-bg);padding:3px 8px;border-radius:999px}
-  .ua-group-cell{max-width:260px}
-  .ua-chip-row{display:flex;gap:4px;flex-wrap:wrap}
-  .ua-chip-more{font-size:.72rem;color:var(--eo-text-muted)}
-  .ua-table td{vertical-align:middle}
+  .ua-scope *{ box-sizing:border-box; }
+
+  /* ─── Editorial masthead ────────────────────────────────────────────── */
+  .ua-masthead{
+    position:relative;
+    background: var(--ua-ink);
+    color: #fff;
+    border-radius: 20px;
+    padding: 36px 40px 30px;
+    margin-bottom: 22px;
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .ua-masthead::before{
+    content:"";
+    position:absolute; inset:0;
+    background:
+      radial-gradient(ellipse 600px 300px at 85% -10%, rgba(59,91,219,.35), transparent 60%),
+      radial-gradient(ellipse 400px 200px at 15% 120%, rgba(169,123,47,.22), transparent 55%);
+    z-index:-1;
+  }
+  .ua-masthead::after{
+    content:"";
+    position:absolute; inset:0;
+    background-image:
+      linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+    background-size: 32px 32px;
+    mask-image: linear-gradient(180deg, rgba(0,0,0,.5), transparent 70%);
+    z-index:-1;
+    pointer-events:none;
+  }
+  .ua-masthead-top{
+    display:flex; justify-content:space-between; align-items:flex-start;
+    gap:20px; flex-wrap:wrap; margin-bottom: 26px;
+  }
+  .ua-eyebrow{
+    font-family: var(--ua-mono);
+    font-size: .7rem;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: #cbd5e1;
+    margin-bottom: 8px;
+    display:flex; align-items:center; gap:10px;
+  }
+  .ua-eyebrow::before{
+    content:""; width:26px; height:1px; background:#64748b;
+  }
+  .ua-title{
+    font-family: var(--ua-display);
+    font-size: clamp(2.2rem, 4vw, 3.2rem);
+    font-weight: 400;
+    line-height: .95;
+    letter-spacing: -.02em;
+    margin: 0 0 10px 0;
+  }
+  .ua-title em{
+    font-style: italic;
+    color: #fbbf24;
+  }
+  .ua-subtitle{
+    font-size: .95rem;
+    color: #cbd5e1;
+    max-width: 560px;
+    margin: 0;
+    line-height: 1.5;
+  }
+  .ua-actions{ display:flex; gap:8px; flex-wrap:wrap; }
+
+  .ua-btn{
+    font-family: var(--ua-sans);
+    font-size: .85rem;
+    font-weight: 500;
+    padding: 9px 16px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: transform .12s ease, background .15s ease, border-color .15s ease, color .15s ease;
+    white-space: nowrap;
+  }
+  .ua-btn-dark{
+    background: rgba(255,255,255,.08);
+    color: #fff;
+    border-color: rgba(255,255,255,.14);
+    backdrop-filter: blur(6px);
+  }
+  .ua-btn-dark:hover{ background: rgba(255,255,255,.14); transform: translateY(-1px); }
+  .ua-btn-primary{
+    background: #fff; color: var(--ua-ink); border-color:#fff;
+  }
+  .ua-btn-primary:hover{ background:#fbbf24; border-color:#fbbf24; }
+  .ua-btn-light{
+    background:#fff; color:var(--ua-ink); border-color:var(--ua-line-2);
+  }
+  .ua-btn-light:hover{ background: var(--ua-paper); border-color: var(--ua-ink); }
+  .ua-btn-ghost{
+    background: transparent; color: var(--ua-ink-2); border-color: var(--ua-line-2);
+  }
+  .ua-btn-ghost:hover{ background: var(--ua-paper); }
+  .ua-btn-sm{ padding: 5px 10px; font-size:.78rem; }
+
+  .ua-badge-dot{
+    display:inline-flex; align-items:center; gap:6px;
+    background: rgba(251,191,36,.16);
+    color:#fbbf24; border:1px solid rgba(251,191,36,.32);
+    padding: 3px 9px; border-radius:999px;
+    font-family: var(--ua-mono); font-size:.7rem; font-weight:500;
+    letter-spacing:.04em;
+  }
+  .ua-badge-dot::before{
+    content:""; width:6px; height:6px; border-radius:50%;
+    background:#fbbf24; box-shadow:0 0 0 3px rgba(251,191,36,.25);
+  }
+
+  /* ─── Stat strip ────────────────────────────────────────────────────── */
+  .ua-stat-strip{
+    display:grid; grid-template-columns: repeat(6, minmax(0,1fr));
+    gap:1px;
+    background: var(--ua-line);
+    border: 1px solid var(--ua-line);
+    border-radius: 14px;
+    overflow: hidden;
+    margin-bottom: 22px;
+  }
+  @media (max-width: 900px){
+    .ua-stat-strip{ grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 500px){
+    .ua-stat-strip{ grid-template-columns: repeat(2, 1fr); }
+  }
+  .ua-stat{
+    background: var(--ua-surface);
+    padding: 18px 18px 16px;
+    position: relative;
+    transition: background .15s;
+  }
+  .ua-stat:hover{ background: var(--ua-paper); }
+  .ua-stat-label{
+    font-family: var(--ua-mono);
+    font-size: .68rem;
+    color: var(--ua-ink-3);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .ua-stat-val{
+    font-family: var(--ua-display);
+    font-size: 2.1rem;
+    line-height: 1;
+    font-weight: 400;
+    letter-spacing: -.02em;
+    color: var(--ua-ink);
+  }
+  .ua-stat-delta{
+    font-family: var(--ua-mono);
+    font-size: .7rem;
+    margin-top: 6px;
+    color: var(--ua-ink-4);
+  }
+  .ua-stat[data-tone="active"] .ua-stat-val{ color: var(--ua-green); }
+  .ua-stat[data-tone="leave"] .ua-stat-val{ color: var(--ua-amber); }
+  .ua-stat[data-tone="suspended"] .ua-stat-val,
+  .ua-stat[data-tone="locked"] .ua-stat-val{ color: var(--ua-red); }
+  .ua-stat[data-tone="terminated"] .ua-stat-val{ color: var(--ua-ink-3); }
+  .ua-stat::after{
+    content:""; position:absolute; top:0; left:0; width:2px; height:0;
+    background: var(--ua-accent);
+    transition: height .2s ease;
+  }
+  .ua-stat:hover::after{ height: 100%; }
+
+  /* ─── Filter bar ────────────────────────────────────────────────────── */
+  .ua-filter{
+    background: var(--ua-surface);
+    border:1px solid var(--ua-line);
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin-bottom: 18px;
+    display:flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;
+  }
+  .ua-filter-group{ display:flex; flex-direction:column; gap: 6px; min-width: 160px; flex:1; }
+  .ua-filter-group.wide{ flex: 2; min-width: 240px; }
+  .ua-label{
+    font-family: var(--ua-mono);
+    font-size: .68rem;
+    color: var(--ua-ink-3);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  .ua-input, .ua-select{
+    width: 100%;
+    font-family: var(--ua-sans);
+    font-size: .9rem;
+    padding: 10px 12px;
+    border: 1px solid var(--ua-line-2);
+    border-radius: 8px;
+    background: var(--ua-surface);
+    color: var(--ua-ink);
+    transition: border-color .15s, box-shadow .15s;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+  .ua-input:focus, .ua-select:focus{
+    outline:none;
+    border-color: var(--ua-ink);
+    box-shadow: 0 0 0 3px rgba(30,64,175,.12);
+  }
+  .ua-select{
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23475569' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 32px;
+  }
+  .ua-check{
+    display:flex; gap:8px; align-items:center;
+    padding: 10px 14px;
+    border: 1px solid var(--ua-line-2);
+    border-radius: 8px;
+    cursor:pointer;
+    font-size: .85rem;
+    transition: background .15s, border-color .15s;
+    user-select: none;
+  }
+  .ua-check:hover{ background: var(--ua-paper); }
+  .ua-check input{ accent-color: var(--ua-accent); }
+
+  /* ─── Directory (user table) ────────────────────────────────────────── */
+  .ua-directory{
+    background: var(--ua-surface);
+    border: 1px solid var(--ua-line);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .ua-directory-head{
+    padding: 14px 20px;
+    display:flex; justify-content:space-between; align-items:center;
+    gap:12px; flex-wrap:wrap;
+    border-bottom: 1px solid var(--ua-line);
+    background: var(--ua-paper);
+  }
+  .ua-directory-count{
+    font-family: var(--ua-display);
+    font-size: 1.3rem;
+    font-weight: 400;
+  }
+  .ua-directory-count em{
+    font-style: normal;
+    font-family: var(--ua-mono);
+    font-size: .85rem;
+    color: var(--ua-ink-3);
+    margin-left: 6px;
+  }
+  .ua-truncnotice{
+    font-family: var(--ua-mono);
+    font-size: .72rem;
+    color: var(--ua-ink-3);
+    background: #fff;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--ua-line);
+  }
+
+  .ua-tbl{ width:100%; border-collapse: collapse; }
+  .ua-tbl thead th{
+    font-family: var(--ua-mono);
+    font-size: .68rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ua-ink-3);
+    text-align: left;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--ua-line);
+    background: var(--ua-surface);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .ua-tbl tbody tr{
+    border-bottom: 1px solid var(--ua-line);
+    transition: background .12s;
+  }
+  .ua-tbl tbody tr:last-child{ border-bottom: 0; }
+  .ua-tbl tbody tr:hover{ background: color-mix(in srgb, var(--ua-paper) 70%, transparent); }
+  .ua-tbl td{ padding: 14px 20px; vertical-align: middle; font-size:.9rem; }
+
+  .ua-user-cell{ display:flex; gap:14px; align-items:center; min-width: 0; }
+  .ua-avatar{
+    width: 44px; height: 44px; min-width:44px;
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+    background: linear-gradient(135deg, #1e40af, #3b5bdb);
+    color: #fff;
+    display:flex; align-items:center; justify-content:center;
+    font-family: var(--ua-mono); font-weight: 600; font-size: .85rem;
+    letter-spacing: .02em;
+  }
+  .ua-avatar img{ width:100%; height:100%; object-fit:cover; }
+  .ua-avatar.v1{ background: linear-gradient(135deg, #0f172a, #334155); }
+  .ua-avatar.v2{ background: linear-gradient(135deg, #164e63, #0e7490); }
+  .ua-avatar.v3{ background: linear-gradient(135deg, #7c2d12, #c2410c); }
+  .ua-avatar.v4{ background: linear-gradient(135deg, #365314, #4d7c0f); }
+  .ua-avatar.v5{ background: linear-gradient(135deg, #581c87, #7c3aed); }
+
+  .ua-user-meta{ min-width:0; }
+  .ua-user-name{
+    font-weight: 600;
+    font-size: .93rem;
+    color: var(--ua-ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 280px;
+  }
+  .ua-user-email{
+    font-family: var(--ua-mono);
+    font-size: .76rem;
+    color: var(--ua-ink-3);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 280px;
+  }
+  .ua-metaline{ display:flex; gap:6px; flex-wrap:wrap; margin-top: 6px; }
+  .ua-metaline span{
+    font-family: var(--ua-mono);
+    font-size: .68rem;
+    color: var(--ua-ink-3);
+    background: var(--ua-paper-2);
+    padding: 2px 7px;
+    border-radius: 4px;
+    letter-spacing: .02em;
+  }
+
+  .ua-status{
+    display:inline-flex; align-items:center; gap:6px;
+    font-size: .78rem; font-weight: 500;
+    padding: 4px 9px; border-radius: 999px;
+    white-space: nowrap;
+  }
+  .ua-status::before{
+    content:""; width:6px; height:6px; border-radius:50%;
+  }
+  .ua-status[data-s="active"]{    background: var(--ua-green-soft); color: var(--ua-green); }
+  .ua-status[data-s="active"]::before{ background: var(--ua-green); box-shadow: 0 0 0 3px rgba(21,128,61,.18); animation: ua-pulse 2s infinite; }
+  .ua-status[data-s="suspended"]{ background: var(--ua-red-soft); color: var(--ua-red); }
+  .ua-status[data-s="suspended"]::before{ background: var(--ua-red); }
+  .ua-status[data-s="on_leave"]{  background: var(--ua-amber-soft); color: var(--ua-amber); }
+  .ua-status[data-s="on_leave"]::before{ background: var(--ua-amber); }
+  .ua-status[data-s="terminated"]{ background: #e5e7eb; color: #374151; }
+  .ua-status[data-s="terminated"]::before{ background: #6b7280; }
+  @keyframes ua-pulse{
+    0%,100%{ box-shadow: 0 0 0 3px rgba(21,128,61,.18); }
+    50%{    box-shadow: 0 0 0 5px rgba(21,128,61,.08); }
+  }
+
+  .ua-lock-chip{
+    display:inline-flex; align-items:center; gap:4px;
+    background: var(--ua-red-soft); color: var(--ua-red);
+    font-size: .72rem; font-weight: 500;
+    padding: 2px 8px; border-radius:999px;
+    margin-left: 4px;
+  }
+  .ua-online-chip{
+    display:inline-block; margin-top:6px;
+    background: var(--ua-green); color:#fff;
+    font-family: var(--ua-mono); font-size:.65rem;
+    padding: 2px 7px; border-radius: 4px;
+    letter-spacing: .1em;
+  }
+
+  .ua-chip{
+    display:inline-flex; align-items:center;
+    background: var(--ua-paper-2); color: var(--ua-ink-2);
+    font-size: .74rem; font-weight: 500;
+    padding: 3px 9px; border-radius: 6px;
+    border: 1px solid var(--ua-line);
+  }
+  .ua-chip-row{ display:flex; gap:4px; flex-wrap:wrap; max-width: 260px; }
+  .ua-chip-none{ font-family: var(--ua-mono); font-size:.72rem; color: var(--ua-ink-4); font-style: italic; }
+
+  .ua-last-seen{
+    font-family: var(--ua-mono);
+    font-size: .78rem;
+    color: var(--ua-ink-2);
+  }
+  .ua-last-seen small{
+    display:block;
+    font-size: .68rem;
+    color: var(--ua-ink-4);
+    margin-top: 2px;
+  }
+
+  .ua-empty{
+    padding: 48px 20px;
+    text-align: center;
+    color: var(--ua-ink-3);
+  }
+  .ua-empty-title{
+    font-family: var(--ua-display);
+    font-size: 1.4rem;
+    color: var(--ua-ink);
+    margin-bottom: 6px;
+  }
+
+  /* ─── Responsive tweaks ──────────────────────────────────────────────── */
+  @media (max-width: 768px){
+    .ua-tbl thead{ display:none; }
+    .ua-tbl, .ua-tbl tbody, .ua-tbl tr, .ua-tbl td{ display:block; width:100%; }
+    .ua-tbl tr{ padding: 14px 16px; }
+    .ua-tbl td{ padding: 6px 0; border:0; }
+    .ua-tbl td::before{
+      content: attr(data-th);
+      display:block;
+      font-family: var(--ua-mono);
+      font-size: .64rem;
+      color: var(--ua-ink-4);
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .ua-tbl td:first-child::before{ display:none; }
+  }
+
+  /* ─── Messages ──────────────────────────────────────────────────────── */
+  .ua-msg{
+    padding: 12px 16px; border-radius: 10px; margin-bottom: 10px;
+    font-size: .88rem; border: 1px solid transparent;
+    display:flex; gap:10px; align-items:center;
+  }
+  .ua-msg.info,    .ua-msg.debug{ background:#eff6ff; color:#1e3a8a; border-color:#dbeafe; }
+  .ua-msg.success{ background: var(--ua-green-soft); color: var(--ua-green); border-color: color-mix(in srgb, var(--ua-green) 20%, transparent); }
+  .ua-msg.warning{ background: var(--ua-amber-soft); color: var(--ua-amber); border-color: color-mix(in srgb, var(--ua-amber) 20%, transparent); }
+  .ua-msg.error,
+  .ua-msg.danger{ background: var(--ua-red-soft); color: var(--ua-red); border-color: color-mix(in srgb, var(--ua-red) 20%, transparent); }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title">User Administration</h1>
-    <p class="eo-page-subtitle">Create accounts, manage access, and review user roles and profile placement.</p>
-  </div>
-  <div class="ua-toolbar">
-    <a href="{% url 'user_admin:create_user' %}" class="eo-btn eo-btn-primary">
-      <i class="bi bi-person-plus"></i> New user
-    </a>
-    <a href="{% url 'user_admin:invitation_list' %}" class="eo-btn eo-btn-secondary">
-      <i class="bi bi-envelope"></i> Invitations
-      {% if stats.pending_invites %}<span class="eo-badge">{{ stats.pending_invites }}</span>{% endif %}
-    </a>
-    <a href="{% url 'user_admin:registration_links' %}" class="eo-btn eo-btn-secondary">
-      <i class="bi bi-link-45deg"></i> Registration links
-      {% if stats.active_links %}<span class="eo-badge">{{ stats.active_links }}</span>{% endif %}
-    </a>
-  </div>
-</div>
+<div class="ua-scope">
 
-<div class="row g-3 mb-4">
-  <div class="col-6 col-md-3 col-lg-2"><div class="eo-stat eo-stat-info"><div class="eo-stat-label">Total users</div><div class="eo-stat-value">{{ stats.total }}</div><i class="bi bi-people eo-stat-icon"></i></div></div>
-  <div class="col-6 col-md-3 col-lg-2"><div class="eo-stat" style="border-left-color:#10b981"><div class="eo-stat-label">Active</div><div class="eo-stat-value">{{ stats.active }}</div><i class="bi bi-person-check eo-stat-icon" style="color:#10b981"></i></div></div>
-  <div class="col-6 col-md-3 col-lg-2"><div class="eo-stat" style="border-left-color:#f59e0b"><div class="eo-stat-label">On leave</div><div class="eo-stat-value">{{ stats.on_leave }}</div><i class="bi bi-briefcase eo-stat-icon" style="color:#f59e0b"></i></div></div>
-  <div class="col-6 col-md-3 col-lg-2"><div class="eo-stat" style="border-left-color:#ef4444"><div class="eo-stat-label">Suspended</div><div class="eo-stat-value">{{ stats.suspended }}</div><i class="bi bi-slash-circle eo-stat-icon" style="color:#ef4444"></i></div></div>
-  <div class="col-6 col-md-3 col-lg-2"><div class="eo-stat" style="border-left-color:#64748b"><div class="eo-stat-label">Terminated</div><div class="eo-stat-value">{{ stats.terminated }}</div><i class="bi bi-person-x eo-stat-icon" style="color:#64748b"></i></div></div>
-  <div class="col-6 col-md-3 col-lg-2"><div class="eo-stat" style="border-left-color:#dc2626"><div class="eo-stat-label">Locked</div><div class="eo-stat-value">{{ stats.locked }}</div><i class="bi bi-lock eo-stat-icon" style="color:#dc2626"></i></div></div>
-</div>
+  {# ═══════════ Editorial masthead ═══════════ #}
+  <header class="ua-masthead">
+    <div class="ua-masthead-top">
+      <div>
+        <div class="ua-eyebrow">
+          Administration Console
+          {% if stats.pending_invites or stats.active_links %}
+            <span class="ua-badge-dot">
+              {{ stats.pending_invites|add:stats.active_links }} pending
+            </span>
+          {% endif %}
+        </div>
+        <h1 class="ua-title">User <em>Administration</em></h1>
+        <p class="ua-subtitle">
+          Provision accounts, manage access, and keep the roster in sync. Every action is audited.
+        </p>
+      </div>
+      <div class="ua-actions">
+        <a href="{% url 'user_admin:create_user' %}" class="ua-btn ua-btn-primary">
+          <i class="bi bi-plus-lg"></i> New user
+        </a>
+        <a href="{% url 'user_admin:invitation_list' %}" class="ua-btn ua-btn-dark">
+          <i class="bi bi-envelope"></i> Invitations
+          {% if stats.pending_invites %}<span style="font-family:var(--ua-mono);font-size:.72rem;opacity:.8">· {{ stats.pending_invites }}</span>{% endif %}
+        </a>
+        <a href="{% url 'user_admin:registration_links' %}" class="ua-btn ua-btn-dark">
+          <i class="bi bi-link-45deg"></i> Links
+          {% if stats.active_links %}<span style="font-family:var(--ua-mono);font-size:.72rem;opacity:.8">· {{ stats.active_links }}</span>{% endif %}
+        </a>
+      </div>
+    </div>
+  </header>
 
-<form method="get" class="eo-card p-3 mb-3" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
-  <div style="flex:2;min-width:220px">
-    <label class="eo-label">Search</label>
-    <input type="search" name="q" value="{{ q }}" class="eo-input" placeholder="Name, email, employee ID, department, unit…">
+  {# ═══════════ Stats strip ═══════════ #}
+  <div class="ua-stat-strip">
+    <div class="ua-stat" data-tone="total">
+      <div class="ua-stat-label">Total</div>
+      <div class="ua-stat-val">{{ stats.total }}</div>
+      <div class="ua-stat-delta">all users</div>
+    </div>
+    <div class="ua-stat" data-tone="active">
+      <div class="ua-stat-label">Active</div>
+      <div class="ua-stat-val">{{ stats.active }}</div>
+      <div class="ua-stat-delta">signed in &amp; enabled</div>
+    </div>
+    <div class="ua-stat" data-tone="leave">
+      <div class="ua-stat-label">On leave</div>
+      <div class="ua-stat-val">{{ stats.on_leave }}</div>
+      <div class="ua-stat-delta">temporarily away</div>
+    </div>
+    <div class="ua-stat" data-tone="suspended">
+      <div class="ua-stat-label">Suspended</div>
+      <div class="ua-stat-val">{{ stats.suspended }}</div>
+      <div class="ua-stat-delta">access blocked</div>
+    </div>
+    <div class="ua-stat" data-tone="terminated">
+      <div class="ua-stat-label">Terminated</div>
+      <div class="ua-stat-val">{{ stats.terminated }}</div>
+      <div class="ua-stat-delta">off-boarded</div>
+    </div>
+    <div class="ua-stat" data-tone="locked">
+      <div class="ua-stat-label">Locked out</div>
+      <div class="ua-stat-val">{{ stats.locked }}</div>
+      <div class="ua-stat-delta">failed logins</div>
+    </div>
   </div>
-  <div style="flex:1;min-width:150px">
-    <label class="eo-label">Status</label>
-    <select name="status" class="eo-input">
-      <option value="">All</option>
-      {% for v, label in all_statuses %}
-        <option value="{{ v }}" {% if status_f == v %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div style="flex:1;min-width:150px">
-    <label class="eo-label">Group</label>
-    <select name="group" class="eo-input">
-      <option value="">All</option>
-      {% for g in all_groups %}
-        <option value="{{ g.name }}" {% if group_f == g.name %}selected{% endif %}>{{ g.name }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div>
-    <label class="eo-label" style="display:flex;gap:6px;align-items:center;cursor:pointer">
-      <input type="checkbox" name="locked" value="1" {% if locked_f %}checked{% endif %}> Locked only
+
+  {# ═══════════ Filters ═══════════ #}
+  <form method="get" class="ua-filter">
+    <div class="ua-filter-group wide">
+      <label class="ua-label">Search</label>
+      <input type="search" name="q" value="{{ q }}" class="ua-input" placeholder="Name, email, employee ID, department…">
+    </div>
+    <div class="ua-filter-group">
+      <label class="ua-label">Status</label>
+      <select name="status" class="ua-select">
+        <option value="">All statuses</option>
+        {% for v, label in all_statuses %}
+          <option value="{{ v }}" {% if status_f == v %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="ua-filter-group">
+      <label class="ua-label">Group</label>
+      <select name="group" class="ua-select">
+        <option value="">All groups</option>
+        {% for g in all_groups %}
+          <option value="{{ g.name }}" {% if group_f == g.name %}selected{% endif %}>{{ g.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <label class="ua-check">
+      <input type="checkbox" name="locked" value="1" {% if locked_f %}checked{% endif %}>
+      <span>Locked only</span>
     </label>
-  </div>
-  <div style="display:flex;gap:8px">
-    <button class="eo-btn eo-btn-primary" type="submit"><i class="bi bi-search"></i> Filter</button>
-    <a href="{% url 'user_admin:dashboard' %}" class="eo-btn eo-btn-secondary">Reset</a>
-  </div>
-</form>
+    <div style="display:flex;gap:6px">
+      <button class="ua-btn ua-btn-light" type="submit"><i class="bi bi-funnel"></i> Filter</button>
+      <a href="{% url 'user_admin:dashboard' %}" class="ua-btn ua-btn-ghost">Reset</a>
+    </div>
+  </form>
 
-<div class="eo-card ua-table">
-  <div style="padding:12px 14px;border-bottom:1px solid var(--eo-border);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-    <strong>{{ total_matches }} user{{ total_matches|pluralize }}</strong>
-    {% if total_matches > 500 %}<span class="text-muted" style="font-size:.85rem">Showing first 500 — narrow with filters</span>{% endif %}
-  </div>
+  {# ═══════════ Directory table ═══════════ #}
+  <div class="ua-directory">
+    <div class="ua-directory-head">
+      <div class="ua-directory-count">
+        {{ total_matches }} <em>user{{ total_matches|pluralize }} matched</em>
+      </div>
+      {% if total_matches > 500 %}
+        <span class="ua-truncnotice">Showing first 500 — narrow with filters</span>
+      {% endif %}
+    </div>
 
-  <div class="eo-table-wrap">
-    <table class="eo-table">
-      <thead>
-        <tr>
-          <th>User</th>
-          <th>Status</th>
-          <th>Groups</th>
-          <th>Last seen</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for u in users %}
-        <tr>
-          <td>
-            <div style="display:flex;align-items:center;gap:12px;min-width:0">
-              <div class="ua-avatar">
-                {% if u.avatar %}<img src="{{ u.avatar.url }}" alt="{{ u.full_name|default:u.email }}">{% else %}{{ u.initials }}{% endif %}
-              </div>
-              <div style="min-width:0">
-                <div class="ua-user-name">{{ u.full_name|default:u.email }}</div>
-                <div class="ua-user-email">{{ u.email }}</div>
-                <div class="ua-meta">
-                  {% if u.employee_id %}<span>ID: {{ u.employee_id }}</span>{% endif %}
-                  {% if u.staffprofile.position %}<span>{{ u.staffprofile.position }}</span>{% endif %}
-                  {% if u.staffprofile.department %}<span>{{ u.staffprofile.department.name }}</span>{% endif %}
-                  {% if u.staffprofile.unit %}<span>{{ u.staffprofile.unit.name }}</span>{% endif %}
+    <div style="overflow-x:auto">
+      <table class="ua-tbl">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Status</th>
+            <th>Groups</th>
+            <th>Last seen</th>
+            <th style="text-align:right">Manage</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in users %}
+          <tr>
+            <td data-th="User">
+              <div class="ua-user-cell">
+                <div class="ua-avatar v{% cycle '1' '2' '3' '4' '5' %}">
+                  {% if u.avatar %}<img src="{{ u.avatar.url }}" alt="">{% else %}{{ u.initials }}{% endif %}
+                </div>
+                <div class="ua-user-meta">
+                  <div class="ua-user-name">{{ u.full_name|default:u.email }}</div>
+                  <div class="ua-user-email">{{ u.email }}</div>
+                  <div class="ua-metaline">
+                    {% if u.employee_id %}<span>ID·{{ u.employee_id }}</span>{% endif %}
+                    {% if u.staffprofile.position %}<span>{{ u.staffprofile.position }}</span>{% endif %}
+                    {% if u.staffprofile.department %}<span>{{ u.staffprofile.department.name }}</span>{% endif %}
+                    {% if u.staffprofile.unit %}<span>{{ u.staffprofile.unit.name }}</span>{% endif %}
+                  </div>
                 </div>
               </div>
-            </div>
-          </td>
-          <td>
-            <span class="eo-chip" style="background:{% if u.status == 'active' %}#d1fae5{% elif u.status == 'suspended' %}#fee2e2{% elif u.status == 'terminated' %}#e5e7eb{% elif u.status == 'on_leave' %}#fef3c7{% else %}#e0e7ff{% endif %};color:#1e293b">
-              {{ u.get_status_display }}
-            </span>
-            {% if u.is_locked_out %}<span class="eo-chip" style="background:#fee2e2;color:#991b1b;margin-left:4px"><i class="bi bi-lock-fill"></i> Locked</span>{% endif %}
-            {% if u.is_online %}<div style="margin-top:6px"><span class="eo-chip" style="background:#dcfce7;color:#166534">Online</span></div>{% endif %}
-          </td>
-          <td class="ua-group-cell">
-            <div class="ua-chip-row">
-              {% for g in u.groups.all %}
-                <span class="eo-chip">{{ g.name }}</span>
-              {% empty %}
-                <span class="text-muted">No groups</span>
-              {% endfor %}
-            </div>
-          </td>
-          <td style="font-size:.82rem;color:var(--eo-text-muted)">
-            {% if u.last_seen %}
-              {{ u.last_seen|naturaltime }}<br>
-              <small>{{ u.last_seen|date:"M d, Y H:i" }}</small>
-            {% else %}
-              Never
-            {% endif %}
-          </td>
-          <td>
-            <a href="{% url 'user_admin:user_detail' u.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">Manage</a>
-          </td>
-        </tr>
-        {% empty %}
-        <tr><td colspan="5" style="text-align:center;padding:28px;color:var(--eo-text-muted)">No users match these filters.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+            </td>
+            <td data-th="Status">
+              <span class="ua-status" data-s="{{ u.status }}">{{ u.get_status_display }}</span>
+              {% if u.is_locked_out %}
+                <span class="ua-lock-chip"><i class="bi bi-lock-fill"></i> Locked</span>
+              {% endif %}
+              {% if u.is_online %}<div><span class="ua-online-chip">● LIVE</span></div>{% endif %}
+            </td>
+            <td data-th="Groups">
+              <div class="ua-chip-row">
+                {% for g in u.groups.all %}
+                  <span class="ua-chip">{{ g.name }}</span>
+                {% empty %}
+                  <span class="ua-chip-none">no groups</span>
+                {% endfor %}
+              </div>
+            </td>
+            <td data-th="Last seen">
+              {% if u.last_seen %}
+                <div class="ua-last-seen">
+                  {{ u.last_seen|naturaltime }}
+                  <small>{{ u.last_seen|date:"M d, Y · H:i" }}</small>
+                </div>
+              {% else %}
+                <span class="ua-chip-none">never</span>
+              {% endif %}
+            </td>
+            <td data-th="Manage" style="text-align:right">
+              <a href="{% url 'user_admin:user_detail' u.pk %}" class="ua-btn ua-btn-ghost ua-btn-sm">
+                Manage <i class="bi bi-arrow-right"></i>
+              </a>
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="5">
+              <div class="ua-empty">
+                <div class="ua-empty-title">No users match these filters</div>
+                <div>Try clearing filters or broadening your search terms.</div>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
+
 </div>
 {% endblock %}

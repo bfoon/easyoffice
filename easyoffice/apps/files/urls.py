@@ -12,6 +12,12 @@ urlpatterns = [
     path('<uuid:pk>/download/',                 views.FileDownloadView.as_view(),               name='file_download'),
     path('<uuid:pk>/preview/',                  views.FilePreviewView.as_view(),                name='file_preview'),
     path('<uuid:pk>/preview-info/',             views.FilePreviewInfoView.as_view(),            name='file_preview_info'),
+    path('<uuid:pk>/annotations/', views.FileAnnotationView.as_view(), name='file_annotations'),
+    path('<uuid:pk>/live-preview/start/', views.LivePreviewStartView.as_view(), name='live_preview_start'),
+    path('<uuid:pk>/live-preview/users/', views.LivePreviewUsersView.as_view(), name='live_preview_users'),
+    path('live-preview/<uuid:token>/accept/', views.LivePreviewAcceptView.as_view(), name='live_preview_accept'),
+    path('live-preview/<uuid:token>/end/', views.LivePreviewEndView.as_view(), name='live_preview_end'),
+
     path('<uuid:pk>/move/',                     views.FileMoveView.as_view(),                   name='file_move'),
     path('<uuid:pk>/rename/',                   views.FileRenameView.as_view(),                 name='file_rename'),
     path('<uuid:pk>/delete/',                   views.FileDeleteView.as_view(),                 name='file_delete'),

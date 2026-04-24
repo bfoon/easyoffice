@@ -6,119 +6,306 @@
   <span>New user</span>
 {% endblock %}
 
-{% block content %}
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title">Create new user</h1>
-    <p class="eo-page-subtitle">Send an invitation or create the account directly with a temporary password</p>
-  </div>
-  <a href="{% url 'user_admin:dashboard' %}" class="eo-btn eo-btn-secondary">
-    <i class="bi bi-arrow-left"></i> Back
-  </a>
-</div>
-
-{% if messages %}
-  {% for m in messages %}
-    <div class="eo-alert eo-alert-{{ m.tags|default:'info' }}">{{ m }}</div>
-  {% endfor %}
-{% endif %}
-
-<form method="post" class="eo-card" style="padding:20px;max-width:720px">
-  {% csrf_token %}
-
-  <!-- Mode picker -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
-    <label class="mode-card">
-      <input type="radio" name="mode" value="invite" checked>
-      <div>
-        <strong><i class="bi bi-envelope-check"></i> Email invite</strong>
-        <div class="text-muted" style="font-size:.82rem">They click a link in their email and set their own password.</div>
-      </div>
-    </label>
-    <label class="mode-card">
-      <input type="radio" name="mode" value="temp_pw">
-      <div>
-        <strong><i class="bi bi-key"></i> Temporary password</strong>
-        <div class="text-muted" style="font-size:.82rem">Create the account now. You tell them the password; they change it on first login.</div>
-      </div>
-    </label>
-  </div>
-
-  <div class="row g-3">
-    <div class="col-md-6">
-      <label class="eo-label">Email <span style="color:#dc2626">*</span></label>
-      <input type="email" name="email" required class="eo-input">
-    </div>
-    <div class="col-md-6">
-      <label class="eo-label">Employee ID</label>
-      <input type="text" name="employee_id" class="eo-input">
-    </div>
-    <div class="col-md-6">
-      <label class="eo-label">First name</label>
-      <input type="text" name="first_name" class="eo-input">
-    </div>
-    <div class="col-md-6">
-      <label class="eo-label">Last name</label>
-      <input type="text" name="last_name" class="eo-input">
-    </div>
-    <div class="col-12">
-      <label class="eo-label">Groups (access roles)</label>
-      <select name="group_names" class="eo-input" multiple style="min-height:120px" id="groupsSelect">
-        {% for g in all_groups %}
-          <option value="{{ g.name }}">{{ g.name }}</option>
-        {% endfor %}
-      </select>
-      <small class="text-muted">Hold Ctrl/Cmd to pick multiple. Leave empty for no special groups.</small>
-    </div>
-
-    <!-- Mode-specific options -->
-    <div class="col-12 mode-invite-only">
-      <label class="eo-label">Personal note (optional)</label>
-      <textarea name="message" class="eo-input" rows="3"
-                placeholder="Welcome to the team!"></textarea>
-    </div>
-    <div class="col-md-4 mode-invite-only">
-      <label class="eo-label">Invitation expires in</label>
-      <select name="expires_days" class="eo-input">
-        <option value="1">1 day</option>
-        <option value="3">3 days</option>
-        <option value="7" selected>7 days</option>
-        <option value="14">14 days</option>
-        <option value="30">30 days</option>
-      </select>
-    </div>
-  </div>
-
-  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
-    <a href="{% url 'user_admin:dashboard' %}" class="eo-btn eo-btn-secondary">Cancel</a>
-    <button type="submit" class="eo-btn eo-btn-primary">
-      <i class="bi bi-check2"></i> Create
-    </button>
-  </div>
-</form>
+{% block extra_css %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
 <style>
-  .mode-card{
-    display:flex;gap:10px;align-items:flex-start;padding:14px;
-    border:1px solid var(--eo-border);border-radius:10px;cursor:pointer;
-    transition:border-color .15s,background .15s;
+  .cu-scope{
+    --ua-ink:#0b0f14; --ua-ink-2:#1c2530; --ua-ink-3:#475569; --ua-ink-4:#94a3b8;
+    --ua-paper:#fafaf7; --ua-paper-2:#f3f2ec; --ua-surface:#fff;
+    --ua-line:#e5e4dd; --ua-line-2:#cfcec4;
+    --ua-accent:#1e40af; --ua-accent-2:#3b5bdb; --ua-accent-soft:#eef2ff;
+    --ua-gold:#a97b2f; --ua-gold-soft:#fbf4e3;
+    --ua-red:#b91c1c; --ua-red-soft:#fee2e2;
+    --ua-display:'Instrument Serif', ui-serif, Georgia, serif;
+    --ua-sans:'Inter Tight', -apple-system, sans-serif;
+    --ua-mono:'JetBrains Mono', ui-monospace, monospace;
+    color: var(--ua-ink); font-family: var(--ua-sans);
+    font-feature-settings: "ss01","cv11","tnum";
   }
-  .mode-card:hover{ background:var(--eo-bg); }
-  .mode-card input[type=radio]{ margin-top:2px; }
-  .mode-card input[type=radio]:checked + div{ color:var(--eo-accent); }
-  .mode-card:has(input[type=radio]:checked){ border-color:var(--eo-accent); background:color-mix(in srgb,var(--eo-accent) 6%,transparent); }
-  /* Groups multi-select on small screens needs its own wrapping so tags don't shove */
-  select[multiple]{ padding:6px !important; }
+  .cu-scope *{ box-sizing:border-box; }
+
+  .cu-head{
+    display:flex; justify-content:space-between; align-items:flex-end;
+    gap:20px; flex-wrap:wrap; margin-bottom: 26px;
+    padding-bottom: 22px; border-bottom: 1px solid var(--ua-line);
+  }
+  .cu-eyebrow{
+    font-family: var(--ua-mono); font-size: .7rem; letter-spacing: .22em;
+    text-transform: uppercase; color: var(--ua-ink-3); margin-bottom: 8px;
+    display:flex; align-items:center; gap:10px;
+  }
+  .cu-eyebrow::before{ content:""; width:26px; height:1px; background: var(--ua-ink-3); }
+  .cu-title{
+    font-family: var(--ua-display); font-size: clamp(1.8rem, 3.5vw, 2.6rem);
+    font-weight: 400; line-height: 1; margin: 0 0 8px 0; letter-spacing: -.02em;
+  }
+  .cu-title em{ font-style: italic; color: var(--ua-gold); }
+  .cu-sub{ font-size: .92rem; color: var(--ua-ink-3); margin: 0; max-width: 520px; }
+
+  .cu-btn{
+    font-family: var(--ua-sans); font-size: .86rem; font-weight: 500;
+    padding: 9px 16px; border-radius: 8px; border: 1px solid transparent;
+    display: inline-flex; align-items: center; gap: 7px; text-decoration: none;
+    cursor: pointer; transition: all .15s;
+  }
+  .cu-btn-primary{ background: var(--ua-ink); color: #fff; border-color: var(--ua-ink); }
+  .cu-btn-primary:hover{ background: var(--ua-accent); border-color: var(--ua-accent); }
+  .cu-btn-ghost{ background: transparent; color: var(--ua-ink-2); border-color: var(--ua-line-2); }
+  .cu-btn-ghost:hover{ background: var(--ua-paper); border-color: var(--ua-ink); }
+
+  .cu-msg{
+    padding: 12px 16px; border-radius: 10px; margin-bottom: 10px;
+    font-size: .88rem; border: 1px solid transparent;
+  }
+  .cu-msg.info, .cu-msg.debug{ background:#eff6ff; color:#1e3a8a; border-color:#dbeafe; }
+  .cu-msg.success{ background:#dcfce7; color:#15803d; border-color:#bbf7d0; }
+  .cu-msg.warning{ background:#fef3c7; color:#b45309; border-color:#fde68a; }
+  .cu-msg.error, .cu-msg.danger{ background: var(--ua-red-soft); color: var(--ua-red); border-color:#fecaca; }
+
+  /* Form layout */
+  .cu-form{
+    max-width: 880px;
+  }
+  .cu-card{
+    background: var(--ua-surface); border: 1px solid var(--ua-line);
+    border-radius: 14px; padding: 28px;
+  }
+  .cu-section{
+    margin-bottom: 28px;
+  }
+  .cu-section-title{
+    font-family: var(--ua-mono);
+    font-size: .7rem;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ua-ink-3);
+    margin-bottom: 14px;
+    display:flex; align-items:center; gap:10px;
+  }
+  .cu-section-title::after{ content:""; flex:1; height:1px; background: var(--ua-line); }
+
+  /* Mode picker — big bold cards */
+  .cu-modes{ display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px){ .cu-modes{ grid-template-columns: 1fr; } }
+  .cu-mode{
+    position: relative;
+    display:flex; gap:14px; align-items:flex-start;
+    padding: 20px;
+    border: 1.5px solid var(--ua-line-2);
+    border-radius: 12px; cursor: pointer;
+    transition: all .15s;
+    background: var(--ua-surface);
+  }
+  .cu-mode:hover{ background: var(--ua-paper); border-color: var(--ua-ink-3); }
+  .cu-mode input[type=radio]{ position:absolute; opacity:0; pointer-events:none; }
+  .cu-mode-icon{
+    width: 42px; height: 42px; flex-shrink:0;
+    border-radius: 10px;
+    background: var(--ua-paper-2);
+    display:flex; align-items:center; justify-content:center;
+    font-size: 1.2rem; color: var(--ua-ink-2);
+    transition: all .15s;
+  }
+  .cu-mode-title{
+    font-family: var(--ua-display);
+    font-size: 1.25rem; line-height:1.1;
+    margin-bottom: 4px;
+    color: var(--ua-ink);
+  }
+  .cu-mode-desc{
+    font-size: .82rem; color: var(--ua-ink-3); line-height: 1.45;
+  }
+  .cu-mode-badge{
+    position: absolute; top: 12px; right: 12px;
+    width: 20px; height: 20px; border-radius: 50%;
+    border: 1.5px solid var(--ua-line-2);
+    transition: all .15s;
+  }
+  .cu-mode:has(input:checked){
+    border-color: var(--ua-ink); background:#fff;
+    box-shadow: 0 0 0 3px rgba(30,64,175,.08);
+  }
+  .cu-mode:has(input:checked) .cu-mode-icon{
+    background: var(--ua-ink); color:#fff;
+  }
+  .cu-mode:has(input:checked) .cu-mode-badge{
+    background: var(--ua-ink); border-color: var(--ua-ink);
+    box-shadow: inset 0 0 0 4px #fff;
+  }
+
+  /* Form fields */
+  .cu-row{ display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px){ .cu-row{ grid-template-columns: 1fr; } }
+  .cu-field{ display:flex; flex-direction:column; gap: 6px; margin-bottom: 14px; }
+  .cu-label{
+    font-family: var(--ua-mono);
+    font-size: .68rem; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ua-ink-3);
+  }
+  .cu-label .req{ color: var(--ua-red); }
+  .cu-input, .cu-select, .cu-textarea{
+    font-family: var(--ua-sans); font-size: .92rem;
+    padding: 11px 13px;
+    border: 1px solid var(--ua-line-2); border-radius: 8px;
+    background: var(--ua-surface); color: var(--ua-ink);
+    transition: all .15s; width: 100%; appearance: none;
+  }
+  .cu-input:focus, .cu-select:focus, .cu-textarea:focus{
+    outline: none; border-color: var(--ua-ink);
+    box-shadow: 0 0 0 3px rgba(30,64,175,.12);
+  }
+  .cu-select{
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23475569' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center; padding-right: 32px;
+  }
+  .cu-select[multiple]{
+    background-image: none; padding-right: 13px; min-height: 130px;
+  }
+  .cu-textarea{ resize: vertical; min-height: 80px; }
+  .cu-help{ font-size: .76rem; color: var(--ua-ink-4); }
+
+  .cu-invite-only{ transition: opacity .2s; }
+
+  .cu-footer{
+    display:flex; justify-content:space-between; align-items:center;
+    gap: 12px; flex-wrap: wrap;
+    padding-top: 20px; margin-top: 10px;
+    border-top: 1px solid var(--ua-line);
+  }
+  .cu-footer-note{ font-family: var(--ua-mono); font-size: .72rem; color: var(--ua-ink-4); }
 </style>
+{% endblock %}
+
+{% block content %}
+<div class="cu-scope">
+
+  <header class="cu-head">
+    <div>
+      <div class="cu-eyebrow">Onboarding · New Account</div>
+      <h1 class="cu-title">Add a <em>person</em> to the roster</h1>
+      <p class="cu-sub">Choose how they'll receive credentials. Both methods create a full user record once they sign in.</p>
+    </div>
+    <a href="{% url 'user_admin:dashboard' %}" class="cu-btn cu-btn-ghost">
+      <i class="bi bi-arrow-left"></i> Back to directory
+    </a>
+  </header>
+
+  {% if messages %}
+    {% for m in messages %}
+      <div class="cu-msg {{ m.tags|default:'info' }}">{{ m }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <form method="post" class="cu-form">
+    {% csrf_token %}
+
+    <div class="cu-card">
+
+      {# ── Mode selector ── #}
+      <div class="cu-section">
+        <div class="cu-section-title">Onboarding method</div>
+        <div class="cu-modes">
+          <label class="cu-mode">
+            <input type="radio" name="mode" value="invite" checked>
+            <div class="cu-mode-icon"><i class="bi bi-envelope-check"></i></div>
+            <div>
+              <div class="cu-mode-title">Email invitation</div>
+              <div class="cu-mode-desc">Send a secure link. The user clicks it, sets their own password, and completes their profile.</div>
+            </div>
+            <span class="cu-mode-badge"></span>
+          </label>
+          <label class="cu-mode">
+            <input type="radio" name="mode" value="temp_pw">
+            <div class="cu-mode-icon"><i class="bi bi-key"></i></div>
+            <div>
+              <div class="cu-mode-title">Temporary password</div>
+              <div class="cu-mode-desc">Create the account now. Share the generated password in person — the user must change it on first sign-in.</div>
+            </div>
+            <span class="cu-mode-badge"></span>
+          </label>
+        </div>
+      </div>
+
+      {# ── Identity ── #}
+      <div class="cu-section">
+        <div class="cu-section-title">Identity</div>
+        <div class="cu-row">
+          <div class="cu-field" style="grid-column: 1 / -1">
+            <label class="cu-label">Email address <span class="req">*</span></label>
+            <input type="email" name="email" required class="cu-input" placeholder="alex.morgan@company.com">
+          </div>
+          <div class="cu-field">
+            <label class="cu-label">First name</label>
+            <input type="text" name="first_name" class="cu-input" placeholder="Alex">
+          </div>
+          <div class="cu-field">
+            <label class="cu-label">Last name</label>
+            <input type="text" name="last_name" class="cu-input" placeholder="Morgan">
+          </div>
+          <div class="cu-field">
+            <label class="cu-label">Employee ID</label>
+            <input type="text" name="employee_id" class="cu-input" placeholder="e.g. EMP-0042">
+          </div>
+        </div>
+      </div>
+
+      {# ── Access ── #}
+      <div class="cu-section">
+        <div class="cu-section-title">Access groups</div>
+        <div class="cu-field">
+          <label class="cu-label">Assigned groups</label>
+          <select name="group_names" class="cu-select" multiple id="groupsSelect">
+            {% for g in all_groups %}
+              <option value="{{ g.name }}">{{ g.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="cu-help">Hold <kbd style="font-family:var(--ua-mono);font-size:.7rem;background:var(--ua-paper-2);padding:1px 5px;border-radius:3px">Ctrl</kbd> / <kbd style="font-family:var(--ua-mono);font-size:.7rem;background:var(--ua-paper-2);padding:1px 5px;border-radius:3px">⌘</kbd> to select multiple. Leave empty for no special groups.</div>
+        </div>
+      </div>
+
+      {# ── Invite-only options ── #}
+      <div class="cu-section cu-invite-only">
+        <div class="cu-section-title">Invitation details</div>
+        <div class="cu-field">
+          <label class="cu-label">Personal message <span style="color:var(--ua-ink-4);text-transform:none;letter-spacing:0;font-family:var(--ua-sans)">— optional</span></label>
+          <textarea name="message" class="cu-textarea" rows="3" placeholder="Welcome to the team — looking forward to having you."></textarea>
+        </div>
+        <div class="cu-field" style="max-width: 280px">
+          <label class="cu-label">Invitation expires in</label>
+          <select name="expires_days" class="cu-select">
+            <option value="1">1 day</option>
+            <option value="3">3 days</option>
+            <option value="7" selected>7 days</option>
+            <option value="14">14 days</option>
+            <option value="30">30 days</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="cu-footer">
+        <div class="cu-footer-note">All actions are logged to the audit trail.</div>
+        <div style="display:flex; gap:8px">
+          <a href="{% url 'user_admin:dashboard' %}" class="cu-btn cu-btn-ghost">Cancel</a>
+          <button type="submit" class="cu-btn cu-btn-primary">
+            <i class="bi bi-check2"></i> Create account
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </form>
+</div>
 
 <script>
 (function(){
-  // Hide the invite-only fields when "temp_pw" is selected.
   function sync(){
     var mode = document.querySelector('input[name="mode"]:checked');
     if (!mode) return;
     var isInvite = (mode.value === 'invite');
-    document.querySelectorAll('.mode-invite-only').forEach(function(el){
+    document.querySelectorAll('.cu-invite-only').forEach(function(el){
       el.style.display = isInvite ? '' : 'none';
     });
   }
@@ -127,19 +314,17 @@
   });
   sync();
 
-  // Because the backend expects a comma-separated string, join the
-  // multi-select values into a hidden input on submit.
+  // Backend expects comma-separated group names.
   var form = document.querySelector('form');
   form.addEventListener('submit', function(){
     var sel = document.getElementById('groupsSelect');
     if (!sel) return;
     var vals = Array.from(sel.selectedOptions).map(function(o){ return o.value; });
-    // Replace the existing multi-select's name so the server sees the joined value
     var hidden = document.createElement('input');
     hidden.type = 'hidden';
     hidden.name = 'group_names';
     hidden.value = vals.join(',');
-    sel.name = '';   // stop the multi-select from submitting its own value
+    sel.name = '';
     form.appendChild(hidden);
   });
 })();

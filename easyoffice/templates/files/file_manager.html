@@ -7,21 +7,603 @@
 
 {% block content %}
 <style>
+/* ══════════════════════════════════════════════════════════════════
+   FILE ANNOTATION TOOLBAR  — add inside the existing <style> block
+   ══════════════════════════════════════════════════════════════════ */
+
+/* Annotation overlay wrapper — sits on top of the preview surface */
+.ann-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;   /* transparent by default — iframe scroll works */
+  z-index: 30;
+  /* overflow:hidden removed — was clipping annotations near edges */
+}
+
+/* Only the TOOLBAR and PANELS are always interactive */
+.ann-overlay .ann-toolbar,
+.ann-overlay .ann-settings-panel,
+.ann-overlay .ann-comment-popup,
+.ann-overlay .ann-list-panel,
+.ann-overlay .ann-save-indicator {
+  pointer-events: all;
+}
+
+/* When a drawing tool is active, the SVG canvas captures mouse events.
+   The toolbar/panels keep their own pointer-events above. */
+.ann-overlay.ann-active .ann-canvas {
+  pointer-events: all;
+  cursor: crosshair;
+}
+.ann-overlay.ann-tool-highlight .ann-canvas { cursor: text; }
+.ann-overlay.ann-tool-comment   .ann-canvas { cursor: cell; }
+.ann-overlay.ann-tool-stamp     .ann-canvas { cursor: cell; }
+.ann-overlay.ann-tool-bookmark  .ann-canvas { cursor: pointer; }
+.ann-overlay.ann-tool-erase     .ann-canvas { cursor: not-allowed; }
+
+/* Existing rendered DOM annotations (pins, stamps, bookmarks) stay clickable */
+.ann-overlay .ann-pin,
+.ann-overlay .ann-bookmark-flag,
+.ann-overlay .ann-stamp-text {
+  pointer-events: all;
+}
+
+/* SVG canvas that stretches over the whole surface */
+.ann-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;   /* enabled per-tool via parent class */
+  overflow: visible;
+}
+
+/* ── Vertical annotation toolbar ──────────────────────────────── */
+.ann-toolbar {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  transform: translateY(-50%);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(255,255,255,.97);
+  border: 1px solid var(--eo-border);
+  border-radius: 14px;
+  padding: 8px 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.10);
+  user-select: none;
+  min-width: 40px;
+}
+
+.ann-tool-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .95rem;
+  cursor: pointer;
+  color: var(--eo-text-muted);
+  transition: background .12s, color .12s, border-color .12s, transform .1s;
+  position: relative;
+  flex-shrink: 0;
+}
+.ann-tool-btn:hover {
+  background: var(--eo-bg);
+  color: var(--eo-text);
+  transform: scale(1.07);
+}
+.ann-tool-btn.active {
+  background: var(--eo-accent);
+  color: #fff;
+  border-color: var(--eo-accent);
+  box-shadow: 0 2px 8px rgba(var(--eo-accent-rgb),.35);
+}
+.ann-tool-btn.ann-danger.active {
+  background: #ef4444;
+  border-color: #ef4444;
+}
+
+.ann-sep {
+  height: 1px;
+  background: var(--eo-border);
+  margin: 2px 4px;
+}
+
+/* Tooltip on hover */
+.ann-tool-btn::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: #1e293b;
+  color: #fff;
+  font-size: .71rem;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 6px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .12s;
+  z-index: 99;
+}
+.ann-tool-btn:hover::after { opacity: 1; }
+
+/* Count badge on the Annotations button */
+.ann-count-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  background: var(--eo-accent);
+  color: #fff;
+  font-size: .58rem;
+  font-weight: 800;
+  border-radius: 8px;
+  min-width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  pointer-events: none;
+}
+
+/* ── Colour + opacity picker panel ────────────────────────────── */
+.ann-settings-panel {
+  position: absolute;
+  top: 50%;
+  left: 58px;
+  transform: translateY(-50%);
+  z-index: 50;
+  background: rgba(255,255,255,.98);
+  border: 1px solid var(--eo-border);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.18);
+  width: 200px;
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+}
+.ann-settings-panel.open { display: flex; }
+
+.ann-settings-label {
+  font-size: .7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--eo-text-muted);
+  margin-bottom: 4px;
+}
+
+.ann-color-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ann-color-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform .12s, border-color .12s;
+}
+.ann-color-dot:hover { transform: scale(1.15); }
+.ann-color-dot.selected { border-color: var(--eo-text); transform: scale(1.15); }
+
+.ann-opacity-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ann-opacity-row input[type=range] {
+  flex: 1;
+  accent-color: var(--eo-accent);
+}
+.ann-opacity-val {
+  font-size: .72rem;
+  font-weight: 700;
+  color: var(--eo-text-muted);
+  min-width: 28px;
+  text-align: right;
+}
+
+.ann-stroke-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ann-stroke-btn {
+  flex: 1;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--eo-border);
+  background: var(--eo-bg);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .12s, border-color .12s;
+}
+.ann-stroke-btn.active { background: var(--eo-accent); border-color: var(--eo-accent); }
+.ann-stroke-btn.active svg line { stroke: #fff; }
+
+/* ── Comment popup ────────────────────────────────────────────── */
+.ann-comment-popup {
+  position: absolute;
+  z-index: 60;
+  background: #fff;
+  border: 1px solid var(--eo-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  padding: 10px;
+  width: 220px;
+  display: none;
+}
+.ann-comment-popup.open { display: flex; flex-direction: column; gap: 7px; }
+.ann-comment-popup textarea {
+  width: 100%;
+  height: 80px;
+  resize: none;
+  border: 1px solid var(--eo-border);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: .82rem;
+  color: var(--eo-text);
+  background: var(--eo-bg);
+  outline: none;
+  font-family: inherit;
+}
+.ann-comment-popup textarea:focus { border-color: var(--eo-accent); }
+.ann-comment-popup-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* ── Rendered annotation elements ──────────────────────────────── */
+/* Comment marker pin */
+.ann-pin {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg) translate(-4px, 4px);
+  cursor: pointer;
+  transition: transform .12s;
+  z-index: 25;
+}
+.ann-pin:hover { transform: rotate(-45deg) translate(-4px, 4px) scale(1.2); }
+.ann-pin-inner {
+  position: absolute;
+  inset: 4px;
+  background: #fff;
+  border-radius: 50%;
+}
+
+/* Bookmark flag */
+.ann-bookmark-flag {
+  position: absolute;
+  width: 22px;
+  cursor: pointer;
+  z-index: 25;
+}
+
+/* Stamp text */
+.ann-stamp-text {
+  position: absolute;
+  font-size: .75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 2px solid;
+  cursor: pointer;
+  white-space: nowrap;
+  z-index: 25;
+  user-select: none;
+  opacity: .85;
+}
+
+/* Erase X hover overlay on any annotation element */
+.ann-erase-x {
+  display: none;
+  position: absolute;
+  inset: -4px;
+  align-items: center;
+  justify-content: center;
+  background: rgba(239,68,68,.18);
+  border: 2px dashed #ef4444;
+  border-radius: 6px;
+  font-size: .7rem;
+  color: #ef4444;
+  font-weight: 800;
+  cursor: pointer;
+  z-index: 35;
+}
+.ann-tool-erase-active .ann-pin:hover .ann-erase-x,
+.ann-tool-erase-active .ann-bookmark-flag:hover .ann-erase-x,
+.ann-tool-erase-active .ann-stamp-text:hover .ann-erase-x { display: flex; }
+
+/* Save indicator */
+.ann-save-indicator {
+  position: absolute;
+  bottom: 8px;
+  left: 58px;
+  background: rgba(16,185,129,.92);
+  color: #fff;
+  font-size: .72rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 20px;
+  z-index: 40;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity .2s, transform .2s;
+  pointer-events: none;
+}
+.ann-save-indicator.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Annotation list panel (right rail) */
+.ann-list-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 260px;
+  background: var(--eo-surface);
+  border-left: 1px solid var(--eo-border);
+  z-index: 38;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform .18s ease;
+}
+.ann-list-panel.open { transform: translateX(0); }
+.ann-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--eo-border);
+  font-size: .85rem;
+  font-weight: 700;
+}
+.ann-list-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+.ann-list-item {
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--eo-border);
+  margin-bottom: 6px;
+  cursor: pointer;
+  transition: background .1s, border-color .1s;
+  font-size: .8rem;
+}
+.ann-list-item:hover { background: var(--eo-bg); border-color: var(--eo-accent); }
+.ann-list-item-type {
+  font-size: .65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--eo-text-muted);
+  margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.ann-list-item-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ann-list-item-text {
+  color: var(--eo-text);
+  line-height: 1.38;
+  margin-bottom: 2px;
+}
+.ann-list-item-meta {
+  font-size: .66rem;
+  color: var(--eo-text-muted);
+}
+.ann-list-delete-btn {
+  float: right;
+  background: none;
+  border: none;
+  color: var(--eo-text-muted);
+  cursor: pointer;
+  font-size: .8rem;
+  padding: 0;
+  transition: color .1s;
+}
+.ann-list-delete-btn:hover { color: #ef4444; }
+.ann-list-empty {
+  text-align: center;
+  color: var(--eo-text-muted);
+  font-size: .8rem;
+  padding: 30px 16px;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   LIVE PREVIEW SESSION
+   ══════════════════════════════════════════════════════════════════ */
+.lp-share-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 8px;
+  border: 1px solid #8b5cf6; background: #8b5cf6; color: #fff;
+  font-size: .78rem; font-weight: 700; cursor: pointer;
+  transition: background .12s; white-space: nowrap;
+}
+.lp-share-btn:hover { background: #7c3aed; }
+.lp-share-btn.live { background: #ef4444; border-color: #ef4444; animation: lp-pulse-btn 1.6s ease-in-out infinite; }
+.lp-share-btn.viewer-mode { background: #10b981; border-color: #10b981; pointer-events: none; cursor: default; }
+@keyframes lp-pulse-btn {
+  0%,100% { box-shadow: 0 0 0 0 rgba(139,92,246,.4); }
+  50%     { box-shadow: 0 0 0 7px rgba(139,92,246,0); }
+}
+.lp-picker-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.5);
+  z-index: 2000; display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none; transition: opacity .15s;
+}
+.lp-picker-modal.open { opacity: 1; pointer-events: all; }
+.lp-picker-card {
+  background: var(--eo-surface); border: 1px solid var(--eo-border);
+  border-radius: 16px; box-shadow: 0 24px 64px rgba(0,0,0,.22);
+  width: min(440px,94vw); display: flex; flex-direction: column; max-height: 80vh; overflow: hidden;
+}
+.lp-picker-head {
+  padding: 16px 18px 12px; border-bottom: 1px solid var(--eo-border);
+  display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+}
+.lp-picker-search { padding: 10px 18px; border-bottom: 1px solid var(--eo-border); flex-shrink: 0; position: relative; }
+.lp-picker-search input {
+  width: 100%; padding: 7px 12px 7px 32px; border: 1px solid var(--eo-border);
+  border-radius: 8px; background: var(--eo-bg); color: var(--eo-text); font-size: .84rem; outline: none;
+}
+.lp-picker-search input:focus { border-color: #8b5cf6; }
+.lp-picker-search i { position: absolute; left: 28px; top: 50%; transform: translateY(-50%); color: var(--eo-text-muted); font-size: .8rem; }
+.lp-user-list { flex: 1; overflow-y: auto; padding: 8px 12px; }
+.lp-user-row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 10px;
+  border-radius: 8px; cursor: pointer; transition: background .1s; border: 1px solid transparent;
+}
+.lp-user-row:hover { background: var(--eo-bg); }
+.lp-user-row.selected { background: #f5f3ff; border-color: #8b5cf6; }
+.lp-user-avatar {
+  width: 34px; height: 34px; border-radius: 50%;
+  background: linear-gradient(135deg,#8b5cf6,#6d28d9); color: #fff;
+  font-size: .78rem; font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.lp-user-name  { font-size: .85rem; font-weight: 600; color: var(--eo-text); }
+.lp-user-email { font-size: .72rem; color: var(--eo-text-muted); }
+.lp-user-check { margin-left: auto; color: #8b5cf6; font-size: 1rem; display: none; }
+.lp-user-row.selected .lp-user-check { display: block; }
+.lp-picker-foot {
+  padding: 12px 18px; border-top: 1px solid var(--eo-border);
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-shrink: 0;
+}
+.lp-selected-count { font-size: .78rem; color: var(--eo-text-muted); }
+.lp-empty { text-align: center; padding: 28px 16px; color: var(--eo-text-muted); font-size: .83rem; }
+.lp-status-bar {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  z-index: 45; background: rgba(139,92,246,.95); color: #fff;
+  border-radius: 20px; padding: 5px 14px; font-size: .74rem; font-weight: 700;
+  display: none; align-items: center; gap: 8px; white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(139,92,246,.3); pointer-events: none;
+  transition: background .2s ease;
+}
+.lp-status-bar.show { display: flex; }
+.lp-status-bar.viewer { background: rgba(16,185,129,.95); }
+.lp-status-bar.offline { background: rgba(245,158,11,.96); }
+.lp-viewer-count {
+  display: none; align-items: center; gap: 3px;
+  background: rgba(255,255,255,.22); padding: 1px 7px; border-radius: 10px;
+  font-size: .68rem; font-weight: 800; margin-left: 2px;
+}
+.lp-viewer-count i { font-size: .7rem; }
+.lp-live-dot { width:7px; height:7px; border-radius:50%; background:#fff; animation: lp-blink .9s ease-in-out infinite alternate; }
+.lp-status-bar.offline .lp-live-dot { animation: none; opacity: .6; }
+@keyframes lp-blink { 0%{opacity:1;}100%{opacity:.2;} }
+.lp-remote-cursor { position: absolute; pointer-events: none; z-index: 50; transition: left .06s linear, top .06s linear; }
+.lp-cursor-label {
+  position: absolute; top: 20px; left: 14px;
+  background: #8b5cf6; color: #fff; font-size: .64rem; font-weight: 700;
+  padding: 2px 6px; border-radius: 6px; white-space: nowrap;
+}
+.lp-chat-panel {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 270px;
+  background: var(--eo-surface); border-left: 1px solid var(--eo-border);
+  display: flex; flex-direction: column; z-index: 42;
+  transform: translateX(100%); transition: transform .2s ease;
+}
+.lp-chat-panel.open { transform: translateX(0); }
+.lp-chat-head {
+  padding: 10px 13px; border-bottom: 1px solid var(--eo-border);
+  font-size: .82rem; font-weight: 700;
+  display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+}
+.lp-chat-messages { flex: 1; overflow-y: auto; padding: 10px 10px 4px; display: flex; flex-direction: column; gap: 6px; }
+.lp-msg { max-width: 88%; padding: 6px 10px; border-radius: 10px; font-size: .79rem; line-height: 1.4; word-break: break-word; }
+.lp-msg.mine { align-self: flex-end; background: #8b5cf6; color: #fff; border-bottom-right-radius: 3px; }
+.lp-msg.theirs { align-self: flex-start; background: var(--eo-bg); border: 1px solid var(--eo-border); color: var(--eo-text); border-bottom-left-radius: 3px; }
+.lp-msg-sender { font-size: .65rem; font-weight: 700; margin-bottom: 2px; opacity: .7; }
+.lp-msg-meta   { font-size: .62rem; opacity: .6; margin-top: 2px; text-align: right; }
+.lp-msg.theirs .lp-msg-meta { text-align: left; }
+.lp-chat-input-row { padding: 8px 10px; border-top: 1px solid var(--eo-border); display: flex; gap: 6px; flex-shrink: 0; }
+.lp-chat-input {
+  flex: 1; padding: 6px 10px; border: 1px solid var(--eo-border);
+  border-radius: 8px; background: var(--eo-bg); color: var(--eo-text);
+  font-size: .82rem; outline: none; font-family: inherit; resize: none; height: 34px;
+}
+.lp-chat-input:focus { border-color: #8b5cf6; }
+.lp-chat-send {
+  width: 34px; height: 34px; border-radius: 8px; background: #8b5cf6;
+  border: none; color: #fff; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: .9rem; flex-shrink: 0; transition: background .12s;
+}
+.lp-chat-send:hover { background: #7c3aed; }
+.lp-chat-unread {
+  position: absolute; top: -3px; right: -3px;
+  background: #ef4444; color: #fff; font-size: .56rem; font-weight: 800;
+  border-radius: 8px; min-width: 14px; height: 14px;
+  display: none; align-items: center; justify-content: center; padding: 0 3px; pointer-events: none;
+}
+
+/* Viewer-side: hide drawing tools.  Settings/list/chat stay visible. */
+.lp-viewer-readonly .ann-tool-btn[data-tool],
+.lp-viewer-readonly .ann-tool-btn#annSettingsToggle,
+.lp-viewer-readonly .ann-sep:not(#lpChatSep) { display: none !important; }
+.lp-viewer-readonly .ann-overlay-canvas,
+.lp-viewer-readonly .ann-layer { pointer-events: none; }
+.lp-invite-toast {
+  position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+  background: var(--eo-surface); border: 2px solid #8b5cf6;
+  border-radius: 14px; box-shadow: 0 12px 36px rgba(0,0,0,.18);
+  padding: 16px 18px; width: min(340px,92vw);
+  display: none; flex-direction: column; gap: 10px; animation: lp-slide-in .22s ease;
+}
+.lp-invite-toast.show { display: flex; }
+@keyframes lp-slide-in { from{transform:translateY(16px);opacity:0;}to{transform:translateY(0);opacity:1;} }
+.lp-invite-title { font-size: .88rem; font-weight: 700; color: var(--eo-text); display: flex; align-items: center; gap: 7px; }
+.lp-invite-body  { font-size: .78rem; color: var(--eo-text-muted); line-height: 1.4; }
+.lp-invite-actions { display: flex; gap: 8px; }
+
 /* ── Preview side rail ───────────────────────────────────────────── */
 .fm-preview-shell {
   display: flex;
   width: 100%;
   height: 100%;
-  min-height: 100%;
   background: #111827;
+  overflow: hidden;
 }
 
 .fm-preview-main {
   position: relative;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   height: 100%;
+  display: flex;
+  flex-direction: column;
   background: #111827;
+  overflow: hidden;
 }
 
 .fm-pdf-rail-toggle {
@@ -593,6 +1175,28 @@
   transition: transform .18s;
 }
 .fm-modal-backdrop.open .fm-modal { transform: translateY(0); }
+
+/* ── Preview modal: use flex column so the body can fill remaining height ── */
+#previewModal .fm-modal {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 92vh;
+  height: 92vh;
+}
+#previewModal .fm-modal-head {
+  flex-shrink: 0;
+}
+#previewModal .fm-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 !important;
+}
+#previewModal #previewContent {
+  height: 100% !important;
+  overflow: hidden;
+}
 .fm-modal-head {
   padding: 18px 22px 14px;
   display: flex; align-items: center; justify-content: space-between;
@@ -637,17 +1241,27 @@
 .preview-text {
   width: 100%;
   height: 100%;
+  display: block;
 }
 
 .preview-frame {
   border: none;
   background: #111827;
+  /* iframes scroll internally — do NOT block their pointer events */
 }
 
 .preview-image {
   object-fit: contain;
   background: #111827;
-  display: block;
+  /* images may be larger than the container — allow overflow scroll */
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .preview-video {
@@ -2168,6 +2782,9 @@
         <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px" id="previewModalFileName"></div>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
+        <button type="button" id="lpShareBtn" class="lp-share-btn" onclick="lpOnShareBtnClick()" hidden>
+          <i class="bi bi-cast"></i> <span id="lpShareBtnLabel">Share Live</span>
+        </button>
         <a href="#" id="previewDownloadBtn" class="eo-btn eo-btn-secondary eo-btn-sm">
           <i class="bi bi-download"></i> Download
         </a>
@@ -2177,7 +2794,7 @@
       </div>
     </div>
 
-    <div class="fm-modal-body" style="padding:0;height:min(78vh,820px)">
+    <div class="fm-modal-body">
       <div id="previewLoading"
            style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--eo-text-muted);font-size:.92rem;">
         <div style="text-align:center">
@@ -2186,7 +2803,7 @@
         </div>
       </div>
 
-      <div id="previewContent" style="display:none;height:100%;background:#111827;"></div>
+      <div id="previewContent" style="display:none;background:#111827;"></div>
     </div>
   </div>
 </div>
@@ -2624,11 +3241,69 @@
   </div><!-- /fnCard -->
 </div><!-- /fnOverlay -->
 
+<!-- ══ LIVE PREVIEW: User Picker Modal ══════════════════════════════════════ -->
+<div class="lp-picker-modal" id="lpPickerModal">
+  <div class="lp-picker-card">
+    <div class="lp-picker-head">
+      <div>
+        <div style="font-size:.95rem;font-weight:700;color:var(--eo-text)">
+          <i class="bi bi-cast me-2" style="color:#8b5cf6"></i>Share Live Preview
+        </div>
+        <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:2px">
+          Select people to invite — they will see your screen live
+        </div>
+      </div>
+      <button type="button" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" onclick="lpClosePicker()">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="lp-picker-search">
+      <i class="bi bi-search"></i>
+      <input type="text" id="lpUserSearch" placeholder="Search by name or email…"
+             oninput="lpFilterUsers(this.value)" autocomplete="off">
+    </div>
+    <div class="lp-user-list" id="lpUserList">
+      <div class="lp-empty"><i class="bi bi-hourglass-split d-block mb-2" style="font-size:1.3rem;opacity:.4"></i>Loading…</div>
+    </div>
+    <div class="lp-picker-foot">
+      <span class="lp-selected-count" id="lpSelectedCount">0 selected</span>
+      <div style="display:flex;gap:8px;">
+        <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="lpClosePicker()">Cancel</button>
+        <button type="button" class="eo-btn eo-btn-primary eo-btn-sm" id="lpStartBtn"
+                onclick="lpStartSession()" disabled
+                style="background:#8b5cf6;border-color:#8b5cf6;">
+          <i class="bi bi-cast me-1"></i>Start sharing
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ LIVE PREVIEW: Invite Toast (viewer side) ═════════════════════════════ -->
+<div class="lp-invite-toast" id="lpInviteToast">
+  <div class="lp-invite-title">
+    <i class="bi bi-cast" style="color:#8b5cf6;font-size:1.1rem"></i>
+    <span id="lpInvitePresenterName">Someone</span> is sharing a live preview
+  </div>
+  <div class="lp-invite-body" id="lpInviteFileName"></div>
+  <div class="lp-invite-actions">
+    <button type="button" class="eo-btn eo-btn-sm" id="lpAcceptBtn"
+            onclick="lpAcceptInvite()"
+            style="background:#8b5cf6;border-color:#8b5cf6;color:#fff;font-weight:700;">
+      <i class="bi bi-cast me-1"></i>Join
+    </button>
+    <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="lpDeclineInvite()">
+      Decline
+    </button>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block extra_js %}
 <script src="{% static 'js/file_manager.js' %}"></script>
 <script src="{% static 'js/collabora_presence.js' %}"></script>
+
 <script>
 /* ════════════════════════════════════════════════════════
    STICKY NOTE  +  NOTE SHARING  +  LIVE UPDATES
@@ -2664,7 +3339,7 @@
   var activeTrigger = null;
   var saveTimer     = null;
   var pollTimer     = null;
-  var typingTimer   = null;   /* debounce for typing pings */
+  var typingTimer   = null;
   var lastSavedBody = '';
   var activeTab     = 'note';
 
@@ -2716,7 +3391,7 @@
     card.style.top  = top  + 'px';
   }
 
-  /* ── Render shared notes (notes from others, shown read-only) ── */
+  /* ── Render shared notes ── */
   function renderSharedNotes(sharedNotes) {
     if (!sharedNotes || !sharedNotes.length) {
       sharedNotesWrap.style.display = 'none';
@@ -2725,10 +3400,7 @@
       if (activeFileId) updateSharedBadges(activeFileId, false);
       return;
     }
-
     sharedNotesWrap.style.display = 'block';
-
-    /* Show/hide typing hand — if ANY sharer is_typing, show the indicator */
     var whoIsTyping = sharedNotes.filter(function(n) { return n.is_typing; });
     if (whoIsTyping.length) {
       var names = whoIsTyping.map(function(n) { return n.author.split(' ')[0]; }).join(', ');
@@ -2737,8 +3409,6 @@
     } else {
       typingIndicator.classList.remove('fn-typing-active');
     }
-
-    /* Render the note bodies */
     var html = '';
     sharedNotes.forEach(function(n) {
       html += '<div class="fn-shared-note-block">'
@@ -2753,7 +3423,7 @@
     if (activeFileId) updateSharedBadges(activeFileId, true);
   }
 
-  /* ── Single fetch that loads own note + shared notes ── */
+  /* ── Fetch note data ── */
   function fetchNoteData(fileId, isInitial) {
     return fetch(noteUrl(fileId), {
       headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken() }
@@ -2764,7 +3434,6 @@
     })
     .then(function(data) {
       if (isInitial) {
-        /* Only set textarea on first load — don't overwrite while user is typing */
         textarea.value = data.body || '';
         lastSavedBody  = textarea.value;
         if (data.updated_at) {
@@ -2775,13 +3444,12 @@
         textarea.focus();
         textarea.setSelectionRange(textarea.value.length, textarea.value.length);
       }
-      /* Always refresh shared notes — this is the live update */
       renderSharedNotes(data.shared_notes || []);
       return data;
     });
   }
 
-  /* ── Poll every 4 s for live shared-note updates ── */
+  /* ── Polling ── */
   function startPolling(fileId) {
     stopPolling();
     pollTimer = setInterval(function() {
@@ -2829,7 +3497,6 @@
     fnSwitchTab('note');
     scopeSelect.value = '';
     fnScopeChanged();
-
     fetchNoteData(activeFileId, true)
       .then(function() { startPolling(activeFileId); })
       .catch(function() { setStatus('Could not load note', 'fn-error'); });
@@ -2847,7 +3514,7 @@
     activeTrigger = null;
   }
 
-  /* ── Send a typing ping (fire-and-forget, debounced to 1 s) ── */
+  /* ── Typing ping ── */
   function sendTypingPing() {
     if (!activeFileId || !_typingTpl) return;
     fetch(noteTypingUrl(activeFileId), {
@@ -2860,7 +3527,6 @@
   function scheduleSave() {
     if (saveTimer) clearTimeout(saveTimer);
     setStatus('Typing\u2026', 'fn-saving');
-    /* Debounced typing ping — send once per second while typing */
     if (typingTimer) clearTimeout(typingTimer);
     typingTimer = setTimeout(function() { sendTypingPing(); }, 1000);
     saveTimer = setTimeout(function() { doSave(false); }, 900);
@@ -2916,8 +3582,7 @@
     .catch(function() { if (!silent) setStatus('Save failed \u2014 retry', 'fn-error'); });
   }
 
-  /* ════════════════════ SHARE LOGIC ════════════════════ */
-
+  /* ════════════ SHARE LOGIC ════════════ */
   function fnLoadShares() {
     currentSharesEl.innerHTML = '<div class="fn-share-empty">Loading\u2026</div>';
     fetch(noteShareUrl(activeFileId), {
@@ -3037,11 +3702,9 @@
 
 })();
 
+
 /* ════════════════════════════════════════════════════════════════════════
    PAGE-LEVEL BADGE INIT & BACKGROUND POLLING
-   Runs on every page load. Fetches badge states for ALL file buttons on
-   the page in one request, then keeps polling every 15 s so shared-note
-   alerts appear live even when the note modal is closed.
    ════════════════════════════════════════════════════════════════════════ */
 (function () {
   var ol       = document.getElementById('fnOverlay');
@@ -3053,12 +3716,9 @@
     return m ? decodeURIComponent(m[1]) : '';
   }
 
-  /* Apply a status object {has_my_note, has_shared_note} to all buttons for a file */
   function applyStatus(fileId, st) {
     document.querySelectorAll('.fn-btn[data-file-id="' + fileId + '"]').forEach(function(btn) {
       var svg = btn.querySelector('svg');
-
-      /* Own note badge */
       if (st.has_my_note) {
         btn.classList.add('fn-has-note');
         btn.style.background  = '#fef08a';
@@ -3070,8 +3730,6 @@
         btn.style.borderColor = '';
         if (svg) svg.setAttribute('fill', 'none');
       }
-
-      /* Shared note badge */
       if (st.has_shared_note) {
         btn.classList.add('fn-has-shared-note');
         btn.title = 'Note (+ shared note from colleague)';
@@ -3090,20 +3748,15 @@
       if (id && !seen[id]) { seen[id] = true; ids.push(id); }
     });
     if (!ids.length) return;
-
     fetch(bulkUrl + '?ids=' + ids.join(','), {
       headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken() }
     })
     .then(function(r) { return r.ok ? r.json() : null; })
     .then(function(data) {
       if (!data || !data.statuses) return;
-
-      /* Apply statuses returned from server */
       Object.keys(data.statuses).forEach(function(fid) {
         applyStatus(fid, data.statuses[fid]);
       });
-
-      /* For any file NOT in the response the note is empty — clear badges */
       ids.forEach(function(fid) {
         if (!data.statuses[fid]) {
           applyStatus(fid, { has_my_note: false, has_shared_note: false });
@@ -3113,27 +3766,26 @@
     .catch(function() {});
   }
 
-  /* Expose globally so refreshGrid (defined earlier) can call it after a grid swap */
   window.runBulkCheck = runBulkCheck;
-
-  /* Run immediately on page load */
   document.addEventListener('DOMContentLoaded', runBulkCheck);
-
-  /* Also poll every 15 s in the background so shared-note alerts appear
-     live on the file list without needing to open the note modal */
   setInterval(runBulkCheck, 15000);
 
 })();
-</script>
-<script>
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   FILE PREVIEW  +  PDF PAGE RAIL  +  ANNOTATION ENGINE
+   Everything lives in one IIFE so all helpers share the same scope.
+   ════════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
 
-  const modal         = document.getElementById('previewModal');
-  const loading       = document.getElementById('previewLoading');
-  const content       = document.getElementById('previewContent');
-  const fileNameEl    = document.getElementById('previewModalFileName');
-  const downloadBtn   = document.getElementById('previewDownloadBtn');
+  /* ── Preview modal elements ─────────────────────────────────────────── */
+  const modal      = document.getElementById('previewModal');
+  const loading    = document.getElementById('previewLoading');
+  const content    = document.getElementById('previewContent');
+  const fileNameEl = document.getElementById('previewModalFileName');
+  const downloadBtn= document.getElementById('previewDownloadBtn');
 
   if (!modal || !loading || !content || !fileNameEl || !downloadBtn) return;
 
@@ -3144,69 +3796,69 @@
   const AUDIO_EXTS  = new Set(['mp3','wav','ogg','m4a']);
   const ZIP_EXTS    = new Set(['zip']);
 
-  let currentFileId = null;
-  let currentFileExt = '';
-  let currentMeta = null;
-  let pageOrder = [];
-  let deleteSet = new Set();
-  let dragPage = null;
+  /* File types the annotation layer supports */
+  const ANN_SUPPORTED_EXTS = new Set([
+    'pdf','doc','docx','odt','rtf','xls','xlsx','ods',
+    'ppt','pptx','odp','jpg','jpeg','png','gif','webp',
+    'svg','bmp','txt','md','py','js','html','css','json','csv',
+  ]);
 
+  let currentFileId  = null;
+  let currentFileExt = '';
+  let currentMeta    = null;
+  let pageOrder      = [];
+  let deleteSet      = new Set();
+  let dragPage       = null;
+
+  /* ── Shared helpers ─────────────────────────────────────────────────── */
   function csrfToken() {
     const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
     return m ? decodeURIComponent(m[1]) : '';
   }
 
   function esc(s) {
-    return String(s || '').replace(/[&<>"']/g, function (c) {
-      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
-    });
+    return String(s || '').replace(/[&<>"']/g, c =>
+      ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]
+    );
   }
 
-  function previewUrl(fileId) {
-    return `/files/${fileId}/preview/`;
-  }
-
-  function previewInfoUrl(fileId) {
-    return `/files/${fileId}/preview-info/`;
-  }
-
-  function downloadUrl(fileId) {
-    return `/files/${fileId}/download/`;
-  }
+  function previewUrl(id)     { return `/files/${id}/preview/`; }
+  function previewInfoUrl(id) { return `/files/${id}/preview-info/`; }
+  function downloadUrl(id)    { return `/files/${id}/download/`; }
+  function annUrl(id)         { return `/files/${id}/annotations/`; }
 
   function resetPreviewState() {
     currentMeta = null;
-    pageOrder = [];
-    deleteSet = new Set();
-    dragPage = null;
+    pageOrder   = [];
+    deleteSet   = new Set();
+    dragPage    = null;
   }
 
   function setRailStatus(text, isError) {
     const el = document.getElementById('pdfRailStatus');
     if (!el) return;
-    el.textContent = text || '—';
-    el.style.color = isError ? '#dc2626' : '';
+    el.textContent  = text || '—';
+    el.style.color  = isError ? '#dc2626' : '';
   }
 
   async function safeJsonFetch(url, options) {
     const response = await fetch(url, options || {});
-    const text = await response.text();
-
+    const text     = await response.text();
     let data = null;
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch (e) {
+    try { data = text ? JSON.parse(text) : {}; }
+    catch (e) {
       console.error('Expected JSON but got:', text);
       throw new Error(`Server returned non-JSON response from ${url}`);
     }
-
     if (!response.ok || (data && data.ok === false)) {
       throw new Error((data && data.error) ? data.error : `Request failed (${response.status})`);
     }
-
     return data;
   }
 
+  /* ══════════════════════════════════════════════════════════════════════
+     PDF PAGE RAIL
+     ══════════════════════════════════════════════════════════════════════ */
   function buildPreviewShell() {
     content.innerHTML = `
       <div class="fm-preview-shell" id="fmPreviewShell">
@@ -3214,7 +3866,7 @@
           <button type="button" id="pdfRailToggle" class="fm-pdf-rail-toggle" hidden>
             <i class="bi bi-layout-sidebar-inset"></i> Pages
           </button>
-          <div id="previewSurface" style="width:100%;height:100%;"></div>
+          <div id="previewSurface" style="flex:1;min-height:0;position:relative;overflow:hidden;"></div>
         </div>
 
         <aside id="pdfRail" class="fm-pdf-rail is-hidden" hidden>
@@ -3222,18 +3874,14 @@
             <strong>Page tools</strong>
             <button type="button" id="pdfRailHideBtn" class="eo-btn eo-btn-secondary eo-btn-sm">Hide</button>
           </div>
-
           <div class="fm-pdf-rail-meta">
             <div id="pdfRailFileName" class="fm-pdf-rail-file">—</div>
             <div id="pdfRailPageCount" class="fm-pdf-rail-count">0 pages</div>
           </div>
-
           <div class="fm-pdf-rail-help">
             Click a page chip to mark it for deletion. Drag chips to change order.
           </div>
-
           <div id="pdfPageList" class="fm-pdf-page-list"></div>
-
           <div class="fm-pdf-rail-actions">
             <button type="button" id="pdfApplyReorderBtn" class="eo-btn eo-btn-primary eo-btn-sm">
               <i class="bi bi-arrow-down-up"></i> Save order
@@ -3243,7 +3891,6 @@
               <i class="bi bi-trash"></i> Delete selected
             </button>
           </div>
-
           <div id="pdfRailStatus" class="fm-pdf-rail-status">—</div>
         </aside>
       </div>
@@ -3254,89 +3901,65 @@
     const rail = document.getElementById('pdfRail');
     if (!rail) return;
     rail.hidden = false;
-    requestAnimationFrame(function () {
-      rail.classList.remove('is-hidden');
-    });
+    requestAnimationFrame(() => rail.classList.remove('is-hidden'));
   }
 
   function hideRail() {
     const rail = document.getElementById('pdfRail');
     if (!rail) return;
     rail.classList.add('is-hidden');
-    setTimeout(function () {
-      rail.hidden = true;
-    }, 180);
+    setTimeout(() => { rail.hidden = true; }, 180);
   }
 
   function renderPageList() {
     const list = document.getElementById('pdfPageList');
     if (!list) return;
-
     list.innerHTML = '';
-
     pageOrder.forEach(function (pageNum) {
       const chip = document.createElement('button');
-      chip.type = 'button';
+      chip.type      = 'button';
       chip.className = 'fm-pdf-page-chip' + (deleteSet.has(pageNum) ? ' selected-for-delete' : '');
       chip.draggable = true;
       chip.dataset.page = String(pageNum);
-
       chip.innerHTML = `
         <div class="fm-pdf-page-chip-num">${pageNum}</div>
         <div class="fm-pdf-page-chip-lbl">${deleteSet.has(pageNum) ? 'Delete' : 'Page'}</div>
       `;
-
-      chip.addEventListener('click', function () {
+      chip.addEventListener('click', () => {
         if (deleteSet.has(pageNum)) deleteSet.delete(pageNum);
         else deleteSet.add(pageNum);
         renderPageList();
       });
-
-      chip.addEventListener('dragstart', function () {
-        dragPage = pageNum;
-        chip.classList.add('dragging');
-      });
-
-      chip.addEventListener('dragend', function () {
-        dragPage = null;
-        chip.classList.remove('dragging');
-      });
-
-      chip.addEventListener('dragover', function (e) {
-        e.preventDefault();
-      });
-
-      chip.addEventListener('drop', function (e) {
+      chip.addEventListener('dragstart', () => { dragPage = pageNum; chip.classList.add('dragging'); });
+      chip.addEventListener('dragend',   () => { dragPage = null;    chip.classList.remove('dragging'); });
+      chip.addEventListener('dragover',  e  => e.preventDefault());
+      chip.addEventListener('drop', e => {
         e.preventDefault();
         const targetPage = parseInt(chip.dataset.page, 10);
         if (!dragPage || dragPage === targetPage) return;
-
-        const fromIndex = pageOrder.indexOf(dragPage);
-        const toIndex = pageOrder.indexOf(targetPage);
-        if (fromIndex === -1 || toIndex === -1) return;
-
-        pageOrder.splice(fromIndex, 1);
-        pageOrder.splice(toIndex, 0, dragPage);
+        const from = pageOrder.indexOf(dragPage);
+        const to   = pageOrder.indexOf(targetPage);
+        if (from === -1 || to === -1) return;
+        pageOrder.splice(from, 1);
+        pageOrder.splice(to, 0, dragPage);
         renderPageList();
       });
-
       list.appendChild(chip);
     });
   }
 
   function bindRailEvents() {
-    const toggleBtn = document.getElementById('pdfRailToggle');
-    const hideBtn = document.getElementById('pdfRailHideBtn');
+    const toggleBtn  = document.getElementById('pdfRailToggle');
+    const hideBtn    = document.getElementById('pdfRailHideBtn');
     const reorderBtn = document.getElementById('pdfApplyReorderBtn');
-    const deleteBtn = document.getElementById('pdfDeleteSelectedBtn');
+    const deleteBtn  = document.getElementById('pdfDeleteSelectedBtn');
 
-    if (toggleBtn) toggleBtn.addEventListener('click', showRail);
-    if (hideBtn) hideBtn.addEventListener('click', hideRail);
+    if (toggleBtn)  toggleBtn.addEventListener('click', showRail);
+    if (hideBtn)    hideBtn.addEventListener('click', hideRail);
 
     if (reorderBtn) {
-      reorderBtn.addEventListener('click', async function () {
+      reorderBtn.addEventListener('click', async () => {
         if (!currentMeta || !currentMeta.reorder_url) return;
-
         try {
           setRailStatus('Applying…');
           const data = await safeJsonFetch(currentMeta.reorder_url, {
@@ -3344,14 +3967,10 @@
             headers: {
               'X-Requested-With': 'XMLHttpRequest',
               'X-CSRFToken': csrfToken(),
-              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
             },
-            body: new URLSearchParams({
-              page_order: pageOrder.join(','),
-              overwrite: '1'
-            }).toString()
+            body: new URLSearchParams({ page_order: pageOrder.join(','), overwrite: '1' }).toString(),
           });
-
           setRailStatus(data.message || 'Page order updated.');
           openPreviewModal(currentFileId, fileNameEl.textContent || '', currentFileExt, true);
         } catch (err) {
@@ -3362,19 +3981,10 @@
     }
 
     if (deleteBtn) {
-      deleteBtn.addEventListener('click', async function () {
+      deleteBtn.addEventListener('click', async () => {
         if (!currentMeta || !currentMeta.remove_url) return;
-
-        if (!deleteSet.size) {
-          setRailStatus('Select at least one page to delete.', true);
-          return;
-        }
-
-        if (deleteSet.size >= pageOrder.length) {
-          setRailStatus('You cannot delete every page.', true);
-          return;
-        }
-
+        if (!deleteSet.size) { setRailStatus('Select at least one page to delete.', true); return; }
+        if (deleteSet.size >= pageOrder.length) { setRailStatus('You cannot delete every page.', true); return; }
         try {
           setRailStatus('Applying…');
           const data = await safeJsonFetch(currentMeta.remove_url, {
@@ -3382,14 +3992,13 @@
             headers: {
               'X-Requested-With': 'XMLHttpRequest',
               'X-CSRFToken': csrfToken(),
-              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
             },
             body: new URLSearchParams({
               remove_pages: Array.from(deleteSet).sort((a, b) => a - b).join(','),
-              overwrite: '1'
-            }).toString()
+              overwrite: '1',
+            }).toString(),
           });
-
           setRailStatus(data.message || 'Pages deleted.');
           openPreviewModal(currentFileId, fileNameEl.textContent || '', currentFileExt, true);
         } catch (err) {
@@ -3402,27 +4011,19 @@
 
   async function loadPreviewInfo(fileId, fileName) {
     try {
-      const data = await safeJsonFetch(previewInfoUrl(fileId), {
-        headers: { 'X-Requested-With': 'XMLHttpRequest' }
-      });
-
+      const data      = await safeJsonFetch(previewInfoUrl(fileId), { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
       const toggleBtn = document.getElementById('pdfRailToggle');
-      const railFile = document.getElementById('pdfRailFileName');
+      const railFile  = document.getElementById('pdfRailFileName');
       const railCount = document.getElementById('pdfRailPageCount');
-
       currentMeta = data;
-
       if (railFile) railFile.textContent = fileName || data.name || 'Untitled';
-
       if (!data.is_pdf || !data.can_edit) {
         if (toggleBtn) toggleBtn.hidden = true;
         hideRail();
         return;
       }
-
       if (toggleBtn) toggleBtn.hidden = false;
       if (railCount) railCount.textContent = `${data.page_count} page${data.page_count === 1 ? '' : 's'}`;
-
       pageOrder = Array.from({ length: data.page_count }, (_, i) => i + 1);
       deleteSet = new Set();
       renderPageList();
@@ -3437,63 +4038,770 @@
   }
 
   function renderPreviewSurface(fileId, fileName, ext) {
-    const surface = document.getElementById('previewSurface');
+    const surface  = document.getElementById('previewSurface');
     if (!surface) return;
-
-    const url = previewUrl(fileId) + '?_ts=' + Date.now();
+    const url      = previewUrl(fileId) + '?_ts=' + Date.now();
     const cleanExt = String(ext || '').toLowerCase().trim();
-
     surface.innerHTML = '';
 
     if (cleanExt === 'pdf' || OFFICE_EXTS.has(cleanExt) || ZIP_EXTS.has(cleanExt)) {
       surface.innerHTML = `<iframe class="preview-frame" src="${url}" title="${esc(fileName)}"></iframe>`;
       return;
     }
-
     if (IMAGE_EXTS.has(cleanExt)) {
       surface.innerHTML = `<img class="preview-image" src="${url}" alt="${esc(fileName)}">`;
       return;
     }
-
     if (VIDEO_EXTS.has(cleanExt)) {
       surface.innerHTML = `<video class="preview-video" src="${url}" controls style="width:100%;height:100%"></video>`;
       return;
     }
-
     if (AUDIO_EXTS.has(cleanExt)) {
-      surface.innerHTML = `
-        <div class="preview-audio">
-          <audio src="${url}" controls style="width:min(720px,92%);"></audio>
-        </div>
-      `;
+      surface.innerHTML = `<div class="preview-audio"><audio src="${url}" controls style="width:min(720px,92%);"></audio></div>`;
       return;
     }
-
     if (TEXT_EXTS.has(cleanExt)) {
       surface.innerHTML = `<pre class="preview-text">Loading text preview…</pre>`;
       fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
         .then(r => r.text())
-        .then(txt => {
-          const pre = surface.querySelector('.preview-text');
-          if (pre) pre.textContent = txt;
-        })
-        .catch(() => {
-          const pre = surface.querySelector('.preview-text');
-          if (pre) pre.textContent = 'Could not load text preview.';
-        });
+        .then(txt => { const pre = surface.querySelector('.preview-text'); if (pre) pre.textContent = txt; })
+        .catch(()  => { const pre = surface.querySelector('.preview-text'); if (pre) pre.textContent = 'Could not load text preview.'; });
       return;
     }
-
     surface.innerHTML = `<iframe class="preview-frame" src="${url}" title="${esc(fileName)}"></iframe>`;
   }
 
+  /* ══════════════════════════════════════════════════════════════════════
+     ANNOTATION ENGINE
+     ══════════════════════════════════════════════════════════════════════ */
+
+  /* ── Constants ── */
+  const ANN_COLORS = [
+    '#fbbf24','#f97316','#ef4444','#ec4899',
+    '#8b5cf6','#3b82f6','#06b6d4','#10b981',
+    '#84cc16','#1e293b','#ffffff',
+  ];
+
+  const STAMP_LABELS    = ['DRAFT','APPROVED','REJECTED','CONFIDENTIAL','URGENT','FOR REVIEW'];
+  const SAVE_DEBOUNCE   = 1200;
+
+  /* ── Annotation state ── */
+  let _annFileId      = null;
+  let _annAnnotations = [];
+  let _annSettings    = { active_tool: 'highlight', color: '#fbbf24', opacity: 0.45, stroke_width: 3 };
+  let _annDirty       = false;
+  let _annSaveTimer   = null;
+  let _annDrawing     = false;
+  let _annDrawStart   = null;
+  let _annCurrentPath = [];
+  let _annTempEl      = null;
+
+  /* ── Annotation helpers ── */
+  function annGenId()  { return 'ann-' + Math.random().toString(36).slice(2, 11); }
+
+  function annPctPos(el, e) {
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(100, (e.clientX - r.left) / r.width  * 100)),
+      y: Math.max(0, Math.min(100, (e.clientY - r.top)  / r.height * 100)),
+    };
+  }
+
+  function hexToRgba(hex, a) {
+    const r = parseInt(hex.slice(1,3), 16);
+    const g = parseInt(hex.slice(3,5), 16);
+    const b = parseInt(hex.slice(5,7), 16);
+    return `rgba(${r},${g},${b},${a})`;
+  }
+
+  /* ── Persistence ── */
+  async function annLoad(fileId) {
+    try {
+      const data = await safeJsonFetch(annUrl(fileId), { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      _annAnnotations = Array.isArray(data.annotations) ? data.annotations : [];
+      if (data.tool_settings && typeof data.tool_settings === 'object') {
+        _annSettings = Object.assign(_annSettings, data.tool_settings);
+      }
+      annApplySettings();
+      annRenderAll();
+      annUpdateCountBadge();
+    } catch (err) {
+      console.warn('[ann] load failed', err);
+    }
+  }
+
+  function annScheduleSave() {
+    _annDirty = true;
+    clearTimeout(_annSaveTimer);
+    _annSaveTimer = setTimeout(annFlush, SAVE_DEBOUNCE);
+  }
+
+  async function annFlush() {
+    if (!_annFileId || !_annDirty) return;
+    _annDirty = false;
+    try {
+      await fetch(annUrl(_annFileId), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+          'X-CSRFToken': csrfToken(),
+        },
+        body: JSON.stringify({ annotations: _annAnnotations, tool_settings: _annSettings }),
+      });
+      annFlashSave();
+    } catch (err) {
+      console.warn('[ann] save failed', err);
+      _annDirty = true;
+    }
+  }
+
+  async function annSaveSettings() {
+    if (!_annFileId) return;
+    try {
+      await fetch(annUrl(_annFileId), {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+          'X-CSRFToken': csrfToken(),
+        },
+        body: JSON.stringify({ tool_settings: _annSettings }),
+      });
+    } catch (err) { console.warn('[ann] settings save failed', err); }
+  }
+
+  function annFlashSave() {
+    const ind = document.getElementById('annSaveIndicator');
+    if (!ind) return;
+    ind.classList.add('show');
+    setTimeout(() => ind.classList.remove('show'), 1800);
+  }
+
+  /* ── Add / Remove — defined at bottom of IIFE (with LP broadcast hooks) ── */
+
+  function annUpdateCountBadge() {
+    const badge = document.getElementById('annCountBadge');
+    if (!badge) return;
+    const n = _annAnnotations.length;
+    badge.textContent  = n > 0 ? n : '';
+    badge.style.display = n > 0 ? 'flex' : 'none';
+  }
+
+  /* ── Render all ── */
+  function annRenderAll() {
+    const overlay = document.getElementById('annOverlay');
+    if (!overlay) return;
+    overlay.querySelectorAll('[data-ann-id]').forEach(el => el.remove());
+    const svg = overlay.querySelector('.ann-canvas');
+    if (svg) svg.innerHTML = '';
+    _annAnnotations.forEach(a => annRenderOne(a));
+  }
+
+  function annRenderOne(a) {
+    const overlay = document.getElementById('annOverlay');
+    if (!overlay) return;
+    const svg = overlay.querySelector('.ann-canvas');
+    switch (a.tool) {
+      case 'highlight': annRenderHighlight(svg, a); break;
+      case 'draw':      annRenderDraw(svg, a);      break;
+      case 'rect':      annRenderRect(svg, a);      break;
+      case 'comment':   annRenderComment(overlay, a); break;
+      case 'stamp':     annRenderStamp(overlay, a);   break;
+      case 'bookmark':  annRenderBookmark(overlay, a); break;
+    }
+  }
+
+  function annSvgRect(svg, a, fill, stroke, strokeOpacity, strokeWidth) {
+    const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    r.setAttribute('x',       a.x);
+    r.setAttribute('y',       a.y);
+    r.setAttribute('width',   a.w || 10);
+    r.setAttribute('height',  a.h || 2);
+    r.setAttribute('fill',    fill);
+    r.setAttribute('rx',      '0.5');
+    r.setAttribute('data-ann-id', a.id);
+    if (stroke)        r.setAttribute('stroke',         stroke);
+    if (strokeOpacity) r.setAttribute('stroke-opacity', strokeOpacity);
+    if (strokeWidth)   r.setAttribute('stroke-width',   strokeWidth);
+    r.style.cursor = 'pointer';
+    r.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
+    svg.appendChild(r);
+  }
+
+  function annRenderHighlight(svg, a) {
+    if (!svg) return;
+    annSvgRect(svg, a, hexToRgba(a.color || '#fbbf24', a.opacity ?? 0.45));
+  }
+
+  function annRenderRect(svg, a) {
+    if (!svg) return;
+    const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    r.setAttribute('x',              a.x);
+    r.setAttribute('y',              a.y);
+    r.setAttribute('width',          a.w || 10);
+    r.setAttribute('height',         a.h || 5);
+    r.setAttribute('fill',           hexToRgba(a.color || '#8b5cf6', a.opacity ?? 0.25));
+    r.setAttribute('stroke',         a.color || '#8b5cf6');
+    r.setAttribute('stroke-opacity', '0.8');
+    r.setAttribute('stroke-width',   '0.4');
+    r.setAttribute('rx',             '0.6');
+    r.setAttribute('data-ann-id',    a.id);
+    r.style.cursor = 'pointer';
+    r.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
+    svg.appendChild(r);
+  }
+
+  function annRenderDraw(svg, a) {
+    if (!svg || !Array.isArray(a.paths) || a.paths.length < 2) return;
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    poly.setAttribute('points',           a.paths.map(p => `${p[0]},${p[1]}`).join(' '));
+    poly.setAttribute('fill',            'none');
+    poly.setAttribute('stroke',           a.color || '#ef4444');
+    poly.setAttribute('stroke-opacity',   String(a.opacity ?? 0.85));
+    poly.setAttribute('stroke-width',     String((a.stroke_width || 3) * 0.5));
+    poly.setAttribute('stroke-linecap',  'round');
+    poly.setAttribute('stroke-linejoin', 'round');
+    poly.setAttribute('data-ann-id',      a.id);
+    poly.style.cursor = 'pointer';
+    poly.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
+    svg.appendChild(poly);
+  }
+
+  function annRenderComment(overlay, a) {
+    const pin = document.createElement('div');
+    pin.className         = 'ann-pin';
+    pin.dataset.annId     = a.id;
+    pin.style.left        = a.x + '%';
+    pin.style.top         = a.y + '%';
+    pin.style.background  = a.color || '#3b82f6';
+    pin.title             = a.text || '';
+    pin.innerHTML         = `<div class="ann-pin-inner"></div>`;
+    pin.addEventListener('click', e => {
+      if (_annSettings.active_tool === 'erase') { annRemove(a.id); return; }
+      annShowCommentView(e, a);
+    });
+    overlay.appendChild(pin);
+  }
+
+  function annRenderStamp(overlay, a) {
+    const el = document.createElement('div');
+    el.className          = 'ann-stamp-text';
+    el.dataset.annId      = a.id;
+    el.style.left         = a.x + '%';
+    el.style.top          = a.y + '%';
+    el.style.color        = a.color || '#ef4444';
+    el.style.borderColor  = a.color || '#ef4444';
+    el.style.opacity      = a.opacity ?? 0.85;
+    el.textContent        = a.text || 'DRAFT';
+    el.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
+    overlay.appendChild(el);
+  }
+
+  function annRenderBookmark(overlay, a) {
+    const bk = document.createElement('div');
+    bk.className      = 'ann-bookmark-flag';
+    bk.dataset.annId  = a.id;
+    bk.style.left     = a.x + '%';
+    bk.style.top      = '0';
+    bk.title          = a.text || '';
+    bk.innerHTML      = `<svg viewBox="0 0 24 30" xmlns="http://www.w3.org/2000/svg">
+      <path d="M0 0h24v30l-12-8L0 30V0z" fill="${a.color || '#06b6d4'}" opacity="${a.opacity ?? 1}"/>
+    </svg>`;
+    bk.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
+    overlay.appendChild(bk);
+  }
+
+  /* ── Comment popup ── */
+  function annShowCommentView(e, a) {
+    const popup = document.getElementById('annCommentPopup');
+    if (!popup) return;
+    popup.querySelector('textarea').value = a.text || '';
+    popup.dataset.annId = a.id;
+    const parent = popup.offsetParent ? popup.offsetParent.getBoundingClientRect() : { left: 0, top: 0 };
+    popup.style.left = (e.pageX - parent.left + 8) + 'px';
+    popup.style.top  = (e.pageY - parent.top  - 40) + 'px';
+    popup.classList.add('open');
+    popup.querySelector('textarea').focus();
+  }
+
+  function annOpenCommentInput(pos, overlay) {
+    const popup = document.getElementById('annCommentPopup');
+    if (!popup) return;
+    popup.querySelector('textarea').value = '';
+    delete popup.dataset.annId;
+    popup.dataset.pendingX = pos.x;
+    popup.dataset.pendingY = pos.y;
+    const r = overlay.getBoundingClientRect();
+    popup.style.left = (pos.x / 100 * r.width  + 12) + 'px';
+    popup.style.top  = (pos.y / 100 * r.height - 20) + 'px';
+    popup.classList.add('open');
+    popup.querySelector('textarea').focus();
+  }
+
+  function annCommentSave() {
+    const popup = document.getElementById('annCommentPopup');
+    if (!popup) return;
+    const txt = popup.querySelector('textarea').value.trim();
+    if (popup.dataset.annId) {
+      const ann = _annAnnotations.find(a => a.id === popup.dataset.annId);
+      if (ann) { ann.text = txt; annScheduleSave(); annRenderAll(); }
+    } else if (txt) {
+      annAdd({
+        tool: 'comment',
+        color: _annSettings.color, opacity: _annSettings.opacity,
+        x: parseFloat(popup.dataset.pendingX || 50),
+        y: parseFloat(popup.dataset.pendingY || 50),
+        text: txt,
+      });
+    }
+    popup.classList.remove('open');
+    annRefreshListPanel();
+  }
+
+  /* ── Stamp picker ── */
+  function annOpenStampPicker(pos, overlay) {
+    document.getElementById('annStampMenu')?.remove();
+    const menu = document.createElement('div');
+    menu.id = 'annStampMenu';
+    menu.style.cssText = `
+      position:absolute;left:${pos.x}%;top:${pos.y}%;
+      background:#fff;border:1px solid var(--eo-border);border-radius:10px;
+      box-shadow:0 8px 24px rgba(0,0,0,.18);padding:6px;z-index:70;
+      display:flex;flex-direction:column;gap:3px;min-width:140px;
+    `;
+    STAMP_LABELS.forEach(label => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.style.cssText = `
+        width:100%;text-align:left;padding:5px 10px;border:none;border-radius:7px;
+        background:none;cursor:pointer;font-size:.78rem;font-weight:700;
+        color:${_annSettings.color};letter-spacing:.08em;
+      `;
+      btn.textContent = label;
+      btn.onmouseenter = () => btn.style.background = 'var(--eo-bg)';
+      btn.onmouseleave = () => btn.style.background = 'none';
+      btn.onclick = () => {
+        annAdd({ tool:'stamp', color:_annSettings.color, opacity:_annSettings.opacity, x:pos.x, y:pos.y, text:label });
+        menu.remove();
+      };
+      menu.appendChild(btn);
+    });
+    overlay.appendChild(menu);
+    setTimeout(() => document.addEventListener('click', function rm(e) {
+      if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', rm); }
+    }), 50);
+  }
+
+  /* ── Mouse handlers — bound to the SVG canvas, not the whole overlay ── */
+  function annBindOverlayEvents(overlay) {
+    /* We bind to the overlay div for mousedown/move/up so drag works even
+       when the cursor briefly leaves the canvas during fast movement.
+       But we use e.target checks to ignore clicks on toolbar/panel children. */
+    const svg = overlay.querySelector('.ann-canvas');
+    if (!svg) return;
+
+    svg.addEventListener('mousedown', annOnDown);
+    /* move and up on window so drag finishes even if mouse leaves svg */
+    window.addEventListener('mousemove', annOnMove);
+    window.addEventListener('mouseup',   annOnUp);
+    svg.addEventListener('click', annOnClick);
+  }
+
+  function annOnDown(e) {
+    if (e.button !== 0) return;
+    const tool = _annSettings.active_tool;
+    if (tool === 'draw' || tool === 'rect' || tool === 'highlight') {
+      const overlay = document.getElementById('annOverlay');
+      if (!overlay) return;
+      _annDrawing     = true;
+      _annDrawStart   = annPctPos(overlay, e);
+      _annCurrentPath = [[_annDrawStart.x, _annDrawStart.y]];
+      e.preventDefault();
+    }
+  }
+
+  function annOnMove(e) {
+    if (!_annDrawing) return;
+    const overlay = document.getElementById('annOverlay');
+    if (!overlay) return;
+    const svg  = overlay.querySelector('.ann-canvas');
+    if (!svg) return;
+    const pos  = annPctPos(overlay, e);
+    const tool = _annSettings.active_tool;
+
+    if (tool === 'draw') {
+      _annCurrentPath.push([pos.x, pos.y]);
+      if (_annTempEl) {
+        _annTempEl.setAttribute('points', _annCurrentPath.map(p => `${p[0]},${p[1]}`).join(' '));
+      } else {
+        _annTempEl = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        _annTempEl.setAttribute('fill',            'none');
+        _annTempEl.setAttribute('stroke',           _annSettings.color);
+        _annTempEl.setAttribute('stroke-opacity',   String(_annSettings.opacity));
+        _annTempEl.setAttribute('stroke-width',     String((_annSettings.stroke_width || 3) * 0.5));
+        _annTempEl.setAttribute('stroke-linecap',  'round');
+        _annTempEl.setAttribute('stroke-linejoin', 'round');
+        svg.appendChild(_annTempEl);
+      }
+    } else if (tool === 'rect' || tool === 'highlight') {
+      const x    = Math.min(_annDrawStart.x, pos.x);
+      const y    = Math.min(_annDrawStart.y, pos.y);
+      const w    = Math.abs(pos.x - _annDrawStart.x);
+      const h    = Math.abs(pos.y - _annDrawStart.y);
+      const fill = tool === 'highlight'
+        ? hexToRgba(_annSettings.color, _annSettings.opacity)
+        : hexToRgba(_annSettings.color, _annSettings.opacity * 0.5);
+      if (_annTempEl) {
+        _annTempEl.setAttribute('x', x);
+        _annTempEl.setAttribute('y', y);
+        _annTempEl.setAttribute('width',  w);
+        _annTempEl.setAttribute('height', h);
+        _annTempEl.setAttribute('fill', fill);
+      } else {
+        _annTempEl = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        _annTempEl.setAttribute('rx', '0.5');
+        _annTempEl.setAttribute('fill', fill);
+        svg.appendChild(_annTempEl);
+      }
+    }
+  }
+
+  function annOnUp(e) {
+    if (!_annDrawing) return;
+    _annDrawing = false;
+    const overlay = document.getElementById('annOverlay');
+    if (!overlay) return;
+    const pos  = annPctPos(overlay, e);
+    const tool = _annSettings.active_tool;
+
+    if (_annTempEl) { _annTempEl.remove(); _annTempEl = null; }
+
+    if (tool === 'draw' && _annCurrentPath.length > 2) {
+      annAdd({
+        tool: 'draw', color: _annSettings.color,
+        opacity: _annSettings.opacity, stroke_width: _annSettings.stroke_width || 3,
+        paths: _annCurrentPath, x: _annDrawStart.x, y: _annDrawStart.y,
+      });
+    } else if (tool === 'rect' || tool === 'highlight') {
+      const x = Math.min(_annDrawStart.x, pos.x);
+      const y = Math.min(_annDrawStart.y, pos.y);
+      const w = Math.abs(pos.x - _annDrawStart.x);
+      const h = Math.abs(pos.y - _annDrawStart.y);
+      if (w > 0.5 && h > 0.3) {
+        annAdd({ tool, color: _annSettings.color, opacity: _annSettings.opacity, x, y, w, h });
+      }
+    }
+    _annCurrentPath = [];
+    _annDrawStart   = null;
+  }
+
+  function annOnClick(e) {
+    /* Ignore if this click finished a drag */
+    if (_annDrawing) return;
+    const tool    = _annSettings.active_tool;
+    const overlay = document.getElementById('annOverlay');
+    if (!overlay) return;
+    const pos = annPctPos(overlay, e);
+    if      (tool === 'comment')  annOpenCommentInput(pos, overlay);
+    else if (tool === 'stamp')    annOpenStampPicker(pos, overlay);
+    else if (tool === 'bookmark') annAdd({ tool:'bookmark', color:_annSettings.color, opacity:_annSettings.opacity, x:pos.x, y:pos.y });
+  }
+
+  /* ── Annotation list panel ── */
+  function annRefreshListPanel() {
+    const scroll = document.getElementById('annListScroll');
+    if (!scroll) return;
+    scroll.innerHTML = '';
+    if (!_annAnnotations.length) {
+      scroll.innerHTML = '<div class="ann-list-empty"><i class="bi bi-pencil-square d-block mb-2" style="font-size:1.4rem;opacity:.4"></i>No annotations yet.<br>Pick a tool and click on the document.</div>';
+      return;
+    }
+    const toolNames = { highlight:'Highlight', comment:'Comment', draw:'Drawing', rect:'Rectangle', stamp:'Stamp', bookmark:'Bookmark' };
+    _annAnnotations.slice().reverse().forEach(a => {
+      const item       = document.createElement('div');
+      item.className   = 'ann-list-item';
+      item.dataset.annId = a.id;
+      const preview = a.text ? `<div class="ann-list-item-text">${esc(a.text.slice(0, 60))}${a.text.length > 60 ? '…' : ''}</div>` : '';
+      const ts      = a.created_at ? new Date(a.created_at).toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+      item.innerHTML = `
+        <button class="ann-list-delete-btn" data-ann-id="${a.id}" title="Delete"><i class="bi bi-x-circle"></i></button>
+        <div class="ann-list-item-type">
+          <span class="ann-list-item-dot" style="background:${a.color || '#3b82f6'}"></span>
+          ${toolNames[a.tool] || a.tool}
+        </div>
+        ${preview}
+        <div class="ann-list-item-meta">${ts}</div>
+      `;
+      item.querySelector('.ann-list-delete-btn').addEventListener('click', e => {
+        e.stopPropagation();
+        annRemove(a.id);
+      });
+      scroll.appendChild(item);
+    });
+  }
+
+  function annToggleListPanel() {
+    const panel = document.getElementById('annListPanel');
+    if (!panel) return;
+    const isOpen = panel.classList.toggle('open');
+    if (isOpen) annRefreshListPanel();
+  }
+
+  /* ── Settings panel ── */
+  function annApplySettings() {
+    const panel = document.getElementById('annSettingsPanel');
+    if (panel) {
+      panel.querySelectorAll('.ann-color-dot').forEach(dot =>
+        dot.classList.toggle('selected', dot.dataset.color === _annSettings.color)
+      );
+      const slider = panel.querySelector('#annOpacitySlider');
+      const valEl  = panel.querySelector('#annOpacityVal');
+      if (slider) slider.value = Math.round((_annSettings.opacity ?? 0.5) * 100);
+      if (valEl)  valEl.textContent = Math.round((_annSettings.opacity ?? 0.5) * 100) + '%';
+      const sw = _annSettings.stroke_width || 3;
+      panel.querySelectorAll('.ann-stroke-btn').forEach(btn =>
+        btn.classList.toggle('active', parseInt(btn.dataset.sw, 10) === sw)
+      );
+    }
+    document.querySelectorAll('.ann-tool-btn[data-tool]').forEach(btn =>
+      btn.classList.toggle('active', btn.dataset.tool === _annSettings.active_tool)
+    );
+    /* Update overlay class — CSS targets .ann-canvas inside for pointer-events */
+    const overlay = document.getElementById('annOverlay');
+    if (overlay) {
+      const tool = _annSettings.active_tool;
+      overlay.className = 'ann-overlay' +
+        (tool && tool !== 'none' ? ` ann-active ann-tool-${tool}` : '');
+    }
+  }
+
+  function annBuildSettingsPanel() {
+    const dots = ANN_COLORS.map(c =>
+      `<div class="ann-color-dot${c === _annSettings.color ? ' selected' : ''}" style="background:${c}" data-color="${c}" title="${c}"></div>`
+    ).join('');
+    const strokes = [1,2,3,5].map(sw =>
+      `<button class="ann-stroke-btn${(_annSettings.stroke_width||3)===sw?' active':''}" data-sw="${sw}" type="button" title="${sw}px">
+        <svg width="20" height="20"><line x1="4" y1="10" x2="16" y2="10" stroke="${(_annSettings.stroke_width||3)===sw?'#fff':'#64748b'}" stroke-width="${sw}" stroke-linecap="round"/></svg>
+      </button>`
+    ).join('');
+    const pct = Math.round((_annSettings.opacity ?? 0.5) * 100);
+    return `
+      <div class="ann-settings-panel" id="annSettingsPanel">
+        <div>
+          <div class="ann-settings-label">Colour</div>
+          <div class="ann-color-grid">${dots}</div>
+        </div>
+        <div>
+          <div class="ann-settings-label">Opacity</div>
+          <div class="ann-opacity-row">
+            <input type="range" id="annOpacitySlider" min="10" max="100" value="${pct}" step="5">
+            <span class="ann-opacity-val" id="annOpacityVal">${pct}%</span>
+          </div>
+        </div>
+        <div>
+          <div class="ann-settings-label">Stroke width</div>
+          <div class="ann-stroke-row">${strokes}</div>
+        </div>
+      </div>`;
+  }
+
+  function annBindSettingsEvents(panel) {
+    panel.querySelectorAll('.ann-color-dot').forEach(dot => {
+      dot.addEventListener('click', () => {
+        _annSettings.color = dot.dataset.color;
+        annApplySettings();
+        annSaveSettings();
+      });
+    });
+    const slider = panel.querySelector('#annOpacitySlider');
+    const valEl  = panel.querySelector('#annOpacityVal');
+    if (slider) {
+      slider.addEventListener('input', () => {
+        _annSettings.opacity = parseFloat(slider.value) / 100;
+        if (valEl) valEl.textContent = slider.value + '%';
+        annSaveSettings();
+      });
+    }
+    panel.querySelectorAll('.ann-stroke-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        _annSettings.stroke_width = parseInt(btn.dataset.sw, 10);
+        annApplySettings();
+        annSaveSettings();
+      });
+    });
+  }
+
+  /* ── Build annotation UI ── */
+  function annBuildUI(overlay) {
+    overlay.innerHTML = `
+      <!-- SVG canvas: viewBox 0 0 100 100 so attribute values are 0-100 = 0%-100% -->
+      <svg class="ann-canvas" id="annSvgCanvas"
+           viewBox="0 0 100 100" preserveAspectRatio="none"
+           xmlns="http://www.w3.org/2000/svg"></svg>
+
+      <div class="ann-toolbar" id="annToolbar">
+        <button class="ann-tool-btn" data-tool="highlight" data-tip="Highlight"     type="button"><i class="bi bi-highlighter"></i></button>
+        <button class="ann-tool-btn" data-tool="comment"   data-tip="Comment"       type="button"><i class="bi bi-chat-square-text"></i></button>
+        <button class="ann-tool-btn" data-tool="draw"      data-tip="Freehand draw" type="button"><i class="bi bi-pencil"></i></button>
+        <button class="ann-tool-btn" data-tool="rect"      data-tip="Rectangle"     type="button"><i class="bi bi-square"></i></button>
+        <button class="ann-tool-btn" data-tool="stamp"     data-tip="Stamp"         type="button"><i class="bi bi-type-bold"></i></button>
+        <button class="ann-tool-btn" data-tool="bookmark"  data-tip="Bookmark"      type="button"><i class="bi bi-bookmark-fill"></i></button>
+        <div class="ann-sep"></div>
+        <button class="ann-tool-btn ann-danger" data-tool="erase" data-tip="Erase"  type="button"><i class="bi bi-eraser"></i></button>
+        <div class="ann-sep"></div>
+        <button class="ann-tool-btn" id="annSettingsToggle" data-tip="Settings"        type="button"><i class="bi bi-sliders"></i></button>
+        <button class="ann-tool-btn" id="annListToggle"     data-tip="All annotations" type="button" style="position:relative">
+          <i class="bi bi-list-ul"></i>
+          <span class="ann-count-badge" id="annCountBadge" style="display:none"></span>
+        </button>
+        <div class="ann-sep" id="lpChatSep" style="display:none"></div>
+        <button class="ann-tool-btn lp-chat-toggle-btn" id="lpChatToggleBtn" data-tip="Live chat"
+                type="button" style="display:none;position:relative" onclick="lpToggleChat()">
+          <i class="bi bi-chat-dots"></i>
+          <span class="lp-chat-unread" id="lpChatUnread"></span>
+        </button>
+      </div>
+
+      ${annBuildSettingsPanel()}
+
+      <div class="ann-comment-popup" id="annCommentPopup">
+        <textarea placeholder="Type your comment…" rows="3"></textarea>
+        <div class="ann-comment-popup-actions">
+          <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" id="annCommentCancel">Cancel</button>
+          <button type="button" class="eo-btn eo-btn-primary   eo-btn-sm" id="annCommentSave">Save</button>
+        </div>
+      </div>
+
+      <div class="ann-list-panel" id="annListPanel">
+        <div class="ann-list-head">
+          <span><i class="bi bi-pencil-square me-1" style="color:var(--eo-accent)"></i>Annotations</span>
+          <button type="button" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" id="annListClose"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div class="ann-list-scroll" id="annListScroll"></div>
+      </div>
+
+      <div class="ann-save-indicator" id="annSaveIndicator">
+        <i class="bi bi-check-circle-fill me-1"></i> Saved
+      </div>
+    `;
+  }
+
+  function annBindToolbarEvents(overlay) {
+    /* Tool buttons — toggle on/off */
+    overlay.querySelectorAll('.ann-tool-btn[data-tool]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        _annSettings.active_tool = (_annSettings.active_tool === btn.dataset.tool) ? 'none' : btn.dataset.tool;
+        document.getElementById('annSettingsPanel')?.classList.remove('open');
+        annApplySettings();
+        annSaveSettings();
+      });
+    });
+
+    /* Settings panel */
+    overlay.querySelector('#annSettingsToggle')?.addEventListener('click', e => {
+      e.stopPropagation();
+      document.getElementById('annSettingsPanel')?.classList.toggle('open');
+    });
+
+    /* List panel */
+    overlay.querySelector('#annListToggle')?.addEventListener('click', e => {
+      e.stopPropagation();
+      annToggleListPanel();
+    });
+    overlay.querySelector('#annListClose')?.addEventListener('click', () =>
+      document.getElementById('annListPanel')?.classList.remove('open')
+    );
+
+    /* Comment popup buttons */
+    overlay.querySelector('#annCommentSave')?.addEventListener('click', e => {
+      e.stopPropagation();
+      annCommentSave();
+    });
+    overlay.querySelector('#annCommentCancel')?.addEventListener('click', e => {
+      e.stopPropagation();
+      document.getElementById('annCommentPopup')?.classList.remove('open');
+    });
+
+    /* Outside-click: close settings + comment popups */
+    function annOutside(e) {
+      const sp  = document.getElementById('annSettingsPanel');
+      const cp  = document.getElementById('annCommentPopup');
+      const stb = document.getElementById('annSettingsToggle');
+      if (sp && !sp.contains(e.target) && e.target !== stb) sp.classList.remove('open');
+      if (cp && !cp.contains(e.target))                      cp.classList.remove('open');
+    }
+    document.addEventListener('click', annOutside);
+    overlay._outsideListener = annOutside;   /* saved for cleanup */
+
+    /* Stop toolbar / panels from bubbling clicks to overlay canvas */
+    ['#annToolbar','#annListPanel','#annSettingsPanel'].forEach(sel =>
+      overlay.querySelector(sel)?.addEventListener('click', e => e.stopPropagation())
+    );
+
+    /* Bind settings panel inputs */
+    const panel = document.getElementById('annSettingsPanel');
+    if (panel) annBindSettingsEvents(panel);
+  }
+
+  /* ── Init / Destroy ── */
+  function initAnnotationLayer(fileId) {
+    _annFileId      = fileId;
+    _annAnnotations = [];
+    _annDirty       = false;
+
+    const surface = document.getElementById('previewSurface');
+    if (!surface) return;
+    surface.style.position = 'relative';
+
+    const overlay     = document.createElement('div');
+    overlay.id        = 'annOverlay';
+    overlay.className = 'ann-overlay';
+    surface.appendChild(overlay);
+
+    annBuildUI(overlay);
+    annBindToolbarEvents(overlay);
+    annBindOverlayEvents(overlay);
+    annApplySettings();
+    annLoad(fileId);
+  }
+
+  function destroyAnnotationLayer() {
+    if (_annDirty) annFlush();
+    clearTimeout(_annSaveTimer);
+
+    /* Remove window-level drag listeners added in annBindOverlayEvents */
+    window.removeEventListener('mousemove', annOnMove);
+    window.removeEventListener('mouseup',   annOnUp);
+
+    const overlay = document.getElementById('annOverlay');
+    if (overlay) {
+      if (overlay._outsideListener) document.removeEventListener('click', overlay._outsideListener);
+      overlay.remove();
+    }
+    _annFileId      = null;
+    _annAnnotations = [];
+    _annDirty       = false;
+    _annSaveTimer   = null;
+    _annDrawing     = false;
+    _annDrawStart   = null;
+    _annCurrentPath = [];
+    _annTempEl      = null;
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════
+     PREVIEW MODAL  (openPreviewModal / closePreviewModal)
+     Defined last so they can call initAnnotationLayer / destroyAnnotationLayer
+     which are now in the same scope.
+     ══════════════════════════════════════════════════════════════════════ */
   window.openPreviewModal = function (fileId, fileName, fileExt) {
-    currentFileId = fileId;
+    currentFileId  = fileId;
     currentFileExt = String(fileExt || '').toLowerCase().trim();
     resetPreviewState();
 
     fileNameEl.textContent = fileName || 'Untitled';
-    downloadBtn.href = downloadUrl(fileId);
+    downloadBtn.href       = downloadUrl(fileId);
 
     loading.style.display = 'flex';
     content.style.display = 'none';
@@ -3508,24 +4816,783 @@
       loadPreviewInfo(fileId, fileName);
       loading.style.display = 'none';
       content.style.display = 'block';
+
+      /* Start annotation layer for supported file types */
+      if (ANN_SUPPORTED_EXTS.has(currentFileExt)) {
+        setTimeout(function () { initAnnotationLayer(fileId); }, 320);
+      }
     });
   };
 
   window.closePreviewModal = function () {
+    destroyAnnotationLayer();          /* flush + clean up annotation state */
     modal.classList.remove('open');
-    currentFileId = null;
+    currentFileId  = null;
     currentFileExt = '';
     resetPreviewState();
-    content.innerHTML = '';
+    content.innerHTML     = '';
     loading.style.display = 'flex';
     content.style.display = 'none';
   };
 
   modal.addEventListener('click', function (e) {
-    if (e.target === modal) {
-      window.closePreviewModal();
-    }
+    if (e.target === modal) window.closePreviewModal();
   });
+
+  /* ══════════════════════════════════════════════════════════════════════
+     LIVE PREVIEW ENGINE
+     Presentation mode — real-time sharing over WebSocket.
+     The presenter's cursor, tool actions and annotations stream live to
+     all joined viewers.  Chat is bidirectional.  Everything is ephemeral:
+     closing the preview ends the session for everyone instantly.
+     ══════════════════════════════════════════════════════════════════════ */
+
+  /* ── Current-user info injected by Django template ── */
+  const LP_CURRENT_USER_ID   = '{{ request.user.id }}';
+  const LP_CURRENT_USER_NAME = '{{ request.user.get_full_name|escapejs }}';
+
+  /* ── Session state ── */
+  let _lpSocket        = null;
+  let _lpSessionToken  = null;
+  let _lpWsPath        = null;       /* remembered so we can reconnect */
+  let _lpRole          = null;       /* 'presenter' | 'viewer' | null */
+  let _lpPresenterName = '';
+  let _lpPendingInvite = null;       /* { token, fileId, fileName, fileExt, presenterName } */
+  let _lpInviteQueue   = [];         /* additional invites that arrive while one is pending */
+  let _lpCursorTimer   = null;
+  let _lpUnreadChat    = 0;
+  let _lpChatOpen      = false;
+  let _lpAllUsers      = [];
+  let _lpSelectedUsers = new Set();
+  let _lpReconnectAttempts = 0;      /* viewer-side exponential backoff */
+  let _lpIntentionalClose  = false;  /* set on teardown so close handler doesn't reconnect */
+
+  /* ── URL helpers ── */
+  function lpStartUrl(fileId)   { return `/files/${fileId}/live-preview/start/`; }
+  function lpAcceptUrl(token)   { return `/files/live-preview/${token}/accept/`; }
+  function lpEndUrl(token)      { return `/files/live-preview/${token}/end/`; }
+  function lpUsersUrl(fileId)   { return `/files/${fileId}/live-preview/users/`; }
+
+  /* ── Share button wired up when preview opens ── */
+  const lpShareBtn      = document.getElementById('lpShareBtn');
+  const lpShareBtnLabel = document.getElementById('lpShareBtnLabel');
+
+  window.lpOnShareBtnClick = function () {
+    if (_lpRole === 'presenter') {
+      /* Already live — clicking again ends session */
+      lpEndSession();
+    } else {
+      lpOpenPicker();
+    }
+  };
+
+  /* ── Picker ── */
+  window.lpOpenPicker = function () {
+    if (!currentFileId) return;
+    _lpSelectedUsers.clear();
+    lpUpdateSelectedCount();
+    document.getElementById('lpPickerModal').classList.add('open');
+    document.getElementById('lpUserSearch').value = '';
+    lpLoadUsers('');
+  };
+
+  window.lpClosePicker = function () {
+    document.getElementById('lpPickerModal').classList.remove('open');
+  };
+
+  window.lpFilterUsers = function (q) {
+    lpRenderUsers(q.toLowerCase());
+  };
+
+  async function lpLoadUsers(q) {
+    const list = document.getElementById('lpUserList');
+    list.innerHTML = '<div class="lp-empty"><i class="bi bi-hourglass-split d-block mb-2" style="font-size:1.3rem;opacity:.4"></i>Loading…</div>';
+    try {
+      const data = await safeJsonFetch(lpUsersUrl(currentFileId) + (q ? `?q=${encodeURIComponent(q)}` : ''), {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+      });
+      _lpAllUsers = data.users || [];
+      lpRenderUsers('');
+    } catch (e) {
+      list.innerHTML = '<div class="lp-empty" style="color:#ef4444">Could not load users</div>';
+    }
+  }
+
+  function lpRenderUsers(q) {
+    const list = document.getElementById('lpUserList');
+    const filtered = q ? _lpAllUsers.filter(u =>
+      u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
+    ) : _lpAllUsers;
+
+    if (!filtered.length) {
+      list.innerHTML = '<div class="lp-empty">No staff found</div>';
+      return;
+    }
+    list.innerHTML = '';
+    filtered.forEach(u => {
+      const row = document.createElement('div');
+      row.className = 'lp-user-row' + (_lpSelectedUsers.has(u.id) ? ' selected' : '');
+      row.dataset.userId = u.id;
+      const initials = u.name.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase();
+      row.innerHTML = `
+        <div class="lp-user-avatar">${initials}</div>
+        <div>
+          <div class="lp-user-name">${esc(u.name)}</div>
+          <div class="lp-user-email">${esc(u.email)}</div>
+        </div>
+        <i class="bi bi-check-circle-fill lp-user-check"></i>
+      `;
+      row.addEventListener('click', () => {
+        if (_lpSelectedUsers.has(u.id)) _lpSelectedUsers.delete(u.id);
+        else _lpSelectedUsers.add(u.id);
+        row.classList.toggle('selected', _lpSelectedUsers.has(u.id));
+        lpUpdateSelectedCount();
+      });
+      list.appendChild(row);
+    });
+  }
+
+  function lpUpdateSelectedCount() {
+    const n = _lpSelectedUsers.size;
+    document.getElementById('lpSelectedCount').textContent = `${n} selected`;
+    document.getElementById('lpStartBtn').disabled = (n === 0);
+  }
+
+  /* ── Start session (presenter) ── */
+  window.lpStartSession = async function () {
+    if (!currentFileId || _lpSelectedUsers.size === 0) return;
+    const startBtn = document.getElementById('lpStartBtn');
+    startBtn.disabled = true;
+    startBtn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Starting…';
+    try {
+      const data = await safeJsonFetch(lpStartUrl(currentFileId), {
+        method:  'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken(), 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ invite_user_ids: Array.from(_lpSelectedUsers) }),
+      });
+      _lpSessionToken  = data.session_token;
+      _lpRole          = 'presenter';
+      lpClosePicker();
+      lpConnectWebSocket(data.ws_path, 'presenter');
+      lpShowShareBtn('live');
+      lpInjectSessionUI();
+    } catch (err) {
+      startBtn.disabled = false;
+      startBtn.innerHTML = '<i class="bi bi-cast me-1"></i>Start sharing';
+      alert('Could not start live session: ' + (err.message || 'Unknown error'));
+    }
+  };
+
+  /* ── Accept invite (viewer) ── */
+  window.lpAcceptInvite = async function () {
+    const toast = document.getElementById('lpInviteToast');
+    toast.classList.remove('show');
+    if (!_lpPendingInvite) return;
+    const invite = _lpPendingInvite;
+    try {
+      const data = await safeJsonFetch(lpAcceptUrl(invite.token), {
+        method:  'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken() },
+      });
+      _lpSessionToken  = data.session_token;
+      _lpRole          = 'viewer';
+      _lpPresenterName = data.presenter_name;
+      /* Open the preview modal for this file as viewer */
+      window.openPreviewModal(data.file_id, data.file_name, data.file_ext, true);
+      /* Give the modal a frame to build then connect */
+      setTimeout(() => {
+        lpConnectWebSocket(data.ws_path, 'viewer');
+        lpShowShareBtn('viewer');
+        lpInjectSessionUI();
+      }, 400);
+    } catch (err) {
+      alert('Could not join live preview: ' + (err.message || 'Unknown error'));
+    }
+    /* Drop the current invite and show the next queued one (if any) —
+       unless the user is now actually in a session, in which case we
+       just discard the queue. */
+    if (_lpRole === 'viewer') {
+      _lpPendingInvite = null;
+      _lpInviteQueue.length = 0;
+    } else {
+      _lpAdvanceInviteQueue();
+    }
+  };
+
+  window.lpDeclineInvite = function () {
+    document.getElementById('lpInviteToast').classList.remove('show');
+    _lpAdvanceInviteQueue();
+  };
+
+  /* ── End session (presenter explicit) ── */
+  window.lpEndSession = function () {
+    if (!_lpSessionToken) return;
+    fetch(lpEndUrl(_lpSessionToken), {
+      method:  'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken() },
+    }).catch(() => {});
+    lpTeardown();
+  };
+
+  /* ── WebSocket ── */
+  function lpConnectWebSocket(wsPath, role) {
+    _lpWsPath = wsPath;
+    _lpIntentionalClose = false;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url   = proto + '//' + location.host + wsPath;
+    _lpSocket   = new WebSocket(url);
+
+    _lpSocket.addEventListener('open', () => {
+      _lpReconnectAttempts = 0;
+      /* Keep-alive ping every 20 s */
+      _lpSocket._ping = setInterval(() => {
+        if (_lpSocket && _lpSocket.readyState === WebSocket.OPEN)
+          _lpSocket.send(JSON.stringify({ type: 'ping' }));
+      }, 20000);
+    });
+
+    _lpSocket.addEventListener('message', e => {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { return; }
+      lpHandleMessage(msg);
+    });
+
+    _lpSocket.addEventListener('close', (ev) => {
+      clearInterval(_lpSocket && _lpSocket._ping);
+
+      if (_lpIntentionalClose) {
+        /* closed by teardown or session_end — don't reconnect */
+        return;
+      }
+
+      /* Auth / session-gone failures — don't retry, just give up */
+      if (ev && (ev.code === 4003 || ev.code === 4004)) {
+        lpTeardown();
+        return;
+      }
+
+      /* Viewers try to reconnect with exponential backoff.  The consumer
+         will auto-join them again via the invited→viewers fallback. */
+      if (_lpRole === 'viewer' && _lpSessionToken) {
+        if (_lpReconnectAttempts >= 5) {
+          lpShowStatusToast('Connection lost', 2800);
+          lpTeardown();
+          return;
+        }
+        _lpReconnectAttempts += 1;
+        const delay = Math.min(800 * Math.pow(2, _lpReconnectAttempts - 1), 6000);
+        setTimeout(() => {
+          if (_lpRole === 'viewer' && _lpSessionToken && !_lpIntentionalClose) {
+            lpConnectWebSocket(_lpWsPath, 'viewer');
+          }
+        }, delay);
+      } else if (_lpRole === 'presenter') {
+        /* Presenter lost connection — tell them, don't auto-reconnect
+           (they can click Share again if the grace expired). */
+        lpShowStatusToast('Disconnected', 2400);
+        lpTeardown();
+      }
+    });
+
+    _lpSocket.addEventListener('error', () => {
+      if (_lpSocket) clearInterval(_lpSocket._ping);
+    });
+
+    /* Presenter: broadcast cursor position at ~20 Hz (throttled, not debounced
+       — the old code was a debounce that reset on every mousemove and never
+       fired until the presenter stopped moving, making the remote cursor
+       appear frozen).  Trailing send guarantees the last position is sent. */
+    if (role === 'presenter') {
+      const surface = document.getElementById('previewSurface');
+      if (surface) {
+        const MIN_MS = 50;
+        let lastSent = 0;
+        let pending  = null;   // {x,y}
+        let trailing = null;   // setTimeout id
+
+        const sendNow = () => {
+          if (!_lpSocket || _lpSocket.readyState !== WebSocket.OPEN || !pending) return;
+          _lpSocket.send(JSON.stringify({
+            type: 'cursor_move',
+            x:    pending.x,
+            y:    pending.y,
+          }));
+          lastSent = Date.now();
+          pending  = null;
+        };
+
+        surface._lpMouseHandler = function (e) {
+          if (!_lpSocket || _lpSocket.readyState !== WebSocket.OPEN) return;
+          const r = surface.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return;
+          pending = {
+            x: +(((e.clientX - r.left) / r.width)  * 100).toFixed(2),
+            y: +(((e.clientY - r.top)  / r.height) * 100).toFixed(2),
+          };
+          const since = Date.now() - lastSent;
+          if (since >= MIN_MS) {
+            sendNow();
+          } else if (!trailing) {
+            trailing = setTimeout(() => {
+              trailing = null;
+              sendNow();
+            }, MIN_MS - since);
+          }
+        };
+        surface.addEventListener('mousemove', surface._lpMouseHandler);
+        // Remember the trailing timer so teardown can clear it.
+        surface._lpCursorTrailing = () => { if (trailing) { clearTimeout(trailing); trailing = null; } };
+      }
+    }
+  }
+
+  /* ── Message router ── */
+  function lpHandleMessage(msg) {
+    switch (msg.type) {
+      case 'cursor_move':
+        lpRenderRemoteCursor(msg.x, msg.y);
+        break;
+      case 'tool_event':
+        lpRenderRemoteToolEvent(msg.payload);
+        break;
+      case 'chat_message':
+        lpAppendChatMessage(msg);
+        break;
+      case 'viewer_joined':
+        lpShowStatusToast(`${msg.name} joined`);
+        break;
+      case 'viewer_left':
+        lpShowStatusToast(`${msg.name} left`);
+        break;
+      case 'viewer_list':
+        lpRenderViewerList(msg.viewers || []);
+        break;
+      case 'presenter_disconnected':
+        lpShowPresenterOffline(msg.grace_seconds || 10);
+        break;
+      case 'presenter_reconnected':
+        lpClearPresenterOffline();
+        lpShowStatusToast('Presenter is back', 1800);
+        break;
+      case 'session_end':
+        /* Presenter closed — wipe everything on viewer side */
+        lpTeardown();
+        window.closePreviewModal();
+        lpShowStatusToast('The presenter ended the session', 3500);
+        break;
+      case 'error':
+        lpShowStatusToast(msg.message || 'Error', 2400);
+        break;
+      case 'pong':
+        break;
+    }
+  }
+
+  /* ── Viewer roster (shown in status bar) ── */
+  let _lpViewerCount = 0;
+  function lpRenderViewerList(viewers) {
+    _lpViewerCount = viewers.length;
+    const badge = document.getElementById('lpViewerCount');
+    if (badge) {
+      badge.textContent = _lpViewerCount;
+      badge.style.display = _lpViewerCount > 0 ? 'inline-flex' : 'none';
+    }
+    const title = document.getElementById('lpViewerCount');
+    if (title && viewers.length) {
+      title.title = viewers.map(v => v.name).join(', ');
+    }
+  }
+
+  /* ── Presenter offline banner (viewer only) ── */
+  let _lpOfflineTimer = null;
+  function lpShowPresenterOffline(graceSec) {
+    const bar = document.getElementById('lpStatusBar');
+    if (bar) {
+      bar.classList.add('offline');
+      const txt = document.getElementById('lpStatusText');
+      if (txt) txt.textContent = 'Presenter offline — reconnecting…';
+    }
+    clearTimeout(_lpOfflineTimer);
+    /* After the grace window, if no reconnect arrived the server will
+       send session_end which tears everything down — no UI action needed. */
+  }
+  function lpClearPresenterOffline() {
+    const bar = document.getElementById('lpStatusBar');
+    if (bar) {
+      bar.classList.remove('offline');
+      const txt = document.getElementById('lpStatusText');
+      if (txt) txt.textContent = `Watching ${_lpPresenterName}`;
+    }
+  }
+
+  /* ── Broadcast tool events (called by annotation engine) ── */
+  function lpBroadcastToolEvent(payload) {
+    if (!_lpSocket || _lpSocket.readyState !== WebSocket.OPEN) return;
+    if (_lpRole !== 'presenter') return;
+    _lpSocket.send(JSON.stringify({ type: 'tool_event', payload }));
+  }
+
+  /* Hook into annAdd and annRemove so every annotation action is broadcast */
+  const _origAnnAdd    = window._lpAnnAddHook    = null;  /* set below after functions defined */
+
+  /* ── Render remote cursor ── */
+  function lpRenderRemoteCursor(x, y) {
+    const overlay = document.getElementById('annOverlay');
+    if (!overlay) return;
+    let cursor = overlay.querySelector('.lp-remote-cursor');
+    if (!cursor) {
+      cursor = document.createElement('div');
+      cursor.className = 'lp-remote-cursor';
+      cursor.innerHTML = `
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 2L17 10L10 12L7 18L3 2Z" fill="#8b5cf6" stroke="#fff" stroke-width="1.5"/>
+        </svg>
+        <div class="lp-cursor-label">${esc(_lpPresenterName || 'Presenter')}</div>
+      `;
+      overlay.appendChild(cursor);
+    }
+    cursor.style.left = x + '%';
+    cursor.style.top  = y + '%';
+  }
+
+  /* ── Render remote tool event on viewer overlay ── */
+  function lpRenderRemoteToolEvent(payload) {
+    if (!payload || !payload.action) return;
+    const { action, data } = payload;
+
+    if (action === 'add') {
+      /* Re-use the annotation engine's render functions */
+      if (data && data.id) {
+        /* Avoid duplicates */
+        if (_annAnnotations.some(a => a.id === data.id)) return;
+        _annAnnotations.push(data);
+        annRenderOne(data);
+        annUpdateCountBadge();
+      }
+    } else if (action === 'remove') {
+      if (data && data.id) {
+        _annAnnotations = _annAnnotations.filter(a => a.id !== data.id);
+        const el = document.querySelector(`[data-ann-id="${data.id}"]`);
+        if (el) el.remove();
+        annUpdateCountBadge();
+      }
+    } else if (action === 'clear') {
+      _annAnnotations = [];
+      annRenderAll();
+      annUpdateCountBadge();
+    }
+  }
+
+  /* ── Session UI: status bar + chat panel injected into previewSurface ── */
+  function lpInjectSessionUI() {
+    const surface = document.getElementById('previewSurface');
+    if (!surface) return;
+
+    /* Status bar */
+    let bar = document.getElementById('lpStatusBar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'lpStatusBar';
+      bar.className = 'lp-status-bar' + (_lpRole === 'viewer' ? ' viewer' : '');
+      bar.innerHTML = `
+        <div class="lp-live-dot"></div>
+        <span id="lpStatusText"></span>
+        <span id="lpViewerCount" class="lp-viewer-count" title="">
+          <i class="bi bi-people-fill"></i><span>0</span>
+        </span>
+      `;
+      surface.appendChild(bar);
+    }
+    bar.classList.add('show');
+    bar.classList.remove('offline');
+    const txt = document.getElementById('lpStatusText');
+    if (txt) txt.textContent = _lpRole === 'presenter' ? 'Live — sharing' : `Watching ${_lpPresenterName}`;
+
+    /* Chat panel */
+    let chat = document.getElementById('lpChatPanel');
+    if (!chat) {
+      chat = document.createElement('div');
+      chat.id = 'lpChatPanel';
+      chat.className = 'lp-chat-panel';
+      chat.innerHTML = `
+        <div class="lp-chat-head">
+          <span><i class="bi bi-chat-dots me-1" style="color:#8b5cf6"></i>Live Chat</span>
+          <button type="button" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" onclick="lpToggleChat()">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+        <div class="lp-chat-messages" id="lpChatMessages"></div>
+        <div class="lp-chat-input-row">
+          <textarea class="lp-chat-input" id="lpChatInput" placeholder="Message…" rows="1" maxlength="1000"></textarea>
+          <button class="lp-chat-send" onclick="lpSendChat()" type="button">
+            <i class="bi bi-send-fill"></i>
+          </button>
+        </div>
+      `;
+      surface.appendChild(chat);
+
+      /* Send on Enter (Shift+Enter = newline) */
+      chat.querySelector('#lpChatInput').addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); lpSendChat(); }
+      });
+    }
+
+    /* Show chat button in annotation toolbar */
+    const chatBtn  = document.getElementById('lpChatToggleBtn');
+    const chatSep  = document.getElementById('lpChatSep');
+    if (chatBtn) chatBtn.style.display = 'flex';
+    if (chatSep) chatSep.style.display = 'block';
+
+    /* Viewers can't draw — hide annotation drawing tools.  They still see
+       settings/list so they can read existing annotations. */
+    if (_lpRole === 'viewer') {
+      const overlay = document.getElementById('annOverlay');
+      if (overlay) overlay.classList.add('lp-viewer-readonly');
+    }
+  }
+
+  /* ── Chat ── */
+  window.lpToggleChat = function () {
+    const panel = document.getElementById('lpChatPanel');
+    if (!panel) return;
+    _lpChatOpen = panel.classList.toggle('open');
+    if (_lpChatOpen) {
+      _lpUnreadChat = 0;
+      lpUpdateUnreadBadge();
+      const msgs = document.getElementById('lpChatMessages');
+      if (msgs) msgs.scrollTop = msgs.scrollHeight;
+      document.getElementById('lpChatInput')?.focus();
+    }
+  };
+
+  window.lpSendChat = function () {
+    const input = document.getElementById('lpChatInput');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text || !_lpSocket || _lpSocket.readyState !== WebSocket.OPEN) return;
+    _lpSocket.send(JSON.stringify({ type: 'chat_message', text }));
+    input.value = '';
+  };
+
+  function lpAppendChatMessage(msg) {
+    const msgs = document.getElementById('lpChatMessages');
+    if (!msgs) return;
+
+    const isMine = String(msg.sender_id) === LP_CURRENT_USER_ID;
+    const el = document.createElement('div');
+    el.className = 'lp-msg ' + (isMine ? 'mine' : 'theirs');
+    el.innerHTML = (!isMine ? `<div class="lp-msg-sender">${esc(msg.sender_name)}</div>` : '')
+      + `<div>${esc(msg.text)}</div>`
+      + `<div class="lp-msg-meta">${esc(msg.ts)}</div>`;
+    msgs.appendChild(el);
+    msgs.scrollTop = msgs.scrollHeight;
+
+    if (!_lpChatOpen && !isMine) {
+      _lpUnreadChat++;
+      lpUpdateUnreadBadge();
+    }
+  }
+
+  function lpUpdateUnreadBadge() {
+    const badge = document.getElementById('lpChatUnread');
+    if (!badge) return;
+    if (_lpUnreadChat > 0) {
+      badge.textContent = _lpUnreadChat;
+      badge.style.display = 'flex';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  /* ── Status toast (inside the preview surface) ── */
+  function lpShowStatusToast(text, duration) {
+    const existing = document.getElementById('lpToast');
+    if (existing) existing.remove();
+    const t = document.createElement('div');
+    t.id = 'lpToast';
+    t.style.cssText = `
+      position:fixed;bottom:80px;left:50%;transform:translateX(-50%);
+      background:rgba(30,41,59,.92);color:#fff;font-size:.78rem;font-weight:600;
+      padding:8px 18px;border-radius:20px;z-index:9998;
+      animation:lp-slide-in .22s ease;pointer-events:none;white-space:nowrap;
+    `;
+    t.textContent = text;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), duration || 2800);
+  }
+
+  /* ── Share button state ── */
+  function lpShowShareBtn(mode) {
+    if (!lpShareBtn) return;
+    lpShareBtn.hidden = false;
+    lpShareBtn.className = 'lp-share-btn';
+    if (mode === 'live') {
+      lpShareBtn.classList.add('live');
+      lpShareBtnLabel.textContent = 'End sharing';
+    } else if (mode === 'viewer') {
+      lpShareBtn.classList.add('viewer-mode');
+      lpShareBtnLabel.textContent = 'Watching live';
+    } else {
+      lpShareBtnLabel.textContent = 'Share Live';
+    }
+  }
+
+  /* ── Teardown ── */
+  function lpTeardown() {
+    _lpIntentionalClose = true;
+    if (_lpSocket) {
+      clearInterval(_lpSocket._ping);
+      try { _lpSocket.close(); } catch (_) {}
+      _lpSocket = null;
+    }
+    clearTimeout(_lpCursorTimer);
+    clearTimeout(_lpOfflineTimer);
+    _lpOfflineTimer = null;
+
+    /* Remove cursor tracking from surface */
+    const surface = document.getElementById('previewSurface');
+    if (surface && surface._lpMouseHandler) {
+      surface.removeEventListener('mousemove', surface._lpMouseHandler);
+      surface._lpMouseHandler = null;
+      if (typeof surface._lpCursorTrailing === 'function') {
+        surface._lpCursorTrailing();
+        surface._lpCursorTrailing = null;
+      }
+    }
+
+    /* Remove viewer read-only class */
+    const annOv = document.getElementById('annOverlay');
+    if (annOv) annOv.classList.remove('lp-viewer-readonly');
+
+    /* Hide chat button in annotation toolbar */
+    const chatBtn = document.getElementById('lpChatToggleBtn');
+    const chatSep = document.getElementById('lpChatSep');
+    if (chatBtn) chatBtn.style.display = 'none';
+    if (chatSep) chatSep.style.display = 'none';
+
+    const bar   = document.getElementById('lpStatusBar');
+    const chat  = document.getElementById('lpChatPanel');
+    const curs  = document.querySelector('.lp-remote-cursor');
+    if (bar)  bar.remove();
+    if (chat) chat.remove();
+    if (curs) curs.remove();
+
+    _lpSessionToken  = null;
+    _lpRole          = null;
+    _lpPresenterName = '';
+    _lpUnreadChat    = 0;
+    _lpChatOpen      = false;
+    _lpViewerCount   = 0;
+    _lpReconnectAttempts = 0;
+
+    if (lpShareBtn) {
+      lpShareBtn.hidden = true;
+      lpShareBtn.className = 'lp-share-btn';
+      lpShareBtnLabel.textContent = 'Share Live';
+    }
+  }
+
+  /* ── Hook annotation add/remove to broadcast when presenter ── */
+  /* Because function declarations are hoisted, we can't rely on storing a
+     reference to the "original" annAdd — both declarations point to the same
+     hoisted binding. Instead we inline the original logic here and add the
+     broadcast call. The earlier annAdd/annRemove definitions are unreachable
+     at runtime since this declaration (being lower in the source) wins. */
+
+  function annAdd(obj) {
+    obj.id         = obj.id || annGenId();
+    obj.created_at = obj.created_at || new Date().toISOString();
+    _annAnnotations.push(obj);
+    annRenderOne(obj);
+    annUpdateCountBadge();
+    annScheduleSave();
+    lpBroadcastToolEvent({ action: 'add', data: obj });
+  }
+
+  function annRemove(id) {
+    _annAnnotations = _annAnnotations.filter(a => a.id !== id);
+    const el = document.querySelector(`[data-ann-id="${id}"]`);
+    if (el) el.remove();
+    annUpdateCountBadge();
+    annScheduleSave();
+    annRefreshListPanel();
+    lpBroadcastToolEvent({ action: 'remove', data: { id } });
+  }
+
+  /* ── Show Share Live button when preview opens (non-viewer) ── */
+  const _origOpenPreview = window.openPreviewModal;
+  window.openPreviewModal = function (fileId, fileName, fileExt, skipLp) {
+    _origOpenPreview(fileId, fileName, fileExt);
+    /* Show share btn only when opening fresh (not called internally by viewer accept) */
+    if (!skipLp && lpShareBtn) {
+      lpShareBtn.hidden = false;
+      lpShareBtn.className = 'lp-share-btn';
+      lpShareBtnLabel.textContent = 'Share Live';
+    }
+  };
+
+  /* ── Clean up live session when modal closes ── */
+  const _origClosePreview = window.closePreviewModal;
+  window.closePreviewModal = function () {
+    if (_lpRole === 'presenter' && _lpSessionToken) {
+      /* End session explicitly */
+      fetch(lpEndUrl(_lpSessionToken), {
+        method:  'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken() },
+      }).catch(() => {});
+    }
+    lpTeardown();
+    _origClosePreview();
+  };
+
+  /* ── Handle incoming live_preview_invite from the notifications WebSocket ── */
+  /* The notifications consumer fires an event with action data — we listen here */
+  window.lpHandleNotificationAction = function (actionData) {
+    if (!actionData) return;
+    if (actionData.action !== 'live_preview_accept') return;
+
+    const invite = {
+      token:         actionData.session_token,
+      fileId:        actionData.file_id,
+      fileName:      actionData.file_name,
+      fileExt:       actionData.file_ext,
+      presenterName: actionData.presenter_name,
+    };
+
+    /* Already showing an invite? Queue this one (de-duped by token). */
+    if (_lpPendingInvite) {
+      if (_lpPendingInvite.token !== invite.token &&
+          !_lpInviteQueue.some(q => q.token === invite.token)) {
+        _lpInviteQueue.push(invite);
+      }
+      return;
+    }
+
+    _lpShowInvite(invite);
+  };
+
+  function _lpShowInvite(invite) {
+    _lpPendingInvite = invite;
+    document.getElementById('lpInvitePresenterName').textContent = invite.presenterName;
+    document.getElementById('lpInviteFileName').textContent = `"${invite.fileName}"`;
+    document.getElementById('lpInviteToast').classList.add('show');
+    /* Auto-dismiss after 30 s — route through decline so the queue advances */
+    setTimeout(() => {
+      if (_lpPendingInvite && _lpPendingInvite.token === invite.token) {
+        window.lpDeclineInvite();
+      }
+    }, 30000);
+  }
+
+  function _lpAdvanceInviteQueue() {
+    _lpPendingInvite = null;
+    if (_lpInviteQueue.length) {
+      _lpShowInvite(_lpInviteQueue.shift());
+    } else {
+      document.getElementById('lpInviteToast').classList.remove('show');
+    }
+  }
+
 })();
 </script>
 {% endblock %}

@@ -7,268 +7,570 @@
   <span>{{ target.full_name|default:target.email }}</span>
 {% endblock %}
 
-{% block content %}
-<div class="eo-page-header">
-  <div style="display:flex;align-items:center;gap:14px">
-    <div class="eo-avatar-lg">
-      {% if target.avatar %}<img src="{{ target.avatar.url }}" alt="">{% else %}{{ target.initials }}{% endif %}
-    </div>
-    <div>
-      <h1 class="eo-page-title" style="margin-bottom:0">{{ target.full_name|default:target.email }}</h1>
-      <p class="eo-page-subtitle" style="margin-bottom:0">{{ target.email }}</p>
-    </div>
-  </div>
-  <a href="{% url 'user_admin:dashboard' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-arrow-left"></i> Back</a>
-</div>
-
-{% if messages %}
-  {% for m in messages %}
-    <div class="eo-alert eo-alert-{{ m.tags|default:'info' }}">{{ m }}</div>
-  {% endfor %}
-{% endif %}
-
-{# ═══════════════════ One-shot temp-password banner ═══════════════════ #}
-{% if request.session.temp_pw_flash and request.session.temp_pw_flash.user_id == target.pk|stringformat:'s' %}
-<div class="eo-card" style="padding:18px;margin-bottom:20px;border-left:4px solid #f59e0b;background:#fffbeb">
-  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-    <div>
-      <strong><i class="bi bi-key-fill"></i> Temporary password — show it now, only once</strong>
-      <div style="font-family:monospace;font-size:1.2rem;font-weight:700;margin-top:6px;letter-spacing:.08em">
-        {{ request.session.temp_pw_flash.password }}
-      </div>
-      <div class="text-muted" style="font-size:.82rem;margin-top:4px">
-        The user will be forced to change it the first time they sign in.
-      </div>
-    </div>
-    <button type="button" onclick="navigator.clipboard.writeText('{{ request.session.temp_pw_flash.password }}')"
-            class="eo-btn eo-btn-secondary">
-      <i class="bi bi-clipboard"></i> Copy
-    </button>
-  </div>
-</div>
-{# Clear the flash immediately after rendering so refresh doesn't re-show it. #}
-{% with _=request.session.pop %}{% endwith %}
-<script>
-  // Belt-and-suspenders: wipe the flash from the session via a tiny fetch
-  // as soon as the page loads, so hitting refresh never shows it again.
-  fetch('{% url "user_admin:dashboard" %}', {credentials:'same-origin'});
-</script>
-{% endif %}
-
-<div class="row g-3">
-  {# ═══════════════════════ Actions panel ═══════════════════════ #}
-  <div class="col-lg-7">
-
-    {# Identity summary #}
-    <div class="eo-card" style="padding:16px;margin-bottom:14px">
-      <h3 style="font-size:1rem;margin-bottom:12px">Identity</h3>
-      <div class="row g-2" style="font-size:.88rem">
-        <div class="col-sm-6"><span class="text-muted">Username:</span> {{ target.username }}</div>
-        <div class="col-sm-6"><span class="text-muted">Employee ID:</span> {{ target.employee_id|default:"—" }}</div>
-        <div class="col-sm-6"><span class="text-muted">Phone:</span> {{ target.phone|default:"—" }}</div>
-        <div class="col-sm-6"><span class="text-muted">Joined:</span> {{ target.date_joined|date:"M d, Y" }}</div>
-        <div class="col-sm-6"><span class="text-muted">Last seen:</span>
-          {% if target.last_seen %}{{ target.last_seen|naturaltime }}{% else %}Never{% endif %}
-        </div>
-        <div class="col-sm-6"><span class="text-muted">Active:</span>
-          {% if target.is_active %}<span style="color:#10b981">Yes</span>{% else %}<span style="color:#ef4444">No</span>{% endif %}
-        </div>
-      </div>
-    </div>
-
-    {# Password actions #}
-    <div class="eo-card" style="padding:16px;margin-bottom:14px">
-      <h3 style="font-size:1rem;margin-bottom:12px"><i class="bi bi-key"></i> Password</h3>
-      {% if must_change_pw %}
-        <div class="eo-alert eo-alert-warning" style="margin-bottom:12px">
-          <i class="bi bi-exclamation-triangle"></i> User is required to change their password on next login.
-        </div>
-      {% endif %}
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0">
-          {% csrf_token %}
-          <input type="hidden" name="action" value="reset_email">
-          <button class="eo-btn eo-btn-secondary" type="submit">
-            <i class="bi bi-envelope"></i> Email password-reset link
-          </button>
-        </form>
-        <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0"
-              onsubmit="return confirm('Generate a new temporary password? The current password will stop working immediately.');">
-          {% csrf_token %}
-          <input type="hidden" name="action" value="reset_temp">
-          <button class="eo-btn eo-btn-secondary" type="submit">
-            <i class="bi bi-key"></i> Generate temp password
-          </button>
-        </form>
-      </div>
-    </div>
-
-    {# Status + access #}
-    <div class="eo-card" style="padding:16px;margin-bottom:14px">
-      <h3 style="font-size:1rem;margin-bottom:12px"><i class="bi bi-shield-lock"></i> Access</h3>
-
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-        <span class="eo-chip" style="background:{% if target.status == 'active' %}#d1fae5{% elif target.status == 'suspended' %}#fee2e2{% else %}#e5e7eb{% endif %}">
-          {{ target.get_status_display }}
-        </span>
-        {% if is_locked %}
-          <span class="eo-chip" style="background:#fee2e2;color:#991b1b">
-            <i class="bi bi-lock-fill"></i> Locked out
-          </span>
-        {% endif %}
-      </div>
-
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-        {% if target.is_active and target.status != 'suspended' %}
-          <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0"
-                onsubmit="return confirm('Block {{ target.email|escapejs }}? They will be unable to sign in.');">
-            {% csrf_token %}
-            <input type="hidden" name="action" value="block">
-            <button class="eo-btn" style="background:#ef4444;color:#fff" type="submit">
-              <i class="bi bi-slash-circle"></i> Block user
-            </button>
-          </form>
-        {% else %}
-          <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0">
-            {% csrf_token %}
-            <input type="hidden" name="action" value="unblock">
-            <button class="eo-btn eo-btn-primary" type="submit">
-              <i class="bi bi-check2-circle"></i> Unblock / reactivate
-            </button>
-          </form>
-        {% endif %}
-
-        {% if is_locked %}
-          <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0">
-            {% csrf_token %}
-            <input type="hidden" name="action" value="unlock">
-            <button class="eo-btn eo-btn-secondary" type="submit">
-              <i class="bi bi-unlock"></i> Clear lockout
-            </button>
-          </form>
-        {% endif %}
-
-        {% if target.status != 'terminated' %}
-          <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0"
-                onsubmit="return confirm('Mark {{ target.email|escapejs }} as terminated? This disables their account.');">
-            {% csrf_token %}
-            <input type="hidden" name="action" value="terminate">
-            <button class="eo-btn" style="background:#64748b;color:#fff" type="submit">
-              <i class="bi bi-person-x"></i> Terminate
-            </button>
-          </form>
-        {% endif %}
-      </div>
-
-      {# Status changer #}
-      <form method="post" action="{% url 'user_admin:user_action' target.pk %}"
-            style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:14px">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="change_status">
-        <div style="flex:1;min-width:180px">
-          <label class="eo-label">Change status to</label>
-          <select name="status" class="eo-input">
-            {% for v, label in target.Status.choices %}
-              <option value="{{ v }}" {% if target.status == v %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <button class="eo-btn eo-btn-secondary" type="submit">Update status</button>
-      </form>
-
-      {# Groups #}
-      <form method="post" action="{% url 'user_admin:user_action' target.pk %}">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="set_groups">
-        <label class="eo-label">Groups</label>
-        <select name="groups" class="eo-input" multiple style="min-height:120px">
-          {% for g in all_groups %}
-            <option value="{{ g.name }}" {% if g.name in user_groups %}selected{% endif %}>{{ g.name }}</option>
-          {% endfor %}
-        </select>
-        <small class="text-muted">Hold Ctrl/Cmd to pick multiple.</small>
-        <div style="margin-top:10px">
-          <button class="eo-btn eo-btn-secondary" type="submit">Save groups</button>
-        </div>
-      </form>
-    </div>
-
-    {% if request.user.is_superuser %}
-    <div class="eo-card" style="padding:16px;border-left:4px solid #dc2626">
-      <h3 style="font-size:1rem;margin-bottom:10px;color:#991b1b">
-        <i class="bi bi-exclamation-octagon"></i> Danger zone
-      </h3>
-      <p class="text-muted" style="font-size:.85rem">
-        Hard-deleting a user removes their profile. Messages and tickets they created
-        may remain (the user FK is set to NULL in most places).
-      </p>
-      <form method="post" action="{% url 'user_admin:user_action' target.pk %}"
-            onsubmit="return confirm('PERMANENTLY DELETE {{ target.email|escapejs }}?\n\nThis cannot be undone. Type the email to confirm:') && prompt('Type the email to confirm:') === '{{ target.email|escapejs }}';">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="delete">
-        <button class="eo-btn" style="background:#dc2626;color:#fff" type="submit">
-          <i class="bi bi-trash"></i> Delete permanently
-        </button>
-      </form>
-    </div>
-    {% endif %}
-  </div>
-
-  {# ═══════════════════════ Sidebar: history ═══════════════════════ #}
-  <div class="col-lg-5">
-    <div class="eo-card" style="padding:16px;margin-bottom:14px">
-      <h3 style="font-size:1rem;margin-bottom:12px"><i class="bi bi-shield"></i> Recent security events</h3>
-      {% if recent_events %}
-        <ul style="list-style:none;padding:0;margin:0;font-size:.85rem">
-          {% for e in recent_events %}
-            <li style="padding:6px 0;border-bottom:1px solid var(--eo-border)">
-              <div style="display:flex;justify-content:space-between;gap:8px">
-                <span>{{ e.get_event_type_display }}</span>
-                <span class="text-muted" style="font-size:.75rem">{{ e.created_at|naturaltime }}</span>
-              </div>
-              {% if e.city or e.country %}
-                <div class="text-muted" style="font-size:.75rem">
-                  {{ e.city }}{% if e.city and e.country %}, {% endif %}{{ e.country }}
-                </div>
-              {% endif %}
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <div class="text-muted" style="font-size:.82rem">No recent events.</div>
-      {% endif %}
-    </div>
-
-    <div class="eo-card" style="padding:16px">
-      <h3 style="font-size:1rem;margin-bottom:12px"><i class="bi bi-clock-history"></i> Admin audit trail</h3>
-      {% if audit_logs %}
-        <ul style="list-style:none;padding:0;margin:0;font-size:.85rem">
-          {% for a in audit_logs %}
-            <li style="padding:6px 0;border-bottom:1px solid var(--eo-border)">
-              <div style="display:flex;justify-content:space-between;gap:8px">
-                <strong>{{ a.get_action_display }}</strong>
-                <span class="text-muted" style="font-size:.75rem">{{ a.timestamp|naturaltime }}</span>
-              </div>
-              <div class="text-muted" style="font-size:.78rem">
-                by {{ a.user|default:"—" }}
-              </div>
-              {% if a.notes %}<div style="font-size:.78rem;margin-top:2px">{{ a.notes }}</div>{% endif %}
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <div class="text-muted" style="font-size:.82rem">No admin actions recorded for this user yet.</div>
-      {% endif %}
-    </div>
-  </div>
-</div>
+{% block extra_css %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
 <style>
-  .eo-avatar-lg{
-    width:60px;height:60px;border-radius:50%;background:var(--eo-accent);color:#fff;
-    font-weight:700;font-size:1.3rem;display:flex;align-items:center;justify-content:center;
-    overflow:hidden;flex-shrink:0;
+  .ud-scope{
+    --ua-ink:#0b0f14; --ua-ink-2:#1c2530; --ua-ink-3:#475569; --ua-ink-4:#94a3b8;
+    --ua-paper:#fafaf7; --ua-paper-2:#f3f2ec; --ua-surface:#fff;
+    --ua-line:#e5e4dd; --ua-line-2:#cfcec4;
+    --ua-accent:#1e40af; --ua-accent-2:#3b5bdb; --ua-accent-soft:#eef2ff;
+    --ua-gold:#a97b2f; --ua-gold-soft:#fbf4e3;
+    --ua-green:#15803d; --ua-green-soft:#dcfce7;
+    --ua-red:#b91c1c; --ua-red-soft:#fee2e2;
+    --ua-amber:#b45309; --ua-amber-soft:#fef3c7;
+    --ua-display:'Instrument Serif', serif;
+    --ua-sans:'Inter Tight', sans-serif;
+    --ua-mono:'JetBrains Mono', monospace;
+    color: var(--ua-ink); font-family: var(--ua-sans);
+    font-feature-settings:"ss01","cv11","tnum";
   }
-  .eo-avatar-lg img{width:100%;height:100%;object-fit:cover}
+  .ud-scope *{ box-sizing:border-box; }
+
+  /* ─── Profile header ─── */
+  .ud-hero{
+    position:relative;
+    background: var(--ua-ink);
+    color: #fff;
+    border-radius: 20px;
+    padding: 32px 36px;
+    margin-bottom: 20px;
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .ud-hero::before{
+    content:""; position:absolute; inset:0; z-index:-1;
+    background:
+      radial-gradient(ellipse 500px 260px at 90% 120%, rgba(59,91,219,.38), transparent 60%),
+      radial-gradient(ellipse 400px 200px at 5% -20%, rgba(169,123,47,.22), transparent 55%);
+  }
+  .ud-hero::after{
+    content:""; position:absolute; inset:0; z-index:-1;
+    background-image:
+      linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+    background-size: 28px 28px;
+    mask-image: linear-gradient(180deg, rgba(0,0,0,.45), transparent 75%);
+  }
+  .ud-hero-row{
+    display:flex; gap: 22px; align-items: center; flex-wrap: wrap;
+    justify-content: space-between;
+  }
+  .ud-hero-left{ display:flex; gap:22px; align-items:center; min-width: 0; flex: 1; }
+  .ud-avatar{
+    width: 86px; height: 86px; min-width: 86px;
+    border-radius: 18px;
+    background: linear-gradient(135deg,#3b5bdb,#1e40af);
+    color:#fff; display:flex; align-items:center; justify-content:center;
+    font-family: var(--ua-mono); font-weight: 600; font-size: 1.8rem;
+    border: 2px solid rgba(255,255,255,.12);
+    overflow: hidden;
+  }
+  .ud-avatar img{ width:100%; height:100%; object-fit:cover; }
+  .ud-name{
+    font-family: var(--ua-display);
+    font-size: clamp(1.8rem, 3vw, 2.6rem);
+    font-weight: 400; line-height: 1;
+    margin: 0 0 6px 0; letter-spacing: -.02em;
+  }
+  .ud-email{
+    font-family: var(--ua-mono); font-size: .88rem;
+    color:#cbd5e1; letter-spacing: .01em;
+    margin-bottom: 12px; word-break: break-all;
+  }
+  .ud-hero-chips{ display:flex; gap:8px; flex-wrap:wrap; }
+  .ud-pill{
+    display:inline-flex; align-items:center; gap:6px;
+    background: rgba(255,255,255,.1); color:#fff;
+    border: 1px solid rgba(255,255,255,.16);
+    padding: 4px 10px; border-radius: 999px;
+    font-family: var(--ua-mono); font-size: .72rem;
+    letter-spacing: .04em;
+  }
+  .ud-pill::before{ content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .ud-pill[data-s="active"]    { background: rgba(34,197,94,.18); color:#4ade80; border-color: rgba(34,197,94,.3); }
+  .ud-pill[data-s="suspended"] { background: rgba(239,68,68,.18); color:#fca5a5; border-color: rgba(239,68,68,.3); }
+  .ud-pill[data-s="on_leave"]  { background: rgba(251,191,36,.18); color:#fcd34d; border-color: rgba(251,191,36,.3); }
+  .ud-pill[data-s="terminated"]{ background: rgba(148,163,184,.18); color:#cbd5e1; border-color: rgba(148,163,184,.3); }
+  .ud-pill.lock{ background: rgba(239,68,68,.22); color:#fca5a5; border-color: rgba(239,68,68,.35); }
+
+  .ud-btn{
+    font-family: var(--ua-sans); font-size: .86rem; font-weight: 500;
+    padding: 9px 16px; border-radius: 8px; border: 1px solid transparent;
+    display: inline-flex; align-items: center; gap: 7px; text-decoration: none;
+    cursor: pointer; transition: all .15s; white-space:nowrap;
+  }
+  .ud-btn-ondark{ background: rgba(255,255,255,.1); color:#fff; border-color: rgba(255,255,255,.14); }
+  .ud-btn-ondark:hover{ background: rgba(255,255,255,.18); }
+  .ud-btn-primary{ background: var(--ua-ink); color:#fff; border-color: var(--ua-ink); }
+  .ud-btn-primary:hover{ background: var(--ua-accent); border-color: var(--ua-accent); }
+  .ud-btn-ghost{ background: transparent; color: var(--ua-ink-2); border-color: var(--ua-line-2); }
+  .ud-btn-ghost:hover{ background: var(--ua-paper); border-color: var(--ua-ink); }
+  .ud-btn-danger{ background: var(--ua-red); color:#fff; border-color: var(--ua-red); }
+  .ud-btn-danger:hover{ background:#991b1b; border-color:#991b1b; }
+  .ud-btn-warn{ background:#78716c; color:#fff; border-color:#78716c; }
+  .ud-btn-warn:hover{ background:#57534e; border-color:#57534e; }
+  .ud-btn-sm{ padding: 6px 12px; font-size: .78rem; }
+
+  /* ─── Messages ─── */
+  .ud-msg{ padding: 12px 16px; border-radius: 10px; margin-bottom: 10px; font-size: .88rem; border:1px solid transparent; }
+  .ud-msg.info, .ud-msg.debug{ background:#eff6ff; color:#1e3a8a; border-color:#dbeafe; }
+  .ud-msg.success{ background: var(--ua-green-soft); color: var(--ua-green); }
+  .ud-msg.warning{ background: var(--ua-amber-soft); color: var(--ua-amber); }
+  .ud-msg.error, .ud-msg.danger{ background: var(--ua-red-soft); color: var(--ua-red); }
+
+  /* ─── Temp PW banner ─── */
+  .ud-temppw{
+    position: relative;
+    background: linear-gradient(135deg, #fef9c3 0%, #fef3c7 100%);
+    border: 1px solid #fde047;
+    border-left: 4px solid #ca8a04;
+    border-radius: 14px;
+    padding: 20px 24px; margin-bottom: 22px;
+    overflow: hidden;
+  }
+  .ud-temppw::before{
+    content:""; position:absolute; top:-20px; right:-20px;
+    width: 120px; height: 120px;
+    background: radial-gradient(circle, rgba(202,138,4,.12), transparent 70%);
+    pointer-events:none;
+  }
+  .ud-temppw-inner{
+    display:flex; justify-content:space-between; align-items:center;
+    gap: 18px; flex-wrap: wrap;
+  }
+  .ud-temppw-label{
+    font-family: var(--ua-mono);
+    font-size: .68rem; letter-spacing: .22em;
+    text-transform: uppercase; color: #78350f;
+    display:flex; align-items:center; gap:8px;
+    margin-bottom: 10px;
+  }
+  .ud-temppw-val{
+    font-family: var(--ua-mono);
+    font-size: 1.5rem; font-weight: 600;
+    letter-spacing: .06em; color: #451a03;
+    background: rgba(255,255,255,.65);
+    padding: 8px 16px; border-radius: 8px;
+    border: 1px dashed #ca8a04; display: inline-block;
+  }
+  .ud-temppw-note{
+    font-size: .8rem; color: #78350f; margin-top: 8px;
+  }
+
+  /* ─── Grid & cards ─── */
+  .ud-grid{ display:grid; grid-template-columns: 1.35fr 1fr; gap: 20px; }
+  @media (max-width: 1000px){ .ud-grid{ grid-template-columns: 1fr; } }
+
+  .ud-card{
+    background: var(--ua-surface);
+    border: 1px solid var(--ua-line);
+    border-radius: 14px;
+    padding: 24px;
+    margin-bottom: 16px;
+  }
+  .ud-card.accent-red{ border-left: 4px solid var(--ua-red); }
+
+  .ud-card-head{
+    display:flex; justify-content:space-between; align-items:flex-end;
+    gap: 12px; margin-bottom: 18px; padding-bottom: 12px;
+    border-bottom: 1px solid var(--ua-line);
+  }
+  .ud-card-title{
+    font-family: var(--ua-display);
+    font-size: 1.4rem; font-weight: 400; line-height: 1;
+    letter-spacing: -.01em; margin: 0;
+    display:flex; align-items:center; gap:10px;
+  }
+  .ud-card-title i{ font-size: .95rem; color: var(--ua-ink-3); }
+  .ud-card-sub{
+    font-family: var(--ua-mono); font-size: .7rem;
+    letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ua-ink-4);
+  }
+
+  /* ─── Identity grid ─── */
+  .ud-ident{ display:grid; grid-template-columns: 1fr 1fr; gap: 14px 24px; }
+  @media (max-width: 500px){ .ud-ident{ grid-template-columns: 1fr; } }
+  .ud-ident-item{}
+  .ud-ident-k{
+    font-family: var(--ua-mono); font-size: .65rem;
+    letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ua-ink-4); margin-bottom: 3px;
+  }
+  .ud-ident-v{
+    font-size: .92rem; color: var(--ua-ink);
+    font-weight: 500;
+  }
+  .ud-ident-v.mono{ font-family: var(--ua-mono); font-size: .85rem; font-weight: 500; }
+  .ud-ident-v.pos{ color: var(--ua-green); }
+  .ud-ident-v.neg{ color: var(--ua-red); }
+
+  /* ─── Button group ─── */
+  .ud-actions{
+    display:flex; gap:8px; flex-wrap:wrap;
+  }
+
+  /* ─── Forms ─── */
+  .ud-field{ display:flex; flex-direction:column; gap: 6px; margin-bottom: 14px; }
+  .ud-label{
+    font-family: var(--ua-mono); font-size: .68rem;
+    letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ua-ink-3);
+  }
+  .ud-input, .ud-select{
+    font-family: var(--ua-sans); font-size: .9rem;
+    padding: 10px 12px;
+    border: 1px solid var(--ua-line-2); border-radius: 8px;
+    background: var(--ua-surface); color: var(--ua-ink);
+    transition: all .15s; width: 100%; appearance: none;
+  }
+  .ud-input:focus, .ud-select:focus{
+    outline:none; border-color: var(--ua-ink);
+    box-shadow: 0 0 0 3px rgba(30,64,175,.12);
+  }
+  .ud-select{
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23475569' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center; padding-right: 32px;
+  }
+  .ud-select[multiple]{ background-image:none; padding-right: 13px; min-height: 130px; }
+
+  .ud-inline-form{
+    display:flex; gap:10px; align-items:flex-end; flex-wrap: wrap;
+  }
+
+  /* ─── Pw-change warning mini-alert ─── */
+  .ud-warn-box{
+    background: var(--ua-amber-soft);
+    border: 1px solid #fde68a;
+    border-left: 3px solid var(--ua-amber);
+    padding: 10px 14px; border-radius: 8px;
+    font-size: .85rem; color: #78350f;
+    margin-bottom: 14px; display:flex; gap:8px; align-items:center;
+  }
+
+  /* ─── Sidebar event list ─── */
+  .ud-event-list{ list-style:none; padding: 0; margin: 0; }
+  .ud-event{
+    padding: 12px 0;
+    border-bottom: 1px solid var(--ua-line);
+    display:flex; flex-direction: column; gap: 4px;
+  }
+  .ud-event:last-child{ border-bottom: 0; }
+  .ud-event-row{
+    display:flex; justify-content:space-between; gap:10px;
+    align-items: baseline;
+  }
+  .ud-event-action{
+    font-size: .88rem; font-weight: 500; color: var(--ua-ink);
+  }
+  .ud-event-time{
+    font-family: var(--ua-mono); font-size: .7rem;
+    color: var(--ua-ink-4); white-space: nowrap;
+  }
+  .ud-event-meta{
+    font-family: var(--ua-mono); font-size: .75rem;
+    color: var(--ua-ink-3); display:flex; align-items:center; gap:6px;
+  }
+  .ud-event-meta::before{
+    content:""; width:4px; height:4px; border-radius:50%; background: var(--ua-ink-4);
+    display:inline-block;
+  }
+  .ud-event-note{
+    font-size: .8rem; color: var(--ua-ink-2);
+    padding-left: 10px; border-left: 2px solid var(--ua-line);
+    margin-top: 2px;
+  }
+  .ud-empty{
+    padding: 24px 0; text-align: center;
+    color: var(--ua-ink-4); font-size: .82rem;
+  }
+
+  /* Danger zone */
+  .ud-danger-title{ color: var(--ua-red); }
+  .ud-danger-desc{ font-size: .84rem; color: var(--ua-ink-3); margin-bottom: 14px; }
 </style>
+{% endblock %}
+
+{% block content %}
+<div class="ud-scope">
+
+  {# ═══════════ Hero / profile header ═══════════ #}
+  <header class="ud-hero">
+    <div class="ud-hero-row">
+      <div class="ud-hero-left">
+        <div class="ud-avatar">
+          {% if target.avatar %}<img src="{{ target.avatar.url }}" alt="">{% else %}{{ target.initials }}{% endif %}
+        </div>
+        <div style="min-width:0">
+          <h1 class="ud-name">{{ target.full_name|default:target.email }}</h1>
+          <div class="ud-email">{{ target.email }}</div>
+          <div class="ud-hero-chips">
+            <span class="ud-pill" data-s="{{ target.status }}">{{ target.get_status_display }}</span>
+            {% if is_locked %}<span class="ud-pill lock"><i class="bi bi-lock-fill"></i> Locked out</span>{% endif %}
+            {% if must_change_pw %}<span class="ud-pill" style="background:rgba(251,191,36,.2);color:#fcd34d;border-color:rgba(251,191,36,.35)">Must change password</span>{% endif %}
+            {% if target.employee_id %}<span class="ud-pill">ID · {{ target.employee_id }}</span>{% endif %}
+          </div>
+        </div>
+      </div>
+      <a href="{% url 'user_admin:dashboard' %}" class="ud-btn ud-btn-ondark">
+        <i class="bi bi-arrow-left"></i> Directory
+      </a>
+    </div>
+  </header>
+
+  {% if messages %}
+    {% for m in messages %}
+      <div class="ud-msg {{ m.tags|default:'info' }}">{{ m }}</div>
+    {% endfor %}
+  {% endif %}
+
+  {# ═══════════ One-shot temp-password banner ═══════════ #}
+  {% if request.session.temp_pw_flash and request.session.temp_pw_flash.user_id == target.pk|stringformat:'s' %}
+  <div class="ud-temppw">
+    <div class="ud-temppw-inner">
+      <div>
+        <div class="ud-temppw-label">
+          <i class="bi bi-key-fill"></i> Temporary password · show once
+        </div>
+        <div class="ud-temppw-val">{{ request.session.temp_pw_flash.password }}</div>
+        <div class="ud-temppw-note">
+          The user will be required to change this password on their first sign-in. It will not be displayed again.
+        </div>
+      </div>
+      <button type="button" onclick="navigator.clipboard.writeText('{{ request.session.temp_pw_flash.password }}');this.innerHTML='<i class=&quot;bi bi-check2&quot;></i> Copied'"
+              class="ud-btn ud-btn-ghost">
+        <i class="bi bi-clipboard"></i> Copy to clipboard
+      </button>
+    </div>
+  </div>
+  {% with _=request.session.pop %}{% endwith %}
+  <script>
+    fetch('{% url "user_admin:dashboard" %}', {credentials:'same-origin'});
+  </script>
+  {% endif %}
+
+  {# ═══════════ Two-column layout ═══════════ #}
+  <div class="ud-grid">
+
+    {# ────── Left column: actions ────── #}
+    <div>
+
+      {# Identity summary #}
+      <div class="ud-card">
+        <div class="ud-card-head">
+          <h3 class="ud-card-title"><i class="bi bi-person-vcard"></i> Identity</h3>
+          <span class="ud-card-sub">Core account details</span>
+        </div>
+        <div class="ud-ident">
+          <div class="ud-ident-item">
+            <div class="ud-ident-k">Username</div>
+            <div class="ud-ident-v mono">{{ target.username }}</div>
+          </div>
+          <div class="ud-ident-item">
+            <div class="ud-ident-k">Employee ID</div>
+            <div class="ud-ident-v mono">{{ target.employee_id|default:"—" }}</div>
+          </div>
+          <div class="ud-ident-item">
+            <div class="ud-ident-k">Phone</div>
+            <div class="ud-ident-v mono">{{ target.phone|default:"—" }}</div>
+          </div>
+          <div class="ud-ident-item">
+            <div class="ud-ident-k">Joined</div>
+            <div class="ud-ident-v">{{ target.date_joined|date:"M d, Y" }}</div>
+          </div>
+          <div class="ud-ident-item">
+            <div class="ud-ident-k">Last seen</div>
+            <div class="ud-ident-v">
+              {% if target.last_seen %}{{ target.last_seen|naturaltime }}{% else %}<span style="color:var(--ua-ink-4)">Never</span>{% endif %}
+            </div>
+          </div>
+          <div class="ud-ident-item">
+            <div class="ud-ident-k">Account flag</div>
+            <div class="ud-ident-v {% if target.is_active %}pos{% else %}neg{% endif %}">
+              {% if target.is_active %}● Enabled{% else %}● Disabled{% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# Password actions #}
+      <div class="ud-card">
+        <div class="ud-card-head">
+          <h3 class="ud-card-title"><i class="bi bi-key"></i> Password</h3>
+          <span class="ud-card-sub">Reset or reissue credentials</span>
+        </div>
+        {% if must_change_pw %}
+          <div class="ud-warn-box">
+            <i class="bi bi-exclamation-triangle-fill"></i>
+            <span>This user is required to change their password on next login.</span>
+          </div>
+        {% endif %}
+        <div class="ud-actions">
+          <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="reset_email">
+            <button class="ud-btn ud-btn-ghost" type="submit">
+              <i class="bi bi-envelope"></i> Email reset link
+            </button>
+          </form>
+          <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0"
+                onsubmit="return confirm('Generate a new temporary password? The current password will stop working immediately.');">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="reset_temp">
+            <button class="ud-btn ud-btn-ghost" type="submit">
+              <i class="bi bi-key"></i> Generate temp password
+            </button>
+          </form>
+        </div>
+      </div>
+
+      {# Access & status #}
+      <div class="ud-card">
+        <div class="ud-card-head">
+          <h3 class="ud-card-title"><i class="bi bi-shield-lock"></i> Access control</h3>
+          <span class="ud-card-sub">Status · lockout · groups</span>
+        </div>
+
+        <div class="ud-actions" style="margin-bottom:18px">
+          {% if target.is_active and target.status != 'suspended' %}
+            <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0"
+                  onsubmit="return confirm('Block {{ target.email|escapejs }}? They will be unable to sign in.');">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="block">
+              <button class="ud-btn ud-btn-danger" type="submit"><i class="bi bi-slash-circle"></i> Block</button>
+            </form>
+          {% else %}
+            <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="unblock">
+              <button class="ud-btn ud-btn-primary" type="submit"><i class="bi bi-check2-circle"></i> Reactivate</button>
+            </form>
+          {% endif %}
+
+          {% if is_locked %}
+            <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="unlock">
+              <button class="ud-btn ud-btn-ghost" type="submit"><i class="bi bi-unlock"></i> Clear lockout</button>
+            </form>
+          {% endif %}
+
+          {% if target.status != 'terminated' %}
+            <form method="post" action="{% url 'user_admin:user_action' target.pk %}" style="margin:0"
+                  onsubmit="return confirm('Mark {{ target.email|escapejs }} as terminated?');">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="terminate">
+              <button class="ud-btn ud-btn-warn" type="submit"><i class="bi bi-person-x"></i> Terminate</button>
+            </form>
+          {% endif %}
+        </div>
+
+        <form method="post" action="{% url 'user_admin:user_action' target.pk %}" class="ud-inline-form" style="margin-bottom:18px">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="change_status">
+          <div class="ud-field" style="flex: 1; min-width: 200px; margin-bottom: 0">
+            <label class="ud-label">Change status to</label>
+            <select name="status" class="ud-select">
+              {% for v, label in target.Status.choices %}
+                <option value="{{ v }}" {% if target.status == v %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button class="ud-btn ud-btn-ghost" type="submit">Update status</button>
+        </form>
+
+        <form method="post" action="{% url 'user_admin:user_action' target.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="set_groups">
+          <div class="ud-field" style="margin-bottom:10px">
+            <label class="ud-label">Assigned groups</label>
+            <select name="groups" class="ud-select" multiple>
+              {% for g in all_groups %}
+                <option value="{{ g.name }}" {% if g.name in user_groups %}selected{% endif %}>{{ g.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button class="ud-btn ud-btn-ghost ud-btn-sm" type="submit"><i class="bi bi-floppy"></i> Save groups</button>
+        </form>
+      </div>
+
+      {# Danger zone #}
+      {% if request.user.is_superuser %}
+      <div class="ud-card accent-red">
+        <div class="ud-card-head">
+          <h3 class="ud-card-title ud-danger-title"><i class="bi bi-exclamation-octagon-fill"></i> Danger zone</h3>
+          <span class="ud-card-sub">Irreversible</span>
+        </div>
+        <p class="ud-danger-desc">
+          Hard-deleting removes the user profile. Messages and tickets they authored may remain (the user FK is set to NULL in most places).
+        </p>
+        <form method="post" action="{% url 'user_admin:user_action' target.pk %}"
+              onsubmit="return confirm('PERMANENTLY DELETE {{ target.email|escapejs }}?\n\nThis cannot be undone.') && prompt('Type the email to confirm:') === '{{ target.email|escapejs }}';">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="delete">
+          <button class="ud-btn ud-btn-danger" type="submit">
+            <i class="bi bi-trash"></i> Delete permanently
+          </button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+
+    {# ────── Right column: history ────── #}
+    <div>
+      <div class="ud-card">
+        <div class="ud-card-head">
+          <h3 class="ud-card-title"><i class="bi bi-shield-check"></i> Security events</h3>
+          <span class="ud-card-sub">Last 20</span>
+        </div>
+        {% if recent_events %}
+          <ul class="ud-event-list">
+            {% for e in recent_events %}
+              <li class="ud-event">
+                <div class="ud-event-row">
+                  <span class="ud-event-action">{{ e.get_event_type_display }}</span>
+                  <span class="ud-event-time">{{ e.created_at|naturaltime }}</span>
+                </div>
+                {% if e.city or e.country %}
+                  <div class="ud-event-meta">
+                    {{ e.city }}{% if e.city and e.country %}, {% endif %}{{ e.country }}
+                  </div>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="ud-empty">No recent events.</div>
+        {% endif %}
+      </div>
+
+      <div class="ud-card">
+        <div class="ud-card-head">
+          <h3 class="ud-card-title"><i class="bi bi-clock-history"></i> Admin audit trail</h3>
+          <span class="ud-card-sub">Last 20</span>
+        </div>
+        {% if audit_logs %}
+          <ul class="ud-event-list">
+            {% for a in audit_logs %}
+              <li class="ud-event">
+                <div class="ud-event-row">
+                  <span class="ud-event-action">{{ a.get_action_display }}</span>
+                  <span class="ud-event-time">{{ a.timestamp|naturaltime }}</span>
+                </div>
+                <div class="ud-event-meta">by {{ a.user|default:"—" }}</div>
+                {% if a.notes %}<div class="ud-event-note">{{ a.notes }}</div>{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="ud-empty">No admin actions recorded yet.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}

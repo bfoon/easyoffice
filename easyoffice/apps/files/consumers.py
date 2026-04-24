@@ -117,7 +117,35 @@ class LivePreviewConsumer(AsyncWebsocketConsumer):
                 'exclude': self.channel_name,
             })
 
-        # ── Chat — both presenter and viewers may send ──
+        # ── Presenter-only: PDF scroll / page change ──
+        elif msg_type == 'pdf_scroll' and is_presenter:
+            await self.channel_layer.group_send(self.group_name, {
+                'type':       'pdf.scroll',
+                'scroll_pct': msg.get('scroll_pct', 0),
+                'page':       msg.get('page', 1),
+                'exclude':    self.channel_name,
+            })
+
+        # ── Presenter: viewer asked for current page — presenter broadcasts sync ──
+        elif msg_type == 'sync_state' and is_presenter:
+            # Presenter sends back their current page to just the requester
+            requester = msg.get('requester_channel')
+            if requester:
+                await self.channel_layer.send(requester, {
+                    'type':       'pdf.scroll',
+                    'scroll_pct': msg.get('scroll_pct', 0),
+                    'page':       msg.get('page', 1),
+                    'exclude':    '',  # don't exclude — this goes directly to requester
+                })
+
+        # ── Viewer: request current state from presenter ──
+        elif msg_type == 'request_sync' and not is_presenter:
+            # Forward to the group so the presenter can respond
+            await self.channel_layer.group_send(self.group_name, {
+                'type':              'sync.request',
+                'requester_channel': self.channel_name,
+            })
+
         elif msg_type == 'chat_message':
             text = str(msg.get('text', '')).strip()[:1000]
             if not text:
@@ -162,6 +190,25 @@ class LivePreviewConsumer(AsyncWebsocketConsumer):
             'sender_id':   event['sender_id'],
             'ts':          event['ts'],
             'is_self':     is_self,
+        }))
+
+    async def pdf_scroll(self, event):
+        if event.get('exclude') == self.channel_name:
+            return
+        await self.send(text_data=json.dumps({
+            'type':       'pdf_scroll',
+            'scroll_pct': event['scroll_pct'],
+            'page':       event['page'],
+        }))
+
+    async def sync_request(self, event):
+        """Only the presenter should respond to this."""
+        if not self._is_presenter_cached:
+            return
+        # Tell the presenter's JS to respond with current state
+        await self.send(text_data=json.dumps({
+            'type':              'sync_request',
+            'requester_channel': event['requester_channel'],
         }))
 
     async def viewer_joined(self, event):

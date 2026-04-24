@@ -1250,6 +1250,68 @@
   /* iframes scroll internally — do NOT block their pointer events */
 }
 
+/* PDF.js canvas-based viewer — used instead of raw iframe for live sync */
+.pdfjs-viewer {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: #111827;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  box-sizing: border-box;
+  scroll-behavior: smooth;
+}
+.pdfjs-page-wrap {
+  position: relative;
+  flex-shrink: 0;
+  box-shadow: 0 4px 20px rgba(0,0,0,.4);
+}
+.pdfjs-page-wrap canvas {
+  display: block;
+}
+.pdfjs-nav {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  background: rgba(30,41,59,.88);
+  border-radius: 20px;
+  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: .78rem;
+  font-weight: 600;
+  color: #fff;
+  pointer-events: all;
+  user-select: none;
+  white-space: nowrap;
+}
+.pdfjs-nav button {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background .1s;
+  line-height: 1;
+}
+.pdfjs-nav button:hover { background: rgba(255,255,255,.15); }
+.pdfjs-nav button:disabled { opacity: .35; cursor: default; }
+.pdfjs-loading {
+  color: #9ca3af;
+  font-size: .84rem;
+  padding: 40px 20px;
+  text-align: center;
+}
+
 .preview-image {
   object-fit: contain;
   background: #111827;
@@ -4037,6 +4099,15 @@
     }
   }
 
+  /* ── PDF.js state (shared between presenter and viewer) ── */
+  let _pdfDoc        = null;   /* PDFDocumentProxy */
+  let _pdfCurrentPage = 1;
+  let _pdfTotalPages  = 0;
+  let _pdfRendering   = false;
+  let _pdfScale       = 1.4;   /* default zoom */
+  let _pdfPendingPage = null;  /* page requested while render in progress */
+  let _pdfScrollTimer = null;  /* throttle for scroll broadcast */
+
   function renderPreviewSurface(fileId, fileName, ext) {
     const surface  = document.getElementById('previewSurface');
     if (!surface) return;
@@ -4044,7 +4115,13 @@
     const cleanExt = String(ext || '').toLowerCase().trim();
     surface.innerHTML = '';
 
-    if (cleanExt === 'pdf' || OFFICE_EXTS.has(cleanExt) || ZIP_EXTS.has(cleanExt)) {
+    /* ── PDF: use PDF.js so we can control page/scroll programmatically ── */
+    if (cleanExt === 'pdf') {
+      _pdfRenderViewer(surface, fileId);
+      return;
+    }
+
+    if (OFFICE_EXTS.has(cleanExt) || ZIP_EXTS.has(cleanExt)) {
       surface.innerHTML = `<iframe class="preview-frame" src="${url}" title="${esc(fileName)}"></iframe>`;
       return;
     }
@@ -4069,6 +4146,219 @@
       return;
     }
     surface.innerHTML = `<iframe class="preview-frame" src="${url}" title="${esc(fileName)}"></iframe>`;
+  }
+
+  /* ── Build the PDF.js viewer shell and load the document ── */
+  function _pdfRenderViewer(surface, fileId) {
+    _pdfDoc         = null;
+    _pdfCurrentPage = 1;
+    _pdfTotalPages  = 0;
+    _pdfRendering   = false;
+    _pdfPendingPage = null;
+
+    surface.innerHTML = `
+      <div class="pdfjs-viewer" id="pdfjsViewer">
+        <div class="pdfjs-loading" id="pdfjsLoading">
+          <i class="bi bi-hourglass-split d-block mb-2" style="font-size:1.5rem"></i>
+          Loading PDF…
+        </div>
+      </div>
+      <div class="pdfjs-nav" id="pdfjsNav" style="display:none">
+        <button id="pdfjsPrev" title="Previous page"><i class="bi bi-chevron-left"></i></button>
+        <span id="pdfjsPageLabel">1 / 1</span>
+        <button id="pdfjsNext" title="Next page"><i class="bi bi-chevron-right"></i></button>
+        <span style="opacity:.5;margin:0 4px">|</span>
+        <button id="pdfjsZoomOut" title="Zoom out"><i class="bi bi-zoom-out"></i></button>
+        <button id="pdfjsZoomIn"  title="Zoom in"><i class="bi bi-zoom-in"></i></button>
+      </div>
+    `;
+
+    /* Bind nav buttons — only active for presenter */
+    document.getElementById('pdfjsPrev').addEventListener('click', () => {
+      if (_lpRole === 'viewer') return;
+      _pdfGoToPage(_pdfCurrentPage - 1, true);
+    });
+    document.getElementById('pdfjsNext').addEventListener('click', () => {
+      if (_lpRole === 'viewer') return;
+      _pdfGoToPage(_pdfCurrentPage + 1, true);
+    });
+    document.getElementById('pdfjsZoomOut').addEventListener('click', () => { _pdfScale = Math.max(0.5, _pdfScale - 0.2); _pdfReRenderAll(); });
+    document.getElementById('pdfjsZoomIn').addEventListener('click',  () => { _pdfScale = Math.min(3.0, _pdfScale + 0.2); _pdfReRenderAll(); });
+
+    /* Load PDF.js from CDN if not already available */
+    _pdfEnsurePdfjsLoaded().then(() => {
+      const rawUrl = previewUrl(fileId);
+      const loadingTask = pdfjsLib.getDocument({ url: rawUrl, withCredentials: true });
+      loadingTask.promise.then(doc => {
+        _pdfDoc        = doc;
+        _pdfTotalPages = doc.numPages;
+        document.getElementById('pdfjsLoading')?.remove();
+        document.getElementById('pdfjsNav').style.display = 'flex';
+        _pdfRenderAllPages();
+      }).catch(err => {
+        const el = document.getElementById('pdfjsLoading');
+        if (el) el.innerHTML = `<i class="bi bi-exclamation-triangle d-block mb-2" style="font-size:1.5rem;color:#ef4444"></i>Could not load PDF`;
+        console.error('[pdfjs] load error', err);
+      });
+    });
+  }
+
+  function _pdfEnsurePdfjsLoaded() {
+    if (window.pdfjsLib) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      if (document.getElementById('pdfjsScript')) {
+        /* Script already injected but not ready yet — wait */
+        const wait = setInterval(() => {
+          if (window.pdfjsLib) { clearInterval(wait); resolve(); }
+        }, 80);
+        return;
+      }
+      const s = document.createElement('script');
+      s.id  = 'pdfjsScript';
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+      s.onload = () => {
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        resolve();
+      };
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  /* Render ALL pages as stacked canvases (enables scroll-based navigation) */
+  async function _pdfRenderAllPages() {
+    if (!_pdfDoc) return;
+    const viewer = document.getElementById('pdfjsViewer');
+    if (!viewer) return;
+
+    /* Clear existing canvases */
+    viewer.querySelectorAll('.pdfjs-page-wrap').forEach(el => el.remove());
+
+    for (let n = 1; n <= _pdfTotalPages; n++) {
+      const wrap = document.createElement('div');
+      wrap.className     = 'pdfjs-page-wrap';
+      wrap.dataset.pageN = n;
+      const canvas       = document.createElement('canvas');
+      wrap.appendChild(canvas);
+      viewer.appendChild(wrap);
+
+      try {
+        const page    = await _pdfDoc.getPage(n);
+        const vp      = page.getViewport({ scale: _pdfScale });
+        canvas.width  = vp.width;
+        canvas.height = vp.height;
+        wrap.style.width  = vp.width  + 'px';
+        wrap.style.height = vp.height + 'px';
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      } catch (err) {
+        console.warn('[pdfjs] page render error', n, err);
+      }
+    }
+
+    _pdfUpdateNav();
+
+    /* Scroll listener: detect which page is most visible, broadcast if presenter */
+    const viewer2 = document.getElementById('pdfjsViewer');
+    if (viewer2) {
+      viewer2.addEventListener('scroll', _pdfOnScroll, { passive: true });
+    }
+  }
+
+  function _pdfReRenderAll() {
+    const viewer = document.getElementById('pdfjsViewer');
+    const scrollRatio = viewer ? viewer.scrollTop / (viewer.scrollHeight || 1) : 0;
+    _pdfRenderAllPages().then(() => {
+      const v = document.getElementById('pdfjsViewer');
+      if (v) v.scrollTop = scrollRatio * v.scrollHeight;
+    });
+  }
+
+  function _pdfOnScroll() {
+    const viewer = document.getElementById('pdfjsViewer');
+    if (!viewer) return;
+
+    /* Find the page wrap most visible in the viewport */
+    const wraps = viewer.querySelectorAll('.pdfjs-page-wrap');
+    let best = null, bestVis = -1;
+    const viewTop    = viewer.scrollTop;
+    const viewBottom = viewTop + viewer.clientHeight;
+    wraps.forEach(wrap => {
+      const top    = wrap.offsetTop;
+      const bottom = top + wrap.offsetHeight;
+      const vis    = Math.min(bottom, viewBottom) - Math.max(top, viewTop);
+      if (vis > bestVis) { bestVis = vis; best = wrap; }
+    });
+    if (best) {
+      const n = parseInt(best.dataset.pageN, 10);
+      if (n !== _pdfCurrentPage) {
+        _pdfCurrentPage = n;
+        _pdfUpdateNav();
+      }
+    }
+
+    /* Broadcast scroll position to viewers (throttled to 50ms) */
+    if (_lpRole === 'presenter' && _lpSocket && _lpSocket.readyState === WebSocket.OPEN) {
+      clearTimeout(_pdfScrollTimer);
+      _pdfScrollTimer = setTimeout(() => {
+        const scrollPct = viewer.scrollHeight > viewer.clientHeight
+          ? viewer.scrollTop / (viewer.scrollHeight - viewer.clientHeight)
+          : 0;
+        _lpSocket.send(JSON.stringify({
+          type:       'pdf_scroll',
+          scroll_pct: +scrollPct.toFixed(4),
+          page:       _pdfCurrentPage,
+        }));
+      }, 50);
+    }
+  }
+
+  /* Navigate to a specific page number */
+  function _pdfGoToPage(n, broadcast) {
+    if (!_pdfDoc) return;
+    n = Math.max(1, Math.min(_pdfTotalPages, n));
+    const viewer = document.getElementById('pdfjsViewer');
+    if (!viewer) return;
+    const wrap = viewer.querySelector(`.pdfjs-page-wrap[data-page-n="${n}"]`);
+    if (wrap) {
+      viewer.scrollTop = wrap.offsetTop - 8;
+      _pdfCurrentPage = n;
+      _pdfUpdateNav();
+    }
+    if (broadcast && _lpRole === 'presenter' && _lpSocket && _lpSocket.readyState === WebSocket.OPEN) {
+      const scrollPct = viewer.scrollHeight > viewer.clientHeight
+        ? viewer.scrollTop / (viewer.scrollHeight - viewer.clientHeight)
+        : 0;
+      _lpSocket.send(JSON.stringify({
+        type:       'pdf_scroll',
+        scroll_pct: +scrollPct.toFixed(4),
+        page:       n,
+      }));
+    }
+  }
+
+  /* Apply a remote scroll position received from the presenter */
+  function _pdfApplyRemoteScroll(scrollPct, page) {
+    const viewer = document.getElementById('pdfjsViewer');
+    if (!viewer) return;
+    /* Try to scroll to the exact page first for precision */
+    const wrap = viewer.querySelector(`.pdfjs-page-wrap[data-page-n="${page}"]`);
+    if (wrap) {
+      viewer.scrollTop = wrap.offsetTop - 8;
+    } else if (scrollPct !== undefined) {
+      viewer.scrollTop = scrollPct * (viewer.scrollHeight - viewer.clientHeight);
+    }
+    _pdfCurrentPage = page || _pdfCurrentPage;
+    _pdfUpdateNav();
+  }
+
+  function _pdfUpdateNav() {
+    const label = document.getElementById('pdfjsPageLabel');
+    const prev  = document.getElementById('pdfjsPrev');
+    const next  = document.getElementById('pdfjsNext');
+    if (label) label.textContent = `${_pdfCurrentPage} / ${_pdfTotalPages}`;
+    if (prev)  prev.disabled  = _pdfCurrentPage <= 1;
+    if (next)  next.disabled  = _pdfCurrentPage >= _pdfTotalPages;
   }
 
   /* ══════════════════════════════════════════════════════════════════════
@@ -4989,7 +5279,6 @@
 
   /* ── Accept invite (viewer) ── */
   window.lpAcceptInvite = async function () {
-    /* Dismiss both the global toast AND the in-preview banner */
     document.getElementById('lpInviteToast').classList.remove('show');
     document.getElementById('lpInPreviewBanner')?.remove();
 
@@ -5006,9 +5295,6 @@
       _lpRole          = 'viewer';
       _lpPresenterName = data.presenter_name;
 
-      /* If this file isn't already open in the preview modal, open it now.
-         Pass skipLp=true so our openPreviewModal wrapper doesn't re-show
-         the idle share button or trigger a status check. */
       const alreadyOpen = (currentFileId === data.file_id &&
                            document.getElementById('previewModal').classList.contains('open'));
 
@@ -5016,17 +5302,15 @@
         window.openPreviewModal(data.file_id, data.file_name, data.file_ext, true);
       }
 
-      /* Connect the WebSocket immediately — messages will buffer in the
-         browser until the connection is established. */
+      /* Connect WebSocket immediately — messages buffer in the browser
+         while the connection handshake completes. */
       lpConnectWebSocket(data.ws_path, 'viewer');
       lpShowShareBtn('viewer');
 
-      /* Inject the session UI only after annOverlay is actually in the DOM.
-         annOverlay is created by initAnnotationLayer() which fires at 320 ms
-         inside a requestAnimationFrame — we poll for it rather than guessing. */
-      lpWaitForOverlayThen(() => {
-        lpInjectSessionUI();
-      });
+      /* Inject session UI only after annOverlay exists in the DOM.
+         annOverlay is created by initAnnotationLayer() which fires at ~320 ms
+         inside requestAnimationFrame — poll for it instead of guessing. */
+      lpWaitForOverlayThen(() => lpInjectSessionUI());
 
       _lpPendingInvite = null;
       _lpInviteQueue.length = 0;
@@ -5037,27 +5321,19 @@
     }
   };
 
-  /* Poll until annOverlay exists in the DOM (max 3 s), then run callback. */
-  function lpWaitForOverlayThen(cb, _elapsed) {
-    _elapsed = _elapsed || 0;
-    const overlay = document.getElementById('annOverlay');
-    if (overlay) {
-      cb();
-      return;
-    }
-    if (_elapsed >= 3000) {
-      /* Annotation layer never appeared — inject UI anyway so chat still works */
-      cb();
-      return;
-    }
-    setTimeout(() => lpWaitForOverlayThen(cb, _elapsed + 60), 60);
-  }
-
   window.lpDeclineInvite = function () {
     document.getElementById('lpInviteToast').classList.remove('show');
     document.getElementById('lpInPreviewBanner')?.remove();
     _lpAdvanceInviteQueue();
   };
+
+  /* ── Poll until annOverlay is in the DOM (max 3 s), then run callback ── */
+  function lpWaitForOverlayThen(cb, _elapsed) {
+    _elapsed = _elapsed || 0;
+    if (document.getElementById('annOverlay')) { cb(); return; }
+    if (_elapsed >= 3000) { cb(); return; }   /* give up and run anyway */
+    setTimeout(() => lpWaitForOverlayThen(cb, _elapsed + 60), 60);
+  }
 
   /* ── End session — presenter ends it for everyone ── */
   window.lpEndSession = function () {
@@ -5096,6 +5372,11 @@
         if (_lpSocket && _lpSocket.readyState === WebSocket.OPEN)
           _lpSocket.send(JSON.stringify({ type: 'ping' }));
       }, 20000);
+
+      /* If we're a viewer, ask the presenter to send their current page state */
+      if (role === 'viewer') {
+        _lpSocket.send(JSON.stringify({ type: 'request_sync' }));
+      }
     });
 
     _lpSocket.addEventListener('message', e => {
@@ -5205,6 +5486,27 @@
       case 'chat_message':
         lpAppendChatMessage(msg);
         break;
+      case 'pdf_scroll':
+        /* Viewer mirrors the presenter's page/scroll position */
+        if (_lpRole === 'viewer') {
+          _pdfApplyRemoteScroll(msg.scroll_pct, msg.page);
+        }
+        break;
+      case 'sync_request':
+        /* Presenter received a sync request — reply with current page */
+        if (_lpRole === 'presenter' && _lpSocket && _lpSocket.readyState === WebSocket.OPEN) {
+          const viewer = document.getElementById('pdfjsViewer');
+          const scrollPct = viewer && viewer.scrollHeight > viewer.clientHeight
+            ? viewer.scrollTop / (viewer.scrollHeight - viewer.clientHeight)
+            : 0;
+          _lpSocket.send(JSON.stringify({
+            type:              'sync_state',
+            page:              _pdfCurrentPage || 1,
+            scroll_pct:        +scrollPct.toFixed(4),
+            requester_channel: msg.requester_channel,
+          }));
+        }
+        break;
       case 'viewer_joined':
         lpShowStatusToast(`${msg.name} joined`);
         break;
@@ -5222,7 +5524,6 @@
         lpShowStatusToast('Presenter is back', 1800);
         break;
       case 'session_end':
-        /* Presenter ended the session — tear down but leave viewer's preview open */
         lpTeardown();
         lpShowStatusToast('The presenter ended the live session', 3500);
         break;
@@ -5278,7 +5579,7 @@
   /* ── Render remote cursor ── */
   function lpRenderRemoteCursor(x, y) {
     const overlay = document.getElementById('annOverlay');
-    if (!overlay) return;   /* cursor updates are fire-and-forget; skip if not ready */
+    if (!overlay) return;
     let cursor = overlay.querySelector('.lp-remote-cursor');
     if (!cursor) {
       cursor = document.createElement('div');
@@ -5301,7 +5602,7 @@
   function lpRenderRemoteToolEvent(payload) {
     if (!payload || !payload.action) return;
 
-    /* If annOverlay doesn't exist yet, queue and flush when ready */
+    /* Queue events if annOverlay doesn't exist yet, flush when ready */
     if (!document.getElementById('annOverlay')) {
       _lpPendingToolEvents.push(payload);
       lpWaitForOverlayThen(() => {
@@ -5312,7 +5613,6 @@
     }
 
     const { action, data } = payload;
-
     if (action === 'add') {
       if (data && data.id) {
         if (_annAnnotations.some(a => a.id === data.id)) return;
@@ -5334,7 +5634,7 @@
     }
   }
 
-  /* ── Session UI: status bar + chat panel injected into previewSurface ── */
+  /* ── Session UI: status bar + chat panel ── */
   function lpInjectSessionUI() {
     const surface = document.getElementById('previewSurface');
     if (!surface) return;
@@ -5363,7 +5663,7 @@
     let chat = document.getElementById('lpChatPanel');
     if (!chat) {
       chat = document.createElement('div');
-      chat.id        = 'lpChatPanel';
+      chat.id = 'lpChatPanel';
       chat.className = 'lp-chat-panel';
       chat.innerHTML = `
         <div class="lp-chat-head">
@@ -5375,7 +5675,7 @@
         <div class="lp-chat-messages" id="lpChatMessages"></div>
         <div class="lp-chat-input-row">
           <textarea class="lp-chat-input" id="lpChatInput"
-                    placeholder="Type a message and press Enter…"
+                    placeholder="Type a message, press Enter to send…"
                     rows="1" maxlength="1000"></textarea>
           <button class="lp-chat-send" type="button" onclick="lpSendChat()">
             <i class="bi bi-send-fill"></i>
@@ -5383,49 +5683,40 @@
         </div>
       `;
       surface.appendChild(chat);
-
       chat.querySelector('#lpChatInput').addEventListener('keydown', e => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); lpSendChat(); }
       });
     }
-
-    /* Open the chat panel immediately so both sides see it without having
-       to find the toolbar button. */
+    /* Open immediately so both sides see it without hunting for a button */
     chat.classList.add('open');
     _lpChatOpen = true;
 
-    /* ── Show chat button in annotation toolbar ──
-       The button lives inside annOverlay which is created dynamically.
-       It may not exist yet if called before the annotation layer is ready,
-       so we also retry once annOverlay is in the DOM. */
-    function showChatToolbarBtn() {
-      const annOverlay = document.getElementById('annOverlay');
-      if (!annOverlay) return false;
-      const chatBtn = annOverlay.querySelector('#lpChatToggleBtn') ||
-                      document.getElementById('lpChatToggleBtn');
-      const chatSep = annOverlay.querySelector('#lpChatSep') ||
-                      document.getElementById('lpChatSep');
-      if (chatBtn) chatBtn.style.display = 'flex';
-      if (chatSep) chatSep.style.display = 'block';
-      return true;
+    /* ── Show chat toggle button in annotation toolbar ──
+       The button lives inside annOverlay which may not exist yet.
+       Search both globally and inside the overlay, retry if needed. */
+    function _showChatBtn() {
+      const ov = document.getElementById('annOverlay');
+      const btn = (ov && ov.querySelector('#lpChatToggleBtn')) ||
+                  document.getElementById('lpChatToggleBtn');
+      const sep = (ov && ov.querySelector('#lpChatSep')) ||
+                  document.getElementById('lpChatSep');
+      if (btn) btn.style.display = 'flex';
+      if (sep) sep.style.display = 'block';
+      return !!(btn && sep);
+    }
+    if (!_showChatBtn()) {
+      lpWaitForOverlayThen(_showChatBtn);
     }
 
-    if (!showChatToolbarBtn()) {
-      /* annOverlay not ready yet — retry after it's created */
-      lpWaitForOverlayThen(showChatToolbarBtn);
-    }
-
-    /* ── Viewer read-only mode ── */
+    /* ── Viewer read-only: hide draw tools, apply when overlay is ready ── */
     if (_lpRole === 'viewer') {
-      const overlay = document.getElementById('annOverlay');
-      if (overlay) {
-        overlay.classList.add('lp-viewer-readonly');
-      } else {
-        /* Apply once the overlay exists */
-        lpWaitForOverlayThen(() => {
-          const ov = document.getElementById('annOverlay');
-          if (ov) ov.classList.add('lp-viewer-readonly');
-        });
+      function _applyReadonly() {
+        const ov = document.getElementById('annOverlay');
+        if (ov) { ov.classList.add('lp-viewer-readonly'); return true; }
+        return false;
+      }
+      if (!_applyReadonly()) {
+        lpWaitForOverlayThen(_applyReadonly);
       }
     }
   }
@@ -5455,25 +5746,20 @@
   };
 
   function lpAppendChatMessage(msg) {
-    /* Ensure the chat panel is open and visible when a message arrives */
-    const panel = document.getElementById('lpChatPanel');
-    if (panel && !panel.classList.contains('open')) {
-      /* Auto-open if it was closed — makes it obvious a message arrived */
-    }
-
     const msgs = document.getElementById('lpChatMessages');
     if (!msgs) return;
 
-    /* Use server-sent is_self flag first; fall back to ID comparison */
+    /* Use server-sent is_self flag first; fall back to string ID comparison */
     const isMine = (msg.is_self === true) ||
                    (String(msg.sender_id) === String(LP_CURRENT_USER_ID));
 
     const el = document.createElement('div');
     el.className = 'lp-msg ' + (isMine ? 'mine' : 'theirs');
+
     if (!isMine) {
       const sender = document.createElement('div');
       sender.className = 'lp-msg-sender';
-      sender.textContent = msg.sender_name || 'Unknown';
+      sender.textContent = msg.sender_name || '';
       el.appendChild(sender);
     }
     const body = document.createElement('div');
@@ -5490,12 +5776,6 @@
     if (!_lpChatOpen && !isMine) {
       _lpUnreadChat++;
       lpUpdateUnreadBadge();
-      /* Flash the chat button to draw attention */
-      const chatBtn = document.getElementById('lpChatToggleBtn');
-      if (chatBtn) {
-        chatBtn.style.animation = 'none';
-        setTimeout(() => { chatBtn.style.animation = ''; }, 10);
-      }
     }
   }
 
@@ -5591,7 +5871,16 @@
     _lpViewerCount   = 0;
     _lpReconnectAttempts = 0;
     _lpIntentionalClose  = false;
-    _lpPendingToolEvents = [];
+
+    /* Clear queued tool events so they don't bleed into a new session */
+    if (typeof _lpPendingToolEvents !== 'undefined') _lpPendingToolEvents = [];
+
+    /* Reset PDF sync state */
+    clearTimeout(_pdfScrollTimer);
+    _pdfScrollTimer = null;
+    _pdfDoc         = null;
+    _pdfCurrentPage = 1;
+    _pdfTotalPages  = 0;
 
     /* Restore share button to idle state — keep it visible if preview is open */
     if (lpShareBtn) {

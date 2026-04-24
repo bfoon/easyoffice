@@ -13,7 +13,9 @@ from apps.core.views import (
     ChangePasswordView,
     UserSettingsView,
     NotificationsView,
+    NotificationsBellView,          # ← NEW import
     MarkNotificationsReadView,
+    MarkNotificationReadView,       # ← NEW import
 )
 
 urlpatterns = [
@@ -31,6 +33,10 @@ urlpatterns = [
     path('profile/edit/', ProfileEditView.as_view(), name='profile_edit'),
     path('change-password/', ChangePasswordView.as_view(), name='change_password'),
     path('settings/', UserSettingsView.as_view(), name='user_settings'),
-    path('notifications/', NotificationsView.as_view(), name='notifications'),
-    path('notifications/read/', MarkNotificationsReadView.as_view(), name='mark_notifications_read'),
+
+    # ── Notifications ─────────────────────────────────────────────────────────
+    path('notifications/',                  NotificationsView.as_view(),         name='notifications'),
+    path('notifications/bell/',             NotificationsBellView.as_view(),     name='notifications_bell'),           # ← NEW
+    path('notifications/read/',             MarkNotificationsReadView.as_view(), name='mark_notifications_read'),
+    path('notifications/read/<uuid:pk>/',   MarkNotificationReadView.as_view(),  name='mark_notification_read'),       # ← NEW
 ]

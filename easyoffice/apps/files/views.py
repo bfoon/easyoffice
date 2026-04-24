@@ -6200,9 +6200,8 @@ class LivePreviewEndView(LoginRequiredMixin, View):
     """
     POST /files/live-preview/<uuid:token>/end/
 
-    Presenter-only: explicitly ends the session (in case they close via button
-    rather than closing the WebSocket).  The consumer's disconnect() also does
-    this, so both paths are covered.
+    Presenter: ends the session for everyone.
+    Viewer: leaves the session (session stays alive for others).
     """
 
     def post(self, request, token):
@@ -6210,24 +6209,83 @@ class LivePreviewEndView(LoginRequiredMixin, View):
         from channels.layers import get_channel_layer
         from asgiref.sync import async_to_sync
 
-        session = get_object_or_404(
-            LivePreviewSession, token=token, presenter=request.user
-        )
-        session.ended_at = timezone.now()
-        session.save(update_fields=['ended_at'])
-
-        # Also push session_end over the channel in case the WS is still open
         try:
-            layer = get_channel_layer()
-            if layer:
-                async_to_sync(layer.group_send)(
-                    f'preview_{token}',
-                    {'type': 'session_end'}
-                )
-        except Exception:
-            pass
+            session = LivePreviewSession.objects.get(token=token, ended_at__isnull=True)
+        except LivePreviewSession.DoesNotExist:
+            return JsonResponse({'ok': True, 'detail': 'already ended'})
+
+        layer = get_channel_layer()
+
+        if session.presenter_id == request.user.id:
+            # Presenter ends → mark ended, broadcast session_end to all
+            session.ended_at = timezone.now()
+            session.save(update_fields=['ended_at'])
+            try:
+                if layer:
+                    async_to_sync(layer.group_send)(
+                        f'preview_{token}',
+                        {'type': 'session_end'}
+                    )
+            except Exception:
+                pass
+        elif session.viewers.filter(id=request.user.id).exists():
+            # Viewer leaves → remove from viewers, notify presenter
+            session.viewers.remove(request.user)
+            try:
+                if layer:
+                    async_to_sync(layer.group_send)(
+                        f'preview_{token}',
+                        {
+                            'type': 'viewer_left',
+                            'name': request.user.get_full_name() or request.user.username,
+                        }
+                    )
+            except Exception:
+                pass
+        else:
+            return JsonResponse({'ok': False, 'error': 'Not a participant'}, status=403)
 
         return JsonResponse({'ok': True})
+
+
+class LivePreviewStatusView(LoginRequiredMixin, View):
+    """
+    GET /files/<uuid:pk>/live-preview/status/
+
+    Called when a viewer opens a file preview.  Returns any active session
+    they have been invited to for this file, so the frontend can show the
+    accept/reject banner without needing a notification.
+    """
+
+    def get(self, request, pk):
+        from apps.files.models import LivePreviewSession
+        f = get_object_or_404(SharedFile, pk=pk)
+
+        # Find an active session for this file that this user is invited to
+        # and has not yet ended
+        session = (
+            LivePreviewSession.objects
+            .filter(file=f, ended_at__isnull=True)
+            .filter(invited=request.user)
+            .exclude(presenter=request.user)
+            .select_related('presenter', 'file')
+            .first()
+        )
+
+        if not session:
+            return JsonResponse({'ok': True, 'session': None})
+
+        return JsonResponse({
+            'ok': True,
+            'session': {
+                'token':          str(session.token),
+                'ws_path':        session.ws_path,
+                'file_id':        str(f.id),
+                'file_name':      f.name,
+                'file_ext':       f.extension,
+                'presenter_name': session.presenter.get_full_name() or session.presenter.username,
+            },
+        })
 
 
 class LivePreviewUsersView(LoginRequiredMixin, View):
@@ -6265,4 +6323,3 @@ class LivePreviewUsersView(LoginRequiredMixin, View):
                 for u in qs
             ],
         })
-

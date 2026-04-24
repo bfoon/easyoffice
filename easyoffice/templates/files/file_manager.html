@@ -452,7 +452,7 @@
 }
 .lp-share-btn:hover { background: #7c3aed; }
 .lp-share-btn.live { background: #ef4444; border-color: #ef4444; animation: lp-pulse-btn 1.6s ease-in-out infinite; }
-.lp-share-btn.viewer-mode { background: #10b981; border-color: #10b981; pointer-events: none; cursor: default; }
+.lp-share-btn.viewer-mode { background: #10b981; border-color: #10b981; }
 @keyframes lp-pulse-btn {
   0%,100% { box-shadow: 0 0 0 0 rgba(139,92,246,.4); }
   50%     { box-shadow: 0 0 0 7px rgba(139,92,246,0); }
@@ -4869,6 +4869,7 @@
 
   /* ── URL helpers ── */
   function lpStartUrl(fileId)   { return `/files/${fileId}/live-preview/start/`; }
+  function lpStatusUrl(fileId)  { return `/files/${fileId}/live-preview/status/`; }
   function lpAcceptUrl(token)   { return `/files/live-preview/${token}/accept/`; }
   function lpEndUrl(token)      { return `/files/live-preview/${token}/end/`; }
   function lpUsersUrl(fileId)   { return `/files/${fileId}/live-preview/users/`; }
@@ -4879,8 +4880,11 @@
 
   window.lpOnShareBtnClick = function () {
     if (_lpRole === 'presenter') {
-      /* Already live — clicking again ends session */
+      if (!confirm('End the live sharing session for all viewers?')) return;
       lpEndSession();
+    } else if (_lpRole === 'viewer') {
+      if (!confirm('Leave the live preview session?')) return;
+      lpLeaveSession();
     } else {
       lpOpenPicker();
     }
@@ -4985,47 +4989,69 @@
 
   /* ── Accept invite (viewer) ── */
   window.lpAcceptInvite = async function () {
-    const toast = document.getElementById('lpInviteToast');
-    toast.classList.remove('show');
+    /* Dismiss both the global toast AND the in-preview banner */
+    document.getElementById('lpInviteToast').classList.remove('show');
+    document.getElementById('lpInPreviewBanner')?.remove();
+
     if (!_lpPendingInvite) return;
     const invite = _lpPendingInvite;
+
     try {
       const data = await safeJsonFetch(lpAcceptUrl(invite.token), {
         method:  'POST',
         headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken() },
       });
+
       _lpSessionToken  = data.session_token;
       _lpRole          = 'viewer';
       _lpPresenterName = data.presenter_name;
-      /* Open the preview modal for this file as viewer */
-      window.openPreviewModal(data.file_id, data.file_name, data.file_ext, true);
-      /* Give the modal a frame to build then connect */
+
+      /* If this file isn't already open in the preview modal, open it now.
+         Pass skipLp=true so our openPreviewModal wrapper doesn't re-show
+         the idle share button. */
+      const alreadyOpen = (currentFileId === data.file_id &&
+                           document.getElementById('previewModal').classList.contains('open'));
+
+      if (!alreadyOpen) {
+        window.openPreviewModal(data.file_id, data.file_name, data.file_ext, true);
+      }
+
+      /* Wait for the shell + annotation layer to be ready then connect */
       setTimeout(() => {
         lpConnectWebSocket(data.ws_path, 'viewer');
         lpShowShareBtn('viewer');
         lpInjectSessionUI();
-      }, 400);
-    } catch (err) {
-      alert('Could not join live preview: ' + (err.message || 'Unknown error'));
-    }
-    /* Drop the current invite and show the next queued one (if any) —
-       unless the user is now actually in a session, in which case we
-       just discard the queue. */
-    if (_lpRole === 'viewer') {
+      }, alreadyOpen ? 50 : 420);
+
       _lpPendingInvite = null;
       _lpInviteQueue.length = 0;
-    } else {
+
+    } catch (err) {
       _lpAdvanceInviteQueue();
+      alert('Could not join live preview: ' + (err.message || 'Unknown error'));
     }
   };
 
   window.lpDeclineInvite = function () {
     document.getElementById('lpInviteToast').classList.remove('show');
+    document.getElementById('lpInPreviewBanner')?.remove();
     _lpAdvanceInviteQueue();
   };
 
-  /* ── End session (presenter explicit) ── */
+  /* ── End session — presenter ends it for everyone ── */
   window.lpEndSession = function () {
+    if (!_lpSessionToken) return;
+    fetch(lpEndUrl(_lpSessionToken), {
+      method:  'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken() },
+    }).catch(() => {});
+    /* session_end WS message will arrive and trigger lpTeardown for viewers;
+       presenter tears down immediately */
+    lpTeardown();
+  };
+
+  /* ── Leave session — viewer exits, session stays alive for others ── */
+  window.lpLeaveSession = function () {
     if (!_lpSessionToken) return;
     fetch(lpEndUrl(_lpSessionToken), {
       method:  'POST',
@@ -5175,10 +5201,9 @@
         lpShowStatusToast('Presenter is back', 1800);
         break;
       case 'session_end':
-        /* Presenter closed — wipe everything on viewer side */
+        /* Presenter ended the session — tear down but leave viewer's preview open */
         lpTeardown();
-        window.closePreviewModal();
-        lpShowStatusToast('The presenter ended the session', 3500);
+        lpShowStatusToast('The presenter ended the live session', 3500);
         break;
       case 'error':
         lpShowStatusToast(msg.message || 'Error', 2400);
@@ -5194,12 +5219,9 @@
     _lpViewerCount = viewers.length;
     const badge = document.getElementById('lpViewerCount');
     if (badge) {
-      badge.textContent = _lpViewerCount;
+      badge.querySelector('span').textContent = _lpViewerCount;
       badge.style.display = _lpViewerCount > 0 ? 'inline-flex' : 'none';
-    }
-    const title = document.getElementById('lpViewerCount');
-    if (title && viewers.length) {
-      title.title = viewers.map(v => v.name).join(', ');
+      badge.title = viewers.map(v => v.name).join(', ');
     }
   }
 
@@ -5231,9 +5253,6 @@
     if (_lpRole !== 'presenter') return;
     _lpSocket.send(JSON.stringify({ type: 'tool_event', payload }));
   }
-
-  /* Hook into annAdd and annRemove so every annotation action is broadcast */
-  const _origAnnAdd    = window._lpAnnAddHook    = null;  /* set below after functions defined */
 
   /* ── Render remote cursor ── */
   function lpRenderRemoteCursor(x, y) {
@@ -5431,7 +5450,7 @@
       lpShareBtnLabel.textContent = 'End sharing';
     } else if (mode === 'viewer') {
       lpShareBtn.classList.add('viewer-mode');
-      lpShareBtnLabel.textContent = 'Watching live';
+      lpShareBtnLabel.textContent = 'Leave session';
     } else {
       lpShareBtnLabel.textContent = 'Share Live';
     }
@@ -5470,13 +5489,13 @@
     if (chatBtn) chatBtn.style.display = 'none';
     if (chatSep) chatSep.style.display = 'none';
 
-    const bar   = document.getElementById('lpStatusBar');
-    const chat  = document.getElementById('lpChatPanel');
-    const curs  = document.querySelector('.lp-remote-cursor');
-    if (bar)  bar.remove();
-    if (chat) chat.remove();
-    if (curs) curs.remove();
+    /* Remove injected session UI */
+    document.getElementById('lpStatusBar')?.remove();
+    document.getElementById('lpChatPanel')?.remove();
+    document.getElementById('lpInPreviewBanner')?.remove();
+    document.querySelector('.lp-remote-cursor')?.remove();
 
+    /* Reset state */
     _lpSessionToken  = null;
     _lpRole          = null;
     _lpPresenterName = '';
@@ -5484,11 +5503,14 @@
     _lpChatOpen      = false;
     _lpViewerCount   = 0;
     _lpReconnectAttempts = 0;
+    _lpIntentionalClose  = false;
 
+    /* Restore share button to idle state — keep it visible if preview is open */
     if (lpShareBtn) {
-      lpShareBtn.hidden = true;
+      const previewOpen = document.getElementById('previewModal')?.classList.contains('open');
+      lpShareBtn.hidden    = !previewOpen;
       lpShareBtn.className = 'lp-share-btn';
-      lpShareBtnLabel.textContent = 'Share Live';
+      if (lpShareBtnLabel) lpShareBtnLabel.textContent = 'Share Live';
     }
   }
 
@@ -5519,23 +5541,42 @@
     lpBroadcastToolEvent({ action: 'remove', data: { id } });
   }
 
-  /* ── Show Share Live button when preview opens (non-viewer) ── */
+  /* ── Show Share Live button when preview opens, and check for active invite ── */
   const _origOpenPreview = window.openPreviewModal;
   window.openPreviewModal = function (fileId, fileName, fileExt, skipLp) {
     _origOpenPreview(fileId, fileName, fileExt);
-    /* Show share btn only when opening fresh (not called internally by viewer accept) */
-    if (!skipLp && lpShareBtn) {
-      lpShareBtn.hidden = false;
+
+    if (skipLp) return;   /* called internally by lpAcceptInvite — don't interfere */
+
+    /* Show idle share button */
+    if (lpShareBtn) {
+      lpShareBtn.hidden    = false;
       lpShareBtn.className = 'lp-share-btn';
-      lpShareBtnLabel.textContent = 'Share Live';
+      if (lpShareBtnLabel) lpShareBtnLabel.textContent = 'Share Live';
     }
+
+    /* After the shell renders, check if there's an active session this user
+       is invited to.  If so, show the in-preview accept/reject banner. */
+    setTimeout(async () => {
+      /* Don't check if we're already in a session */
+      if (_lpRole) return;
+      try {
+        const data = await safeJsonFetch(lpStatusUrl(fileId), {
+          headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        if (data.session && data.session.token) {
+          lpShowInPreviewBanner(data.session);
+        }
+      } catch (_) { /* silent — non-critical */ }
+    }, 450);
   };
 
   /* ── Clean up live session when modal closes ── */
   const _origClosePreview = window.closePreviewModal;
   window.closePreviewModal = function () {
-    if (_lpRole === 'presenter' && _lpSessionToken) {
-      /* End session explicitly */
+    if (_lpSessionToken) {
+      /* Both presenter and viewer notify the server when closing the modal.
+         The server handles each role differently (end vs leave). */
       fetch(lpEndUrl(_lpSessionToken), {
         method:  'POST',
         headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken() },
@@ -5545,8 +5586,71 @@
     _origClosePreview();
   };
 
+  /* ── In-preview accept/reject banner (shown when the file is already open) ── */
+  function lpShowInPreviewBanner(session) {
+    /* Only show if the preview is open and not already in a session */
+    if (_lpRole) return;
+    const surface = document.getElementById('previewSurface');
+    if (!surface) return;
+
+    /* Don't double-inject */
+    document.getElementById('lpInPreviewBanner')?.remove();
+
+    /* Store this as the pending invite so Accept/Decline functions work */
+    _lpPendingInvite = {
+      token:         session.token,
+      fileId:        session.file_id,
+      fileName:      session.file_name,
+      fileExt:       session.file_ext,
+      presenterName: session.presenter_name,
+    };
+
+    const banner = document.createElement('div');
+    banner.id = 'lpInPreviewBanner';
+    banner.style.cssText = `
+      position:absolute;top:12px;left:50%;transform:translateX(-50%);
+      z-index:200;background:var(--eo-surface);
+      border:2px solid #8b5cf6;border-radius:14px;
+      box-shadow:0 8px 28px rgba(139,92,246,.25);
+      padding:14px 18px;display:flex;align-items:center;gap:14px;
+      min-width:320px;max-width:90%;pointer-events:all;
+    `;
+    banner.innerHTML = `
+      <i class="bi bi-cast" style="color:#8b5cf6;font-size:1.3rem;flex-shrink:0"></i>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:.85rem;font-weight:700;color:var(--eo-text);margin-bottom:2px;">
+          ${esc(session.presenter_name)} is sharing this file live
+        </div>
+        <div style="font-size:.74rem;color:var(--eo-text-muted);">
+          Join to see their screen and chat in real time
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-shrink:0;">
+        <button type="button" onclick="lpAcceptInvite()"
+          style="padding:6px 14px;border-radius:8px;border:none;
+                 background:#8b5cf6;color:#fff;font-size:.78rem;
+                 font-weight:700;cursor:pointer;white-space:nowrap;">
+          <i class="bi bi-cast me-1"></i>Join
+        </button>
+        <button type="button" onclick="lpDeclineInvite()"
+          style="padding:6px 12px;border-radius:8px;
+                 border:1px solid var(--eo-border);background:var(--eo-bg);
+                 color:var(--eo-text-muted);font-size:.78rem;cursor:pointer;">
+          Dismiss
+        </button>
+      </div>
+    `;
+    surface.appendChild(banner);
+
+    /* Auto-dismiss after 60 s */
+    setTimeout(() => {
+      if (_lpPendingInvite && _lpPendingInvite.token === session.token && !_lpRole) {
+        window.lpDeclineInvite();
+      }
+    }, 60000);
+  }
+
   /* ── Handle incoming live_preview_invite from the notifications WebSocket ── */
-  /* The notifications consumer fires an event with action data — we listen here */
   window.lpHandleNotificationAction = function (actionData) {
     if (!actionData) return;
     if (actionData.action !== 'live_preview_accept') return;
@@ -5558,6 +5662,23 @@
       fileExt:       actionData.file_ext,
       presenterName: actionData.presenter_name,
     };
+
+    /* If already in a session, ignore */
+    if (_lpRole) return;
+
+    /* If the preview modal is already open for this exact file, show the
+       in-preview banner rather than the global toast */
+    const previewOpen = document.getElementById('previewModal')?.classList.contains('open');
+    if (previewOpen && currentFileId === invite.fileId) {
+      lpShowInPreviewBanner({
+        token:          invite.token,
+        file_id:        invite.fileId,
+        file_name:      invite.fileName,
+        file_ext:       invite.fileExt,
+        presenter_name: invite.presenterName,
+      });
+      return;
+    }
 
     /* Already showing an invite? Queue this one (de-duped by token). */
     if (_lpPendingInvite) {
@@ -5571,17 +5692,28 @@
     _lpShowInvite(invite);
   };
 
+  /* ── CustomEvent bridge — allows global notification WS to reach us ──
+     In your base.html notification handler, fire:
+       window.dispatchEvent(new CustomEvent('lp-invite', { detail: actionData }))
+     when the notification type is 'live_preview_invite'. ── */
+  window.addEventListener('lp-invite', function (e) {
+    if (e.detail) window.lpHandleNotificationAction(e.detail);
+  });
+
+  /* ── Toast invite helpers ── */
   function _lpShowInvite(invite) {
     _lpPendingInvite = invite;
-    document.getElementById('lpInvitePresenterName').textContent = invite.presenterName;
-    document.getElementById('lpInviteFileName').textContent = `"${invite.fileName}"`;
+    const el = document.getElementById('lpInvitePresenterName');
+    const fn = document.getElementById('lpInviteFileName');
+    if (el) el.textContent = invite.presenterName;
+    if (fn) fn.textContent = `"${invite.fileName}"`;
     document.getElementById('lpInviteToast').classList.add('show');
-    /* Auto-dismiss after 30 s — route through decline so the queue advances */
+    /* Auto-dismiss after 60 s */
     setTimeout(() => {
-      if (_lpPendingInvite && _lpPendingInvite.token === invite.token) {
+      if (_lpPendingInvite && _lpPendingInvite.token === invite.token && !_lpRole) {
         window.lpDeclineInvite();
       }
-    }, 30000);
+    }, 60000);
   }
 
   function _lpAdvanceInviteQueue() {

@@ -12,12 +12,6 @@ urlpatterns = [
     path('<uuid:pk>/download/',                 views.FileDownloadView.as_view(),               name='file_download'),
     path('<uuid:pk>/preview/',                  views.FilePreviewView.as_view(),                name='file_preview'),
     path('<uuid:pk>/preview-info/',             views.FilePreviewInfoView.as_view(),            name='file_preview_info'),
-    path('<uuid:pk>/annotations/', views.FileAnnotationView.as_view(), name='file_annotations'),
-    path('<uuid:pk>/live-preview/start/', views.LivePreviewStartView.as_view(), name='live_preview_start'),
-    path('<uuid:pk>/live-preview/users/', views.LivePreviewUsersView.as_view(), name='live_preview_users'),
-    path('live-preview/<uuid:token>/accept/', views.LivePreviewAcceptView.as_view(), name='live_preview_accept'),
-    path('live-preview/<uuid:token>/end/', views.LivePreviewEndView.as_view(), name='live_preview_end'),
-
     path('<uuid:pk>/move/',                     views.FileMoveView.as_view(),                   name='file_move'),
     path('<uuid:pk>/rename/',                   views.FileRenameView.as_view(),                 name='file_rename'),
     path('<uuid:pk>/delete/',                   views.FileDeleteView.as_view(),                 name='file_delete'),
@@ -71,7 +65,15 @@ urlpatterns = [
     path('<uuid:pk>/note/share/<uuid:share_id>/', views.FileNoteShareView.as_view(),            name='file_note_share_detail'),
     path('<uuid:pk>/note/typing/',              views.FileNoteTypingView.as_view(),              name='file_note_typing'),
     path('note/bulk-status/',                   views.FileNoteBulkStatusView.as_view(),          name='file_note_bulk_status'),
-    path('recycle-bin/<int:pk>/delete/', views.PermanentDeleteTrashFileView.as_view(), name='delete_trash_file'),
+    path('recycle-bin/<int:pk>/delete/',        views.PermanentDeleteTrashFileView.as_view(),   name='delete_trash_file'),
+    path('<uuid:pk>/annotations/',              views.FileAnnotationView.as_view(),              name='file_annotations'),
+
+    # ── Live Preview Session ─────────────────────────────────────────────────
+    path('<uuid:pk>/live-preview/start/',       views.LivePreviewStartView.as_view(),           name='live_preview_start'),
+    path('<uuid:pk>/live-preview/status/',      views.LivePreviewStatusView.as_view(),          name='live_preview_status'),
+    path('<uuid:pk>/live-preview/users/',       views.LivePreviewUsersView.as_view(),           name='live_preview_users'),
+    path('live-preview/<uuid:token>/accept/',   views.LivePreviewAcceptView.as_view(),          name='live_preview_accept'),
+    path('live-preview/<uuid:token>/end/',      views.LivePreviewEndView.as_view(),             name='live_preview_end'),
 
     path('collabora/', include('apps.files.collabora.urls')),
 ]

@@ -671,6 +671,8 @@ def _push_notification(
     color='#3b82f6',
     actions=None,
     extra_data=None,
+    notif_id=None,    # ← NEW
+    read_url=None,    # ← NEW
 ):
     """
     Push a real-time notification to a user via notifications websocket.
@@ -692,6 +694,8 @@ def _push_notification(
             {
                 'type': 'send_notification',
                 'data': {
+                    'id': notif_id,  # ← NEW
+                    'read_url': read_url,
                     'type': notif_type,
                     'title': title,
                     'body': body,
@@ -810,13 +814,42 @@ def _notify_user(
 ):
     """
     Safe notification helper for Files/live-preview.
-    Sends websocket notification + stores bell notification.
+    Creates a CoreNotification row FIRST so the row's pk can be included
+    in the WebSocket payload — the frontend needs it to mark-as-read.
     """
-    actions = _normalize_notification_actions(actions)
+    from django.urls import reverse, NoReverseMatch
+    from apps.core.models import CoreNotification
 
+    actions = _normalize_notification_actions(actions)
     payload_data = dict(extra_data or {})
     payload_data['actions'] = actions
 
+    notif_id = None
+    read_url = None
+
+    # ── Store FIRST so we have a pk to include in the push ──
+    if store:
+        try:
+            create_kwargs = {
+                'recipient':         user,
+                'notification_type': notif_type,
+                'title':             title,
+                'message':           body,
+                'link':              link,
+                'data':              payload_data,
+            }
+            if sender is not None:
+                create_kwargs['sender'] = sender
+            notif = CoreNotification.objects.create(**create_kwargs)
+            notif_id = str(notif.pk)
+            try:
+                read_url = reverse('mark_notification_read', kwargs={'pk': notif.pk})
+            except NoReverseMatch:
+                read_url = f'/auth/notifications/read/{notif.pk}/'
+        except Exception as e:
+            print('[notify_user store failed]', e)
+
+    # ── Now push with the id embedded ──
     if push:
         try:
             _push_notification(
@@ -829,30 +862,11 @@ def _notify_user(
                 color=color,
                 actions=actions,
                 extra_data=payload_data,
+                notif_id=notif_id,
+                read_url=read_url,
             )
         except Exception as e:
             print('[notify_user push failed]', e)
-
-    if store:
-        try:
-            from apps.core.models import CoreNotification
-
-            create_kwargs = {
-                'recipient': user,
-                'notification_type': notif_type,
-                'title': title,
-                'message': body,
-                'link': link,
-                'data': payload_data,
-            }
-
-            if sender is not None:
-                create_kwargs['sender'] = sender
-
-            CoreNotification.objects.create(**create_kwargs)
-
-        except Exception as e:
-            print('[notify_user store failed]', e)
 
 def _get_sig_font_path(font_name='Dancing Script'):
     """

@@ -5672,26 +5672,28 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         return;
       }
 
-      /* Viewers try to reconnect with exponential backoff.  The consumer
-         will auto-join them again via the invited→viewers fallback. */
-      if (_lpRole === 'viewer' && _lpSessionToken) {
-        if (_lpReconnectAttempts >= 5) {
-          lpShowStatusToast('Connection lost', 2800);
+      /* Both presenters and viewers try to reconnect with exponential
+         backoff. The server holds the session open for a grace window
+         (~15 s) after the presenter's socket drops so transient network
+         blips don't kill the session. */
+      if ((_lpRole === 'viewer' || _lpRole === 'presenter') && _lpSessionToken) {
+        if (_lpReconnectAttempts >= 6) {
+          lpShowStatusToast(_lpRole === 'presenter'
+            ? 'Reconnection failed'
+            : 'Connection lost', 2800);
           lpTeardown();
           return;
         }
         _lpReconnectAttempts += 1;
-        const delay = Math.min(800 * Math.pow(2, _lpReconnectAttempts - 1), 6000);
+        if (_lpRole === 'presenter') {
+          lpShowStatusToast('Reconnecting…', 1400);
+        }
+        const delay = Math.min(500 * Math.pow(2, _lpReconnectAttempts - 1), 4000);
         setTimeout(() => {
-          if (_lpRole === 'viewer' && _lpSessionToken && !_lpIntentionalClose) {
-            lpConnectWebSocket(_lpWsPath, 'viewer');
+          if (_lpSessionToken && !_lpIntentionalClose) {
+            lpConnectWebSocket(_lpWsPath, _lpRole);
           }
         }, delay);
-      } else if (_lpRole === 'presenter') {
-        /* Presenter lost connection — tell them, don't auto-reconnect
-           (they can click Share again if the grace expired). */
-        lpShowStatusToast('Disconnected', 2400);
-        lpTeardown();
       }
     });
 
@@ -5713,22 +5715,59 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
 
         const sendNow = () => {
           if (!_lpSocket || _lpSocket.readyState !== WebSocket.OPEN || !pending) return;
-          _lpSocket.send(JSON.stringify({
-            type: 'cursor_move',
-            x:    pending.x,
-            y:    pending.y,
-          }));
+          const out = { type: 'cursor_move', x: pending.x, y: pending.y };
+          if (pending.page) out.page = pending.page;
+          _lpSocket.send(JSON.stringify(out));
           lastSent = Date.now();
           pending  = null;
         };
 
-        surface._lpMouseHandler = function (e) {
+        const mouseHandler = function (e) {
           if (!_lpSocket || _lpSocket.readyState !== WebSocket.OPEN) return;
-          const r = surface.getBoundingClientRect();
-          if (r.width <= 0 || r.height <= 0) return;
+
+          /* Prefer PDF page-relative coordinates when the cursor is actually
+             over a rendered PDF page — this keeps the cursor anchored to the
+             same content regardless of viewer zoom / scroll / aspect ratio.
+             Fall back to surface-relative coords for non-PDF previews. */
+          let pageN = null;
+          let rect  = null;
+          const viewer = document.getElementById('pdfjsViewer');
+          if (viewer) {
+            /* Find the page wrap directly under the mouse. */
+            const path = e.composedPath ? e.composedPath() : [];
+            let wrap = null;
+            for (const el of path) {
+              if (el && el.classList && el.classList.contains('pdfjs-page-wrap')) {
+                wrap = el; break;
+              }
+            }
+            if (!wrap) {
+              /* composedPath may not include ancestors in some browsers —
+                 walk up the target manually. */
+              let node = e.target;
+              while (node && node !== surface) {
+                if (node.classList && node.classList.contains('pdfjs-page-wrap')) {
+                  wrap = node; break;
+                }
+                node = node.parentNode;
+              }
+            }
+            if (wrap) {
+              pageN = parseInt(wrap.dataset.pageN, 10) || null;
+              rect  = wrap.getBoundingClientRect();
+            }
+          }
+
+          if (!rect) {
+            /* Non-PDF, or cursor between pages — use the outer surface. */
+            rect = surface.getBoundingClientRect();
+          }
+          if (rect.width <= 0 || rect.height <= 0) return;
+
           pending = {
-            x: +(((e.clientX - r.left) / r.width)  * 100).toFixed(2),
-            y: +(((e.clientY - r.top)  / r.height) * 100).toFixed(2),
+            x:    +(((e.clientX - rect.left) / rect.width)  * 100).toFixed(2),
+            y:    +(((e.clientY - rect.top)  / rect.height) * 100).toFixed(2),
+            page: pageN,
           };
           const since = Date.now() - lastSent;
           if (since >= MIN_MS) {
@@ -5740,7 +5779,17 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
             }, MIN_MS - since);
           }
         };
-        surface.addEventListener('mousemove', surface._lpMouseHandler);
+
+        /* If we're re-binding after a reconnect, detach the previous
+           handler first so we don't pile up duplicate listeners. */
+        if (surface._lpMouseHandler) {
+          surface.removeEventListener('mousemove', surface._lpMouseHandler);
+        }
+        if (typeof surface._lpCursorTrailing === 'function') {
+          surface._lpCursorTrailing();
+        }
+        surface._lpMouseHandler = mouseHandler;
+        surface.addEventListener('mousemove', mouseHandler);
         // Remember the trailing timer so teardown can clear it.
         surface._lpCursorTrailing = () => { if (trailing) { clearTimeout(trailing); trailing = null; } };
       }
@@ -5751,7 +5800,7 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   function lpHandleMessage(msg) {
     switch (msg.type) {
       case 'cursor_move':
-        lpRenderRemoteCursor(msg.x, msg.y);
+        lpRenderRemoteCursor(msg.x, msg.y, msg.page);
         break;
       case 'tool_event':
         lpRenderRemoteToolEvent(msg.payload);
@@ -5795,6 +5844,11 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       case 'presenter_reconnected':
         lpClearPresenterOffline();
         lpShowStatusToast('Presenter is back', 1800);
+        /* Ask the presenter for their current page — they may have
+           scrolled or changed page during the outage. */
+        if (_lpRole === 'viewer' && _lpSocket && _lpSocket.readyState === WebSocket.OPEN) {
+          try { _lpSocket.send(JSON.stringify({ type: 'request_sync' })); } catch (_) {}
+        }
         break;
       case 'session_end':
         lpTeardown();
@@ -5849,11 +5903,16 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     _lpSocket.send(JSON.stringify({ type: 'tool_event', payload }));
   }
 
-  /* ── Render remote cursor ── */
-  function lpRenderRemoteCursor(x, y) {
-    const overlay = document.getElementById('annOverlay');
-    if (!overlay) return;
-    let cursor = overlay.querySelector('.lp-remote-cursor');
+  /* ── Render remote cursor ──
+     If `page` is provided, the coordinates are relative to that PDF page's
+     bounding box and the cursor is parented inside that page's DOM overlay
+     (so it stays glued to the content as the viewer scrolls/zooms). If no
+     page is given, the coordinates are relative to the outer preview
+     surface — fine for images, HTML, etc. */
+  function lpRenderRemoteCursor(x, y, page) {
+    /* Always work with one cursor element — move it between parents if the
+       presenter crosses a page boundary. */
+    let cursor = document.querySelector('.lp-remote-cursor');
     if (!cursor) {
       cursor = document.createElement('div');
       cursor.className = 'lp-remote-cursor';
@@ -5863,8 +5922,29 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         </svg>
         <div class="lp-cursor-label">${esc(_lpPresenterName || 'Presenter')}</div>
       `;
-      overlay.appendChild(cursor);
     }
+
+    let parent = null;
+    if (page) {
+      /* Page-relative: anchor the cursor inside the specific page wrap. */
+      const viewer = document.getElementById('pdfjsViewer');
+      if (viewer) {
+        const wrap = viewer.querySelector(`.pdfjs-page-wrap[data-page-n="${page}"]`);
+        if (wrap) {
+          /* Make the wrap a positioning context for absolutely-positioned
+             children (it already is — position:relative — but cheap to assert). */
+          if (getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
+          parent = wrap;
+        }
+      }
+    }
+    if (!parent) {
+      /* Fallback: the annotation overlay that covers the whole surface. */
+      parent = document.getElementById('annOverlay');
+    }
+    if (!parent) return;
+
+    if (cursor.parentNode !== parent) parent.appendChild(cursor);
     cursor.style.left = x + '%';
     cursor.style.top  = y + '%';
   }

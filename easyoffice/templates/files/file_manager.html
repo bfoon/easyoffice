@@ -5008,7 +5008,7 @@
 
       /* If this file isn't already open in the preview modal, open it now.
          Pass skipLp=true so our openPreviewModal wrapper doesn't re-show
-         the idle share button. */
+         the idle share button or trigger a status check. */
       const alreadyOpen = (currentFileId === data.file_id &&
                            document.getElementById('previewModal').classList.contains('open'));
 
@@ -5016,12 +5016,17 @@
         window.openPreviewModal(data.file_id, data.file_name, data.file_ext, true);
       }
 
-      /* Wait for the shell + annotation layer to be ready then connect */
-      setTimeout(() => {
-        lpConnectWebSocket(data.ws_path, 'viewer');
-        lpShowShareBtn('viewer');
+      /* Connect the WebSocket immediately — messages will buffer in the
+         browser until the connection is established. */
+      lpConnectWebSocket(data.ws_path, 'viewer');
+      lpShowShareBtn('viewer');
+
+      /* Inject the session UI only after annOverlay is actually in the DOM.
+         annOverlay is created by initAnnotationLayer() which fires at 320 ms
+         inside a requestAnimationFrame — we poll for it rather than guessing. */
+      lpWaitForOverlayThen(() => {
         lpInjectSessionUI();
-      }, alreadyOpen ? 50 : 420);
+      });
 
       _lpPendingInvite = null;
       _lpInviteQueue.length = 0;
@@ -5031,6 +5036,22 @@
       alert('Could not join live preview: ' + (err.message || 'Unknown error'));
     }
   };
+
+  /* Poll until annOverlay exists in the DOM (max 3 s), then run callback. */
+  function lpWaitForOverlayThen(cb, _elapsed) {
+    _elapsed = _elapsed || 0;
+    const overlay = document.getElementById('annOverlay');
+    if (overlay) {
+      cb();
+      return;
+    }
+    if (_elapsed >= 3000) {
+      /* Annotation layer never appeared — inject UI anyway so chat still works */
+      cb();
+      return;
+    }
+    setTimeout(() => lpWaitForOverlayThen(cb, _elapsed + 60), 60);
+  }
 
   window.lpDeclineInvite = function () {
     document.getElementById('lpInviteToast').classList.remove('show');
@@ -5257,7 +5278,7 @@
   /* ── Render remote cursor ── */
   function lpRenderRemoteCursor(x, y) {
     const overlay = document.getElementById('annOverlay');
-    if (!overlay) return;
+    if (!overlay) return;   /* cursor updates are fire-and-forget; skip if not ready */
     let cursor = overlay.querySelector('.lp-remote-cursor');
     if (!cursor) {
       cursor = document.createElement('div');
@@ -5275,14 +5296,25 @@
   }
 
   /* ── Render remote tool event on viewer overlay ── */
+  let _lpPendingToolEvents = [];   /* queued until annOverlay is ready */
+
   function lpRenderRemoteToolEvent(payload) {
     if (!payload || !payload.action) return;
+
+    /* If annOverlay doesn't exist yet, queue and flush when ready */
+    if (!document.getElementById('annOverlay')) {
+      _lpPendingToolEvents.push(payload);
+      lpWaitForOverlayThen(() => {
+        const q = _lpPendingToolEvents.splice(0);
+        q.forEach(p => lpRenderRemoteToolEvent(p));
+      });
+      return;
+    }
+
     const { action, data } = payload;
 
     if (action === 'add') {
-      /* Re-use the annotation engine's render functions */
       if (data && data.id) {
-        /* Avoid duplicates */
         if (_annAnnotations.some(a => a.id === data.id)) return;
         _annAnnotations.push(data);
         annRenderOne(data);
@@ -5307,7 +5339,7 @@
     const surface = document.getElementById('previewSurface');
     if (!surface) return;
 
-    /* Status bar */
+    /* ── Status bar ── */
     let bar = document.getElementById('lpStatusBar');
     if (!bar) {
       bar = document.createElement('div');
@@ -5316,7 +5348,7 @@
       bar.innerHTML = `
         <div class="lp-live-dot"></div>
         <span id="lpStatusText"></span>
-        <span id="lpViewerCount" class="lp-viewer-count" title="">
+        <span id="lpViewerCount" class="lp-viewer-count" style="display:none" title="">
           <i class="bi bi-people-fill"></i><span>0</span>
         </span>
       `;
@@ -5327,11 +5359,11 @@
     const txt = document.getElementById('lpStatusText');
     if (txt) txt.textContent = _lpRole === 'presenter' ? 'Live — sharing' : `Watching ${_lpPresenterName}`;
 
-    /* Chat panel */
+    /* ── Chat panel ── */
     let chat = document.getElementById('lpChatPanel');
     if (!chat) {
       chat = document.createElement('div');
-      chat.id = 'lpChatPanel';
+      chat.id        = 'lpChatPanel';
       chat.className = 'lp-chat-panel';
       chat.innerHTML = `
         <div class="lp-chat-head">
@@ -5342,31 +5374,59 @@
         </div>
         <div class="lp-chat-messages" id="lpChatMessages"></div>
         <div class="lp-chat-input-row">
-          <textarea class="lp-chat-input" id="lpChatInput" placeholder="Message…" rows="1" maxlength="1000"></textarea>
-          <button class="lp-chat-send" onclick="lpSendChat()" type="button">
+          <textarea class="lp-chat-input" id="lpChatInput"
+                    placeholder="Type a message and press Enter…"
+                    rows="1" maxlength="1000"></textarea>
+          <button class="lp-chat-send" type="button" onclick="lpSendChat()">
             <i class="bi bi-send-fill"></i>
           </button>
         </div>
       `;
       surface.appendChild(chat);
 
-      /* Send on Enter (Shift+Enter = newline) */
       chat.querySelector('#lpChatInput').addEventListener('keydown', e => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); lpSendChat(); }
       });
     }
 
-    /* Show chat button in annotation toolbar */
-    const chatBtn  = document.getElementById('lpChatToggleBtn');
-    const chatSep  = document.getElementById('lpChatSep');
-    if (chatBtn) chatBtn.style.display = 'flex';
-    if (chatSep) chatSep.style.display = 'block';
+    /* Open the chat panel immediately so both sides see it without having
+       to find the toolbar button. */
+    chat.classList.add('open');
+    _lpChatOpen = true;
 
-    /* Viewers can't draw — hide annotation drawing tools.  They still see
-       settings/list so they can read existing annotations. */
+    /* ── Show chat button in annotation toolbar ──
+       The button lives inside annOverlay which is created dynamically.
+       It may not exist yet if called before the annotation layer is ready,
+       so we also retry once annOverlay is in the DOM. */
+    function showChatToolbarBtn() {
+      const annOverlay = document.getElementById('annOverlay');
+      if (!annOverlay) return false;
+      const chatBtn = annOverlay.querySelector('#lpChatToggleBtn') ||
+                      document.getElementById('lpChatToggleBtn');
+      const chatSep = annOverlay.querySelector('#lpChatSep') ||
+                      document.getElementById('lpChatSep');
+      if (chatBtn) chatBtn.style.display = 'flex';
+      if (chatSep) chatSep.style.display = 'block';
+      return true;
+    }
+
+    if (!showChatToolbarBtn()) {
+      /* annOverlay not ready yet — retry after it's created */
+      lpWaitForOverlayThen(showChatToolbarBtn);
+    }
+
+    /* ── Viewer read-only mode ── */
     if (_lpRole === 'viewer') {
       const overlay = document.getElementById('annOverlay');
-      if (overlay) overlay.classList.add('lp-viewer-readonly');
+      if (overlay) {
+        overlay.classList.add('lp-viewer-readonly');
+      } else {
+        /* Apply once the overlay exists */
+        lpWaitForOverlayThen(() => {
+          const ov = document.getElementById('annOverlay');
+          if (ov) ov.classList.add('lp-viewer-readonly');
+        });
+      }
     }
   }
 
@@ -5374,13 +5434,14 @@
   window.lpToggleChat = function () {
     const panel = document.getElementById('lpChatPanel');
     if (!panel) return;
-    _lpChatOpen = panel.classList.toggle('open');
+    _lpChatOpen = !panel.classList.contains('open');
+    panel.classList.toggle('open', _lpChatOpen);
     if (_lpChatOpen) {
       _lpUnreadChat = 0;
       lpUpdateUnreadBadge();
       const msgs = document.getElementById('lpChatMessages');
       if (msgs) msgs.scrollTop = msgs.scrollHeight;
-      document.getElementById('lpChatInput')?.focus();
+      setTimeout(() => document.getElementById('lpChatInput')?.focus(), 80);
     }
   };
 
@@ -5394,21 +5455,47 @@
   };
 
   function lpAppendChatMessage(msg) {
+    /* Ensure the chat panel is open and visible when a message arrives */
+    const panel = document.getElementById('lpChatPanel');
+    if (panel && !panel.classList.contains('open')) {
+      /* Auto-open if it was closed — makes it obvious a message arrived */
+    }
+
     const msgs = document.getElementById('lpChatMessages');
     if (!msgs) return;
 
-    const isMine = String(msg.sender_id) === LP_CURRENT_USER_ID;
+    /* Use server-sent is_self flag first; fall back to ID comparison */
+    const isMine = (msg.is_self === true) ||
+                   (String(msg.sender_id) === String(LP_CURRENT_USER_ID));
+
     const el = document.createElement('div');
     el.className = 'lp-msg ' + (isMine ? 'mine' : 'theirs');
-    el.innerHTML = (!isMine ? `<div class="lp-msg-sender">${esc(msg.sender_name)}</div>` : '')
-      + `<div>${esc(msg.text)}</div>`
-      + `<div class="lp-msg-meta">${esc(msg.ts)}</div>`;
+    if (!isMine) {
+      const sender = document.createElement('div');
+      sender.className = 'lp-msg-sender';
+      sender.textContent = msg.sender_name || 'Unknown';
+      el.appendChild(sender);
+    }
+    const body = document.createElement('div');
+    body.textContent = msg.text || '';
+    el.appendChild(body);
+    const meta = document.createElement('div');
+    meta.className = 'lp-msg-meta';
+    meta.textContent = msg.ts || '';
+    el.appendChild(meta);
+
     msgs.appendChild(el);
     msgs.scrollTop = msgs.scrollHeight;
 
     if (!_lpChatOpen && !isMine) {
       _lpUnreadChat++;
       lpUpdateUnreadBadge();
+      /* Flash the chat button to draw attention */
+      const chatBtn = document.getElementById('lpChatToggleBtn');
+      if (chatBtn) {
+        chatBtn.style.animation = 'none';
+        setTimeout(() => { chatBtn.style.animation = ''; }, 10);
+      }
     }
   }
 
@@ -5504,6 +5591,7 @@
     _lpViewerCount   = 0;
     _lpReconnectAttempts = 0;
     _lpIntentionalClose  = false;
+    _lpPendingToolEvents = [];
 
     /* Restore share button to idle state — keep it visible if preview is open */
     if (lpShareBtn) {

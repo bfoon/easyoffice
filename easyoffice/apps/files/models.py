@@ -859,5 +859,3 @@ class LivePreviewSession(models.Model):
     @property
     def ws_path(self):
         return f'/ws/files/live-preview/{self.token}/'
-
-

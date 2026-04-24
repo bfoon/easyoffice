@@ -61,7 +61,15 @@ body.ann-tool-active .pdfjs-page-wrap { cursor: crosshair; }
 body.ann-tool-highlight-active .pdfjs-page-wrap { cursor: text; }
 body.ann-tool-comment-active   .pdfjs-page-wrap,
 body.ann-tool-stamp-active     .pdfjs-page-wrap,
-body.ann-tool-bookmark-active  .pdfjs-page-wrap { cursor: cell; }
+body.ann-tool-bookmark-active  .pdfjs-page-wrap,
+body.ann-tool-checkbox-active  .pdfjs-page-wrap,
+body.ann-tool-numbered-active  .pdfjs-page-wrap,
+body.ann-tool-date-active      .pdfjs-page-wrap { cursor: cell; }
+body.ann-tool-text-active      .pdfjs-page-wrap,
+body.ann-tool-signature-active .pdfjs-page-wrap { cursor: text; }
+body.ann-tool-line-active      .pdfjs-page-wrap,
+body.ann-tool-arrow-active     .pdfjs-page-wrap,
+body.ann-tool-circle-active    .pdfjs-page-wrap { cursor: crosshair; }
 body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
 
 /* Per-page SVG sits inside each page wrap */
@@ -89,9 +97,122 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
 .ann-overlay .ann-stamp-text,
 .ann-page-dom .ann-pin,
 .ann-page-dom .ann-bookmark-flag,
-.ann-page-dom .ann-stamp-text {
+.ann-page-dom .ann-stamp-text,
+.ann-page-dom .ann-text-field,
+.ann-page-dom .ann-signature,
+.ann-page-dom .ann-checkbox,
+.ann-page-dom .ann-numbered,
+.ann-page-dom .ann-date-stamp {
   pointer-events: all;
 }
+
+/* ── Editable text field (form input) ── */
+.ann-text-field {
+  position: absolute;
+  min-width: 60px; max-width: 90%;
+  background: rgba(255,255,255,.95);
+  border: 1px dashed transparent;
+  border-radius: 3px;
+  padding: 2px 4px;
+  font-size: 14px;
+  font-family: inherit;
+  color: #1f2937;
+  cursor: text;
+  outline: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  transition: border-color .1s;
+}
+.ann-text-field:focus,
+.ann-text-field:hover { border-color: #3b82f6; background: #fff; }
+.ann-text-field.ann-text-editing { border-style: solid; border-color: #3b82f6; }
+.ann-text-field[data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  color: #9ca3af; font-style: italic;
+}
+
+/* ── Signature ── */
+.ann-signature {
+  position: absolute;
+  min-width: 120px; max-width: 320px;
+  padding: 4px 8px;
+  border-bottom: 2px solid;
+  background: transparent;
+  font-family: 'Brush Script MT', 'Lucida Handwriting', cursive;
+  font-size: 22px;
+  font-style: italic;
+  outline: none;
+  cursor: text;
+  color: #1e3a8a;
+  white-space: nowrap;
+}
+.ann-signature[data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  color: #9ca3af; font-style: italic; font-size: 13px; font-family: inherit;
+}
+
+/* ── Checkbox ── */
+.ann-checkbox {
+  position: absolute;
+  width: 18px; height: 18px;
+  border: 2px solid;
+  border-radius: 3px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,.85);
+  font-weight: bold; font-size: 14px;
+  user-select: none;
+}
+.ann-checkbox:hover { background: #fff; }
+.ann-checkbox.checked::after { content: '✓'; color: inherit; }
+
+/* ── Numbered marker ── */
+.ann-numbered {
+  position: absolute;
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #fff;
+  font-weight: 800; font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0,0,0,.3);
+  transform: translate(-50%, -50%);
+  user-select: none;
+}
+
+/* ── Date stamp ── */
+.ann-date-stamp {
+  position: absolute;
+  padding: 3px 10px;
+  border: 2px solid;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  font-family: monospace;
+  cursor: pointer;
+  background: rgba(255,255,255,.9);
+  white-space: nowrap;
+}
+
+/* ── Clear all confirmation dialog ── */
+.ann-clear-confirm {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100;
+  background: #fff;
+  border: 1px solid var(--eo-border);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.22);
+  padding: 18px 20px;
+  min-width: 280px;
+  pointer-events: all;
+}
+.ann-clear-confirm-title { font-size: .9rem; font-weight: 700; margin-bottom: 6px; }
+.ann-clear-confirm-body  { font-size: .78rem; color: var(--eo-text-muted); margin-bottom: 12px; }
+.ann-clear-confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
 /* SVG canvas that stretches over the whole surface */
 .ann-canvas {
@@ -4233,7 +4354,13 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     /* Load PDF.js from CDN if not already available */
     _pdfEnsurePdfjsLoaded().then(() => {
       const rawUrl = previewUrl(fileId);
-      const loadingTask = pdfjsLib.getDocument({ url: rawUrl, withCredentials: true });
+      const loadingTask = pdfjsLib.getDocument({
+        url: rawUrl,
+        withCredentials: true,
+        cMapUrl:             'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+        cMapPacked:          true,
+        standardFontDataUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/standard_fonts/',
+      });
       loadingTask.promise.then(doc => {
         _pdfDoc        = doc;
         _pdfTotalPages = doc.numPages;
@@ -4642,9 +4769,17 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       case 'highlight': annRenderHighlight(svg, a); break;
       case 'draw':      annRenderDraw(svg, a);      break;
       case 'rect':      annRenderRect(svg, a);      break;
+      case 'circle':    annRenderCircle(svg, a);    break;
+      case 'line':      annRenderLine(svg, a);      break;
+      case 'arrow':     annRenderArrow(svg, a);     break;
       case 'comment':   annRenderComment(dom, a);   break;
       case 'stamp':     annRenderStamp(dom, a);     break;
       case 'bookmark':  annRenderBookmark(dom, a);  break;
+      case 'text':      annRenderTextField(dom, a); break;
+      case 'signature': annRenderSignature(dom, a); break;
+      case 'checkbox':  annRenderCheckbox(dom, a);  break;
+      case 'numbered':  annRenderNumbered(dom, a);  break;
+      case 'date':      annRenderDateStamp(dom, a); break;
     }
   }
 
@@ -4752,6 +4887,208 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     </svg>`;
     bk.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
     container.appendChild(bk);
+  }
+
+  /* ── Circle / ellipse (SVG) ── */
+  function annRenderCircle(svg, a) {
+    if (!svg) return;
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'ellipse');
+    const cx = a.x + (a.w || 10) / 2;
+    const cy = a.y + (a.h || 10) / 2;
+    el.setAttribute('cx', cx);
+    el.setAttribute('cy', cy);
+    el.setAttribute('rx', Math.max(0.1, (a.w || 10) / 2));
+    el.setAttribute('ry', Math.max(0.1, (a.h || 10) / 2));
+    el.setAttribute('fill',           hexToRgba(a.color || '#8b5cf6', (a.opacity ?? 0.5) * 0.35));
+    el.setAttribute('stroke',         a.color || '#8b5cf6');
+    el.setAttribute('stroke-opacity', String(a.opacity ?? 0.85));
+    el.setAttribute('stroke-width',   '0.4');
+    el.setAttribute('data-ann-id',    a.id);
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
+    svg.appendChild(el);
+  }
+
+  /* ── Straight line (SVG) ── */
+  function annRenderLine(svg, a) {
+    if (!svg) return;
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    el.setAttribute('x1', a.x);
+    el.setAttribute('y1', a.y);
+    el.setAttribute('x2', a.x2 ?? a.x + (a.w || 10));
+    el.setAttribute('y2', a.y2 ?? a.y);
+    el.setAttribute('stroke',         a.color || '#ef4444');
+    el.setAttribute('stroke-opacity', String(a.opacity ?? 0.9));
+    el.setAttribute('stroke-width',   String((a.stroke_width || 3) * 0.5));
+    el.setAttribute('stroke-linecap', 'round');
+    el.setAttribute('data-ann-id',    a.id);
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
+    svg.appendChild(el);
+  }
+
+  /* ── Arrow (SVG line + arrowhead marker) ── */
+  function annRenderArrow(svg, a) {
+    if (!svg) return;
+    let defs = svg.querySelector('defs');
+    if (!defs) {
+      defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+      svg.insertBefore(defs, svg.firstChild);
+    }
+    const markerId = 'ann-arrow-' + (a.color || '#ef4444').replace('#', '');
+    if (!defs.querySelector(`#${markerId}`)) {
+      const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+      marker.setAttribute('id', markerId);
+      marker.setAttribute('viewBox', '0 0 10 10');
+      marker.setAttribute('refX', '9');
+      marker.setAttribute('refY', '5');
+      marker.setAttribute('markerWidth',  '5');
+      marker.setAttribute('markerHeight', '5');
+      marker.setAttribute('orient', 'auto-start-reverse');
+      marker.innerHTML = `<path d="M0,0 L10,5 L0,10 L2,5 z" fill="${a.color || '#ef4444'}"/>`;
+      defs.appendChild(marker);
+    }
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    el.setAttribute('x1', a.x);
+    el.setAttribute('y1', a.y);
+    el.setAttribute('x2', a.x2 ?? a.x);
+    el.setAttribute('y2', a.y2 ?? a.y);
+    el.setAttribute('stroke',         a.color || '#ef4444');
+    el.setAttribute('stroke-opacity', String(a.opacity ?? 0.9));
+    el.setAttribute('stroke-width',   String((a.stroke_width || 3) * 0.5));
+    el.setAttribute('stroke-linecap', 'round');
+    el.setAttribute('marker-end',     `url(#${markerId})`);
+    el.setAttribute('data-ann-id',    a.id);
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
+    svg.appendChild(el);
+  }
+
+  /* ── Editable text field (form input) ── */
+  function annRenderTextField(container, a) {
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className       = 'ann-text-field';
+    el.dataset.annId   = a.id;
+    el.style.left      = a.x + '%';
+    el.style.top       = a.y + '%';
+    el.style.color     = a.color || '#1f2937';
+    el.style.fontSize  = (a.fontSize || 14) + 'px';
+    el.contentEditable = 'true';
+    el.spellcheck      = false;
+    el.setAttribute('data-placeholder', 'Type here…');
+    el.textContent     = a.text || '';
+
+    el.addEventListener('mousedown', e => {
+      if (_annSettings.active_tool === 'erase') {
+        e.preventDefault();
+        annRemove(a.id);
+      } else {
+        e.stopPropagation();   /* don't start a drag while editing */
+      }
+    });
+    el.addEventListener('focus', () => el.classList.add('ann-text-editing'));
+    el.addEventListener('blur',  () => {
+      el.classList.remove('ann-text-editing');
+      const ann = _annAnnotations.find(x => x.id === a.id);
+      if (ann && ann.text !== el.textContent) {
+        ann.text = el.textContent;
+        annScheduleSave();
+      }
+    });
+    container.appendChild(el);
+  }
+
+  /* ── Signature field ── */
+  function annRenderSignature(container, a) {
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className           = 'ann-signature';
+    el.dataset.annId       = a.id;
+    el.style.left          = a.x + '%';
+    el.style.top           = a.y + '%';
+    el.style.color         = a.color || '#1e3a8a';
+    el.style.borderBottomColor = a.color || '#1e3a8a';
+    el.contentEditable     = 'true';
+    el.spellcheck          = false;
+    el.setAttribute('data-placeholder', 'Sign here');
+    el.textContent         = a.text || '';
+
+    el.addEventListener('mousedown', e => {
+      if (_annSettings.active_tool === 'erase') {
+        e.preventDefault();
+        annRemove(a.id);
+      } else {
+        e.stopPropagation();
+      }
+    });
+    el.addEventListener('blur', () => {
+      const ann = _annAnnotations.find(x => x.id === a.id);
+      if (ann && ann.text !== el.textContent) {
+        ann.text = el.textContent;
+        annScheduleSave();
+      }
+    });
+    container.appendChild(el);
+  }
+
+  /* ── Checkbox (toggleable) ── */
+  function annRenderCheckbox(container, a) {
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className     = 'ann-checkbox' + (a.checked ? ' checked' : '');
+    el.dataset.annId = a.id;
+    el.style.left    = a.x + '%';
+    el.style.top     = a.y + '%';
+    el.style.color       = a.color || '#1f2937';
+    el.style.borderColor = a.color || '#1f2937';
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      if (_annSettings.active_tool === 'erase') { annRemove(a.id); return; }
+      const ann = _annAnnotations.find(x => x.id === a.id);
+      if (ann) {
+        ann.checked = !ann.checked;
+        el.classList.toggle('checked', ann.checked);
+        annScheduleSave();
+      }
+    });
+    container.appendChild(el);
+  }
+
+  /* ── Numbered marker ── */
+  function annRenderNumbered(container, a) {
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className     = 'ann-numbered';
+    el.dataset.annId = a.id;
+    el.style.left    = a.x + '%';
+    el.style.top     = a.y + '%';
+    el.style.background = a.color || '#ef4444';
+    el.textContent   = a.number || '1';
+    el.title         = a.text || '';
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      if (_annSettings.active_tool === 'erase') annRemove(a.id);
+    });
+    container.appendChild(el);
+  }
+
+  /* ── Date stamp ── */
+  function annRenderDateStamp(container, a) {
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className     = 'ann-date-stamp';
+    el.dataset.annId = a.id;
+    el.style.left    = a.x + '%';
+    el.style.top     = a.y + '%';
+    el.style.color       = a.color || '#ef4444';
+    el.style.borderColor = a.color || '#ef4444';
+    el.textContent   = a.text || new Date().toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'});
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      if (_annSettings.active_tool === 'erase') annRemove(a.id);
+    });
+    container.appendChild(el);
   }
 
   /* ── Comment popup ── */
@@ -4891,7 +5228,9 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   function annOnDown(e) {
     if (e.button !== 0) return;
     const tool = _annSettings.active_tool;
-    if (tool !== 'draw' && tool !== 'rect' && tool !== 'highlight') return;
+    /* Drag tools: shapes that need a start and end point */
+    const dragTools = new Set(['draw', 'rect', 'highlight', 'line', 'arrow', 'circle']);
+    if (!dragTools.has(tool)) return;
 
     const viewer = document.getElementById('pdfjsViewer');
     if (viewer) {
@@ -4942,6 +5281,36 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         _annTempEl.setAttribute('stroke-linejoin', 'round');
         svg.appendChild(_annTempEl);
       }
+    } else if (tool === 'line' || tool === 'arrow') {
+      if (!_annTempEl) {
+        _annTempEl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        _annTempEl.setAttribute('stroke',         _annSettings.color);
+        _annTempEl.setAttribute('stroke-opacity', String(_annSettings.opacity));
+        _annTempEl.setAttribute('stroke-width',   String((_annSettings.stroke_width || 3) * 0.5));
+        _annTempEl.setAttribute('stroke-linecap', 'round');
+        svg.appendChild(_annTempEl);
+      }
+      _annTempEl.setAttribute('x1', _annDrawStart.x);
+      _annTempEl.setAttribute('y1', _annDrawStart.y);
+      _annTempEl.setAttribute('x2', pos.x);
+      _annTempEl.setAttribute('y2', pos.y);
+    } else if (tool === 'circle') {
+      const cx = (_annDrawStart.x + pos.x) / 2;
+      const cy = (_annDrawStart.y + pos.y) / 2;
+      const rx = Math.max(0.1, Math.abs(pos.x - _annDrawStart.x) / 2);
+      const ry = Math.max(0.1, Math.abs(pos.y - _annDrawStart.y) / 2);
+      if (!_annTempEl) {
+        _annTempEl = document.createElementNS('http://www.w3.org/2000/svg', 'ellipse');
+        _annTempEl.setAttribute('fill',           hexToRgba(_annSettings.color, _annSettings.opacity * 0.35));
+        _annTempEl.setAttribute('stroke',         _annSettings.color);
+        _annTempEl.setAttribute('stroke-opacity', String(_annSettings.opacity));
+        _annTempEl.setAttribute('stroke-width',   '0.4');
+        svg.appendChild(_annTempEl);
+      }
+      _annTempEl.setAttribute('cx', cx);
+      _annTempEl.setAttribute('cy', cy);
+      _annTempEl.setAttribute('rx', rx);
+      _annTempEl.setAttribute('ry', ry);
     } else if (tool === 'rect' || tool === 'highlight') {
       const x    = Math.min(_annDrawStart.x, pos.x);
       const y    = Math.min(_annDrawStart.y, pos.y);
@@ -4988,6 +5357,26 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         paths: _annCurrentPath,
         x: _annDrawStart.x, y: _annDrawStart.y,
       });
+    } else if (tool === 'line' || tool === 'arrow') {
+      const dx = pos.x - _annDrawStart.x;
+      const dy = pos.y - _annDrawStart.y;
+      if (Math.sqrt(dx*dx + dy*dy) > 0.5) {
+        annAdd({
+          tool, page: pageN,
+          color: _annSettings.color, opacity: _annSettings.opacity,
+          stroke_width: _annSettings.stroke_width || 3,
+          x:  _annDrawStart.x, y:  _annDrawStart.y,
+          x2: pos.x,           y2: pos.y,
+        });
+      }
+    } else if (tool === 'circle') {
+      const x = Math.min(_annDrawStart.x, pos.x);
+      const y = Math.min(_annDrawStart.y, pos.y);
+      const w = Math.abs(pos.x - _annDrawStart.x);
+      const h = Math.abs(pos.y - _annDrawStart.y);
+      if (w > 0.5 && h > 0.3) {
+        annAdd({ tool: 'circle', page: pageN, color: _annSettings.color, opacity: _annSettings.opacity, x, y, w, h });
+      }
     } else if (tool === 'rect' || tool === 'highlight') {
       const x = Math.min(_annDrawStart.x, pos.x);
       const y = Math.min(_annDrawStart.y, pos.y);
@@ -5030,6 +5419,50 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       annOpenStampPicker(pos, domContainer, pageN);
     } else if (tool === 'bookmark') {
       annAdd({ tool: 'bookmark', page: pageN, color: _annSettings.color, opacity: _annSettings.opacity, x: pos.x, y: pos.y });
+    } else if (tool === 'text') {
+      const newAnn = {
+        tool: 'text', page: pageN,
+        color: _annSettings.color, opacity: _annSettings.opacity,
+        x: pos.x, y: pos.y, text: '', fontSize: 14,
+      };
+      annAdd(newAnn);
+      setTimeout(() => {
+        const el = document.querySelector(`[data-ann-id="${newAnn.id}"]`);
+        if (el) el.focus();
+      }, 30);
+    } else if (tool === 'signature') {
+      const newAnn = {
+        tool: 'signature', page: pageN,
+        color: _annSettings.color, opacity: _annSettings.opacity,
+        x: pos.x, y: pos.y, text: '',
+      };
+      annAdd(newAnn);
+      setTimeout(() => {
+        const el = document.querySelector(`[data-ann-id="${newAnn.id}"]`);
+        if (el) el.focus();
+      }, 30);
+    } else if (tool === 'checkbox') {
+      annAdd({
+        tool: 'checkbox', page: pageN,
+        color: _annSettings.color, opacity: _annSettings.opacity,
+        x: pos.x, y: pos.y, checked: false,
+      });
+    } else if (tool === 'numbered') {
+      const maxN = _annAnnotations
+        .filter(a => a.tool === 'numbered')
+        .reduce((m, a) => Math.max(m, parseInt(a.number || '0', 10)), 0);
+      annAdd({
+        tool: 'numbered', page: pageN,
+        color: _annSettings.color, opacity: _annSettings.opacity,
+        x: pos.x, y: pos.y, number: String(maxN + 1),
+      });
+    } else if (tool === 'date') {
+      annAdd({
+        tool: 'date', page: pageN,
+        color: _annSettings.color, opacity: _annSettings.opacity,
+        x: pos.x, y: pos.y,
+        text: new Date().toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'}),
+      });
     }
   }
 
@@ -5042,7 +5475,13 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       scroll.innerHTML = '<div class="ann-list-empty"><i class="bi bi-pencil-square d-block mb-2" style="font-size:1.4rem;opacity:.4"></i>No annotations yet.<br>Pick a tool and click on the document.</div>';
       return;
     }
-    const toolNames = { highlight:'Highlight', comment:'Comment', draw:'Drawing', rect:'Rectangle', stamp:'Stamp', bookmark:'Bookmark' };
+    const toolNames = {
+      highlight:'Highlight', comment:'Comment', draw:'Drawing',
+      rect:'Rectangle', circle:'Circle', line:'Line', arrow:'Arrow',
+      stamp:'Stamp', bookmark:'Bookmark',
+      text:'Text', signature:'Signature', checkbox:'Checkbox',
+      numbered:'Number', date:'Date',
+    };
     _annAnnotations.slice().reverse().forEach(a => {
       const item       = document.createElement('div');
       item.className   = 'ann-list-item';
@@ -5181,13 +5620,25 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       <div class="ann-toolbar" id="annToolbar">
         <button class="ann-tool-btn" data-tool="highlight" data-tip="Highlight"     type="button"><i class="bi bi-highlighter"></i></button>
         <button class="ann-tool-btn" data-tool="comment"   data-tip="Comment"       type="button"><i class="bi bi-chat-square-text"></i></button>
+        <button class="ann-tool-btn" data-tool="text"      data-tip="Text / form input" type="button"><i class="bi bi-fonts"></i></button>
+        <button class="ann-tool-btn" data-tool="signature" data-tip="Signature"     type="button"><i class="bi bi-pen"></i></button>
+        <button class="ann-tool-btn" data-tool="checkbox"  data-tip="Checkbox"      type="button"><i class="bi bi-check-square"></i></button>
+        <div class="ann-sep"></div>
         <button class="ann-tool-btn" data-tool="draw"      data-tip="Freehand draw" type="button"><i class="bi bi-pencil"></i></button>
+        <button class="ann-tool-btn" data-tool="line"      data-tip="Line"          type="button"><i class="bi bi-slash-lg"></i></button>
+        <button class="ann-tool-btn" data-tool="arrow"     data-tip="Arrow"         type="button"><i class="bi bi-arrow-up-right"></i></button>
         <button class="ann-tool-btn" data-tool="rect"      data-tip="Rectangle"     type="button"><i class="bi bi-square"></i></button>
+        <button class="ann-tool-btn" data-tool="circle"    data-tip="Circle"        type="button"><i class="bi bi-circle"></i></button>
+        <div class="ann-sep"></div>
         <button class="ann-tool-btn" data-tool="stamp"     data-tip="Stamp"         type="button"><i class="bi bi-type-bold"></i></button>
+        <button class="ann-tool-btn" data-tool="date"      data-tip="Date stamp"    type="button"><i class="bi bi-calendar-event"></i></button>
+        <button class="ann-tool-btn" data-tool="numbered"  data-tip="Numbered marker" type="button"><i class="bi bi-123"></i></button>
         <button class="ann-tool-btn" data-tool="bookmark"  data-tip="Bookmark"      type="button"><i class="bi bi-bookmark-fill"></i></button>
         <div class="ann-sep"></div>
-        <button class="ann-tool-btn ann-danger" data-tool="erase" data-tip="Erase"  type="button"><i class="bi bi-eraser"></i></button>
+        <button class="ann-tool-btn ann-danger" data-tool="erase" data-tip="Erase one" type="button"><i class="bi bi-eraser"></i></button>
+        <button class="ann-tool-btn ann-danger" id="annClearAllBtn" data-tip="Clear all" type="button"><i class="bi bi-trash3"></i></button>
         <div class="ann-sep"></div>
+        <button class="ann-tool-btn" id="annExportBtn"      data-tip="Export page as PNG" type="button"><i class="bi bi-download"></i></button>
         <button class="ann-tool-btn" id="annSettingsToggle" data-tip="Settings"        type="button"><i class="bi bi-sliders"></i></button>
         <button class="ann-tool-btn" id="annListToggle"     data-tip="All annotations" type="button" style="position:relative">
           <i class="bi bi-list-ul"></i>
@@ -5225,6 +5676,262 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     `;
   }
 
+  /* ══════════════════════════════════════════════════════════════════
+     CLEAR ALL + EXPORT PNG
+     ══════════════════════════════════════════════════════════════════ */
+
+  function annFlashMessage(text) {
+    const ind = document.getElementById('annSaveIndicator');
+    if (!ind) return;
+    const original = ind.innerHTML;
+    ind.innerHTML = `<i class="bi bi-info-circle-fill me-1"></i> ${text}`;
+    ind.classList.add('show');
+    setTimeout(() => {
+      ind.classList.remove('show');
+      setTimeout(() => { ind.innerHTML = original; }, 400);
+    }, 1800);
+  }
+
+  function annShowClearConfirm() {
+    const surface = document.getElementById('previewSurface');
+    if (!surface) return;
+    document.getElementById('annClearConfirm')?.remove();
+
+    if (!_annAnnotations.length) {
+      annFlashMessage('Nothing to clear');
+      return;
+    }
+
+    const dlg = document.createElement('div');
+    dlg.id        = 'annClearConfirm';
+    dlg.className = 'ann-clear-confirm';
+    dlg.innerHTML = `
+      <div class="ann-clear-confirm-title">
+        <i class="bi bi-exclamation-triangle-fill" style="color:#ef4444;margin-right:5px"></i>
+        Clear all annotations?
+      </div>
+      <div class="ann-clear-confirm-body">
+        This will remove ${_annAnnotations.length} annotation${_annAnnotations.length === 1 ? '' : 's'}
+        from this file. This cannot be undone.
+      </div>
+      <div class="ann-clear-confirm-actions">
+        <button type="button" id="annClearCancel" class="eo-btn eo-btn-secondary eo-btn-sm">Cancel</button>
+        <button type="button" id="annClearConfirmBtn" class="eo-btn eo-btn-sm"
+          style="background:#ef4444;border-color:#ef4444;color:#fff">Clear all</button>
+      </div>
+    `;
+    surface.appendChild(dlg);
+
+    dlg.querySelector('#annClearCancel').addEventListener('click', () => dlg.remove());
+    dlg.querySelector('#annClearConfirmBtn').addEventListener('click', () => {
+      const count = _annAnnotations.length;
+      _annAnnotations = [];
+
+      const viewer = document.getElementById('pdfjsViewer');
+      if (viewer) {
+        viewer.querySelectorAll('.ann-page-canvas').forEach(s => { s.innerHTML = ''; });
+        viewer.querySelectorAll('.ann-page-dom').forEach(d => {
+          d.querySelectorAll('[data-ann-id]').forEach(el => el.remove());
+        });
+      }
+      const overlay = document.getElementById('annOverlay');
+      if (overlay) {
+        overlay.querySelectorAll('[data-ann-id]').forEach(el => el.remove());
+        const svg = overlay.querySelector('.ann-canvas');
+        if (svg) svg.innerHTML = '';
+      }
+      annUpdateCountBadge();
+      annRefreshListPanel();
+      annScheduleSave();
+
+      /* Broadcast to live-preview viewers */
+      if (typeof lpBroadcastToolEvent === 'function') {
+        lpBroadcastToolEvent({ action: 'clear' });
+      }
+
+      dlg.remove();
+      annFlashMessage(`Cleared ${count} annotation${count === 1 ? '' : 's'}`);
+    });
+  }
+
+  /* Render the current page (or non-PDF surface) with annotations baked in */
+  async function annExportCurrentPagePng() {
+    const viewer = document.getElementById('pdfjsViewer');
+    let sourceCanvas, svgToRaster, domContainer, fileLabel = 'export';
+
+    if (viewer) {
+      const pageN = (typeof _pdfCurrentPage !== 'undefined' && _pdfCurrentPage) ? _pdfCurrentPage : 1;
+      const wrap  = viewer.querySelector(`.pdfjs-page-wrap[data-page-n="${pageN}"]`);
+      if (!wrap) { annFlashMessage('Page not ready'); return; }
+      sourceCanvas = wrap.querySelector('canvas');
+      svgToRaster  = wrap.querySelector('.ann-page-canvas');
+      domContainer = wrap.querySelector('.ann-page-dom');
+      fileLabel    = `page-${pageN}`;
+    } else {
+      const surface = document.getElementById('previewSurface');
+      if (!surface) return;
+      const img = surface.querySelector('.preview-image');
+      if (img) {
+        const c = document.createElement('canvas');
+        c.width  = img.naturalWidth || img.width;
+        c.height = img.naturalHeight || img.height;
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        sourceCanvas = c;
+      } else {
+        annFlashMessage('Export not supported for this file type');
+        return;
+      }
+      const overlay = document.getElementById('annOverlay');
+      svgToRaster   = overlay ? overlay.querySelector('.ann-canvas') : null;
+      domContainer  = overlay;
+    }
+
+    if (!sourceCanvas) { annFlashMessage('Nothing to export'); return; }
+
+    try {
+      const out = document.createElement('canvas');
+      out.width  = sourceCanvas.width;
+      out.height = sourceCanvas.height;
+      const ctx = out.getContext('2d');
+      ctx.drawImage(sourceCanvas, 0, 0);
+
+      if (svgToRaster) await annRasterSvgOntoCanvas(svgToRaster, ctx, out.width, out.height);
+      if (domContainer) annDrawDomAnnotationsOnCanvas(domContainer, ctx, out.width, out.height);
+
+      out.toBlob(blob => {
+        if (!blob) { annFlashMessage('Export failed'); return; }
+        const url  = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href     = url;
+        link.download = `${fileLabel}-annotated.png`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        annFlashMessage('Exported PNG');
+      }, 'image/png');
+    } catch (err) {
+      console.warn('[ann] export failed', err);
+      annFlashMessage('Export failed');
+    }
+  }
+
+  function annRasterSvgOntoCanvas(svg, ctx, w, h) {
+    return new Promise(resolve => {
+      if (!svg || !svg.innerHTML || !svg.innerHTML.trim()) { resolve(); return; }
+      const clone = svg.cloneNode(true);
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      clone.setAttribute('width',  w);
+      clone.setAttribute('height', h);
+      clone.setAttribute('viewBox', '0 0 100 100');
+      clone.setAttribute('preserveAspectRatio', 'none');
+      const xml  = new XMLSerializer().serializeToString(clone);
+      const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+      const url  = URL.createObjectURL(blob);
+      const img  = new Image();
+      img.onload  = () => { ctx.drawImage(img, 0, 0, w, h); URL.revokeObjectURL(url); resolve(); };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+      img.src = url;
+    });
+  }
+
+  function annWrapText(ctx, text, x, y, maxW, lineH) {
+    const words = text.split(' ');
+    let line = '', cy = y;
+    for (let i = 0; i < words.length; i++) {
+      const test = line + words[i] + ' ';
+      if (ctx.measureText(test).width > maxW && line) {
+        ctx.fillText(line, x, cy);
+        line = words[i] + ' ';
+        cy += lineH;
+      } else {
+        line = test;
+      }
+    }
+    if (line) ctx.fillText(line, x, cy);
+  }
+
+  function annDrawDomAnnotationsOnCanvas(container, ctx, canvasW, canvasH) {
+    const cRect = container.getBoundingClientRect();
+    container.querySelectorAll('[data-ann-id]').forEach(el => {
+      const r = el.getBoundingClientRect();
+      const x = (r.left - cRect.left) / cRect.width  * canvasW;
+      const y = (r.top  - cRect.top)  / cRect.height * canvasH;
+      const w = r.width  / cRect.width  * canvasW;
+      const h = r.height / cRect.height * canvasH;
+
+      ctx.save();
+      if (el.classList.contains('ann-pin')) {
+        ctx.fillStyle = el.style.background || '#3b82f6';
+        ctx.beginPath();
+        ctx.arc(x + w/2, y + h/2, Math.min(w, h) * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (el.classList.contains('ann-bookmark-flag')) {
+        ctx.fillStyle = '#06b6d4';
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + w, y);
+        ctx.lineTo(x + w, y + h);
+        ctx.lineTo(x + w/2, y + h * 0.72);
+        ctx.lineTo(x, y + h);
+        ctx.closePath();
+        ctx.fill();
+      } else if (el.classList.contains('ann-stamp-text') || el.classList.contains('ann-date-stamp')) {
+        const color = el.style.color || '#ef4444';
+        const fs    = parseFloat(getComputedStyle(el).fontSize) || 14;
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = 2;
+        ctx.strokeRect(x, y, w, h);
+        ctx.fillStyle    = color;
+        ctx.font         = `bold ${fs}px sans-serif`;
+        ctx.textBaseline = 'middle';
+        ctx.fillText(el.textContent || '', x + 6, y + h / 2);
+      } else if (el.classList.contains('ann-checkbox')) {
+        const color = el.style.color || '#1f2937';
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = 2;
+        ctx.strokeRect(x, y, w, h);
+        if (el.classList.contains('checked')) {
+          ctx.fillStyle    = color;
+          ctx.font         = `bold ${h * 0.85}px sans-serif`;
+          ctx.textBaseline = 'middle';
+          ctx.textAlign    = 'center';
+          ctx.fillText('✓', x + w/2, y + h/2);
+        }
+      } else if (el.classList.contains('ann-text-field')) {
+        const color = el.style.color || '#1f2937';
+        const fs    = parseFloat(getComputedStyle(el).fontSize) || 14;
+        ctx.fillStyle    = color;
+        ctx.font         = `${fs}px sans-serif`;
+        ctx.textBaseline = 'top';
+        annWrapText(ctx, el.textContent || '', x + 4, y + 2, w - 8, fs * 1.2);
+      } else if (el.classList.contains('ann-signature')) {
+        const color = el.style.color || '#1e3a8a';
+        ctx.fillStyle    = color;
+        ctx.font         = `italic ${h * 0.75}px 'Brush Script MT', cursive`;
+        ctx.textBaseline = 'middle';
+        ctx.fillText(el.textContent || '', x + 4, y + h / 2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, y + h);
+        ctx.lineTo(x + w, y + h);
+        ctx.stroke();
+      } else if (el.classList.contains('ann-numbered')) {
+        ctx.fillStyle = el.style.background || '#ef4444';
+        ctx.beginPath();
+        ctx.arc(x + w/2, y + h/2, Math.min(w, h) / 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle    = '#fff';
+        ctx.font         = `bold ${h * 0.55}px sans-serif`;
+        ctx.textBaseline = 'middle';
+        ctx.textAlign    = 'center';
+        ctx.fillText(el.textContent || '', x + w/2, y + h/2);
+      }
+      ctx.restore();
+    });
+  }
+
   function annBindToolbarEvents(overlay) {
     /* Tool buttons — toggle on/off */
     overlay.querySelectorAll('.ann-tool-btn[data-tool]').forEach(btn => {
@@ -5251,6 +5958,18 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     overlay.querySelector('#annListClose')?.addEventListener('click', () =>
       document.getElementById('annListPanel')?.classList.remove('open')
     );
+
+    /* Clear All — confirmation dialog, then wipe everything */
+    overlay.querySelector('#annClearAllBtn')?.addEventListener('click', e => {
+      e.stopPropagation();
+      annShowClearConfirm();
+    });
+
+    /* Export PNG — bake annotations into image and download */
+    overlay.querySelector('#annExportBtn')?.addEventListener('click', e => {
+      e.stopPropagation();
+      annExportCurrentPagePng();
+    });
 
     /* Comment popup buttons */
     overlay.querySelector('#annCommentSave')?.addEventListener('click', e => {

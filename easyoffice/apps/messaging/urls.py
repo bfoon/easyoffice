@@ -1,5 +1,6 @@
 from django.urls import path
 from apps.messaging import views
+from apps.messaging import floating_chat_views
 
 urlpatterns = [
     # ─────────────────────────────────────────────
@@ -142,4 +143,24 @@ urlpatterns = [
     # ─────────────────────────────────────────────
     path('present/<uuid:room_id>/upload/', views.PresentUploadView.as_view(),    name='present_upload'),
     path('present/<uuid:room_id>/files/',  views.PresentListFilesView.as_view(), name='present_files'),
+
+    # ─────────────────────────────────────────────
+    # 🆕 GLOBAL FLOATING CHAT WIDGET (corner popup)
+    # ─────────────────────────────────────────────
+    path(
+        'floating/inbox/',
+        floating_chat_views.FloatingChatInboxView.as_view(),
+        name='floating_chat_inbox',
+    ),
+    path(
+        'floating/<uuid:room_id>/messages/',
+        floating_chat_views.FloatingChatRoomMessagesView.as_view(),
+        name='floating_chat_messages',
+    ),
+    path(
+        'floating/<uuid:room_id>/send/',
+        floating_chat_views.FloatingChatSendView.as_view(),
+        name='floating_chat_send',
+    ),
+
 ]

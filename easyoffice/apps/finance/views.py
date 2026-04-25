@@ -69,6 +69,20 @@ def _can_view_finance_dashboard(user):
     return _is_finance(user) or _is_ceo(user) or _is_hr(user)
 
 
+def _can_view_budgets(user):
+    """
+    Budgets are restricted to Superusers, CEO, and Finance.
+    HR can see the wider finance dashboard but NOT the raw budget figures.
+
+    Note: _is_finance() already returns True for superusers and members
+    of the 'Finance' / 'Admin' groups, so superusers are covered without
+    a separate check.
+    """
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    return _is_finance(user) or _is_ceo(user)
+
+
 def _can_view_my_finance(user):
     return user.is_authenticated
 
@@ -444,7 +458,10 @@ class BudgetListView(LoginRequiredMixin, TemplateView):
     template_name = 'finance/budget_list.html'
 
     def dispatch(self, request, *args, **kwargs):
-        if not _can_view_finance_dashboard(request.user):
+        # Budgets are CEO / Superuser / Finance only — HR is intentionally
+        # excluded here even though they have access to the broader finance
+        # dashboard. See `_can_view_budgets` definition above.
+        if not _can_view_budgets(request.user):
             return HttpResponseForbidden('You do not have permission to view budgets.')
         return super().dispatch(request, *args, **kwargs)
 

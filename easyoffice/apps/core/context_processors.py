@@ -153,3 +153,33 @@ def unread_messages(request):
     return {
         'unread_message_count': 0,
     }
+
+
+def role_flags(request):
+    """
+    Add `can_view_reports` and `can_view_budgets` to the template context.
+
+    Both helpers are defensive: an unauthenticated user always gets False,
+    and any unexpected import error is swallowed so this processor never
+    crashes the page render.
+    """
+    flags = {
+        'can_view_reports': False,
+        'can_view_budgets': False,
+    }
+
+    user = getattr(request, 'user', None)
+    if not user or not getattr(user, 'is_authenticated', False):
+        return flags
+
+    try:
+        # Imported lazily so this module has no Django-app side effects
+        # at import time.
+        from apps.finance.views import _is_finance, _is_ceo
+        flags['can_view_reports'] = bool(_is_ceo(user))
+        flags['can_view_budgets'] = bool(_is_finance(user) or _is_ceo(user))
+    except Exception:
+        # Don't let a misconfigured import take down every page.
+        pass
+
+    return flags

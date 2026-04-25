@@ -907,6 +907,866 @@
 })();
 </script>
 {% endif %}
+
+{# ───────────────────────────────────────────────────────────────────────── #}
+{# GLOBAL FLOATING CHAT WIDGET                                                #}
+{# Drop this whole block inside base.html, just before {% block extra_js %}. #}
+{# It is self-contained: scoped CSS, scoped JS, no external deps beyond the  #}
+{# bootstrap-icons font which base.html already loads.                        #}
+{# ───────────────────────────────────────────────────────────────────────── #}
+
+{% if request.user.is_authenticated and request.resolver_match.url_name != 'call_window' %}
+
+{# Hide the launcher when we're already inside the full chat experience —    #}
+{# it would only get in the way on /messages/ and /messages/<room_id>/.      #}
+{% if 'chat' not in request.resolver_match.url_name %}
+<style>
+  /* ── FLOATING WIDGET ─────────────────────────────────────────────────── */
+  .eo-fc-launcher{
+    position:fixed; right:24px; bottom:24px; z-index:1080;
+    width:60px; height:60px; border-radius:50%;
+    background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%);
+    color:#fff; border:none; box-shadow:0 10px 30px rgba(79,70,229,.35);
+    display:flex; align-items:center; justify-content:center;
+    font-size:26px; cursor:pointer; transition:transform .18s ease, box-shadow .18s ease;
+  }
+  .eo-fc-launcher:hover{ transform:translateY(-2px); box-shadow:0 14px 36px rgba(79,70,229,.45); }
+  .eo-fc-launcher:active{ transform:translateY(0); }
+  .eo-fc-launcher .bi{ pointer-events:none; }
+
+  .eo-fc-launcher-badge{
+    position:absolute; top:-4px; right:-4px;
+    min-width:22px; height:22px; padding:0 6px;
+    border-radius:11px; background:#ef4444; color:#fff;
+    font-size:11px; font-weight:700; line-height:22px; text-align:center;
+    border:2px solid #fff; box-shadow:0 2px 6px rgba(0,0,0,.15);
+  }
+  .eo-fc-launcher-badge[hidden]{ display:none !important; }
+
+  /* ── INBOX DROPDOWN (list of DMs) ─────────────────────────────────────── */
+  .eo-fc-inbox{
+    position:fixed; right:24px; bottom:96px; z-index:1080;
+    width:340px; max-height:440px;
+    background:#fff; border-radius:16px;
+    box-shadow:0 20px 50px rgba(15,23,42,.18);
+    display:flex; flex-direction:column; overflow:hidden;
+    transform-origin:bottom right; transform:scale(.95); opacity:0;
+    pointer-events:none; transition:transform .18s ease, opacity .18s ease;
+  }
+  [data-bs-theme="dark"] .eo-fc-inbox{ background:#1f2937; color:#e5e7eb; }
+  .eo-fc-inbox.is-open{ transform:scale(1); opacity:1; pointer-events:auto; }
+
+  .eo-fc-inbox-head{
+    padding:14px 16px; display:flex; align-items:center; justify-content:space-between;
+    background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%); color:#fff;
+  }
+  .eo-fc-inbox-head h6{ margin:0; font-size:15px; font-weight:600; }
+  .eo-fc-inbox-head a{ color:#fff; text-decoration:none; font-size:12px; opacity:.85; }
+  .eo-fc-inbox-head a:hover{ opacity:1; }
+
+  .eo-fc-inbox-list{ overflow-y:auto; flex:1; padding:6px 0; }
+  .eo-fc-inbox-list:empty::after{
+    content:"No conversations yet."; display:block;
+    padding:24px 16px; text-align:center; color:#94a3b8; font-size:13px;
+  }
+
+  .eo-fc-inbox-item{
+    display:flex; align-items:center; gap:12px;
+    padding:10px 16px; cursor:pointer; border:none; background:transparent;
+    width:100%; text-align:left;
+  }
+  .eo-fc-inbox-item:hover{ background:#f1f5f9; }
+  [data-bs-theme="dark"] .eo-fc-inbox-item:hover{ background:#374151; }
+
+  .eo-fc-avatar{
+    width:40px; height:40px; border-radius:50%;
+    background:#e0e7ff; color:#4f46e5;
+    display:flex; align-items:center; justify-content:center;
+    font-weight:600; font-size:14px; flex-shrink:0;
+    background-size:cover; background-position:center;
+  }
+  .eo-fc-inbox-meta{ flex:1; min-width:0; }
+  .eo-fc-inbox-name{ font-size:13px; font-weight:600; color:#0f172a; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  [data-bs-theme="dark"] .eo-fc-inbox-name{ color:#e5e7eb; }
+  .eo-fc-inbox-preview{ font-size:12px; color:#64748b; margin:2px 0 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .eo-fc-inbox-unread{
+    min-width:20px; height:20px; padding:0 6px;
+    border-radius:10px; background:#ef4444; color:#fff;
+    font-size:10px; font-weight:700; line-height:20px; text-align:center;
+    flex-shrink:0;
+  }
+
+  /* ── CHAT WINDOW ──────────────────────────────────────────────────────── */
+  .eo-fc-window{
+    position:fixed; right:24px; bottom:96px; z-index:1080;
+    width:360px; height:500px;
+    background:#fff; border-radius:16px;
+    box-shadow:0 20px 50px rgba(15,23,42,.18);
+    display:flex; flex-direction:column; overflow:hidden;
+    transform:translateY(20px); opacity:0; pointer-events:none;
+    transition:transform .18s ease, opacity .18s ease;
+  }
+  [data-bs-theme="dark"] .eo-fc-window{ background:#1f2937; color:#e5e7eb; }
+  .eo-fc-window.is-open{ transform:translateY(0); opacity:1; pointer-events:auto; }
+
+  .eo-fc-window-head{
+    padding:12px 14px; display:flex; align-items:center; gap:10px;
+    background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%); color:#fff;
+  }
+  .eo-fc-window-head .eo-fc-avatar{ width:34px; height:34px; font-size:12px; background:rgba(255,255,255,.2); color:#fff; }
+  .eo-fc-window-title{ flex:1; min-width:0; }
+  .eo-fc-window-title h6{ margin:0; font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .eo-fc-window-title small{ display:block; font-size:11px; opacity:.85; }
+  .eo-fc-window-head button{
+    background:transparent; border:none; color:#fff; font-size:18px;
+    width:30px; height:30px; border-radius:50%; cursor:pointer; padding:0;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .eo-fc-window-head button:hover{ background:rgba(255,255,255,.15); }
+
+  .eo-fc-messages{
+    flex:1; overflow-y:auto; padding:14px;
+    background:#f8fafc; display:flex; flex-direction:column; gap:8px;
+  }
+  [data-bs-theme="dark"] .eo-fc-messages{ background:#111827; }
+
+  .eo-fc-day-divider{
+    text-align:center; font-size:11px; color:#94a3b8;
+    margin:4px 0 8px; font-weight:500;
+  }
+  .eo-fc-older-link{
+    text-align:center; font-size:12px;
+    margin-bottom:6px;
+  }
+  .eo-fc-older-link a{ color:#4f46e5; text-decoration:none; }
+  .eo-fc-older-link a:hover{ text-decoration:underline; }
+
+  .eo-fc-msg{ display:flex; max-width:85%; }
+  .eo-fc-msg.in{ align-self:flex-start; }
+  .eo-fc-msg.out{ align-self:flex-end; }
+  .eo-fc-msg-bubble{
+    padding:8px 12px; border-radius:14px;
+    font-size:13px; line-height:1.4; word-wrap:break-word; word-break:break-word;
+  }
+  .eo-fc-msg.in .eo-fc-msg-bubble{ background:#fff; border:1px solid #e2e8f0; color:#0f172a; border-bottom-left-radius:4px; }
+  .eo-fc-msg.out .eo-fc-msg-bubble{ background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%); color:#fff; border-bottom-right-radius:4px; }
+  [data-bs-theme="dark"] .eo-fc-msg.in .eo-fc-msg-bubble{ background:#374151; border-color:#4b5563; color:#e5e7eb; }
+  .eo-fc-msg-time{ font-size:10px; opacity:.6; margin-top:3px; display:block; }
+
+  .eo-fc-empty{
+    text-align:center; color:#94a3b8; font-size:12px;
+    padding:30px 20px;
+  }
+
+  .eo-fc-composer{
+    border-top:1px solid #e2e8f0;
+    padding:10px; display:flex; gap:8px; align-items:flex-end;
+    background:#fff;
+  }
+  [data-bs-theme="dark"] .eo-fc-composer{ background:#1f2937; border-top-color:#374151; }
+  .eo-fc-composer textarea{
+    flex:1; border:1px solid #e2e8f0; border-radius:18px;
+    padding:8px 14px; resize:none; font-family:inherit; font-size:13px;
+    min-height:36px; max-height:90px; outline:none;
+    background:#f8fafc;
+  }
+  [data-bs-theme="dark"] .eo-fc-composer textarea{ background:#111827; border-color:#4b5563; color:#e5e7eb; }
+  .eo-fc-composer textarea:focus{ border-color:#4f46e5; background:#fff; }
+  [data-bs-theme="dark"] .eo-fc-composer textarea:focus{ background:#1f2937; }
+
+  .eo-fc-send{
+    width:36px; height:36px; border-radius:50%;
+    background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%);
+    color:#fff; border:none; cursor:pointer; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .eo-fc-send:disabled{ opacity:.5; cursor:not-allowed; }
+  .eo-fc-send:hover:not(:disabled){ filter:brightness(1.1); }
+
+  /* ── INCOMING MESSAGE TOAST (the "in-flow" bubble that disappears) ───── */
+  .eo-fc-toast{
+    position:fixed; right:24px; bottom:96px; z-index:1090;
+    width:300px; padding:12px 14px;
+    background:#fff; border-radius:14px;
+    box-shadow:0 14px 40px rgba(15,23,42,.22);
+    display:flex; gap:10px; align-items:center; cursor:pointer;
+    transform:translateX(380px); opacity:0;
+    transition:transform .35s cubic-bezier(.2,.9,.3,1.2), opacity .35s ease;
+    border-left:4px solid #4f46e5;
+  }
+  [data-bs-theme="dark"] .eo-fc-toast{ background:#1f2937; color:#e5e7eb; }
+  .eo-fc-toast.is-shown{ transform:translateX(0); opacity:1; }
+  .eo-fc-toast .eo-fc-avatar{ width:36px; height:36px; font-size:13px; }
+  .eo-fc-toast-body{ flex:1; min-width:0; }
+  .eo-fc-toast-name{ font-size:12px; font-weight:600; color:#0f172a; margin:0 0 2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  [data-bs-theme="dark"] .eo-fc-toast-name{ color:#e5e7eb; }
+  .eo-fc-toast-text{ font-size:12px; color:#475569; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  [data-bs-theme="dark"] .eo-fc-toast-text{ color:#cbd5e1; }
+
+  /* ── MOBILE ───────────────────────────────────────────────────────────── */
+  @media (max-width: 540px){
+    .eo-fc-launcher{ right:16px; bottom:16px; width:54px; height:54px; font-size:22px; }
+    .eo-fc-inbox, .eo-fc-window{
+      right:8px; left:8px; bottom:80px;
+      width:auto;
+    }
+    .eo-fc-window{ height:75vh; }
+    .eo-fc-toast{ right:8px; left:8px; width:auto; bottom:80px; }
+  }
+</style>
+
+<!-- LAUNCHER -->
+<button type="button"
+        class="eo-fc-launcher"
+        id="eo-fc-launcher"
+        title="Messages"
+        aria-label="Open messages">
+  <i class="bi bi-chat-dots-fill"></i>
+  <span class="eo-fc-launcher-badge" id="eo-fc-launcher-badge" hidden>0</span>
+</button>
+
+<!-- INBOX DROPDOWN -->
+<div class="eo-fc-inbox" id="eo-fc-inbox" role="dialog" aria-label="Direct messages">
+  <div class="eo-fc-inbox-head">
+    <h6><i class="bi bi-chat-dots-fill"></i> Messages</h6>
+    <a href="{% url 'chat_list' %}" title="See all messages">All <i class="bi bi-arrow-up-right"></i></a>
+  </div>
+  <div class="eo-fc-inbox-list" id="eo-fc-inbox-list"></div>
+</div>
+
+<!-- CHAT WINDOW -->
+<div class="eo-fc-window" id="eo-fc-window" role="dialog" aria-label="Chat">
+  <div class="eo-fc-window-head">
+    <div class="eo-fc-avatar" id="eo-fc-window-avatar">?</div>
+    <div class="eo-fc-window-title">
+      <h6 id="eo-fc-window-name">—</h6>
+      <small id="eo-fc-window-sub">Today's recent messages</small>
+    </div>
+    <a href="#" id="eo-fc-window-more" title="Open full chat" style="color:#fff;text-decoration:none;padding:4px 8px;font-size:11px;border:1px solid rgba(255,255,255,.4);border-radius:12px;">More</a>
+    <button type="button" id="eo-fc-window-close" title="Close" aria-label="Close chat">
+      <i class="bi bi-x-lg"></i>
+    </button>
+  </div>
+  <div class="eo-fc-messages" id="eo-fc-messages"></div>
+  <div class="eo-fc-composer">
+    <textarea id="eo-fc-input" rows="1" placeholder="Type a message..." maxlength="5000"></textarea>
+    <button type="button" class="eo-fc-send" id="eo-fc-send" title="Send" aria-label="Send" disabled>
+      <i class="bi bi-send-fill"></i>
+    </button>
+  </div>
+</div>
+
+<!-- TOAST (in-flow notification) -->
+<div class="eo-fc-toast" id="eo-fc-toast" role="alert" aria-live="polite">
+  <div class="eo-fc-avatar" id="eo-fc-toast-avatar">?</div>
+  <div class="eo-fc-toast-body">
+    <p class="eo-fc-toast-name" id="eo-fc-toast-name">—</p>
+    <p class="eo-fc-toast-text" id="eo-fc-toast-text">—</p>
+  </div>
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  // ── Endpoints (built relative to chat_list so app namespacing works) ────
+  // Same trick base.html already uses for notifications.
+  var CHAT_LIST_URL = "{% url 'chat_list' %}";       // e.g. /messages/
+  var INBOX_URL     = CHAT_LIST_URL + 'floating/inbox/';
+  function messagesUrl(roomId){ return CHAT_LIST_URL + 'floating/' + roomId + '/messages/'; }
+  function sendUrl(roomId){     return CHAT_LIST_URL + 'floating/' + roomId + '/send/'; }
+  function roomPageUrl(roomId){ return CHAT_LIST_URL + roomId + '/'; }
+
+  var CURRENT_USER_ID = "{{ request.user.id }}";
+
+  // ── DEBUG ─────────────────────────────────────────────────────────────
+  // Set to false in production. Logs every WebSocket lifecycle event and
+  // every incoming message so you can see exactly where the live-update
+  // flow is breaking. Open DevTools → Console to read it.
+  var DEBUG = true;
+  function dbg(){ if(DEBUG && window.console) console.log.apply(console, ['[floating-chat]'].concat([].slice.call(arguments))); }
+
+  // ── DOM refs ────────────────────────────────────────────────────────────
+  var launcher       = document.getElementById('eo-fc-launcher');
+  var launcherBadge  = document.getElementById('eo-fc-launcher-badge');
+  var inbox          = document.getElementById('eo-fc-inbox');
+  var inboxList      = document.getElementById('eo-fc-inbox-list');
+  var win            = document.getElementById('eo-fc-window');
+  var winAvatar      = document.getElementById('eo-fc-window-avatar');
+  var winName        = document.getElementById('eo-fc-window-name');
+  var winSub         = document.getElementById('eo-fc-window-sub');
+  var winMore        = document.getElementById('eo-fc-window-more');
+  var winClose       = document.getElementById('eo-fc-window-close');
+  var msgList        = document.getElementById('eo-fc-messages');
+  var input          = document.getElementById('eo-fc-input');
+  var sendBtn        = document.getElementById('eo-fc-send');
+  var toast          = document.getElementById('eo-fc-toast');
+  var toastAvatar    = document.getElementById('eo-fc-toast-avatar');
+  var toastName      = document.getElementById('eo-fc-toast-name');
+  var toastText      = document.getElementById('eo-fc-toast-text');
+
+  // ── State ───────────────────────────────────────────────────────────────
+  // We open ONE background WebSocket per DM room the user is a member of,
+  // hooking into the existing /ws/chat/<room_id>/ ChatConsumer. That gives
+  // us live updates for EVERY conversation no matter which one (if any) is
+  // currently open in the popup window. The active window just listens to
+  // the same shared bus instead of opening its own socket.
+  var state = {
+    rooms: [],            // inbox summaries
+    activeRoom: null,     // currently-opened room summary in the window
+    bgSockets: {},        // room_id -> WebSocket (background, always-on)
+    seenIds: new Set(),   // dedupe message IDs in active window
+    lastSeenId: null,     // newest message ID in the OPEN window (for after_id polling)
+    toastTimer: null,
+    inboxRefreshTimer: null,
+    chatPollTimer: null,  // poll the open chat box for new messages (WS fallback / belt-and-braces)
+  };
+
+  // ── Helpers ─────────────────────────────────────────────────────────────
+  function getCSRFToken(){
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    if(meta) return meta.getAttribute('content') || '';
+    var input = document.querySelector('input[name="csrfmiddlewaretoken"]');
+    return input ? input.value : '';
+  }
+
+  function escapeHtml(s){
+    if(s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function setBadge(n){
+    if(!n || n <= 0){
+      launcherBadge.setAttribute('hidden', '');
+      launcherBadge.textContent = '0';
+    } else {
+      launcherBadge.removeAttribute('hidden');
+      launcherBadge.textContent = n > 99 ? '99+' : String(n);
+    }
+  }
+
+  function avatarMarkup(room, asElement){
+    if(room.avatar_url){
+      return '<div class="eo-fc-avatar" style="background-image:url(' + escapeHtml(room.avatar_url) + ')"></div>';
+    }
+    return '<div class="eo-fc-avatar">' + escapeHtml(room.initials || '?') + '</div>';
+  }
+
+  function fmtTime(iso){
+    if(!iso) return '';
+    try{
+      var d = new Date(iso);
+      var h = d.getHours(), m = d.getMinutes();
+      return (h<10?'0':'')+h + ':' + (m<10?'0':'')+m;
+    } catch(e){ return ''; }
+  }
+
+  // ── Inbox rendering ─────────────────────────────────────────────────────
+  function renderInbox(){
+    if(!state.rooms.length){
+      inboxList.innerHTML = '';
+      return;
+    }
+    var html = '';
+    state.rooms.forEach(function(r){
+      var avatarStyle = r.avatar_url
+        ? ' style="background-image:url(' + escapeHtml(r.avatar_url) + ')"'
+        : '';
+      var avatarText = r.avatar_url ? '' : escapeHtml(r.initials || '?');
+      var unreadHtml = r.unread > 0
+        ? '<span class="eo-fc-inbox-unread">' + (r.unread > 99 ? '99+' : r.unread) + '</span>'
+        : '';
+      html += ''
+        + '<button type="button" class="eo-fc-inbox-item" data-room="' + escapeHtml(r.room_id) + '">'
+          + '<div class="eo-fc-avatar"' + avatarStyle + '>' + avatarText + '</div>'
+          + '<div class="eo-fc-inbox-meta">'
+            + '<p class="eo-fc-inbox-name">' + escapeHtml(r.title) + '</p>'
+            + '<p class="eo-fc-inbox-preview">' + escapeHtml(r.last_preview || 'No messages yet') + '</p>'
+          + '</div>'
+          + unreadHtml
+        + '</button>';
+    });
+    inboxList.innerHTML = html;
+  }
+
+  function fetchInbox(){
+    dbg('fetchInbox → GET', INBOX_URL);
+    return fetch(INBOX_URL, { credentials:'same-origin', headers:{'X-Requested-With':'XMLHttpRequest'} })
+      .then(function(r){
+        dbg('fetchInbox response', r.status);
+        return r.ok ? r.json() : null;
+      })
+      .then(function(data){
+        if(!data || !data.ok){ dbg('fetchInbox → no data'); return; }
+        state.rooms = data.rooms || [];
+        dbg('fetchInbox → got', state.rooms.length, 'rooms, total_unread:', data.total_unread);
+        setBadge(data.total_unread || 0);
+        renderInbox();
+        // Now that we know which rooms exist, make sure we have a live
+        // background WebSocket connected to each one.
+        ensureBackgroundSockets();
+      })
+      .catch(function(err){ dbg('fetchInbox ERROR', err); });
+  }
+
+  // ── Window (active chat) ───────────────────────────────────────────────
+  function renderMessages(messages, hasOlder){
+    state.seenIds = new Set();
+    state.lastSeenId = null;
+    var html = '';
+
+    if(hasOlder){
+      html += '<div class="eo-fc-older-link"><a href="' + escapeHtml(roomPageUrl(state.activeRoom.room_id)) + '">View earlier messages →</a></div>';
+    }
+
+    if(!messages.length){
+      html += '<div class="eo-fc-empty">No messages today.<br>Say hi!</div>';
+    } else {
+      html += '<div class="eo-fc-day-divider">Today</div>';
+      messages.forEach(function(m){
+        html += renderMsgHtml(m);
+        var id = m.id || m.message_id;
+        state.seenIds.add(id);
+        state.lastSeenId = id;  // last one wins — they're sorted oldest→newest
+      });
+    }
+    msgList.innerHTML = html;
+    msgList.scrollTop = msgList.scrollHeight;
+  }
+
+  function renderMsgHtml(m){
+    var mine = String(m.sender_id) === String(CURRENT_USER_ID);
+    var bodyText = m.message || m.content || '';
+    var inner = '';
+    if(m.message_type === 'file' || m.file_url){
+      inner = '<i class="bi bi-paperclip"></i> '
+            + '<a href="' + escapeHtml(m.file_url || '#') + '" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">'
+            + escapeHtml(m.file_name || 'Attachment') + '</a>';
+      if(bodyText) inner += '<br>' + escapeHtml(bodyText);
+    } else if(m.message_type === 'poll'){
+      inner = '<i class="bi bi-bar-chart"></i> Poll — open in full chat to vote';
+    } else {
+      inner = escapeHtml(bodyText);
+    }
+    return ''
+      + '<div class="eo-fc-msg ' + (mine ? 'out' : 'in') + '" data-id="' + escapeHtml(m.id || m.message_id) + '">'
+        + '<div>'
+          + '<div class="eo-fc-msg-bubble">' + inner + '</div>'
+          + '<span class="eo-fc-msg-time">' + escapeHtml(m.timestamp || fmtTime(m.created_at)) + '</span>'
+        + '</div>'
+      + '</div>';
+  }
+
+  function appendMessage(m){
+    var id = m.id || m.message_id;
+    if(state.seenIds.has(id)) return;
+    state.seenIds.add(id);
+    state.lastSeenId = id;
+    var emptyEl = msgList.querySelector('.eo-fc-empty');
+    if(emptyEl) emptyEl.remove();
+    if(!msgList.querySelector('.eo-fc-day-divider')){
+      var div = document.createElement('div');
+      div.className = 'eo-fc-day-divider';
+      div.textContent = 'Today';
+      msgList.insertBefore(div, msgList.firstChild);
+    }
+    msgList.insertAdjacentHTML('beforeend', renderMsgHtml(m));
+    msgList.scrollTop = msgList.scrollHeight;
+  }
+
+  function openWindow(room){
+    state.activeRoom = room;
+    winName.textContent = room.title || 'Chat';
+    winSub.textContent  = "Today's recent messages";
+    if(room.avatar_url){
+      winAvatar.style.backgroundImage = 'url(' + room.avatar_url + ')';
+      winAvatar.textContent = '';
+    } else {
+      winAvatar.style.backgroundImage = '';
+      winAvatar.textContent = room.initials || '?';
+    }
+    winMore.href = roomPageUrl(room.room_id);
+
+    inbox.classList.remove('is-open');
+    win.classList.add('is-open');
+    msgList.innerHTML = '<div class="eo-fc-empty">Loading…</div>';
+
+    fetch(messagesUrl(room.room_id), { credentials:'same-origin', headers:{'X-Requested-With':'XMLHttpRequest'} })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(data){
+        if(!data || !data.ok){
+          msgList.innerHTML = '<div class="eo-fc-empty">Couldn\'t load messages.</div>';
+          return;
+        }
+        renderMessages(data.messages || [], !!data.has_older);
+        // Optimistic local read
+        room.unread = 0;
+        renderInbox();
+        var total = state.rooms.reduce(function(a, r){ return a + (r.unread || 0); }, 0);
+        setBadge(total);
+
+        // Start polling the chat box for new messages. The background
+        // WebSocket already pushes live updates the instant they happen,
+        // BUT we also poll every 3s as a safety net so the chat box
+        // refreshes even when:
+        //   * Channels / Redis isn't configured
+        //   * The proxy strips WS upgrade headers
+        //   * The socket dies silently
+        // appendMessage() dedupes by ID, so WS-pushed and poll-pushed
+        // messages never render twice.
+        startChatPoll();
+      })
+      .catch(function(){
+        msgList.innerHTML = '<div class="eo-fc-empty">Couldn\'t load messages.</div>';
+      });
+
+    setTimeout(function(){ input.focus(); }, 250);
+  }
+
+  function closeWindow(){
+    win.classList.remove('is-open');
+    state.activeRoom = null;
+    state.lastSeenId = null;
+    stopChatPoll();
+    // Note: we deliberately do NOT close the background socket — it stays
+    // open so the inbox + badge + toast keep getting live updates.
+  }
+
+  // ── Chat-box auto-refresh poller ───────────────────────────────────────
+  // Runs only while the window is open. Pulls messages newer than the most
+  // recent one we've already rendered, so it costs almost nothing when the
+  // conversation is idle.
+  function startChatPoll(){
+    stopChatPoll();
+    state.chatPollTimer = setInterval(pollOpenChat, 3000);
+  }
+
+  function stopChatPoll(){
+    if(state.chatPollTimer){
+      clearInterval(state.chatPollTimer);
+      state.chatPollTimer = null;
+    }
+  }
+
+  function pollOpenChat(){
+    if(!state.activeRoom) return;
+    if(!win.classList.contains('is-open')) return;
+    // Skip while the user is composing — avoids the cursor-jump that
+    // happens when the textarea is focused and we re-render below.
+    // (Polling resumes the moment they pause typing.)
+    if(document.activeElement === input && input.value) return;
+    // Skip when the tab is hidden — browser will throttle us anyway.
+    if(document.hidden) return;
+
+    var roomId = state.activeRoom.room_id;
+    var url = messagesUrl(roomId);
+    if(state.lastSeenId){
+      url += '?after_id=' + encodeURIComponent(state.lastSeenId);
+    }
+
+    fetch(url, { credentials:'same-origin', headers:{'X-Requested-With':'XMLHttpRequest'} })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(data){
+        if(!data || !data.ok) return;
+        // Guard: if user closed the window or switched rooms mid-flight.
+        if(!state.activeRoom || state.activeRoom.room_id !== roomId) return;
+        var msgs = data.messages || [];
+        msgs.forEach(appendMessage);
+      })
+      .catch(function(){ /* silent; next tick will retry */ });
+  }
+
+  // ── WebSocket: always-on background subscription to every DM room ──────
+  // The ChatConsumer at /ws/chat/<room_id>/ broadcasts every new message to
+  // everyone in that room's channel group. By opening one socket per DM in
+  // the background — regardless of whether the popup window is open — we
+  // get live updates for the inbox, the launcher badge, and the toast at
+  // the same instant the message hits the server, with zero new backend
+  // plumbing.
+  function ensureBackgroundSockets(){
+    var wantIds = {};
+    state.rooms.forEach(function(r){ wantIds[r.room_id] = true; });
+
+    // Tear down sockets for rooms the user is no longer in.
+    Object.keys(state.bgSockets).forEach(function(rid){
+      if(!wantIds[rid]){
+        try{ state.bgSockets[rid].close(); } catch(e){}
+        delete state.bgSockets[rid];
+      }
+    });
+
+    // Open sockets for any DM we don't already have one for.
+    state.rooms.forEach(function(r){
+      if(state.bgSockets[r.room_id]) return;
+      openBackgroundSocket(r.room_id);
+    });
+  }
+
+  function openBackgroundSocket(roomId){
+    try{
+      var proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+      var wsUrl = proto + window.location.host + '/ws/chat/' + roomId + '/';
+      dbg('opening WS', wsUrl);
+      var ws = new WebSocket(wsUrl);
+      state.bgSockets[roomId] = ws;
+
+      ws.onopen = function(){ dbg('WS open', roomId); };
+
+      ws.onmessage = function(e){
+        dbg('WS RAW frame', roomId, e.data && e.data.slice ? e.data.slice(0,200) : e.data);
+        try{
+          var data = JSON.parse(e.data);
+          dbg('WS parsed type:', data.type, 'room:', data.room_id);
+          if(data.type !== 'chat_message') return;
+          handleIncomingMessage(data);
+        } catch(err){ dbg('WS parse error', err); }
+      };
+
+      ws.onclose = function(ev){
+        dbg('WS close', roomId, 'code:', ev.code, 'reason:', ev.reason);
+        // Only auto-reconnect if we still want this room. Avoid stampedes
+        // by jittering between 2-5s.
+        if(state.bgSockets[roomId] === ws){
+          delete state.bgSockets[roomId];
+          var stillWanted = state.rooms.some(function(r){ return r.room_id === roomId; });
+          if(stillWanted){
+            setTimeout(function(){ openBackgroundSocket(roomId); }, 2000 + Math.random()*3000);
+          }
+        }
+      };
+
+      ws.onerror = function(err){ dbg('WS error', roomId, err); };
+    } catch(err){
+      dbg('WS construction failed', roomId, err);
+      delete state.bgSockets[roomId];
+    }
+  }
+
+  function closeAllBackgroundSockets(){
+    Object.keys(state.bgSockets).forEach(function(rid){
+      try{ state.bgSockets[rid].close(); } catch(e){}
+    });
+    state.bgSockets = {};
+  }
+
+  // Single funnel: every incoming live message comes through here, no
+  // matter which room socket delivered it. Decides whether to update the
+  // active window, the inbox preview, the badge, or pop a toast.
+  function handleIncomingMessage(payload){
+    var roomId = payload.room_id;
+    dbg('handleIncomingMessage', {
+      roomId: roomId,
+      sender: payload.sender_id,
+      me: CURRENT_USER_ID,
+      activeRoom: state.activeRoom && state.activeRoom.room_id,
+      knownRooms: state.rooms.map(function(r){ return r.room_id; }),
+    });
+    if(!roomId) return;
+
+    var room = state.rooms.find(function(r){ return r.room_id === roomId; });
+    var fromMe = String(payload.sender_id) === String(CURRENT_USER_ID);
+    var windowOpen = state.activeRoom && state.activeRoom.room_id === roomId;
+
+    // 1) If this room's window is open, append to the live transcript.
+    if(windowOpen){
+      appendMessage(payload);
+    }
+
+    // 2) Update inbox metadata locally so we don't have to wait for a poll.
+    if(room){
+      // Move room to the top of the list.
+      state.rooms = [room].concat(state.rooms.filter(function(r){ return r.room_id !== roomId; }));
+
+      var preview = payload.message || payload.content || '';
+      if(payload.message_type === 'file') preview = '📎 File';
+      else if(payload.message_type === 'image') preview = '🖼 Image';
+      else if(payload.message_type === 'poll') preview = '📊 Poll';
+      room.last_preview = (preview || '').slice(0, 60);
+      room.last_at = payload.created_at || new Date().toISOString();
+      room.updated_at = room.last_at;
+
+      // Bump unread only if it wasn't sent by me AND its window isn't open.
+      if(!fromMe && !windowOpen){
+        room.unread = (room.unread || 0) + 1;
+      } else if(windowOpen){
+        room.unread = 0;
+      }
+      renderInbox();
+
+      var total = state.rooms.reduce(function(a, x){ return a + (x.unread || 0); }, 0);
+      setBadge(total);
+    }
+
+    // 3) Toast — only when it's an inbound message to a room I'm not viewing.
+    if(!fromMe && !windowOpen){
+      showToast(payload, room || {
+        room_id: roomId,
+        title: payload.sender_name,
+        initials: payload.sender_initials,
+        avatar_url: '',
+      });
+    }
+  }
+
+  // ── Sending ────────────────────────────────────────────────────────────
+  function sendCurrent(){
+    if(!state.activeRoom) return;
+    var text = (input.value || '').trim();
+    if(!text) return;
+
+    var fd = new FormData();
+    fd.append('content', text);
+    fd.append('csrfmiddlewaretoken', getCSRFToken());
+
+    sendBtn.disabled = true;
+    input.disabled = true;
+
+    fetch(sendUrl(state.activeRoom.room_id), {
+      method:'POST',
+      credentials:'same-origin',
+      headers:{ 'X-CSRFToken': getCSRFToken(), 'X-Requested-With':'XMLHttpRequest' },
+      body: fd,
+    })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(data){
+      input.disabled = false;
+      sendBtn.disabled = !input.value.trim();
+      if(data && data.ok && data.message){
+        // Append immediately if the WS hasn't already echoed.
+        appendMessage(data.message);
+        input.value = '';
+        autoSize();
+        sendBtn.disabled = true;
+      }
+      input.focus();
+    })
+    .catch(function(){
+      input.disabled = false;
+      sendBtn.disabled = false;
+    });
+  }
+
+  function autoSize(){
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 90) + 'px';
+  }
+
+  // ── Toast (in-flow incoming notification) ──────────────────────────────
+  function showToast(payload, room){
+    if(state.toastTimer) clearTimeout(state.toastTimer);
+
+    var name = payload.sender_name || (room && room.title) || 'New message';
+    var text = payload.message || payload.content || '';
+    if(payload.message_type === 'file') text = '📎 ' + (payload.file_name || 'File');
+    else if(payload.message_type === 'poll') text = '📊 New poll';
+
+    if(room && room.avatar_url){
+      toastAvatar.style.backgroundImage = 'url(' + room.avatar_url + ')';
+      toastAvatar.textContent = '';
+    } else {
+      toastAvatar.style.backgroundImage = '';
+      toastAvatar.textContent = (room && room.initials) || (payload.sender_initials || '?');
+    }
+    toastName.textContent = name;
+    toastText.textContent = text;
+    toast.dataset.roomId = (room && room.room_id) || payload.room_id || '';
+
+    toast.classList.add('is-shown');
+    state.toastTimer = setTimeout(function(){
+      toast.classList.remove('is-shown');
+    }, 4500);
+  }
+
+  // ── Slow safety-net poll ───────────────────────────────────────────────
+  // The background WebSockets above deliver every message in real time. The
+  // chat-box poller (above) refreshes the OPEN window every 3s. This timer
+  // is the third layer of defence — it refreshes the inbox sidebar every
+  // 15 seconds so unread counts, last-message previews, and newly-created
+  // DM rooms show up even if every WebSocket is dead.
+  function startInboxRefresh(){
+    if(state.inboxRefreshTimer) return;
+    state.inboxRefreshTimer = setInterval(function(){
+      if(document.activeElement === input) return;
+      fetchInbox();
+    }, 15000);
+  }
+
+  // ── Wire up ────────────────────────────────────────────────────────────
+  launcher.addEventListener('click', function(){
+    if(win.classList.contains('is-open')){
+      closeWindow();
+      return;
+    }
+    var willOpen = !inbox.classList.contains('is-open');
+    inbox.classList.toggle('is-open', willOpen);
+    if(willOpen) fetchInbox();
+  });
+
+  inboxList.addEventListener('click', function(e){
+    var btn = e.target.closest('.eo-fc-inbox-item');
+    if(!btn) return;
+    var roomId = btn.dataset.room;
+    var room = state.rooms.find(function(r){ return r.room_id === roomId; });
+    if(room) openWindow(room);
+  });
+
+  winClose.addEventListener('click', closeWindow);
+
+  sendBtn.addEventListener('click', sendCurrent);
+
+  input.addEventListener('input', function(){
+    sendBtn.disabled = !input.value.trim();
+    autoSize();
+  });
+
+  input.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' && !e.shiftKey){
+      e.preventDefault();
+      if(!sendBtn.disabled) sendCurrent();
+    }
+  });
+
+  toast.addEventListener('click', function(){
+    var roomId = toast.dataset.roomId;
+    if(!roomId) return;
+    var room = state.rooms.find(function(r){ return r.room_id === roomId; });
+    toast.classList.remove('is-shown');
+    if(room) openWindow(room);
+  });
+
+  // Click outside inbox to dismiss
+  document.addEventListener('click', function(e){
+    if(!inbox.classList.contains('is-open')) return;
+    if(inbox.contains(e.target) || launcher.contains(e.target)) return;
+    inbox.classList.remove('is-open');
+  });
+
+  // Close window on Escape
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape' && win.classList.contains('is-open')) closeWindow();
+  });
+
+  // When the tab regains focus, immediately refresh whatever's open so the
+  // user instantly sees anything that came in while the tab was hidden.
+  document.addEventListener('visibilitychange', function(){
+    if(document.hidden) return;
+    if(state.activeRoom && win.classList.contains('is-open')) pollOpenChat();
+    fetchInbox();
+  });
+
+  // Initial paint
+  fetchInbox();
+  startInboxRefresh();
+
+  // Tidy up sockets if the page is being unloaded.
+  window.addEventListener('beforeunload', closeAllBackgroundSockets);
+
+})();
+</script>
+{% endif %}
+{% endif %}
 {% block extra_js %}{% endblock %}
 </body>
 </html>

@@ -1,11 +1,63 @@
+"""
+apps/reports/views.py
+─────────────────────
+ALL reports require CEO or Superuser. HR/Finance/everyone else is blocked.
+
+The dispatch-level gate is duplicated across each view (rather than a
+single mixin in this file) so each view can be moved/re-exported
+independently without anyone forgetting the guard. The cost is one
+extra method per class — cheaper than a security incident.
+"""
+
 import json
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.http import HttpResponseForbidden
 from django.views.generic import TemplateView
 from django.utils import timezone
 from django.db.models import Count, Avg, Q, Sum
 
+# Re-use the role helpers already defined in apps/finance/views.py so we
+# have ONE source of truth for "what is a CEO" across the codebase.
+from apps.finance.views import _is_ceo
 
-class ReportsDashboardView(LoginRequiredMixin, TemplateView):
+
+# ---------------------------------------------------------------------------
+# Permission helper
+# ---------------------------------------------------------------------------
+
+def _can_view_reports(user):
+    """
+    Reports = strategic / cross-org data. Restricted to CEO + superusers.
+
+    *_is_ceo* already returns True for superusers, members of the 'CEO'
+    group, and users whose StaffProfile.position.title is 'CEO'. That
+    matches the exact scope the user asked for, so we just delegate.
+    """
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    return _is_ceo(user)
+
+
+class _ReportsAccessMixin(LoginRequiredMixin):
+    """
+    Drop-in dispatch gate for every reports view. Returns 403 (not a
+    redirect) when a non-CEO/non-superuser hits the URL directly — even
+    if they typed it manually or followed a stale link.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated and not _can_view_reports(request.user):
+            return HttpResponseForbidden(
+                'Reports are restricted to CEO and Superuser accounts.'
+            )
+        return super().dispatch(request, *args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Views
+# ---------------------------------------------------------------------------
+
+class ReportsDashboardView(_ReportsAccessMixin, TemplateView):
     template_name = 'reports/dashboard.html'
 
     def get_context_data(self, **kwargs):
@@ -52,7 +104,7 @@ class ReportsDashboardView(LoginRequiredMixin, TemplateView):
         return ctx
 
 
-class TaskReportView(LoginRequiredMixin, TemplateView):
+class TaskReportView(_ReportsAccessMixin, TemplateView):
     template_name = 'reports/task_report.html'
 
     def get_context_data(self, **kwargs):
@@ -69,14 +121,13 @@ class TaskReportView(LoginRequiredMixin, TemplateView):
         ).count()
         ctx['total_tasks'] = Task.objects.count()
         ctx['in_progress_count'] = Task.objects.filter(status='in_progress').count()
-        # Recent overdue tasks
         ctx['overdue_tasks'] = Task.objects.filter(
             status__in=['todo', 'in_progress'], due_date__lt=now
         ).select_related('assigned_to').order_by('due_date')[:10]
         return ctx
 
 
-class ProjectReportView(LoginRequiredMixin, TemplateView):
+class ProjectReportView(_ReportsAccessMixin, TemplateView):
     template_name = 'reports/project_report.html'
 
     def get_context_data(self, **kwargs):
@@ -95,7 +146,7 @@ class ProjectReportView(LoginRequiredMixin, TemplateView):
         return ctx
 
 
-class StaffReportView(LoginRequiredMixin, TemplateView):
+class StaffReportView(_ReportsAccessMixin, TemplateView):
     template_name = 'reports/staff_report.html'
 
     def get_context_data(self, **kwargs):
@@ -124,7 +175,7 @@ class StaffReportView(LoginRequiredMixin, TemplateView):
         return ctx
 
 
-class FinanceReportView(LoginRequiredMixin, TemplateView):
+class FinanceReportView(_ReportsAccessMixin, TemplateView):
     template_name = 'reports/finance_report.html'
 
     def get_context_data(self, **kwargs):

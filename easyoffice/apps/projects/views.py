@@ -1379,6 +1379,54 @@ class MilestoneStatusView(LoginRequiredMixin, View):
 
 
 # ---------------------------------------------------------------------------
+# Reorder Milestones (drag-and-drop)
+# ---------------------------------------------------------------------------
+
+class MilestoneReorderView(LoginRequiredMixin, View):
+    """
+    Accepts a JSON POST: {"order": ["<milestone_uuid>", "<milestone_uuid>", ...]}
+    Reorders milestones for the project. Disabled once the project is closed
+    (status = completed or cancelled).
+    """
+
+    CLOSED_STATUSES = {'completed', 'cancelled'}
+
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+
+        if not _is_project_member(request.user, project):
+            return JsonResponse({'ok': False, 'error': 'Permission denied.'}, status=403)
+
+        if project.status in self.CLOSED_STATUSES:
+            return JsonResponse(
+                {'ok': False, 'error': 'Project is closed — milestones cannot be reordered.'},
+                status=400,
+            )
+
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+            new_order = payload.get('order') or []
+            if not isinstance(new_order, list):
+                raise ValueError('order must be a list')
+        except (ValueError, json.JSONDecodeError):
+            return JsonResponse({'ok': False, 'error': 'Invalid payload.'}, status=400)
+
+        # Only touch milestones that belong to this project
+        valid_ids = set(
+            str(mid) for mid in project.milestones.values_list('id', flat=True)
+        )
+        clean_order = [mid for mid in new_order if str(mid) in valid_ids]
+
+        if not clean_order:
+            return JsonResponse({'ok': False, 'error': 'No valid milestones provided.'}, status=400)
+
+        with transaction.atomic():
+            for index, mid in enumerate(clean_order, start=1):
+                Milestone.objects.filter(pk=mid, project=project).update(order=index)
+
+        return JsonResponse({'ok': True, 'count': len(clean_order)})
+
+# ---------------------------------------------------------------------------
 # Risks
 # ---------------------------------------------------------------------------
 

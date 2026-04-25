@@ -66,7 +66,7 @@ urlpatterns = [
         views.ProjectImportsView.as_view(),
         name='project_imports',
     ),
-
+    path('<uuid:pk>/milestone/reorder/', views.MilestoneReorderView.as_view(), name='milestone_reorder'),
 
     # Public survey — no login required (token-based)
     path('surveys/public/<uuid:token>/', views.PublicSurveyView.as_view(), name='survey_public'),

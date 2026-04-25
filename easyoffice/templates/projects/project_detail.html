@@ -237,9 +237,12 @@
       </div>
 
       {% if milestones %}
-      <div class="ms-timeline">
+      <div class="ms-timeline" id="msTimeline"
+           data-can-reorder="{% if is_member and project.status != 'completed' and project.status != 'cancelled' %}1{% else %}0{% endif %}"
+           data-reorder-url="{% url 'milestone_reorder' project.pk %}">
         {% for ms in milestones %}
-        <div style="position:relative;margin-bottom:{% if not forloop.last %}20px{% else %}4px{% endif %}">
+        <div class="ms-item" data-id="{{ ms.pk }}"
+             style="position:relative;margin-bottom:{% if not forloop.last %}20px{% else %}4px{% endif %}">
           <div class="ms-dot
             {% if ms.status == 'completed' %}ms-completed
             {% elif ms.status == 'in_progress' %}ms-in_progress
@@ -253,19 +256,27 @@
           </div>
 
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
-            <div style="flex:1;min-width:0">
-              <div style="font-size:.9rem;font-weight:600;color:var(--eo-text);margin-bottom:2px
-                {% if ms.status == 'completed' %};text-decoration:line-through;color:var(--eo-text-muted){% endif %}">
-                {{ ms.name }}
-              </div>
-              {% if ms.description %}
-              <div style="font-size:.78rem;color:var(--eo-text-muted);line-height:1.5">{{ ms.description }}</div>
+            <div style="flex:1;min-width:0;display:flex;align-items:flex-start;gap:8px">
+              {% if is_member and project.status != 'completed' and project.status != 'cancelled' %}
+              <span class="ms-drag-handle" title="Drag to reorder"
+                    style="cursor:grab;color:var(--eo-text-muted);font-size:1rem;line-height:1;padding-top:2px;user-select:none">
+                <i class="bi bi-grip-vertical"></i>
+              </span>
               {% endif %}
-              <div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:4px;display:flex;align-items:center;gap:10px">
-                <span><i class="bi bi-calendar3 me-1"></i>Due {{ ms.due_date|date:"N j, Y" }}</span>
-                {% if ms.completed_at %}
-                <span><i class="bi bi-check2 me-1" style="color:var(--eo-success)"></i>Done {{ ms.completed_at|date:"N j, Y" }}</span>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:.9rem;font-weight:600;color:var(--eo-text);margin-bottom:2px
+                  {% if ms.status == 'completed' %};text-decoration:line-through;color:var(--eo-text-muted){% endif %}">
+                  {{ ms.name }}
+                </div>
+                {% if ms.description %}
+                <div style="font-size:.78rem;color:var(--eo-text-muted);line-height:1.5">{{ ms.description }}</div>
                 {% endif %}
+                <div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:4px;display:flex;align-items:center;gap:10px">
+                  <span><i class="bi bi-calendar3 me-1"></i>Due {{ ms.due_date|date:"N j, Y" }}</span>
+                  {% if ms.completed_at %}
+                  <span><i class="bi bi-check2 me-1" style="color:var(--eo-success)"></i>Done {{ ms.completed_at|date:"N j, Y" }}</span>
+                  {% endif %}
+                </div>
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
@@ -288,6 +299,15 @@
         </div>
         {% endfor %}
       </div>
+      {% if is_member and project.status != 'completed' and project.status != 'cancelled' %}
+      <p style="font-size:.72rem;color:var(--eo-text-muted);margin-top:10px;margin-bottom:0">
+        <i class="bi bi-info-circle me-1"></i>Drag <i class="bi bi-grip-vertical"></i> to reorder milestones.
+      </p>
+      {% elif project.status == 'completed' or project.status == 'cancelled' %}
+      <p style="font-size:.72rem;color:var(--eo-text-muted);margin-top:10px;margin-bottom:0">
+        <i class="bi bi-lock me-1"></i>Project is closed — milestone order is locked.
+      </p>
+      {% endif %}
       {% else %}
       <div style="text-align:center;padding:32px;color:var(--eo-text-muted)">
         <i class="bi bi-flag" style="font-size:1.8rem;display:block;margin-bottom:8px;opacity:.4"></i>
@@ -1962,5 +1982,63 @@ function toggleResolvedRisks() {
   container.style.display = isHidden ? 'block' : 'none';
   icon.className = isHidden ? 'bi bi-eye-slash' : 'bi bi-eye';
 }
+</script>
+
+{# ── Milestone drag-and-drop reordering ─────────────────────────────────── #}
+<style>
+  .ms-drag-ghost { opacity: .4; background: var(--eo-bg-muted, #f4f4f5); }
+  .ms-drag-handle:active { cursor: grabbing !important; }
+  .ms-item.sortable-chosen { background: rgba(99, 102, 241, .04); border-radius: 6px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<script>
+(function () {
+  var el = document.getElementById('msTimeline');
+  if (!el) return;
+  if (el.dataset.canReorder !== '1') return;
+  if (typeof Sortable === 'undefined') return;
+
+  var url = el.dataset.reorderUrl;
+
+  function getCsrf() {
+    var input = document.querySelector('input[name=csrfmiddlewaretoken]');
+    return input ? input.value : '';
+  }
+
+  Sortable.create(el, {
+    handle: '.ms-drag-handle',
+    animation: 150,
+    ghostClass: 'ms-drag-ghost',
+    onEnd: function () {
+      var ids = Array.prototype.slice
+        .call(el.querySelectorAll('.ms-item'))
+        .map(function (n) { return n.dataset.id; });
+
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': getCsrf(),
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ order: ids })
+      })
+      .then(function (r) {
+        return r.json().then(function (j) { return { ok: r.ok, body: j }; });
+      })
+      .then(function (res) {
+        if (!res.ok || !res.body.ok) {
+          alert((res.body && res.body.error) || 'Failed to save new order.');
+          window.location.reload();
+        }
+      })
+      .catch(function () {
+        alert('Network error — could not save new order.');
+        window.location.reload();
+      });
+    }
+  });
+})();
 </script>
 {% endblock %}

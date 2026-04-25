@@ -101,6 +101,14 @@ def parse_compound_procurement_text(text):
     Process RFQ - Request for quotation
     Deadline 20-Apr-26 10:00 AM (New York time)
     Posted 23-Mar-26
+
+    Searches for labels SEQUENTIALLY — each label is found only after the
+    previous label's position. This prevents false matches in titles that
+    happen to contain words like "Process" or "Deadline".
+
+    Also handles labels at the very start of the string (no leading space)
+    and uses word-boundary-ish matching so the parser doesn't mistake
+    substrings (e.g. a "Process" inside the title) for label markers.
     """
     result = {
         'title': '',
@@ -119,78 +127,101 @@ def parse_compound_procurement_text(text):
         return result
 
     text = clean_text(text)
-
-    labels = [
-        ' Ref No ',
-        ' UNDP Office/Country ',
-        ' Process ',
-        ' Deadline ',
-        ' Posted ',
-    ]
-
-    positions = {}
     lower_text = text.lower()
 
-    for label in labels:
-        idx = lower_text.find(label.lower())
-        positions[label.strip()] = idx
+    # Labels appear in a fixed sequence in every UNDP procurement listing.
+    # We search each label *after* the previous one's start so that the
+    # parser ignores accidental occurrences of the same word in earlier
+    # sections (e.g. a title like "Process Improvement Services").
+    label_seq = [
+        ('Ref No',                'reference_no'),
+        ('UNDP Office/Country',   'office_country_raw'),
+        ('Process',               'procurement_process'),
+        ('Deadline',              'deadline_text'),
+        ('Posted',                'posted_text'),
+    ]
 
-    # Title = from start until Ref No if present, else full text
-    ref_idx = positions.get('Ref No', -1)
-    if ref_idx != -1:
-        result['title'] = clean_text(text[:ref_idx])
-    else:
+    def _find_label(label, search_from):
+        """
+        Find label at search_from or later. Match either:
+        - a leading space + label + trailing space (common case in middle of text), or
+        - a leading space + label at end of string (rare), or
+        - label at the very start of the searched region (label with no leading
+          space, used when the string begins with the label)
+        Returns (start_idx_of_label, end_idx_of_label) or (-1, -1).
+        """
+        ll = label.lower()
+        # Try " label " first (label surrounded by spaces, the safest)
+        spaced = ' ' + ll + ' '
+        idx = lower_text.find(spaced, search_from)
+        if idx != -1:
+            return idx + 1, idx + 1 + len(label)   # skip the leading space
+
+        # Try " label" at the end of the string
+        spaced_eol = ' ' + ll
+        idx = lower_text.find(spaced_eol, search_from)
+        if idx != -1 and idx + len(spaced_eol) == len(lower_text):
+            return idx + 1, idx + 1 + len(label)
+
+        # Try label at the very start of the searched region (no leading space)
+        if search_from == 0 and lower_text.startswith(ll + ' '):
+            return 0, len(label)
+
+        return -1, -1
+
+    # Walk through the labels in order, recording (label_start, value_start)
+    positions = []   # list of (label_name, label_start, value_start)
+    cursor = 0
+    for label, _key in label_seq:
+        s, e = _find_label(label, cursor)
+        if s == -1:
+            # Label missing — record None and don't advance cursor
+            positions.append((label, -1, -1))
+            continue
+        positions.append((label, s, e))
+        cursor = e   # next label must come after this one's end
+
+    # Title = everything before the first found label (typically "Ref No")
+    first_found = next((p for p in positions if p[1] != -1), None)
+    if first_found is None:
+        # No labels at all — the whole text is just the title
         result['title'] = text
         return result
 
-    office_idx = positions.get('UNDP Office/Country', -1)
-    process_idx = positions.get('Process', -1)
-    deadline_idx = positions.get('Deadline', -1)
-    posted_idx = positions.get('Posted', -1)
+    title_end = first_found[1]
+    result['title'] = clean_text(text[:title_end])
 
-    # Ref No
-    if ref_idx != -1:
-        ref_start = ref_idx + len(' Ref No ')
-        ref_end_candidates = [i for i in [office_idx, process_idx, deadline_idx, posted_idx] if i != -1 and i > ref_idx]
-        ref_end = min(ref_end_candidates) if ref_end_candidates else len(text)
-        result['reference_no'] = clean_text(text[ref_start:ref_end])
+    # For each label, the value spans from its end to the next found label's start
+    for i, (label, l_start, l_end) in enumerate(positions):
+        if l_start == -1:
+            continue
+        # Find the next label that was actually found
+        next_start = len(text)
+        for j in range(i + 1, len(positions)):
+            if positions[j][1] != -1:
+                next_start = positions[j][1]
+                break
+        value = clean_text(text[l_end:next_start])
+        # Strip a leading colon/dash if present
+        value = re.sub(r'^[:\-\s]+', '', value)
 
-    # Office/Country
-    if office_idx != -1:
-        office_start = office_idx + len(' UNDP Office/Country ')
-        office_end_candidates = [i for i in [process_idx, deadline_idx, posted_idx] if i != -1 and i > office_idx]
-        office_end = min(office_end_candidates) if office_end_candidates else len(text)
-        result['office_country_raw'] = clean_text(text[office_start:office_end])
-
-    # Process
-    if process_idx != -1:
-        process_start = process_idx + len(' Process ')
-        process_end_candidates = [i for i in [deadline_idx, posted_idx] if i != -1 and i > process_idx]
-        process_end = min(process_end_candidates) if process_end_candidates else len(text)
-        result['procurement_process'] = clean_text(text[process_start:process_end])
-
-    # Deadline
-    if deadline_idx != -1:
-        deadline_start = deadline_idx + len(' Deadline ')
-        deadline_end = posted_idx if posted_idx != -1 and posted_idx > deadline_idx else len(text)
-        result['deadline_text'] = clean_text(text[deadline_start:deadline_end])
-
-    # Posted
-    if posted_idx != -1:
-        posted_start = posted_idx + len(' Posted ')
-        result['posted_text'] = clean_text(text[posted_start:])
+        if   label == 'Ref No':              result['reference_no']      = value
+        elif label == 'UNDP Office/Country': result['office_country_raw'] = value
+        elif label == 'Process':             result['procurement_process'] = value
+        elif label == 'Deadline':            result['deadline_text']     = value
+        elif label == 'Posted':              result['posted_text']       = value
 
     office, country = split_office_country(result['office_country_raw'])
-    result['office'] = office
-    result['country'] = country
-    result['deadline'] = parse_undp_datetime(result['deadline_text'])
+    result['office']      = office
+    result['country']     = country
+    result['deadline']    = parse_undp_datetime(result['deadline_text'])
     result['posted_date'] = parse_undp_datetime(result['posted_text'])
 
-    # Final cleanup in case title still accidentally includes labels
-    for marker in [' Ref No ', ' UNDP Office/Country ', ' Process ', ' Deadline ', ' Posted ']:
-        marker_idx = result['title'].lower().find(marker.lower().strip())
-        if marker_idx != -1:
-            result['title'] = clean_text(result['title'][:marker_idx])
+    # Final cleanup in case title accidentally contains a label substring
+    for marker in ['Ref No', 'UNDP Office/Country', 'Process ', 'Deadline ', 'Posted ']:
+        idx = result['title'].lower().find(marker.lower())
+        if idx != -1:
+            result['title'] = clean_text(result['title'][:idx])
 
     return result
 
@@ -597,17 +628,21 @@ def scan_html_source(source):
 
         full_link = urljoin(source.url, link)
 
-        # NEW:
-        # If the block contains a flattened UNDP procurement row, parse it properly.
+        # If the block contains a flattened UNDP procurement row, parse it
+        # properly. We use the two most distinctive labels — "Ref No" alone
+        # is too generic, but "Ref No" + "UNDP Office/Country" is unique to
+        # UNDP procurement listings. The parser itself tolerates missing
+        # Process / Deadline / Posted fields gracefully.
         parsed = None
-        if (
-            'Ref No' in text
-            and 'UNDP Office/Country' in text
-            and 'Process' in text
-            and 'Deadline' in text
-            and 'Posted' in text
-        ):
-            parsed = parse_compound_procurement_text(text)
+        lower_text = text.lower()
+        if 'ref no ' in lower_text and 'undp office/country' in lower_text:
+            # Skip parent containers that wrap multiple listings — those
+            # would have several "Ref No" occurrences and would parse as a
+            # single mangled record. We want to parse the smallest block
+            # that contains exactly one listing.
+            ref_no_count = lower_text.count('ref no ')
+            if ref_no_count == 1:
+                parsed = parse_compound_procurement_text(text)
 
         if parsed:
             final_title = clean_text(parsed.get('title', ''))
@@ -656,6 +691,14 @@ def scan_html_source(source):
             )
             if match:
                 created += 1
+            continue
+
+        # If the gate matched (this looks like a UNDP procurement block) but
+        # we couldn't parse it cleanly (e.g. parent container wrapping many
+        # rows), skip the row entirely — the smaller child block will be
+        # processed in this same loop. We don't want the fallback dumping
+        # the raw compound text into `title`.
+        if 'ref no ' in lower_text and 'undp office/country' in lower_text:
             continue
 
         # Existing generic HTML logic

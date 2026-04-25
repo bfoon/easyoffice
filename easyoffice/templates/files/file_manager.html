@@ -196,6 +196,122 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   white-space: nowrap;
 }
 
+/* ════════════════════════════════════════════════════════════════
+   MOVABLE / RESIZABLE annotation wrappers
+   Applied to text/signature/stamp/checkbox/numbered/date.
+   The handles are children that show only on hover or when the
+   element has the .ann-selected class.
+   ════════════════════════════════════════════════════════════════ */
+.ann-movable {
+  /* Cursor hint — actual move is set on the element when not erasing */
+  cursor: move;
+  user-select: none;
+}
+.ann-movable.ann-text-field,
+.ann-movable.ann-signature {
+  /* Text-editing elements should keep text cursor on text, move on edges */
+  cursor: text;
+}
+.ann-movable.ann-dragging {
+  opacity: .8;
+  z-index: 60;
+}
+
+/* Selection / hover outline so users see they can interact */
+.ann-movable:hover,
+.ann-movable.ann-selected {
+  outline: 1px dashed rgba(59,130,246,.7);
+  outline-offset: 2px;
+}
+
+/* Resize handles — small dots at edges and corners */
+.ann-handle {
+  position: absolute;
+  width: 9px; height: 9px;
+  background: #fff;
+  border: 1.5px solid #3b82f6;
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.2);
+  z-index: 70;
+  display: none;            /* shown on hover/selected */
+  pointer-events: all;
+}
+.ann-movable:hover  .ann-handle,
+.ann-movable.ann-selected .ann-handle {
+  display: block;
+}
+.ann-handle.h-tl  { top: -5px;    left: -5px;    cursor: nwse-resize; }
+.ann-handle.h-tr  { top: -5px;    right: -5px;   cursor: nesw-resize; }
+.ann-handle.h-bl  { bottom: -5px; left: -5px;    cursor: nesw-resize; }
+.ann-handle.h-br  { bottom: -5px; right: -5px;   cursor: nwse-resize; }
+.ann-handle.h-t   { top: -5px;    left: 50%;     transform: translateX(-50%); cursor: ns-resize; }
+.ann-handle.h-b   { bottom: -5px; left: 50%;     transform: translateX(-50%); cursor: ns-resize; }
+.ann-handle.h-l   { top: 50%;     left: -5px;    transform: translateY(-50%); cursor: ew-resize; }
+.ann-handle.h-r   { top: 50%;     right: -5px;   transform: translateY(-50%); cursor: ew-resize; }
+
+/* Drag handle (a dotted strip at the top of text/signature for grabbing
+   without going into edit mode) */
+.ann-grab {
+  position: absolute;
+  top: -14px; left: 0; right: 0; height: 12px;
+  display: none;
+  align-items: center; justify-content: center;
+  background: rgba(59,130,246,.85);
+  color: #fff; font-size: 10px; font-weight: 700;
+  border-radius: 4px 4px 0 0;
+  cursor: move;
+  pointer-events: all;
+  user-select: none;
+}
+.ann-movable:hover .ann-grab,
+.ann-movable.ann-selected .ann-grab {
+  display: flex;
+}
+
+/* Arrow style picker (small floating menu under arrow tool) */
+.ann-arrow-style-menu {
+  position: absolute;
+  background: #fff;
+  border: 1px solid var(--eo-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  padding: 6px;
+  z-index: 80;
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 170px;
+  pointer-events: all;
+}
+.ann-arrow-style-btn {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px;
+  border: none; background: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: .82rem;
+  color: var(--eo-text);
+  text-align: left;
+  transition: background .1s;
+}
+.ann-arrow-style-btn:hover { background: var(--eo-bg); }
+.ann-arrow-style-btn.selected { background: #eef2ff; color: #4338ca; font-weight: 700; }
+.ann-arrow-style-btn svg { flex-shrink: 0; }
+
+/* Tiny indicator badge on the arrow toolbar button when style ≠ default */
+.ann-tool-btn[data-tool="arrow"] {
+  position: relative;
+}
+.ann-tool-btn[data-tool="arrow"] .ann-arrow-style-dot {
+  position: absolute;
+  bottom: 2px; right: 2px;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #4338ca;
+  display: none;
+}
+.ann-tool-btn[data-tool="arrow"].ann-style-custom .ann-arrow-style-dot {
+  display: block;
+}
+
 /* ── Clear all confirmation dialog ── */
 .ann-clear-confirm {
   position: absolute;
@@ -4566,7 +4682,7 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   /* ── Annotation state ── */
   let _annFileId      = null;
   let _annAnnotations = [];
-  let _annSettings    = { active_tool: 'highlight', color: '#fbbf24', opacity: 0.45, stroke_width: 3 };
+  let _annSettings    = { active_tool: 'highlight', color: '#fbbf24', opacity: 0.45, stroke_width: 3, arrow_style: 'standard' };
   let _annDirty       = false;
   let _annSaveTimer   = null;
   let _annDrawing     = false;
@@ -4662,6 +4778,224 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     const b = parseInt(hex.slice(5,7), 16);
     return `rgba(${r},${g},${b},${a})`;
   }
+
+  /* ════════════════════════════════════════════════════════════════
+     annMakeMovable(el, ann, container, opts)
+     Adds drag-to-move + resize handles to a DOM annotation element.
+
+     opts.resize:  'none' | 'corners' | 'all'   (default 'all')
+     opts.minW, opts.minH:  minimum size in % of container (default 1.5)
+     opts.handleSizeProperty: 'width'|'fontSize' — which CSS property to
+       update during a uniform-scale resize (default 'width').
+     opts.uniform: boolean — if true, all resize handles scale uniformly,
+       keeping aspect ratio (used for stamps, dates, badges).
+     opts.onResize(el, ann): optional callback after each resize step.
+     ════════════════════════════════════════════════════════════════ */
+  function annMakeMovable(el, ann, container, opts) {
+    opts = opts || {};
+    const resizeMode = opts.resize || 'all';
+    const minW = opts.minW ?? 1.5;
+    const minH = opts.minH ?? 1.5;
+
+    /* Click-to-select: shows handles on first click (in addition to hover) */
+    el.addEventListener('mousedown', e => {
+      /* Selection visual stays only while pointer is on the element */
+      if (_annSettings.active_tool === 'erase') return;
+      document.querySelectorAll('.ann-selected').forEach(x => x.classList.remove('ann-selected'));
+      el.classList.add('ann-selected');
+    });
+
+    /* Add the grab strip and handles for elements that support resize */
+    if (resizeMode !== 'none') {
+      /* Grab strip on top — used for elements that capture clicks for
+         editing (text/signature/checkbox) where the body itself can't
+         start a drag without conflicting with editing.  For others
+         (stamp/date/numbered) the body can start the drag. */
+      if (opts.useGrabStrip) {
+        const grab = document.createElement('div');
+        grab.className   = 'ann-grab';
+        grab.textContent = '⋮⋮ drag';
+        grab.addEventListener('mousedown', e => _annStartMove(e, el, ann, container));
+        el.appendChild(grab);
+      }
+
+      /* Resize handles */
+      const corners = ['tl','tr','bl','br'];
+      const edges   = ['t','b','l','r'];
+      const handlesToCreate = (resizeMode === 'corners') ? corners
+                            : corners.concat(edges);
+      handlesToCreate.forEach(pos => {
+        const h = document.createElement('div');
+        h.className = `ann-handle h-${pos}`;
+        h.dataset.dir = pos;
+        h.addEventListener('mousedown', e => _annStartResize(e, el, ann, container, pos, opts));
+        el.appendChild(h);
+      });
+    }
+
+    /* If element body starts a drag (not text-editable), bind it */
+    if (!opts.useGrabStrip) {
+      el.addEventListener('mousedown', e => {
+        /* Only start a drag when clicking the body, not a handle */
+        if (e.target.classList.contains('ann-handle') ||
+            e.target.classList.contains('ann-grab')) return;
+        if (_annSettings.active_tool === 'erase') return;
+        _annStartMove(e, el, ann, container);
+      });
+    }
+  }
+
+  /* Drag-to-move: tracks pointer movement and updates ann.x / ann.y in % */
+  function _annStartMove(e, el, ann, container) {
+    e.preventDefault();
+    e.stopPropagation();
+    const cRect = container.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    /* Offset from the element's top-left to the pointer */
+    const offX = e.clientX - elRect.left;
+    const offY = e.clientY - elRect.top;
+    el.classList.add('ann-dragging');
+
+    function onMove(ev) {
+      const x = ((ev.clientX - offX - cRect.left) / cRect.width)  * 100;
+      const y = ((ev.clientY - offY - cRect.top)  / cRect.height) * 100;
+      const clampedX = Math.max(0, Math.min(99, x));
+      const clampedY = Math.max(0, Math.min(99, y));
+      el.style.left = clampedX + '%';
+      el.style.top  = clampedY + '%';
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup',   onUp);
+      el.classList.remove('ann-dragging');
+      /* Persist final position */
+      const finalX = parseFloat(el.style.left) || 0;
+      const finalY = parseFloat(el.style.top)  || 0;
+      if (ann.x !== finalX || ann.y !== finalY) {
+        ann.x = finalX; ann.y = finalY;
+        annScheduleSave();
+        annRefreshListPanel();
+        if (typeof lpBroadcastToolEvent === 'function') {
+          lpBroadcastToolEvent({ action: 'remove', data: { id: ann.id } });
+          lpBroadcastToolEvent({ action: 'add',    data: ann });
+        }
+      }
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup',   onUp);
+  }
+
+  /* Resize: tracks the chosen corner/edge and updates ann.w / ann.h
+     (or ann.fontSize / ann.scale for elements without explicit size) */
+  function _annStartResize(e, el, ann, container, dir, opts) {
+    e.preventDefault();
+    e.stopPropagation();
+    const cRect = container.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    /* Element position in % relative to container at start of resize */
+    const startX = ((elRect.left - cRect.left) / cRect.width)  * 100;
+    const startY = ((elRect.top  - cRect.top)  / cRect.height) * 100;
+    const startW = (elRect.width  / cRect.width)  * 100;
+    const startH = (elRect.height / cRect.height) * 100;
+    const startMouseX = e.clientX;
+    const startMouseY = e.clientY;
+    const aspect = startW / Math.max(0.0001, startH);
+    el.classList.add('ann-dragging');
+
+    function onMove(ev) {
+      const dxPct = ((ev.clientX - startMouseX) / cRect.width)  * 100;
+      const dyPct = ((ev.clientY - startMouseY) / cRect.height) * 100;
+      let newX = startX, newY = startY, newW = startW, newH = startH;
+
+      /* Adjust based on which handle is being dragged */
+      if (dir.includes('r')) newW = Math.max(opts.minW || 1.5, startW + dxPct);
+      if (dir.includes('l')) {
+        newW = Math.max(opts.minW || 1.5, startW - dxPct);
+        newX = startX + (startW - newW);
+      }
+      if (dir.includes('b')) newH = Math.max(opts.minH || 1.5, startH + dyPct);
+      if (dir.includes('t')) {
+        newH = Math.max(opts.minH || 1.5, startH - dyPct);
+        newY = startY + (startH - newH);
+      }
+
+      /* Uniform scale: lock aspect ratio (corner handles only) */
+      if (opts.uniform && dir.length === 2) {
+        if (Math.abs(dxPct) > Math.abs(dyPct)) {
+          newH = newW / aspect;
+          if (dir.includes('t')) newY = startY + (startH - newH);
+        } else {
+          newW = newH * aspect;
+          if (dir.includes('l')) newX = startX + (startW - newW);
+        }
+      }
+
+      /* Apply position */
+      el.style.left = newX + '%';
+      el.style.top  = newY + '%';
+
+      /* Apply size — depends on the element type */
+      if (opts.scaleProperty === 'fontSize') {
+        /* Scale the font-size proportionally (used for stamp/date/signature) */
+        const factor = newW / startW;
+        const baseFs = parseFloat(opts._origFontSize || getComputedStyle(el).fontSize) || 14;
+        if (!opts._origFontSize) opts._origFontSize = baseFs;
+        el.style.fontSize = Math.max(8, baseFs * factor) + 'px';
+      } else if (opts.scaleProperty === 'numberedSize') {
+        /* Numbered marker: width = height (always uniform) */
+        const cRectNow = container.getBoundingClientRect();
+        const sizePx = (newW / 100) * cRectNow.width;
+        el.style.width  = sizePx + 'px';
+        el.style.height = sizePx + 'px';
+        el.style.fontSize = (sizePx * 0.5) + 'px';
+      } else if (opts.scaleProperty === 'checkboxSize') {
+        const cRectNow = container.getBoundingClientRect();
+        const sizePx = (newW / 100) * cRectNow.width;
+        el.style.width  = sizePx + 'px';
+        el.style.height = sizePx + 'px';
+        el.style.fontSize = (sizePx * 0.78) + 'px';
+      } else {
+        /* Default: width/height in % */
+        el.style.width  = newW + '%';
+        el.style.height = newH + '%';
+      }
+
+      if (opts.onResize) opts.onResize(el, ann, newW, newH);
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup',   onUp);
+      el.classList.remove('ann-dragging');
+      /* Persist size + position */
+      ann.x = parseFloat(el.style.left) || 0;
+      ann.y = parseFloat(el.style.top)  || 0;
+      const finalW = parseFloat(el.style.width)  || null;
+      const finalH = parseFloat(el.style.height) || null;
+      if (opts.scaleProperty === 'fontSize') {
+        ann.fontSize = parseFloat(el.style.fontSize) || 14;
+      } else if (opts.scaleProperty === 'numberedSize' || opts.scaleProperty === 'checkboxSize') {
+        ann.size = parseFloat(el.style.width) || null;
+      } else if (finalW && finalH) {
+        ann.w = finalW; ann.h = finalH;
+      }
+      annScheduleSave();
+      annRefreshListPanel();
+      if (typeof lpBroadcastToolEvent === 'function') {
+        lpBroadcastToolEvent({ action: 'remove', data: { id: ann.id } });
+        lpBroadcastToolEvent({ action: 'add',    data: ann });
+      }
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup',   onUp);
+  }
+
+  /* Click outside to deselect (called once globally) */
+  document.addEventListener('mousedown', function annDeselect(e) {
+    if (e.target.closest('.ann-movable') ||
+        e.target.closest('.ann-handle')  ||
+        e.target.closest('.ann-grab'))   return;
+    document.querySelectorAll('.ann-selected').forEach(x => x.classList.remove('ann-selected'));
+  }, true);
 
   /* ── Persistence ── */
   async function annLoad(fileId) {
@@ -4860,7 +5194,7 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   function annRenderStamp(container, a) {
     if (!container) return;
     const el = document.createElement('div');
-    el.className          = 'ann-stamp-text';
+    el.className          = 'ann-stamp-text ann-movable';
     el.dataset.annId      = a.id;
     el.style.left         = a.x + '%';
     el.style.top          = a.y + '%';
@@ -4868,9 +5202,16 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     el.style.borderColor  = a.color || '#ef4444';
     el.style.opacity      = a.opacity ?? 0.85;
     el.style.pointerEvents = 'all';
+    if (a.fontSize) el.style.fontSize = a.fontSize + 'px';
     el.textContent        = a.text || 'DRAFT';
     el.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
     container.appendChild(el);
+    annMakeMovable(el, a, container, {
+      resize: 'corners',
+      uniform: true,
+      scaleProperty: 'fontSize',
+      minW: 4, minH: 2,
+    });
   }
 
   function annRenderBookmark(container, a) {
@@ -4928,36 +5269,69 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   }
 
   /* ── Arrow (SVG line + arrowhead marker) ── */
-  function annRenderArrow(svg, a) {
-    if (!svg) return;
+  /* Arrow styles. Each style describes how the line/markers look. */
+  const ANN_ARROW_STYLES = {
+    'standard':   { name: 'Standard arrow',   dash: '',          markerEnd: 'tri',   markerStart: 'none' },
+    'thick':      { name: 'Thick arrow',      dash: '',          markerEnd: 'tri',   markerStart: 'none', widthMul: 2 },
+    'dashed':     { name: 'Dashed arrow',     dash: '2,1.5',     markerEnd: 'tri',   markerStart: 'none' },
+    'dotted':     { name: 'Dotted arrow',     dash: '0.5,1',     markerEnd: 'tri',   markerStart: 'none' },
+    'double':     { name: 'Double-headed',    dash: '',          markerEnd: 'tri',   markerStart: 'tri' },
+    'open':       { name: 'Open arrow',       dash: '',          markerEnd: 'open',  markerStart: 'none' },
+    'sharp':      { name: 'Sharp arrow',      dash: '',          markerEnd: 'sharp', markerStart: 'none' },
+  };
+
+  /* Build (or reuse) a marker definition for the given style + color */
+  function _annEnsureArrowMarker(svg, color, type) {
+    if (type === 'none') return null;
     let defs = svg.querySelector('defs');
     if (!defs) {
       defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
       svg.insertBefore(defs, svg.firstChild);
     }
-    const markerId = 'ann-arrow-' + (a.color || '#ef4444').replace('#', '');
-    if (!defs.querySelector(`#${markerId}`)) {
-      const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-      marker.setAttribute('id', markerId);
-      marker.setAttribute('viewBox', '0 0 10 10');
-      marker.setAttribute('refX', '9');
-      marker.setAttribute('refY', '5');
-      marker.setAttribute('markerWidth',  '5');
-      marker.setAttribute('markerHeight', '5');
-      marker.setAttribute('orient', 'auto-start-reverse');
-      marker.innerHTML = `<path d="M0,0 L10,5 L0,10 L2,5 z" fill="${a.color || '#ef4444'}"/>`;
-      defs.appendChild(marker);
+    const cleanColor = color.replace('#', '');
+    const markerId = `ann-arrow-${type}-${cleanColor}`;
+    if (defs.querySelector(`#${markerId}`)) return markerId;
+
+    const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+    marker.setAttribute('id', markerId);
+    marker.setAttribute('viewBox', '0 0 10 10');
+    marker.setAttribute('refX', '9');
+    marker.setAttribute('refY', '5');
+    marker.setAttribute('markerWidth',  '5');
+    marker.setAttribute('markerHeight', '5');
+    marker.setAttribute('orient', 'auto-start-reverse');
+    if (type === 'tri') {
+      marker.innerHTML = `<path d="M0,0 L10,5 L0,10 L2,5 z" fill="${color}"/>`;
+    } else if (type === 'sharp') {
+      marker.innerHTML = `<path d="M0,0 L10,5 L0,10 L4,5 z" fill="${color}"/>`;
+    } else if (type === 'open') {
+      marker.innerHTML = `<path d="M0,0 L10,5 L0,10" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="miter"/>`;
     }
+    defs.appendChild(marker);
+    return markerId;
+  }
+
+  function annRenderArrow(svg, a) {
+    if (!svg) return;
+    const styleKey = a.style || 'standard';
+    const style    = ANN_ARROW_STYLES[styleKey] || ANN_ARROW_STYLES.standard;
+    const color    = a.color || '#ef4444';
+
+    const endMarker   = _annEnsureArrowMarker(svg, color, style.markerEnd);
+    const startMarker = _annEnsureArrowMarker(svg, color, style.markerStart);
+
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     el.setAttribute('x1', a.x);
     el.setAttribute('y1', a.y);
     el.setAttribute('x2', a.x2 ?? a.x);
     el.setAttribute('y2', a.y2 ?? a.y);
-    el.setAttribute('stroke',         a.color || '#ef4444');
+    el.setAttribute('stroke',         color);
     el.setAttribute('stroke-opacity', String(a.opacity ?? 0.9));
-    el.setAttribute('stroke-width',   String((a.stroke_width || 3) * 0.5));
+    el.setAttribute('stroke-width',   String((a.stroke_width || 3) * 0.5 * (style.widthMul || 1)));
     el.setAttribute('stroke-linecap', 'round');
-    el.setAttribute('marker-end',     `url(#${markerId})`);
+    if (style.dash)    el.setAttribute('stroke-dasharray', style.dash);
+    if (endMarker)     el.setAttribute('marker-end',   `url(#${endMarker})`);
+    if (startMarker)   el.setAttribute('marker-start', `url(#${startMarker})`);
     el.setAttribute('data-ann-id',    a.id);
     el.style.cursor = 'pointer';
     el.addEventListener('click', () => { if (_annSettings.active_tool === 'erase') annRemove(a.id); });
@@ -4968,23 +5342,28 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   function annRenderTextField(container, a) {
     if (!container) return;
     const el = document.createElement('div');
-    el.className       = 'ann-text-field';
+    el.className       = 'ann-text-field ann-movable';
     el.dataset.annId   = a.id;
     el.style.left      = a.x + '%';
     el.style.top       = a.y + '%';
     el.style.color     = a.color || '#1f2937';
     el.style.fontSize  = (a.fontSize || 14) + 'px';
+    if (a.w) el.style.width  = a.w + '%';
+    if (a.h) el.style.height = a.h + '%';
     el.contentEditable = 'true';
     el.spellcheck      = false;
     el.setAttribute('data-placeholder', 'Type here…');
     el.textContent     = a.text || '';
 
     el.addEventListener('mousedown', e => {
+      /* Prevent drag-from-body so user can edit text by clicking inside.
+         Drag is via the grab strip and resize handles. */
       if (_annSettings.active_tool === 'erase') {
         e.preventDefault();
         annRemove(a.id);
-      } else {
-        e.stopPropagation();   /* don't start a drag while editing */
+      } else if (!e.target.classList.contains('ann-handle') &&
+                 !e.target.classList.contains('ann-grab')) {
+        e.stopPropagation();
       }
     });
     el.addEventListener('focus', () => el.classList.add('ann-text-editing'));
@@ -4997,18 +5376,25 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       }
     });
     container.appendChild(el);
+    annMakeMovable(el, a, container, {
+      resize: 'all',
+      useGrabStrip: true,
+      minW: 6, minH: 2,
+    });
   }
 
   /* ── Signature field ── */
   function annRenderSignature(container, a) {
     if (!container) return;
     const el = document.createElement('div');
-    el.className           = 'ann-signature';
+    el.className           = 'ann-signature ann-movable';
     el.dataset.annId       = a.id;
     el.style.left          = a.x + '%';
     el.style.top           = a.y + '%';
     el.style.color         = a.color || '#1e3a8a';
     el.style.borderBottomColor = a.color || '#1e3a8a';
+    if (a.fontSize) el.style.fontSize = a.fontSize + 'px';
+    if (a.w) el.style.minWidth = a.w + '%';
     el.contentEditable     = 'true';
     el.spellcheck          = false;
     el.setAttribute('data-placeholder', 'Sign here');
@@ -5018,7 +5404,8 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       if (_annSettings.active_tool === 'erase') {
         e.preventDefault();
         annRemove(a.id);
-      } else {
+      } else if (!e.target.classList.contains('ann-handle') &&
+                 !e.target.classList.contains('ann-grab')) {
         e.stopPropagation();
       }
     });
@@ -5030,40 +5417,84 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       }
     });
     container.appendChild(el);
+    annMakeMovable(el, a, container, {
+      resize: 'corners',
+      useGrabStrip: true,
+      uniform: true,
+      scaleProperty: 'fontSize',
+      minW: 6, minH: 2,
+    });
   }
 
   /* ── Checkbox (toggleable) ── */
   function annRenderCheckbox(container, a) {
     if (!container) return;
     const el = document.createElement('div');
-    el.className     = 'ann-checkbox' + (a.checked ? ' checked' : '');
+    el.className     = 'ann-checkbox ann-movable' + (a.checked ? ' checked' : '');
     el.dataset.annId = a.id;
     el.style.left    = a.x + '%';
     el.style.top     = a.y + '%';
     el.style.color       = a.color || '#1f2937';
     el.style.borderColor = a.color || '#1f2937';
+    if (a.size) {
+      el.style.width    = a.size + 'px';
+      el.style.height   = a.size + 'px';
+      el.style.fontSize = (a.size * 0.78) + 'px';
+    }
+
+    /* Use mousedown threshold to distinguish click-to-toggle from drag */
+    let downX = 0, downY = 0, moved = false;
+    el.addEventListener('mousedown', e => {
+      if (e.target.classList.contains('ann-handle') ||
+          e.target.classList.contains('ann-grab')) return;
+      if (_annSettings.active_tool === 'erase') {
+        e.preventDefault(); annRemove(a.id); return;
+      }
+      downX = e.clientX; downY = e.clientY; moved = false;
+    });
+    el.addEventListener('mousemove', e => {
+      if (e.buttons && (Math.abs(e.clientX - downX) > 4 || Math.abs(e.clientY - downY) > 4)) {
+        moved = true;
+      }
+    });
     el.addEventListener('click', e => {
       e.stopPropagation();
-      if (_annSettings.active_tool === 'erase') { annRemove(a.id); return; }
+      if (_annSettings.active_tool === 'erase') return;
+      if (moved) return;   /* was a drag, not a real click */
       const ann = _annAnnotations.find(x => x.id === a.id);
       if (ann) {
         ann.checked = !ann.checked;
         el.classList.toggle('checked', ann.checked);
         annScheduleSave();
+        if (typeof lpBroadcastToolEvent === 'function') {
+          lpBroadcastToolEvent({ action: 'remove', data: { id: ann.id } });
+          lpBroadcastToolEvent({ action: 'add',    data: ann });
+        }
       }
     });
     container.appendChild(el);
+    annMakeMovable(el, a, container, {
+      resize: 'corners',
+      uniform: true,
+      scaleProperty: 'checkboxSize',
+      minW: 1.5, minH: 1.5,
+    });
   }
 
   /* ── Numbered marker ── */
   function annRenderNumbered(container, a) {
     if (!container) return;
     const el = document.createElement('div');
-    el.className     = 'ann-numbered';
+    el.className     = 'ann-numbered ann-movable';
     el.dataset.annId = a.id;
     el.style.left    = a.x + '%';
     el.style.top     = a.y + '%';
     el.style.background = a.color || '#ef4444';
+    if (a.size) {
+      el.style.width    = a.size + 'px';
+      el.style.height   = a.size + 'px';
+      el.style.fontSize = (a.size * 0.5) + 'px';
+    }
     el.textContent   = a.number || '1';
     el.title         = a.text || '';
     el.addEventListener('click', e => {
@@ -5071,24 +5502,37 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       if (_annSettings.active_tool === 'erase') annRemove(a.id);
     });
     container.appendChild(el);
+    annMakeMovable(el, a, container, {
+      resize: 'corners',
+      uniform: true,
+      scaleProperty: 'numberedSize',
+      minW: 1.5, minH: 1.5,
+    });
   }
 
   /* ── Date stamp ── */
   function annRenderDateStamp(container, a) {
     if (!container) return;
     const el = document.createElement('div');
-    el.className     = 'ann-date-stamp';
+    el.className     = 'ann-date-stamp ann-movable';
     el.dataset.annId = a.id;
     el.style.left    = a.x + '%';
     el.style.top     = a.y + '%';
     el.style.color       = a.color || '#ef4444';
     el.style.borderColor = a.color || '#ef4444';
+    if (a.fontSize) el.style.fontSize = a.fontSize + 'px';
     el.textContent   = a.text || new Date().toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'});
     el.addEventListener('click', e => {
       e.stopPropagation();
       if (_annSettings.active_tool === 'erase') annRemove(a.id);
     });
     container.appendChild(el);
+    annMakeMovable(el, a, container, {
+      resize: 'corners',
+      uniform: true,
+      scaleProperty: 'fontSize',
+      minW: 4, minH: 1.5,
+    });
   }
 
   /* ── Comment popup ── */
@@ -5361,13 +5805,15 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       const dx = pos.x - _annDrawStart.x;
       const dy = pos.y - _annDrawStart.y;
       if (Math.sqrt(dx*dx + dy*dy) > 0.5) {
-        annAdd({
+        const newAnn = {
           tool, page: pageN,
           color: _annSettings.color, opacity: _annSettings.opacity,
           stroke_width: _annSettings.stroke_width || 3,
           x:  _annDrawStart.x, y:  _annDrawStart.y,
           x2: pos.x,           y2: pos.y,
-        });
+        };
+        if (tool === 'arrow') newAnn.style = _annSettings.arrow_style || 'standard';
+        annAdd(newAnn);
       }
     } else if (tool === 'circle') {
       const x = Math.min(_annDrawStart.x, pos.x);
@@ -5528,9 +5974,19 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         btn.classList.toggle('active', parseInt(btn.dataset.sw, 10) === sw)
       );
     }
-    document.querySelectorAll('.ann-tool-btn[data-tool]').forEach(btn =>
-      btn.classList.toggle('active', btn.dataset.tool === _annSettings.active_tool)
-    );
+    document.querySelectorAll('.ann-tool-btn[data-tool]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tool === _annSettings.active_tool);
+      /* Arrow style indicator dot (rendered if arrow style is non-default) */
+      if (btn.dataset.tool === 'arrow') {
+        const isCustom = (_annSettings.arrow_style && _annSettings.arrow_style !== 'standard');
+        btn.classList.toggle('ann-style-custom', isCustom);
+        if (!btn.querySelector('.ann-arrow-style-dot')) {
+          const dot = document.createElement('span');
+          dot.className = 'ann-arrow-style-dot';
+          btn.appendChild(dot);
+        }
+      }
+    });
     /* Update overlay class — CSS targets .ann-canvas inside for pointer-events.
        Preserve the ann-pdf-mode class if it was set at init time. */
     const overlay = document.getElementById('annOverlay');
@@ -5932,13 +6388,104 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     });
   }
 
+  /* ── Arrow style picker (shown when arrow tool is clicked) ── */
+  function annOpenArrowStylePicker(btn) {
+    document.getElementById('annArrowStyleMenu')?.remove();
+
+    /* Position the menu next to the toolbar button */
+    const surface = document.getElementById('previewSurface');
+    if (!surface) return;
+    const sRect = surface.getBoundingClientRect();
+    const bRect = btn.getBoundingClientRect();
+
+    const menu = document.createElement('div');
+    menu.id        = 'annArrowStyleMenu';
+    menu.className = 'ann-arrow-style-menu';
+    /* Place to the right of the toolbar button */
+    menu.style.left = (bRect.right - sRect.left + 8) + 'px';
+    menu.style.top  = (bRect.top   - sRect.top)      + 'px';
+
+    /* Build a small SVG preview for each style */
+    const previewSvg = (key) => {
+      const s     = ANN_ARROW_STYLES[key];
+      const color = _annSettings.color || '#ef4444';
+      const dashAttr = s.dash ? `stroke-dasharray="${s.dash}"` : '';
+      const widthM   = s.widthMul || 1;
+      let markerEnd = '', markerStart = '', defs = '';
+
+      if (s.markerEnd === 'tri' || s.markerStart === 'tri') {
+        defs += `<marker id="pmt-${key}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 L2,5 z" fill="${color}"/></marker>`;
+      }
+      if (s.markerEnd === 'sharp') {
+        defs += `<marker id="pms-${key}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 L4,5 z" fill="${color}"/></marker>`;
+      }
+      if (s.markerEnd === 'open') {
+        defs += `<marker id="pmo-${key}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="miter"/></marker>`;
+      }
+
+      if (s.markerEnd === 'tri')   markerEnd = `marker-end="url(#pmt-${key})"`;
+      if (s.markerEnd === 'sharp') markerEnd = `marker-end="url(#pms-${key})"`;
+      if (s.markerEnd === 'open')  markerEnd = `marker-end="url(#pmo-${key})"`;
+      if (s.markerStart === 'tri') markerStart = `marker-start="url(#pmt-${key})"`;
+
+      return `<svg width="42" height="14" viewBox="0 0 42 14">
+        <defs>${defs}</defs>
+        <line x1="3" y1="7" x2="35" y2="7" stroke="${color}" stroke-width="${1.5 * widthM}" stroke-linecap="round" ${dashAttr} ${markerEnd} ${markerStart}/>
+      </svg>`;
+    };
+
+    Object.keys(ANN_ARROW_STYLES).forEach(key => {
+      const item    = document.createElement('button');
+      item.type     = 'button';
+      item.className = 'ann-arrow-style-btn' +
+        ((_annSettings.arrow_style || 'standard') === key ? ' selected' : '');
+      item.dataset.key = key;
+      item.innerHTML = `${previewSvg(key)}<span>${ANN_ARROW_STYLES[key].name}</span>`;
+      item.addEventListener('click', e => {
+        e.stopPropagation();
+        _annSettings.arrow_style = key;
+        annSaveSettings();
+        annApplySettings();
+        menu.remove();
+      });
+      menu.appendChild(item);
+    });
+
+    surface.appendChild(menu);
+
+    /* Click outside closes */
+    setTimeout(() => {
+      document.addEventListener('click', function close(e) {
+        if (!menu.contains(e.target) && e.target !== btn) {
+          menu.remove();
+          document.removeEventListener('click', close);
+        }
+      });
+    }, 50);
+  }
+
   function annBindToolbarEvents(overlay) {
-    /* Tool buttons — toggle on/off */
+    /* Tool buttons — toggle on/off; arrow tool also opens style picker */
     overlay.querySelectorAll('.ann-tool-btn[data-tool]').forEach(btn => {
       btn.addEventListener('click', e => {
         e.stopPropagation();
-        _annSettings.active_tool = (_annSettings.active_tool === btn.dataset.tool) ? 'none' : btn.dataset.tool;
+        const tool = btn.dataset.tool;
+        const wasActive = (_annSettings.active_tool === tool);
+
+        if (tool === 'arrow') {
+          /* Clicking arrow when already active opens the style picker;
+             clicking when inactive activates it AND opens picker too */
+          _annSettings.active_tool = tool;
+          annApplySettings();
+          annSaveSettings();
+          annOpenArrowStylePicker(btn);
+          return;
+        }
+
+        /* Standard toggle behavior for other tools */
+        _annSettings.active_tool = wasActive ? 'none' : tool;
         document.getElementById('annSettingsPanel')?.classList.remove('open');
+        document.getElementById('annArrowStyleMenu')?.remove();
         annApplySettings();
         annSaveSettings();
       });

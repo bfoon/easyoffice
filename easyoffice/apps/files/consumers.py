@@ -71,7 +71,8 @@ class LivePreviewConsumer(AsyncWebsocketConsumer):
         self.user          = self.scope.get('user')
 
         # Cache role so we never hit the DB on every incoming message
-        self._is_presenter_cached = None
+        self._is_presenter_cached    = None
+        self._viewers_can_edit_cached = False
 
         if not self.user or not self.user.is_authenticated:
             await self.close(code=4003)
@@ -81,15 +82,25 @@ class LivePreviewConsumer(AsyncWebsocketConsumer):
         # Presenters are accepted even if the session is currently in a
         # grace-period "ended" state, as this is exactly the case we want
         # to recover from.
-        allowed, is_presenter = await self._check_allowed_and_role()
+        allowed, is_presenter, can_edit = await self._check_allowed_and_role()
         if not allowed:
             await self.close(code=4004)
             return
 
-        self._is_presenter_cached = is_presenter
+        self._is_presenter_cached     = is_presenter
+        self._viewers_can_edit_cached = can_edit
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
+
+        # Send the connecting client the initial edit-permission state so they
+        # know whether they can draw before any toggle happens.
+        await self.send(text_data=json.dumps({
+            'type':             'edit_permission',
+            'viewers_can_edit': self._viewers_can_edit_cached,
+            'changed_by':       '',
+            'initial':          True,
+        }))
 
         if is_presenter:
             # Presenter reconnected during grace window → cancel the pending
@@ -159,27 +170,29 @@ class LivePreviewConsumer(AsyncWebsocketConsumer):
 
         msg_type     = msg.get('type', '')
         is_presenter = self._is_presenter_cached
+        can_edit     = is_presenter or self._viewers_can_edit_cached
 
         # ── Ping / pong keep-alive ──
         if msg_type == 'ping':
             await self.send(text_data=json.dumps({'type': 'pong'}))
             return
 
-        # ── Presenter-only: cursor position ──
-        if msg_type == 'cursor_move' and is_presenter:
-            # Cursor can be either:
-            #   • page-relative    →  {x, y, page}   (inside a PDF page wrap)
-            #   • surface-relative →  {x, y}         (non-PDF)
+        # ── Cursor position — broadcast from anyone who can edit ──
+        if msg_type == 'cursor_move' and can_edit:
             await self.channel_layer.group_send(self.group_name, {
                 'type':    'cursor.move',
                 'x':       msg.get('x', 0),
                 'y':       msg.get('y', 0),
-                'page':    msg.get('page'),   # None for non-PDF
+                'page':    msg.get('page'),
+                # Tag who's moving so each viewer can show distinct cursors
+                'sender_id':   str(self.user.id),
+                'sender_name': self._get_name(),
+                'is_presenter': is_presenter,
                 'exclude': self.channel_name,
             })
 
-        # ── Presenter-only: annotation tool events ──
-        elif msg_type == 'tool_event' and is_presenter:
+        # ── Annotation tool events — broadcast from anyone who can edit ──
+        elif msg_type == 'tool_event' and can_edit:
             await self.channel_layer.group_send(self.group_name, {
                 'type':    'tool.event',
                 'payload': msg.get('payload', {}),
@@ -193,6 +206,17 @@ class LivePreviewConsumer(AsyncWebsocketConsumer):
                 'scroll_pct': msg.get('scroll_pct', 0),
                 'page':       msg.get('page', 1),
                 'exclude':    self.channel_name,
+            })
+
+        # ── Presenter-only: toggle viewer edit permission ──
+        elif msg_type == 'set_edit_permission' and is_presenter:
+            allow = bool(msg.get('allow', False))
+            await self._set_edit_permission(allow)
+            # Broadcast new state to all members so they can update UI
+            await self.channel_layer.group_send(self.group_name, {
+                'type':              'edit.permission',
+                'viewers_can_edit':  allow,
+                'changed_by':        self._get_name(),
             })
 
         # ── Presenter: respond to a viewer's sync request ──
@@ -236,8 +260,10 @@ class LivePreviewConsumer(AsyncWebsocketConsumer):
             'x':    event['x'],
             'y':    event['y'],
         }
-        if event.get('page') is not None:
-            out['page'] = event['page']
+        if event.get('page') is not None:    out['page']         = event['page']
+        if event.get('sender_id'):           out['sender_id']    = event['sender_id']
+        if event.get('sender_name'):         out['sender_name']  = event['sender_name']
+        if 'is_presenter' in event:          out['is_presenter'] = event['is_presenter']
         await self.send(text_data=json.dumps(out))
 
     async def tool_event(self, event):
@@ -246,6 +272,20 @@ class LivePreviewConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({
             'type':    'tool_event',
             'payload': event['payload'],
+        }))
+
+    async def edit_permission(self, event):
+        """
+        Permission state changed.  Update each connection's cached flag so
+        subsequent receive() checks honour the new policy without a DB hit,
+        and notify the client so it can update its UI.
+        """
+        allow = bool(event.get('viewers_can_edit', False))
+        self._viewers_can_edit_cached = allow
+        await self.send(text_data=json.dumps({
+            'type':             'edit_permission',
+            'viewers_can_edit': allow,
+            'changed_by':       event.get('changed_by', ''),
         }))
 
     async def chat_message(self, event):
@@ -362,7 +402,7 @@ class LivePreviewConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _check_allowed_and_role(self):
         """
-        Returns (allowed: bool, is_presenter: bool).
+        Returns (allowed: bool, is_presenter: bool, viewers_can_edit: bool).
 
         The presenter is allowed to reconnect even during the grace window
         (when ended_at was set by a previous disconnect but the finaliser
@@ -380,18 +420,29 @@ class LivePreviewConsumer(AsyncWebsocketConsumer):
                 qs = qs.filter(ended_at__isnull=True)
             session = qs.first()
             if not session:
-                return False, False
+                return False, False, False
+
+            can_edit = bool(getattr(session, 'viewers_can_edit', False))
 
             if session.presenter_id == self.user.id:
-                return True, True
+                return True, True, can_edit
 
             is_member = (
                 session.viewers.filter(id=self.user.id).exists() or
                 session.invited.filter(id=self.user.id).exists()
             )
-            return is_member, False
+            return is_member, False, can_edit
         except LivePreviewSession.DoesNotExist:
-            return False, False
+            return False, False, False
+
+    @database_sync_to_async
+    def _set_edit_permission(self, allow):
+        """Persist viewers_can_edit flag on the session row."""
+        from apps.files.models import LivePreviewSession
+        LivePreviewSession.objects.filter(
+            token=self.session_token,
+            ended_at__isnull=True,
+        ).update(viewers_can_edit=bool(allow))
 
     @database_sync_to_async
     def _is_session_active(self):

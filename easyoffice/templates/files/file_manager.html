@@ -184,15 +184,13 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
 /* ── Date stamp ── */
 .ann-date-stamp {
   position: absolute;
-  padding: 3px 10px;
-  border: 2px solid;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .06em;
+  padding: 2px 4px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .04em;
   font-family: monospace;
   cursor: pointer;
-  background: rgba(255,255,255,.9);
+  background: transparent;
   white-space: nowrap;
 }
 
@@ -800,6 +798,54 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   font-size: .68rem; font-weight: 800; margin-left: 2px;
 }
 .lp-viewer-count i { font-size: .7rem; }
+
+/* "Allow editing" toggle button (presenter only) */
+.lp-edit-toggle-btn {
+  position: absolute;
+  top: 12px; right: 14px;
+  z-index: 46;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 18px;
+  background: rgba(30,41,59,.86);
+  color: #e2e8f0;
+  font-size: .72rem; font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0,0,0,.18);
+  transition: background .15s, color .15s, transform .12s;
+  pointer-events: all;
+}
+.lp-edit-toggle-btn:hover { background: rgba(30,41,59,.95); transform: translateY(-1px); }
+.lp-edit-toggle-btn.active {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #fff;
+  border-color: rgba(255,255,255,.35);
+}
+.lp-edit-toggle-btn.active:hover {
+  background: linear-gradient(135deg, #0ea674, #047857);
+}
+.lp-edit-toggle-btn i { font-size: .8rem; }
+.lp-edit-toggle-btn .lp-edit-label { letter-spacing: .03em; }
+
+/* "Editor" badge shown to viewers when they have edit permission */
+.lp-edit-badge {
+  display: none;
+  align-items: center; gap: 4px;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #fff;
+  padding: 1px 8px; border-radius: 10px;
+  font-size: .66rem; font-weight: 800;
+  letter-spacing: .04em;
+  margin-left: 2px;
+  animation: lp-edit-badge-pulse 2.4s ease-in-out infinite;
+}
+.lp-edit-badge i { font-size: .68rem; }
+@keyframes lp-edit-badge-pulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
+  50%     { box-shadow: 0 0 0 4px rgba(16,185,129,.25); }
+}
+
 .lp-live-dot { width:7px; height:7px; border-radius:50%; background:#fff; animation: lp-blink .9s ease-in-out infinite alternate; }
 .lp-status-bar.offline .lp-live-dot { animation: none; opacity: .6; }
 @keyframes lp-blink { 0%{opacity:1;}100%{opacity:.2;} }
@@ -5366,6 +5412,14 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         e.stopPropagation();
       }
     });
+    /* Stop click bubbling so annOnClick on the parent doesn't create
+       a new field whenever the user clicks inside this one to type. */
+    el.addEventListener('click', e => {
+      if (!e.target.classList.contains('ann-handle') &&
+          !e.target.classList.contains('ann-grab')) {
+        e.stopPropagation();
+      }
+    });
     el.addEventListener('focus', () => el.classList.add('ann-text-editing'));
     el.addEventListener('blur',  () => {
       el.classList.remove('ann-text-editing');
@@ -5406,6 +5460,14 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         annRemove(a.id);
       } else if (!e.target.classList.contains('ann-handle') &&
                  !e.target.classList.contains('ann-grab')) {
+        e.stopPropagation();
+      }
+    });
+    /* Stop click bubbling so annOnClick on the parent doesn't create
+       a new signature whenever the user clicks inside this one. */
+    el.addEventListener('click', e => {
+      if (!e.target.classList.contains('ann-handle') &&
+          !e.target.classList.contains('ann-grab')) {
         e.stopPropagation();
       }
     });
@@ -5519,7 +5581,6 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     el.style.left    = a.x + '%';
     el.style.top     = a.y + '%';
     el.style.color       = a.color || '#ef4444';
-    el.style.borderColor = a.color || '#ef4444';
     if (a.fontSize) el.style.fontSize = a.fontSize + 'px';
     el.textContent   = a.text || new Date().toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'});
     el.addEventListener('click', e => {
@@ -5675,6 +5736,15 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     /* Drag tools: shapes that need a start and end point */
     const dragTools = new Set(['draw', 'rect', 'highlight', 'line', 'arrow', 'circle']);
     if (!dragTools.has(tool)) return;
+
+    /* Don't start a stroke when the user is grabbing an existing annotation's
+       body, a resize handle, or its drag strip — those events belong to
+       annMakeMovable, not the drawing engine. */
+    if (e.target.closest('[data-ann-id]') ||
+        e.target.classList.contains('ann-handle') ||
+        e.target.classList.contains('ann-grab')) {
+      return;
+    }
 
     const viewer = document.getElementById('pdfjsViewer');
     if (viewer) {
@@ -5840,6 +5910,17 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     if (_annDrawing) return;
     const tool = _annSettings.active_tool;
     if (!tool || tool === 'none' || tool === 'erase') return;
+
+    /* Don't create a new annotation when the user is interacting with an
+       existing one (clicking inside a text field, on a checkbox, on a
+       signature, on a stamp's body, etc.).  This is what was causing
+       new text fields to spawn whenever the user tried to type inside
+       an existing one. */
+    if (e.target.closest('[data-ann-id]') ||
+        e.target.classList.contains('ann-handle') ||
+        e.target.classList.contains('ann-grab')) {
+      return;
+    }
 
     const viewer = document.getElementById('pdfjsViewer');
     let posEl, pageN, domContainer;
@@ -6332,7 +6413,7 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         ctx.lineTo(x, y + h);
         ctx.closePath();
         ctx.fill();
-      } else if (el.classList.contains('ann-stamp-text') || el.classList.contains('ann-date-stamp')) {
+      } else if (el.classList.contains('ann-stamp-text')) {
         const color = el.style.color || '#ef4444';
         const fs    = parseFloat(getComputedStyle(el).fontSize) || 14;
         ctx.strokeStyle = color;
@@ -6342,6 +6423,13 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         ctx.font         = `bold ${fs}px sans-serif`;
         ctx.textBaseline = 'middle';
         ctx.fillText(el.textContent || '', x + 6, y + h / 2);
+      } else if (el.classList.contains('ann-date-stamp')) {
+        const color = el.style.color || '#ef4444';
+        const fs    = parseFloat(getComputedStyle(el).fontSize) || 13;
+        ctx.fillStyle    = color;
+        ctx.font         = `600 ${fs}px monospace`;
+        ctx.textBaseline = 'middle';
+        ctx.fillText(el.textContent || '', x + 2, y + h / 2);
       } else if (el.classList.contains('ann-checkbox')) {
         const color = el.style.color || '#1f2937';
         ctx.strokeStyle = color;
@@ -6694,6 +6782,7 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   let _lpAllUsers      = [];
   let _lpSelectedUsers = new Set();
   let _lpReconnectAttempts = 0;      /* viewer-side exponential backoff */
+  let _lpCanEdit       = false;      /* viewers may draw/edit when true */
   let _lpIntentionalClose  = false;  /* set on teardown so close handler doesn't reconnect */
 
   /* ── URL helpers ── */
@@ -7066,13 +7155,16 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   function lpHandleMessage(msg) {
     switch (msg.type) {
       case 'cursor_move':
-        lpRenderRemoteCursor(msg.x, msg.y, msg.page);
+        lpRenderRemoteCursor(msg.x, msg.y, msg.page, msg.sender_id, msg.sender_name, msg.is_presenter);
         break;
       case 'tool_event':
         lpRenderRemoteToolEvent(msg.payload);
         break;
       case 'chat_message':
         lpAppendChatMessage(msg);
+        break;
+      case 'edit_permission':
+        lpApplyEditPermission(msg.viewers_can_edit, msg.changed_by, !!msg.initial);
         break;
       case 'pdf_scroll':
         /* Viewer mirrors the presenter's page/scroll position */
@@ -7162,11 +7254,71 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     }
   }
 
+  /* ── Apply edit-permission state — called when consumer broadcasts a change
+       (or sends the initial state on connect). ── */
+  function lpApplyEditPermission(allow, changedBy, isInitial) {
+    _lpCanEdit = !!allow;
+
+    /* Viewer side: toggle the read-only class so toolbar tools become
+       interactive (or get hidden again when permission is revoked). */
+    if (_lpRole === 'viewer') {
+      const overlay = document.getElementById('annOverlay');
+      if (overlay) {
+        overlay.classList.toggle('lp-viewer-readonly', !_lpCanEdit);
+      }
+    }
+
+    /* Update presenter's toggle button label/state */
+    const btn = document.getElementById('lpEditToggleBtn');
+    if (btn && _lpRole === 'presenter') {
+      btn.classList.toggle('active', _lpCanEdit);
+      btn.title = _lpCanEdit ? 'Disable viewer editing' : 'Allow viewers to edit';
+      const icon = btn.querySelector('i');
+      if (icon) icon.className = _lpCanEdit ? 'bi bi-unlock-fill' : 'bi bi-lock-fill';
+      const lbl = btn.querySelector('.lp-edit-label');
+      if (lbl) lbl.textContent = _lpCanEdit ? 'Edit: ON' : 'Edit: OFF';
+    }
+
+    /* Update viewer's status banner — show whether they can edit */
+    const banner = document.getElementById('lpEditStatusBadge');
+    if (banner) {
+      banner.style.display = (_lpRole === 'viewer' && _lpCanEdit) ? 'inline-flex' : 'none';
+    }
+
+    /* Toast notification (skip on initial state push to avoid noise) */
+    if (!isInitial && typeof lpShowStatusToast === 'function') {
+      if (_lpRole === 'viewer') {
+        lpShowStatusToast(_lpCanEdit
+          ? 'You can now edit the file'
+          : 'Editing has been disabled', 2400);
+      } else if (_lpRole === 'presenter') {
+        lpShowStatusToast(_lpCanEdit
+          ? 'Viewers can now edit'
+          : 'Viewer editing disabled', 1800);
+      }
+    }
+  }
+
+  /* ── Presenter clicks the edit-permission toggle ── */
+  window.lpToggleEditPermission = function () {
+    if (_lpRole !== 'presenter' || !_lpSocket || _lpSocket.readyState !== WebSocket.OPEN) return;
+    _lpSocket.send(JSON.stringify({
+      type:  'set_edit_permission',
+      allow: !_lpCanEdit,
+    }));
+    /* Optimistic UI update — server will confirm shortly */
+  };
+
   /* ── Broadcast tool events (called by annotation engine) ── */
   function lpBroadcastToolEvent(payload) {
     if (!_lpSocket || _lpSocket.readyState !== WebSocket.OPEN) return;
-    if (_lpRole !== 'presenter') return;
-    _lpSocket.send(JSON.stringify({ type: 'tool_event', payload }));
+    /* Presenter always broadcasts. Viewers broadcast only when they've been
+       granted edit permission for this session. */
+    if (_lpRole === 'presenter') {
+      _lpSocket.send(JSON.stringify({ type: 'tool_event', payload }));
+    } else if (_lpRole === 'viewer' && _lpCanEdit) {
+      _lpSocket.send(JSON.stringify({ type: 'tool_event', payload }));
+    }
   }
 
   /* ── Render remote cursor ──
@@ -7290,6 +7442,9 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         <span id="lpViewerCount" class="lp-viewer-count" style="display:none" title="">
           <i class="bi bi-people-fill"></i><span>0</span>
         </span>
+        <span id="lpEditStatusBadge" class="lp-edit-badge" style="display:none">
+          <i class="bi bi-pencil-fill"></i> Editor
+        </span>
       `;
       surface.appendChild(bar);
     }
@@ -7297,6 +7452,27 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     bar.classList.remove('offline');
     const txt = document.getElementById('lpStatusText');
     if (txt) txt.textContent = _lpRole === 'presenter' ? 'Live — sharing' : `Watching ${_lpPresenterName}`;
+
+    /* Presenter-only: edit-permission toggle button (positioned near status bar) */
+    if (_lpRole === 'presenter') {
+      let editBtn = document.getElementById('lpEditToggleBtn');
+      if (!editBtn) {
+        editBtn = document.createElement('button');
+        editBtn.type      = 'button';
+        editBtn.id        = 'lpEditToggleBtn';
+        editBtn.className = 'lp-edit-toggle-btn';
+        editBtn.title     = 'Allow viewers to edit';
+        editBtn.innerHTML = '<i class="bi bi-lock-fill"></i> <span class="lp-edit-label">Edit: OFF</span>';
+        editBtn.onclick   = () => window.lpToggleEditPermission();
+        surface.appendChild(editBtn);
+      }
+      /* Sync visual to current state in case it's already enabled */
+      editBtn.classList.toggle('active', _lpCanEdit);
+      const ic = editBtn.querySelector('i');
+      if (ic) ic.className = _lpCanEdit ? 'bi bi-unlock-fill' : 'bi bi-lock-fill';
+      const lb = editBtn.querySelector('.lp-edit-label');
+      if (lb) lb.textContent = _lpCanEdit ? 'Edit: ON' : 'Edit: OFF';
+    }
 
     /* ── Chat panel ── */
     let chat = document.getElementById('lpChatPanel');
@@ -7347,12 +7523,14 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       lpWaitForOverlayThen(_showChatBtn);
     }
 
-    /* ── Viewer read-only: hide draw tools, apply when overlay is ready ── */
+    /* ── Viewer read-only: hide draw tools UNLESS they have edit permission.
+         Applied when overlay becomes ready. ── */
     if (_lpRole === 'viewer') {
       function _applyReadonly() {
         const ov = document.getElementById('annOverlay');
-        if (ov) { ov.classList.add('lp-viewer-readonly'); return true; }
-        return false;
+        if (!ov) return false;
+        ov.classList.toggle('lp-viewer-readonly', !_lpCanEdit);
+        return true;
       }
       if (!_applyReadonly()) {
         lpWaitForOverlayThen(_applyReadonly);
@@ -7500,6 +7678,7 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     document.getElementById('lpChatPanel')?.remove();
     document.getElementById('lpInPreviewBanner')?.remove();
     document.querySelector('.lp-remote-cursor')?.remove();
+    document.getElementById('lpEditToggleBtn')?.remove();
 
     /* Reset state */
     _lpSessionToken  = null;
@@ -7510,6 +7689,7 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     _lpViewerCount   = 0;
     _lpReconnectAttempts = 0;
     _lpIntentionalClose  = false;
+    _lpCanEdit       = false;
 
     /* Clear queued tool events so they don't bleed into a new session */
     if (typeof _lpPendingToolEvents !== 'undefined') _lpPendingToolEvents = [];

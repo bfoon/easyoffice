@@ -842,6 +842,11 @@ class LivePreviewSession(models.Model):
         settings.AUTH_USER_MODEL,
         related_name='invited_preview_sessions', blank=True
     )
+    viewers_can_edit = models.BooleanField(
+        default=False,
+        help_text='If True, viewers may also draw, comment, and modify '
+                  'the file during the live session.'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     ended_at = models.DateTimeField(null=True, blank=True)
 

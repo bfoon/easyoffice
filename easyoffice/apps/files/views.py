@@ -6107,6 +6107,9 @@ class LivePreviewStartView(LoginRequiredMixin, View):
         if not invite_ids:
             return JsonResponse({'ok': False, 'error': 'No users selected'}, status=400)
 
+        # Optional flag — presenter can pre-allow viewers to edit the file
+        viewers_can_edit = bool(body.get('viewers_can_edit', False))
+
         from apps.core.models import User as AppUser
         from apps.files.models import LivePreviewSession
 
@@ -6118,6 +6121,7 @@ class LivePreviewStartView(LoginRequiredMixin, View):
         session = LivePreviewSession.objects.create(
             presenter=request.user,
             file=f,
+            viewers_can_edit=viewers_can_edit,
         )
 
         # Resolve invitees — only users who can see this file
@@ -6160,6 +6164,7 @@ class LivePreviewStartView(LoginRequiredMixin, View):
             'ok': True,
             'session_token': str(session.token),
             'ws_path': session.ws_path,
+            'viewers_can_edit': viewers_can_edit,
         })
 
 
@@ -6193,6 +6198,7 @@ class LivePreviewAcceptView(LoginRequiredMixin, View):
             'file_name': f.name,
             'file_ext': f.extension,
             'presenter_name': session.presenter.get_full_name(),
+            'viewers_can_edit': bool(getattr(session, 'viewers_can_edit', False)),
         })
 
 
@@ -6284,6 +6290,7 @@ class LivePreviewStatusView(LoginRequiredMixin, View):
                 'file_name':      f.name,
                 'file_ext':       f.extension,
                 'presenter_name': session.presenter.get_full_name() or session.presenter.username,
+                'viewers_can_edit': bool(getattr(session, 'viewers_can_edit', False)),
             },
         })
 

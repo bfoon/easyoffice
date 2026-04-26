@@ -1,0 +1,371 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}File Storage Report{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'reports_dashboard' %}">Reports</a>
+  <span>/</span>
+  <span>File Storage</span>
+{% endblock %}
+
+{% block content %}
+<style>
+  .fs-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .fs-kpi {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 18px 20px;
+  }
+  .fs-kpi-val { font-size: 1.7rem; font-weight: 800; color: var(--eo-text); line-height: 1; }
+  .fs-kpi-label { font-size: .72rem; color: var(--eo-text-muted); margin-top: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .fs-kpi.accent .fs-kpi-val { color: #14b8a6; }
+
+  .fs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 18px;
+    margin-bottom: 18px;
+  }
+  .fs-card {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 20px;
+  }
+  .fs-card.full { grid-column: 1 / -1; }
+  .fs-card h3 {
+    font-size: .85rem;
+    font-weight: 700;
+    margin: 0 0 14px;
+    color: var(--eo-text);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .fs-card h3 .pill {
+    font-size: .65rem; font-weight: 600;
+    background: var(--eo-bg, #f5f5f7);
+    color: var(--eo-text-muted);
+    padding: 2px 8px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+  .fs-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .fs-table th {
+    text-align: left;
+    font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--eo-text-muted); font-weight: 600;
+    padding: 8px 10px; border-bottom: 1px solid var(--eo-border);
+  }
+  .fs-table td {
+    padding: 10px; border-bottom: 1px solid var(--eo-border);
+    color: var(--eo-text);
+  }
+  .fs-table tr:last-child td { border-bottom: 0; }
+  .fs-empty { color: var(--eo-text-muted); font-size: .85rem; padding: 16px 0; text-align: center; }
+  .fs-bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: .82rem; }
+  .fs-bar-row .name { width: 140px; flex-shrink: 0; font-weight: 600; }
+  .fs-bar-row .track { flex: 1; height: 8px; background: var(--eo-bg, #eef0f3); border-radius: 999px; overflow: hidden; }
+  .fs-bar-row .fill { height: 100%; background: linear-gradient(90deg, #14b8a6, #6366f1); border-radius: 999px; }
+  .fs-bar-row .num { width: 80px; text-align: right; font-weight: 700; color: var(--eo-text-muted); font-variant-numeric: tabular-nums; }
+  .fs-ext-tag {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    background: #e0f2fe; color: #075985;
+    font-family: monospace; font-size: .72rem; font-weight: 600;
+    text-transform: uppercase;
+  }
+  canvas { max-height: 320px; }
+</style>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title"><i class="bi bi-hdd-stack-fill" style="color:#14b8a6"></i> File Storage Report</h1>
+    <p style="color:var(--eo-text-muted);font-size:.85rem;margin:4px 0 0">Storage consumption across the organisation, broken down by user, file type and time.</p>
+  </div>
+</div>
+
+<!-- KPIs -->
+<div class="fs-kpi-grid">
+  <div class="fs-kpi accent">
+    <div class="fs-kpi-val">{{ total_human }}</div>
+    <div class="fs-kpi-label">Total Storage</div>
+  </div>
+  <div class="fs-kpi">
+    <div class="fs-kpi-val">{{ file_count|intcomma }}</div>
+    <div class="fs-kpi-label">Files Stored</div>
+  </div>
+  <div class="fs-kpi">
+    <div class="fs-kpi-val">{{ avg_size_human }}</div>
+    <div class="fs-kpi-label">Avg. File Size</div>
+  </div>
+  <div class="fs-kpi">
+    <div class="fs-kpi-val">{{ total_downloads|intcomma }}</div>
+    <div class="fs-kpi-label">Total Downloads</div>
+  </div>
+  <div class="fs-kpi">
+    <div class="fs-kpi-val">{{ trashed_count|intcomma }}</div>
+    <div class="fs-kpi-label">In Trash (recoverable)</div>
+  </div>
+</div>
+
+<!-- Row 1: by category (donut) + by user (bar) -->
+<div class="fs-grid">
+  <div class="fs-card">
+    <h3><i class="bi bi-pie-chart-fill"></i> Storage by File Type</h3>
+    {% if by_category %}
+      <canvas id="chartCategory"></canvas>
+      <div style="margin-top:14px">
+        {% for c in by_category %}
+        <div class="fs-bar-row">
+          <div class="name">{{ c.category }}</div>
+          <div class="track"><div class="fill" style="width: {% widthratio c.bytes by_category.0.bytes 100 %}%"></div></div>
+          <div class="num">{{ c.human }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="fs-empty">No files uploaded yet.</div>
+    {% endif %}
+  </div>
+
+  <div class="fs-card">
+    <h3><i class="bi bi-person-badge"></i> Top Users by Storage</h3>
+    {% if top_users %}
+      <canvas id="chartTopUsers"></canvas>
+      <table class="fs-table" style="margin-top:14px">
+        <thead>
+          <tr><th>User</th><th style="text-align:right">Files</th><th style="text-align:right">Size</th></tr>
+        </thead>
+        <tbody>
+          {% for u in top_users %}
+          <tr>
+            <td>
+              {{ u.uploaded_by__first_name|default:"" }} {{ u.uploaded_by__last_name|default:"" }}
+              <div style="font-size:.72rem;color:var(--eo-text-muted)">{{ u.uploaded_by__email|default:"—" }}</div>
+            </td>
+            <td style="text-align:right">{{ u.files|intcomma }}</td>
+            <td style="text-align:right;font-weight:700;color:#14b8a6">{{ u.human }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="fs-empty">No users have uploaded files yet.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Row 2: monthly trend (full width) -->
+<div class="fs-card full">
+  <h3><i class="bi bi-graph-up-arrow"></i> Monthly Upload Trend <span class="pill">last 12 months</span></h3>
+  <canvas id="chartMonthly"></canvas>
+</div>
+
+<!-- Row 3: visibility + extensions -->
+<div class="fs-grid" style="margin-top:18px">
+  <div class="fs-card">
+    <h3><i class="bi bi-eye"></i> Storage by Visibility</h3>
+    {% if by_visibility %}
+    <canvas id="chartVisibility"></canvas>
+    <table class="fs-table" style="margin-top:14px">
+      <thead>
+        <tr><th>Visibility</th><th style="text-align:right">Files</th><th style="text-align:right">Size</th></tr>
+      </thead>
+      <tbody>
+        {% for v in by_visibility %}
+        <tr>
+          <td>{{ v.label }}</td>
+          <td style="text-align:right">{{ v.count|intcomma }}</td>
+          <td style="text-align:right;font-weight:700">{{ v.human }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="fs-empty">No visibility data.</div>
+    {% endif %}
+  </div>
+
+  <div class="fs-card">
+    <h3><i class="bi bi-filetype-pdf"></i> Top Extensions <span class="pill">top 12</span></h3>
+    {% if by_extension %}
+    <table class="fs-table">
+      <thead>
+        <tr><th>Extension</th><th style="text-align:right">Files</th><th style="text-align:right">Size</th></tr>
+      </thead>
+      <tbody>
+        {% for e in by_extension %}
+        <tr>
+          <td><span class="fs-ext-tag">.{{ e.ext }}</span></td>
+          <td style="text-align:right">{{ e.count|intcomma }}</td>
+          <td style="text-align:right;font-weight:700">{{ e.human }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="fs-empty">No file extensions detected.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Row 4: largest files (full width) -->
+<div class="fs-card full" style="margin-top:18px">
+  <h3><i class="bi bi-file-earmark-arrow-up"></i> Largest Files <span class="pill">top 15</span></h3>
+  {% if largest_files %}
+  <table class="fs-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Uploaded By</th>
+        <th>Type</th>
+        <th>Uploaded</th>
+        <th style="text-align:right">Size</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in largest_files %}
+      <tr>
+        <td><i class="bi {{ f.icon_class }}" style="color:{{ f.icon_color }};margin-right:6px"></i>{{ f.name|truncatechars:50 }}</td>
+        <td style="color:var(--eo-text-muted)">{{ f.uploaded_by.email|default:"—" }}</td>
+        <td><span class="fs-ext-tag">.{{ f.extension|default:"?" }}</span></td>
+        <td style="color:var(--eo-text-muted);white-space:nowrap">{{ f.created_at|date:"M d, Y" }}</td>
+        <td style="text-align:right;font-weight:700;color:#14b8a6">{{ f.size_display }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div class="fs-empty">No files yet.</div>
+  {% endif %}
+</div>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  const byCategory   = {{ by_category_json|safe }};
+  const topUsers     = {{ top_users_json|safe }};
+  const byVisibility = {{ by_visibility_json|safe }};
+  const monthly      = {{ monthly_uploads_json|safe }};
+
+  const palette = ['#14b8a6','#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b981','#dc2626','#06b6d4','#84cc16','#0ea5e9','#f97316','#64748b'];
+
+  // Donut: storage by category
+  if (byCategory.length && document.getElementById('chartCategory')) {
+    new Chart(document.getElementById('chartCategory'), {
+      type: 'doughnut',
+      data: {
+        labels: byCategory.map(c => c.category),
+        datasets: [{
+          data: byCategory.map(c => c.bytes),
+          backgroundColor: byCategory.map((_, i) => palette[i % palette.length]),
+          borderWidth: 2, borderColor: '#fff',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const row = byCategory[ctx.dataIndex];
+                return `${row.category}: ${row.human} (${row.count} files)`;
+              }
+            }
+          }
+        },
+        cutout: '62%',
+      },
+    });
+  }
+
+  // Bar: top users
+  if (topUsers.length && document.getElementById('chartTopUsers')) {
+    new Chart(document.getElementById('chartTopUsers'), {
+      type: 'bar',
+      data: {
+        labels: topUsers.map(u => u.name),
+        datasets: [{
+          label: 'Storage (MB)',
+          data: topUsers.map(u => +(u.bytes / (1024*1024)).toFixed(2)),
+          backgroundColor: '#14b8a6',
+          borderRadius: 6,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { beginAtZero: true, title: { display: true, text: 'MB' } },
+          y: { ticks: { font: { size: 11 } } },
+        },
+      },
+    });
+  }
+
+  // Donut: by visibility
+  if (byVisibility.length && document.getElementById('chartVisibility')) {
+    new Chart(document.getElementById('chartVisibility'), {
+      type: 'doughnut',
+      data: {
+        labels: byVisibility.map(v => v.label),
+        datasets: [{
+          data: byVisibility.map(v => v.bytes),
+          backgroundColor: byVisibility.map((_, i) => palette[i % palette.length]),
+          borderWidth: 2, borderColor: '#fff',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } } },
+        cutout: '62%',
+      },
+    });
+  }
+
+  // Combo: monthly uploads (count bars + MB line)
+  if (document.getElementById('chartMonthly')) {
+    new Chart(document.getElementById('chartMonthly'), {
+      type: 'bar',
+      data: {
+        labels: monthly.map(r => r.month),
+        datasets: [
+          {
+            type: 'bar',
+            label: 'Files Uploaded',
+            data: monthly.map(r => r.count),
+            backgroundColor: '#14b8a6',
+            borderRadius: 6,
+            yAxisID: 'y',
+          },
+          {
+            type: 'line',
+            label: 'Size (MB)',
+            data: monthly.map(r => r.mb),
+            borderColor: '#6366f1',
+            backgroundColor: 'rgba(99,102,241,0.15)',
+            tension: 0.3,
+            yAxisID: 'y1',
+            pointRadius: 3,
+          },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          y:  { beginAtZero: true, position: 'left',  title: { display: true, text: 'Files' } },
+          y1: { beginAtZero: true, position: 'right', title: { display: true, text: 'MB' }, grid: { drawOnChartArea: false } },
+        },
+        plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } },
+      },
+    });
+  }
+})();
+</script>
+{% endblock %}

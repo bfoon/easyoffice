@@ -16,7 +16,7 @@ from django.http import HttpResponseForbidden
 from django.views.generic import TemplateView
 from django.utils import timezone
 from django.db.models import Count, Avg, Q, Sum
-from django.db.models.functions import TruncDate
+from django.db.models.functions import TruncDate, TruncMonth
 
 # Re-use the role helpers already defined in apps/finance/views.py so we
 # have ONE source of truth for "what is a CEO" across the codebase.
@@ -51,6 +51,71 @@ class _ReportsAccessMixin(LoginRequiredMixin):
         if request.user.is_authenticated and not _can_view_reports(request.user):
             return HttpResponseForbidden(
                 'Reports are restricted to CEO and Superuser accounts.'
+            )
+        return super().dispatch(request, *args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Broader permission helper for "supervisor / admin" reports
+# (file storage, invoicing). Wider audience than the strategic CEO reports.
+# ---------------------------------------------------------------------------
+
+# Group-name and position-title keywords that grant supervisor-tier access.
+# Match is case-insensitive substring on the position title and case-insensitive
+# exact on group name.
+_SUPERVISOR_GROUPS = {'supervisor', 'admin', 'administrator', 'ceo', 'manager'}
+_SUPERVISOR_TITLE_KEYWORDS = ('supervisor', 'manager', 'admin', 'ceo', 'head of')
+
+
+def _can_view_supervisor_reports(user):
+    """
+    Permissive check for the supervisor/admin tier of reports.
+
+    Passes if ANY of:
+      • user.is_superuser
+      • user.is_staff (Django admin staff flag)
+      • user is in a group named Supervisor / Admin / Administrator / CEO / Manager
+      • user.staffprofile.position.title contains 'supervisor', 'manager',
+        'admin', 'ceo', or 'head of'  (case-insensitive)
+
+    Designed not to crash if the user has no staff profile / no position.
+    """
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+
+    # Superuser and Django staff flag — fastest paths
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+
+    # Group membership
+    try:
+        if user.groups.filter(name__iregex=r'^(supervisor|admin|administrator|ceo|manager)$').exists():
+            return True
+    except Exception:
+        pass
+
+    # StaffProfile.position.title — guarded against missing profile/position
+    try:
+        title = (user.staffprofile.position.title or '').lower()
+        if any(kw in title for kw in _SUPERVISOR_TITLE_KEYWORDS):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+class _SupervisorReportsAccessMixin(LoginRequiredMixin):
+    """
+    Dispatch gate for reports open to supervisors + admins (broader than
+    the CEO-only mixin above). Returns a 403 — not a redirect — so a
+    misconfigured link surfaces clearly instead of silently bouncing.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated and not _can_view_supervisor_reports(request.user):
+            return HttpResponseForbidden(
+                'This report is restricted to Supervisor and Admin accounts.'
             )
         return super().dispatch(request, *args, **kwargs)
 
@@ -170,6 +235,29 @@ class ReportsDashboardView(_ReportsAccessMixin, TemplateView):
         except Exception:
             ctx['active_users_today'] = 0
             ctx['top_app_30d'] = '—'
+
+        # ── Storage snapshot ─────────────────────────────────────────────
+        try:
+            from apps.files.models import SharedFile
+            agg = SharedFile.objects.aggregate(total=Sum('file_size'), n=Count('id'))
+            ctx['storage_total_bytes'] = agg['total'] or 0
+            ctx['storage_file_count']  = agg['n'] or 0
+        except Exception:
+            ctx['storage_total_bytes'] = 0
+            ctx['storage_file_count']  = 0
+
+        # ── Invoicing snapshot (this month) ──────────────────────────────
+        try:
+            from apps.invoices.models import InvoiceDocument
+            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            month_qs = InvoiceDocument.objects.filter(
+                status='finalized', finalized_at__gte=month_start,
+            )
+            ctx['invoices_this_month_count'] = month_qs.count()
+            ctx['invoices_this_month_total'] = month_qs.aggregate(t=Sum('total'))['t'] or 0
+        except Exception:
+            ctx['invoices_this_month_count'] = 0
+            ctx['invoices_this_month_total'] = 0
 
         return ctx
 
@@ -489,4 +577,333 @@ class UsageReportView(_ReportsAccessMixin, TemplateView):
             .order_by('-timestamp')[:50]
         )
 
+        return ctx
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by the storage report
+# ---------------------------------------------------------------------------
+
+# Mirrors apps/files/models.py::_TYPE_CATEGORY so the report buckets look
+# identical to what users see elsewhere in the app. Re-defined here (rather
+# than imported) to keep the reports app decoupled — the cost is one
+# duplicated dict, the win is no circular-import surprises.
+_FILE_TYPE_CATEGORY = {
+    'document':     {'doc', 'docx', 'pdf', 'txt', 'md', 'rtf', 'odt'},
+    'spreadsheet':  {'xls', 'xlsx', 'csv', 'ods'},
+    'presentation': {'ppt', 'pptx', 'odp'},
+    'image':        {'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tiff'},
+    'video':        {'mp4', 'mov', 'avi', 'mkv', 'webm'},
+    'audio':        {'mp3', 'wav', 'ogg', 'm4a'},
+    'archive':      {'zip', 'rar', '7z', 'tar', 'gz'},
+    'code':         {'py', 'js', 'html', 'css', 'json', 'xml', 'sql'},
+}
+
+
+def _category_for_extension(ext: str) -> str:
+    """Map 'pdf' -> 'document', 'mp4' -> 'video', unknown -> 'other'."""
+    ext = (ext or '').lower().lstrip('.')
+    for cat, exts in _FILE_TYPE_CATEGORY.items():
+        if ext in exts:
+            return cat
+    return 'other'
+
+
+def _humanise_bytes(n: int) -> str:
+    """1234567 -> '1.2 MB'. Used for tables/KPIs; chart datasets stay in bytes."""
+    n = int(n or 0)
+    for unit in ('B', 'KB', 'MB', 'GB'):
+        if n < 1024:
+            return f'{n:.0f} {unit}' if unit == 'B' else f'{n:.1f} {unit}'
+        n /= 1024
+    return f'{n:.1f} TB'
+
+
+# ---------------------------------------------------------------------------
+# NEW: File Storage Report (Supervisor / Admin)
+# ---------------------------------------------------------------------------
+
+class FileStorageReportView(_SupervisorReportsAccessMixin, TemplateView):
+    """
+    Storage analytics derived from apps.files.SharedFile.
+
+    Charts:
+      • Total storage (KPI) + file count + avg size
+      • Storage by file type / category (donut + breakdown)
+      • Top users by storage consumed (bar)
+      • Storage by visibility (private / shared / department / office)
+      • Monthly upload trend (line, last 12 months) — count and bytes
+      • Largest files (table)
+    """
+    template_name = 'reports/file_storage_report.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        from apps.files.models import SharedFile
+
+        now = timezone.now()
+        twelve_months_ago = (now.replace(day=1) - timedelta(days=365)).replace(day=1)
+
+        # ── Top-line KPIs ────────────────────────────────────────────────
+        agg = SharedFile.objects.aggregate(
+            total_bytes=Sum('file_size'),
+            file_count=Count('id'),
+            total_downloads=Sum('download_count'),
+        )
+        total_bytes = agg['total_bytes'] or 0
+        file_count  = agg['file_count'] or 0
+        ctx['total_bytes']      = total_bytes
+        ctx['total_human']      = _humanise_bytes(total_bytes)
+        ctx['file_count']       = file_count
+        ctx['total_downloads']  = agg['total_downloads'] or 0
+        ctx['avg_size_human']   = _humanise_bytes(total_bytes // file_count) if file_count else '0 B'
+
+        # Trashed files — useful operational signal (recoverable storage)
+        try:
+            from apps.files.models import FileTrash
+            trash_agg = FileTrash.objects.aggregate(c=Count('id'))
+            ctx['trashed_count'] = trash_agg['c'] or 0
+        except Exception:
+            ctx['trashed_count'] = 0
+
+        # ── Storage by file type / category ──────────────────────────────
+        # SharedFile has a .file_type CharField but it's not always populated;
+        # the rest of the app uses the filename extension via _TYPE_CATEGORY.
+        # We mirror that, doing the bucketing in Python because we need to
+        # parse the .name extension which the DB can't index efficiently.
+        rows = SharedFile.objects.values('name', 'file_size')
+        by_category = {cat: {'bytes': 0, 'count': 0} for cat in _FILE_TYPE_CATEGORY}
+        by_category['other'] = {'bytes': 0, 'count': 0}
+        by_extension = {}  # for the long-tail extension breakdown table
+
+        for r in rows:
+            name = r['name'] or ''
+            size = r['file_size'] or 0
+            ext = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
+            cat = _category_for_extension(ext)
+            by_category[cat]['bytes'] += size
+            by_category[cat]['count'] += 1
+            if ext:
+                by_extension.setdefault(ext, {'bytes': 0, 'count': 0})
+                by_extension[ext]['bytes'] += size
+                by_extension[ext]['count'] += 1
+
+        # Sort categories by bytes desc, drop empties
+        cat_data = sorted(
+            ({'category': k.title(), 'bytes': v['bytes'], 'count': v['count'],
+              'human': _humanise_bytes(v['bytes'])}
+             for k, v in by_category.items() if v['count'] > 0),
+            key=lambda r: r['bytes'], reverse=True,
+        )
+        ctx['by_category']      = cat_data
+        ctx['by_category_json'] = json.dumps(cat_data)
+
+        # Top 12 extensions for the granular breakdown
+        ext_data = sorted(
+            ({'ext': k, 'bytes': v['bytes'], 'count': v['count'],
+              'human': _humanise_bytes(v['bytes'])}
+             for k, v in by_extension.items()),
+            key=lambda r: r['bytes'], reverse=True,
+        )[:12]
+        ctx['by_extension'] = ext_data
+
+        # ── Top users by storage consumed ────────────────────────────────
+        top_users = list(
+            SharedFile.objects.values(
+                'uploaded_by__email',
+                'uploaded_by__first_name',
+                'uploaded_by__last_name',
+            )
+            .annotate(bytes=Sum('file_size'), files=Count('id'))
+            .order_by('-bytes')[:10]
+        )
+        for u in top_users:
+            u['human'] = _humanise_bytes(u['bytes'] or 0)
+        ctx['top_users']      = top_users
+        ctx['top_users_json'] = json.dumps([
+            {
+                'name': (
+                    f"{u['uploaded_by__first_name'] or ''} {u['uploaded_by__last_name'] or ''}".strip()
+                    or u['uploaded_by__email'] or 'Unknown'
+                ),
+                'bytes': int(u['bytes'] or 0),
+                'files': u['files'],
+            }
+            for u in top_users
+        ])
+
+        # ── Storage by visibility ────────────────────────────────────────
+        vis_choices = {k: str(v) for k, v in SharedFile.Visibility.choices}
+        vis_rows = list(
+            SharedFile.objects.values('visibility')
+            .annotate(bytes=Sum('file_size'), count=Count('id'))
+            .order_by('-bytes')
+        )
+        for r in vis_rows:
+            r['label'] = vis_choices.get(r['visibility'], r['visibility'])
+            r['human'] = _humanise_bytes(r['bytes'] or 0)
+        ctx['by_visibility']      = vis_rows
+        ctx['by_visibility_json'] = json.dumps([
+            {'label': r['label'], 'bytes': int(r['bytes'] or 0), 'count': r['count']}
+            for r in vis_rows
+        ])
+
+        # ── Monthly upload trend (last 12 months) ────────────────────────
+        monthly = list(
+            SharedFile.objects.filter(created_at__gte=twelve_months_ago)
+            .annotate(m=TruncMonth('created_at'))
+            .values('m')
+            .annotate(count=Count('id'), bytes=Sum('file_size'))
+            .order_by('m')
+        )
+        ctx['monthly_uploads_json'] = json.dumps([
+            {
+                'month': r['m'].strftime('%Y-%m') if r['m'] else '',
+                'count': r['count'],
+                'bytes': int(r['bytes'] or 0),
+                'mb': round((r['bytes'] or 0) / (1024 * 1024), 2),
+            }
+            for r in monthly
+        ])
+
+        # ── Largest files (top 15) ───────────────────────────────────────
+        ctx['largest_files'] = (
+            SharedFile.objects.select_related('uploaded_by')
+            .order_by('-file_size')[:15]
+        )
+
+        return ctx
+
+
+# ---------------------------------------------------------------------------
+# NEW: Invoicing Report (Supervisor / Admin)
+#   Counts + totals for Invoice / Proforma / Delivery Note across daily,
+#   monthly windows, plus status mix and top clients.
+# ---------------------------------------------------------------------------
+
+class InvoicingReportView(_SupervisorReportsAccessMixin, TemplateView):
+    template_name = 'reports/invoicing_report.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        from apps.invoices.models import InvoiceDocument, DocType
+
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        twelve_months_ago = (now.replace(day=1) - timedelta(days=365)).replace(day=1)
+        thirty_days_ago = now - timedelta(days=30)
+
+        # We build all KPI cards from FINALIZED documents — drafts and
+        # voided docs aren't real revenue. Status mix is reported separately.
+        finalized = InvoiceDocument.objects.filter(status='finalized')
+
+        # ── Doc type labels (resolve lazy proxies for JSON) ──────────────
+        doctype_labels = {k: str(v) for k, v in DocType.choices}
+
+        # ── KPI per doc type: count + total this month + today ───────────
+        # Build a dict keyed by doc_type so the template can look it up
+        # cleanly without nested {% if %} chains.
+        per_type = {}
+        for dt_value, dt_label in DocType.choices:
+            month_qs = finalized.filter(doc_type=dt_value, finalized_at__gte=month_start)
+            today_qs = finalized.filter(doc_type=dt_value, finalized_at__gte=today_start)
+            ytd_qs   = finalized.filter(doc_type=dt_value, finalized_at__year=now.year)
+            per_type[dt_value] = {
+                'label': str(dt_label),
+                'count_month': month_qs.count(),
+                'total_month': month_qs.aggregate(t=Sum('total'))['t'] or 0,
+                'count_today': today_qs.count(),
+                'total_today': today_qs.aggregate(t=Sum('total'))['t'] or 0,
+                'count_ytd':   ytd_qs.count(),
+                'total_ytd':   ytd_qs.aggregate(t=Sum('total'))['t'] or 0,
+            }
+        ctx['per_type'] = per_type
+
+        # Convenience top-line totals (sum across all doc types, this month)
+        ctx['grand_count_month'] = sum(v['count_month'] for v in per_type.values())
+        ctx['grand_total_month'] = sum(v['total_month'] for v in per_type.values())
+        ctx['grand_count_today'] = sum(v['count_today'] for v in per_type.values())
+        ctx['grand_total_today'] = sum(v['total_today'] for v in per_type.values())
+
+        # ── Monthly trend (last 12 months) per doc type ──────────────────
+        monthly = list(
+            finalized.filter(finalized_at__gte=twelve_months_ago)
+            .annotate(m=TruncMonth('finalized_at'))
+            .values('m', 'doc_type')
+            .annotate(count=Count('id'), total=Sum('total'))
+            .order_by('m')
+        )
+        # Pivot into one entry per month with each doc_type as a column.
+        # Chart.js expects parallel arrays, so we'll emit a tidy structure
+        # the template script can iterate.
+        month_buckets = {}
+        for r in monthly:
+            mkey = r['m'].strftime('%Y-%m') if r['m'] else 'unknown'
+            bucket = month_buckets.setdefault(mkey, {dt: {'count': 0, 'total': 0.0} for dt, _ in DocType.choices})
+            bucket[r['doc_type']] = {
+                'count': r['count'],
+                'total': float(r['total'] or 0),
+            }
+        monthly_series = [
+            {
+                'month': m,
+                'series': month_buckets[m],
+            }
+            for m in sorted(month_buckets.keys())
+        ]
+        ctx['monthly_series_json'] = json.dumps(monthly_series)
+        # Echo the doc-type list so the JS can build series in a stable order.
+        ctx['doc_types_json'] = json.dumps([
+            {'value': dt, 'label': doctype_labels[dt]} for dt, _ in DocType.choices
+        ])
+
+        # ── Daily trend (last 30 days) — totals only, all doc types ─────
+        daily = list(
+            finalized.filter(finalized_at__gte=thirty_days_ago)
+            .annotate(d=TruncDate('finalized_at'))
+            .values('d')
+            .annotate(count=Count('id'), total=Sum('total'))
+            .order_by('d')
+        )
+        ctx['daily_series_json'] = json.dumps([
+            {
+                'date': r['d'].isoformat() if r['d'] else '',
+                'count': r['count'],
+                'total': float(r['total'] or 0),
+            }
+            for r in daily
+        ])
+
+        # ── Status mix (donut) — across ALL documents, not just finalized ─
+        status_choices = {k: str(v) for k, v in InvoiceDocument.Status.choices}
+        status_rows = list(
+            InvoiceDocument.objects.values('status')
+            .annotate(count=Count('id'))
+            .order_by('-count')
+        )
+        for r in status_rows:
+            r['label'] = status_choices.get(r['status'], r['status'])
+        ctx['status_mix']      = status_rows
+        ctx['status_mix_json'] = json.dumps(status_rows)
+
+        # ── Top clients by total billed (finalized only, this year) ──────
+        top_clients = list(
+            finalized.filter(finalized_at__year=now.year)
+            .exclude(client_name='')
+            .values('client_name')
+            .annotate(count=Count('id'), total=Sum('total'))
+            .order_by('-total')[:10]
+        )
+        ctx['top_clients'] = top_clients
+
+        # ── Recent finalized docs (table) ────────────────────────────────
+        ctx['recent_docs'] = (
+            InvoiceDocument.objects
+            .filter(status='finalized')
+            .select_related('created_by')
+            .order_by('-finalized_at')[:20]
+        )
+
+        ctx['currency'] = 'GMD'  # default currency on the model
         return ctx

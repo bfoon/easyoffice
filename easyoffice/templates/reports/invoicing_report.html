@@ -1,0 +1,325 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Invoicing Report{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'reports_dashboard' %}">Reports</a>
+  <span>/</span>
+  <span>Invoicing</span>
+{% endblock %}
+
+{% block content %}
+<style>
+  .iv-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .iv-kpi {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 18px 20px;
+    border-left: 4px solid transparent;
+  }
+  .iv-kpi.invoice       { border-left-color: #6366f1; }
+  .iv-kpi.proforma      { border-left-color: #f59e0b; }
+  .iv-kpi.delivery_note { border-left-color: #10b981; }
+  .iv-kpi.grand         { background: linear-gradient(135deg, #a855f7, #6366f1); color: #fff; border-left: none; }
+  .iv-kpi.grand .iv-kpi-val,
+  .iv-kpi.grand .iv-kpi-label,
+  .iv-kpi.grand .iv-kpi-sub { color: #fff; }
+  .iv-kpi-val { font-size: 1.6rem; font-weight: 800; color: var(--eo-text); line-height: 1; }
+  .iv-kpi-label { font-size: .72rem; color: var(--eo-text-muted); margin-top: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .iv-kpi-sub { font-size: .8rem; color: var(--eo-text-muted); margin-top: 8px; line-height: 1.4; }
+  .iv-kpi-sub strong { color: var(--eo-text); font-weight: 700; }
+
+  .iv-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 18px;
+    margin-bottom: 18px;
+  }
+  .iv-card {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 20px;
+  }
+  .iv-card.full { grid-column: 1 / -1; }
+  .iv-card h3 {
+    font-size: .85rem;
+    font-weight: 700;
+    margin: 0 0 14px;
+    color: var(--eo-text);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .iv-card h3 .pill {
+    font-size: .65rem; font-weight: 600;
+    background: var(--eo-bg, #f5f5f7);
+    color: var(--eo-text-muted);
+    padding: 2px 8px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+  .iv-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .iv-table th {
+    text-align: left;
+    font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--eo-text-muted); font-weight: 600;
+    padding: 8px 10px; border-bottom: 1px solid var(--eo-border);
+  }
+  .iv-table td {
+    padding: 10px; border-bottom: 1px solid var(--eo-border);
+    color: var(--eo-text);
+  }
+  .iv-table tr:last-child td { border-bottom: 0; }
+  .iv-empty { color: var(--eo-text-muted); font-size: .85rem; padding: 16px 0; text-align: center; }
+  .iv-doctype-tag {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: .68rem; font-weight: 600;
+  }
+  .dt-invoice       { background:#e0e7ff; color:#3730a3; }
+  .dt-proforma      { background:#fef3c7; color:#92400e; }
+  .dt-delivery_note { background:#d1fae5; color:#065f46; }
+  .iv-status {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: .68rem; font-weight: 600;
+  }
+  .st-draft     { background:#e5e7eb; color:#374151; }
+  .st-finalized { background:#dcfce7; color:#166534; }
+  .st-voided    { background:#fee2e2; color:#b91c1c; }
+  .iv-num { font-family: monospace; font-size: .8rem; font-weight: 600; }
+  canvas { max-height: 320px; }
+</style>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title"><i class="bi bi-receipt-cutoff" style="color:#a855f7"></i> Invoicing Report</h1>
+    <p style="color:var(--eo-text-muted);font-size:.85rem;margin:4px 0 0">Invoices, proformas and delivery notes — counts and totals across daily, monthly and yearly windows. (Finalized documents only.)</p>
+  </div>
+</div>
+
+<!-- Grand total this month -->
+<div class="iv-kpi-grid">
+  <div class="iv-kpi grand">
+    <div class="iv-kpi-val">{{ currency }} {{ grand_total_month|floatformat:2|intcomma }}</div>
+    <div class="iv-kpi-label">Total Billed (This Month)</div>
+    <div class="iv-kpi-sub"><strong>{{ grand_count_month }}</strong> documents finalized · <strong>{{ grand_count_today }}</strong> today ({{ currency }} {{ grand_total_today|floatformat:2|intcomma }})</div>
+  </div>
+
+  {% for dt_value, dt_data in per_type.items %}
+    <div class="iv-kpi {{ dt_value }}">
+      <div class="iv-kpi-val">{{ currency }} {{ dt_data.total_month|floatformat:2|intcomma }}</div>
+      <div class="iv-kpi-label">{{ dt_data.label }} · This Month</div>
+      <div class="iv-kpi-sub">
+        <strong>{{ dt_data.count_month }}</strong> this month ·
+        <strong>{{ dt_data.count_today }}</strong> today ·
+        YTD: <strong>{{ dt_data.count_ytd }}</strong> ({{ currency }} {{ dt_data.total_ytd|floatformat:2|intcomma }})
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+<!-- Monthly trend (full width) -->
+<div class="iv-card full">
+  <h3><i class="bi bi-bar-chart-line-fill"></i> Monthly Total by Document Type <span class="pill">last 12 months · {{ currency }}</span></h3>
+  <canvas id="chartMonthlyTotal"></canvas>
+</div>
+
+<div class="iv-card full" style="margin-top:18px">
+  <h3><i class="bi bi-graph-up-arrow"></i> Daily Activity <span class="pill">last 30 days · {{ currency }}</span></h3>
+  <canvas id="chartDaily"></canvas>
+</div>
+
+<!-- Row: status mix + top clients -->
+<div class="iv-grid" style="margin-top:18px">
+  <div class="iv-card">
+    <h3><i class="bi bi-pie-chart-fill"></i> Documents by Status</h3>
+    {% if status_mix %}
+      <canvas id="chartStatus"></canvas>
+      <table class="iv-table" style="margin-top:14px">
+        <thead><tr><th>Status</th><th style="text-align:right">Count</th></tr></thead>
+        <tbody>
+          {% for s in status_mix %}
+          <tr>
+            <td><span class="iv-status st-{{ s.status }}">{{ s.label }}</span></td>
+            <td style="text-align:right;font-weight:700">{{ s.count|intcomma }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="iv-empty">No documents yet.</div>
+    {% endif %}
+  </div>
+
+  <div class="iv-card">
+    <h3><i class="bi bi-trophy-fill" style="color:#f59e0b"></i> Top Clients <span class="pill">YTD · finalized</span></h3>
+    {% if top_clients %}
+    <table class="iv-table">
+      <thead>
+        <tr><th>Client</th><th style="text-align:right">Docs</th><th style="text-align:right">Total ({{ currency }})</th></tr>
+      </thead>
+      <tbody>
+        {% for c in top_clients %}
+        <tr>
+          <td>{{ c.client_name|truncatechars:40 }}</td>
+          <td style="text-align:right">{{ c.count }}</td>
+          <td style="text-align:right;font-weight:700;color:#a855f7">{{ c.total|floatformat:2|intcomma }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="iv-empty">No client billings this year yet.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Recent finalized documents -->
+<div class="iv-card full" style="margin-top:18px">
+  <h3><i class="bi bi-clock-history"></i> Recent Finalized Documents <span class="pill">latest 20</span></h3>
+  {% if recent_docs %}
+  <table class="iv-table">
+    <thead>
+      <tr>
+        <th>Number</th>
+        <th>Type</th>
+        <th>Client</th>
+        <th>Created By</th>
+        <th>Finalized</th>
+        <th style="text-align:right">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in recent_docs %}
+      <tr>
+        <td><span class="iv-num">{{ d.number|default:"—" }}</span></td>
+        <td>
+          {% if d.doc_type == 'invoice' %}<span class="iv-doctype-tag dt-invoice">Invoice</span>
+          {% elif d.doc_type == 'proforma' %}<span class="iv-doctype-tag dt-proforma">Proforma</span>
+          {% elif d.doc_type == 'delivery_note' %}<span class="iv-doctype-tag dt-delivery_note">Delivery Note</span>
+          {% else %}<span class="iv-doctype-tag">{{ d.get_doc_type_display }}</span>
+          {% endif %}
+        </td>
+        <td>{{ d.client_name|default:"—"|truncatechars:30 }}</td>
+        <td style="color:var(--eo-text-muted)">{{ d.created_by.email|default:"—" }}</td>
+        <td style="color:var(--eo-text-muted);white-space:nowrap">{{ d.finalized_at|date:"M d, Y H:i" }}</td>
+        <td style="text-align:right;font-weight:700">{{ d.currency }} {{ d.total|floatformat:2|intcomma }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div class="iv-empty">No finalized documents yet.</div>
+  {% endif %}
+</div>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  const monthlySeries = {{ monthly_series_json|safe }};
+  const dailySeries   = {{ daily_series_json|safe }};
+  const statusMix     = {{ status_mix_json|safe }};
+  const docTypes      = {{ doc_types_json|safe }};
+
+  const docTypeColors = {
+    invoice:       '#6366f1',
+    proforma:      '#f59e0b',
+    delivery_note: '#10b981',
+  };
+  const statusColors = {
+    draft:     '#94a3b8',
+    finalized: '#10b981',
+    voided:    '#dc2626',
+  };
+
+  // Monthly total by doc type — stacked bars (one bar per month, one stack per type)
+  if (document.getElementById('chartMonthlyTotal')) {
+    const labels = monthlySeries.map(r => r.month);
+    const datasets = docTypes.map(dt => ({
+      label: dt.label,
+      data: monthlySeries.map(r => (r.series[dt.value] && r.series[dt.value].total) || 0),
+      backgroundColor: docTypeColors[dt.value] || '#64748b',
+      borderRadius: 4,
+    }));
+    new Chart(document.getElementById('chartMonthlyTotal'), {
+      type: 'bar',
+      data: { labels, datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          x: { stacked: true, ticks: { font: { size: 11 } } },
+          y: { stacked: true, beginAtZero: true,
+               ticks: { callback: v => v.toLocaleString() } },
+        },
+        plugins: {
+          legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}` } },
+        },
+      },
+    });
+  }
+
+  // Daily total — line
+  if (document.getElementById('chartDaily')) {
+    new Chart(document.getElementById('chartDaily'), {
+      type: 'line',
+      data: {
+        labels: dailySeries.map(r => r.date),
+        datasets: [
+          {
+            label: 'Total billed',
+            data: dailySeries.map(r => r.total),
+            borderColor: '#a855f7',
+            backgroundColor: 'rgba(168,85,247,0.15)',
+            fill: true, tension: 0.3, pointRadius: 2,
+            yAxisID: 'y',
+          },
+          {
+            label: 'Documents',
+            data: dailySeries.map(r => r.count),
+            borderColor: '#06b6d4',
+            backgroundColor: 'rgba(6,182,212,0.10)',
+            tension: 0.3, pointRadius: 2,
+            yAxisID: 'y1',
+          },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x:  { ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+          y:  { beginAtZero: true, position: 'left',  title: { display: true, text: 'Total' } },
+          y1: { beginAtZero: true, position: 'right', title: { display: true, text: 'Count' },
+                grid: { drawOnChartArea: false }, ticks: { precision: 0 } },
+        },
+        plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } },
+      },
+    });
+  }
+
+  // Status donut
+  if (statusMix.length && document.getElementById('chartStatus')) {
+    new Chart(document.getElementById('chartStatus'), {
+      type: 'doughnut',
+      data: {
+        labels: statusMix.map(s => s.label),
+        datasets: [{
+          data: statusMix.map(s => s.count),
+          backgroundColor: statusMix.map(s => statusColors[s.status] || '#94a3b8'),
+          borderWidth: 2, borderColor: '#fff',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } } },
+        cutout: '62%',
+      },
+    });
+  }
+})();
+</script>
+{% endblock %}

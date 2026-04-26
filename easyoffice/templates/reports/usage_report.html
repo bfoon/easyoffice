@@ -1,0 +1,309 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Usage Report{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'reports_dashboard' %}">Reports</a>
+  <span>/</span>
+  <span>Usage</span>
+{% endblock %}
+
+{% block content %}
+<style>
+  .use-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .use-kpi {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 18px 20px;
+  }
+  .use-kpi-val { font-size: 1.7rem; font-weight: 800; color: var(--eo-text); line-height: 1; }
+  .use-kpi-label { font-size: .72rem; color: var(--eo-text-muted); margin-top: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .use-kpi.accent .use-kpi-val { color: #06b6d4; }
+
+  .use-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 18px;
+    margin-bottom: 18px;
+  }
+  .use-card {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 20px;
+  }
+  .use-card.full { grid-column: 1 / -1; }
+  .use-card h3 {
+    font-size: .85rem;
+    font-weight: 700;
+    margin: 0 0 14px;
+    color: var(--eo-text);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .use-card h3 .pill {
+    font-size: .65rem; font-weight: 600;
+    background: var(--eo-bg, #f5f5f7);
+    color: var(--eo-text-muted);
+    padding: 2px 8px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+  .use-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .use-table th {
+    text-align: left;
+    font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--eo-text-muted); font-weight: 600;
+    padding: 8px 10px; border-bottom: 1px solid var(--eo-border);
+  }
+  .use-table td {
+    padding: 10px; border-bottom: 1px solid var(--eo-border);
+    color: var(--eo-text);
+  }
+  .use-table tr:last-child td { border-bottom: 0; }
+  .use-action {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: .68rem; font-weight: 600;
+  }
+  .a-create  { background:#dcfce7; color:#166534; }
+  .a-update  { background:#dbeafe; color:#1e40af; }
+  .a-delete  { background:#fee2e2; color:#b91c1c; }
+  .a-login   { background:#e0e7ff; color:#3730a3; }
+  .a-logout  { background:#f3f4f6; color:#374151; }
+  .a-export  { background:#fef3c7; color:#92400e; }
+  .a-approve { background:#d1fae5; color:#065f46; }
+  .a-reject  { background:#fecaca; color:#991b1b; }
+  .a-other   { background:#e5e7eb; color:#374151; }
+  .use-empty { color: var(--eo-text-muted); font-size: .85rem; padding: 16px 0; text-align: center; }
+
+  /* Compact horizontal bar list (for "most used apps") as a CSS fallback
+     visualisation alongside the canvas chart. */
+  .use-bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: .82rem; }
+  .use-bar-row .name { width: 130px; flex-shrink: 0; font-weight: 600; }
+  .use-bar-row .track {
+    flex: 1; height: 8px; background: var(--eo-bg, #eef0f3); border-radius: 999px; overflow: hidden;
+  }
+  .use-bar-row .fill { height: 100%; background: linear-gradient(90deg, #06b6d4, #6366f1); border-radius: 999px; }
+  .use-bar-row .num { width: 50px; text-align: right; font-weight: 700; color: var(--eo-text-muted); font-variant-numeric: tabular-nums; }
+  canvas { max-height: 320px; }
+</style>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title"><i class="bi bi-activity" style="color:#06b6d4"></i> Usage Report</h1>
+    <p style="color:var(--eo-text-muted);font-size:.85rem;margin:4px 0 0">How the system is being used — most active modules, action mix, and power users.</p>
+  </div>
+</div>
+
+<!-- KPIs -->
+<div class="use-kpi-grid">
+  <div class="use-kpi accent">
+    <div class="use-kpi-val">{{ total_actions_30d|intcomma }}</div>
+    <div class="use-kpi-label">Total Actions (30d)</div>
+  </div>
+  <div class="use-kpi">
+    <div class="use-kpi-val">{{ actions_today|intcomma }}</div>
+    <div class="use-kpi-label">Actions in Last 24h</div>
+  </div>
+  <div class="use-kpi">
+    <div class="use-kpi-val">{{ active_users_30d }}</div>
+    <div class="use-kpi-label">Active Users (30d)</div>
+  </div>
+  <div class="use-kpi">
+    <div class="use-kpi-val">{{ active_users_7d }}</div>
+    <div class="use-kpi-label">Active Users (7d)</div>
+  </div>
+</div>
+
+<!-- Row 1: Most-used apps (bar) + Action mix (donut) -->
+<div class="use-grid">
+  <div class="use-card">
+    <h3><i class="bi bi-bar-chart-fill"></i> Most-Used Modules <span class="pill">last 30 days</span></h3>
+    {% if apps_by_usage %}
+      <canvas id="chartAppsUsage"></canvas>
+      <div style="margin-top:18px">
+        {% for a in apps_by_usage %}
+          {% if forloop.first %}{% with first_count=a.count %}<div data-first="{{ first_count }}"></div>{% endwith %}{% endif %}
+        {% endfor %}
+        {% for a in apps_by_usage %}
+          <div class="use-bar-row">
+            <div class="name">{{ a.app }}</div>
+            <div class="track"><div class="fill" style="width: {% widthratio a.count apps_by_usage.0.count 100 %}%"></div></div>
+            <div class="num">{{ a.count|intcomma }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="use-empty">No usage activity recorded in the last 30 days.</div>
+    {% endif %}
+  </div>
+
+  <div class="use-card">
+    <h3><i class="bi bi-pie-chart-fill"></i> Action Breakdown <span class="pill">last 30 days</span></h3>
+    {% if actions_breakdown %}
+      <canvas id="chartActions"></canvas>
+    {% else %}
+      <div class="use-empty">No actions recorded.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Row 2: Daily activity trend (full width) -->
+<div class="use-card full">
+  <h3><i class="bi bi-graph-up-arrow"></i> Daily Activity <span class="pill">last 30 days</span></h3>
+  <canvas id="chartDailyActivity"></canvas>
+</div>
+
+<!-- Row 3: Top users + Recent activity -->
+<div class="use-grid" style="margin-top:18px">
+  <div class="use-card">
+    <h3><i class="bi bi-trophy-fill" style="color:#f59e0b"></i> Top Active Users <span class="pill">last 30 days</span></h3>
+    {% if top_users %}
+    <table class="use-table">
+      <thead>
+        <tr><th>User</th><th>Email</th><th style="text-align:right">Actions</th></tr>
+      </thead>
+      <tbody>
+        {% for u in top_users %}
+        <tr>
+          <td>{{ u.user__first_name|default:"" }} {{ u.user__last_name|default:"" }}</td>
+          <td style="color:var(--eo-text-muted)">{{ u.user__email|default:"—" }}</td>
+          <td style="text-align:right;font-weight:700;color:#06b6d4">{{ u.count|intcomma }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="use-empty">No user activity recorded.</div>
+    {% endif %}
+  </div>
+
+  <div class="use-card">
+    <h3><i class="bi bi-clock-history"></i> Recent Activity <span class="pill">last 50 events</span></h3>
+    {% if recent_activity %}
+    <div style="max-height: 420px; overflow-y: auto;">
+    <table class="use-table">
+      <thead>
+        <tr><th>When</th><th>User</th><th>Action</th><th>Object</th></tr>
+      </thead>
+      <tbody>
+        {% for log in recent_activity %}
+        <tr>
+          <td style="white-space:nowrap;color:var(--eo-text-muted)">{{ log.timestamp|date:"M d, H:i" }}</td>
+          <td>{{ log.user.email|default:"system" }}</td>
+          <td>
+            {% if log.action == 'create' %}<span class="use-action a-create">Create</span>
+            {% elif log.action == 'update' %}<span class="use-action a-update">Update</span>
+            {% elif log.action == 'delete' %}<span class="use-action a-delete">Delete</span>
+            {% elif log.action == 'login' %}<span class="use-action a-login">Login</span>
+            {% elif log.action == 'logout' %}<span class="use-action a-logout">Logout</span>
+            {% elif log.action == 'export' %}<span class="use-action a-export">Export</span>
+            {% elif log.action == 'approve' %}<span class="use-action a-approve">Approve</span>
+            {% elif log.action == 'reject' %}<span class="use-action a-reject">Reject</span>
+            {% else %}<span class="use-action a-other">{{ log.action|title }}</span>
+            {% endif %}
+          </td>
+          <td style="color:var(--eo-text-muted)">
+            <span style="font-weight:600;color:var(--eo-text)">{{ log.model_name|default:"—" }}</span>
+            {% if log.object_repr %}<br><span style="font-size:.72rem">{{ log.object_repr|truncatechars:40 }}</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+      <div class="use-empty">No recent activity.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  const apps          = {{ apps_by_usage_json|safe }};
+  const actions       = {{ actions_breakdown_json|safe }};
+  const dailyActivity = {{ daily_activity_json|safe }};
+
+  const palette = ['#06b6d4','#6366f1','#8b5cf6','#ec4899','#10b981','#f59e0b','#dc2626','#84cc16','#0ea5e9','#f97316','#64748b','#14b8a6'];
+  const actionColors = {
+    create:'#10b981', update:'#3b82f6', delete:'#dc2626',
+    login:'#6366f1', logout:'#64748b', export:'#f59e0b',
+    approve:'#059669', reject:'#b91c1c',
+  };
+
+  // Bar: most-used apps
+  if (apps.length && document.getElementById('chartAppsUsage')) {
+    new Chart(document.getElementById('chartAppsUsage'), {
+      type: 'bar',
+      data: {
+        labels: apps.map(a => a.app),
+        datasets: [{
+          label: 'Actions',
+          data: apps.map(a => a.count),
+          backgroundColor: apps.map((_, i) => palette[i % palette.length]),
+          borderRadius: 6,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { font: { size: 11 } } },
+          y: { beginAtZero: true, ticks: { precision: 0 } },
+        },
+      },
+    });
+  }
+
+  // Donut: action breakdown
+  if (actions.length && document.getElementById('chartActions')) {
+    new Chart(document.getElementById('chartActions'), {
+      type: 'doughnut',
+      data: {
+        labels: actions.map(a => a.label),
+        datasets: [{
+          data: actions.map(a => a.count),
+          backgroundColor: actions.map(a => actionColors[a.action] || '#94a3b8'),
+          borderWidth: 2, borderColor: '#fff',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } } },
+        cutout: '62%',
+      },
+    });
+  }
+
+  // Line: daily activity
+  if (document.getElementById('chartDailyActivity')) {
+    new Chart(document.getElementById('chartDailyActivity'), {
+      type: 'line',
+      data: {
+        labels: dailyActivity.map(r => r.date),
+        datasets: [{
+          label: 'Actions per day',
+          data: dailyActivity.map(r => r.count),
+          borderColor: '#06b6d4',
+          backgroundColor: 'rgba(6,182,212,0.15)',
+          fill: true, tension: 0.3, pointRadius: 2,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          x: { ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+          y: { beginAtZero: true, ticks: { precision: 0 } },
+        },
+        plugins: { legend: { display: false } },
+      },
+    });
+  }
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Security Report{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'reports_dashboard' %}">Reports</a>
+  <span>/</span>
+  <span>Security</span>
+{% endblock %}
+
+{% block content %}
+<style>
+  .sec-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .sec-kpi {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 18px 20px;
+  }
+  .sec-kpi-val { font-size: 1.6rem; font-weight: 800; color: var(--eo-text); line-height: 1; }
+  .sec-kpi-label { font-size: .72rem; color: var(--eo-text-muted); margin-top: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .sec-kpi.danger .sec-kpi-val  { color: #dc2626; }
+  .sec-kpi.warn   .sec-kpi-val  { color: #f59e0b; }
+  .sec-kpi.ok     .sec-kpi-val  { color: #10b981; }
+
+  .sec-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 18px;
+    margin-bottom: 18px;
+  }
+  .sec-card {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 20px;
+  }
+  .sec-card h3 {
+    font-size: .85rem;
+    font-weight: 700;
+    margin: 0 0 14px;
+    color: var(--eo-text);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .sec-card h3 .pill {
+    font-size: .65rem; font-weight: 600;
+    background: var(--eo-bg, #f5f5f7);
+    color: var(--eo-text-muted);
+    padding: 2px 8px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+  .sec-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .sec-table th {
+    text-align: left;
+    font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--eo-text-muted); font-weight: 600;
+    padding: 8px 10px; border-bottom: 1px solid var(--eo-border);
+  }
+  .sec-table td {
+    padding: 10px; border-bottom: 1px solid var(--eo-border);
+    color: var(--eo-text);
+  }
+  .sec-table tr:last-child td { border-bottom: 0; }
+  .sec-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: .68rem; font-weight: 600;
+  }
+  .sec-badge.b-fail   { background:#fee2e2; color:#b91c1c; }
+  .sec-badge.b-lock   { background:#fde68a; color:#92400e; }
+  .sec-badge.b-otp    { background:#fed7aa; color:#9a3412; }
+  .sec-badge.b-untr   { background:#e0e7ff; color:#3730a3; }
+  .sec-badge.b-geo    { background:#fce7f3; color:#9d174d; }
+  .sec-badge.b-other  { background:#e5e7eb; color:#374151; }
+  .sec-empty { color: var(--eo-text-muted); font-size: .85rem; padding: 16px 0; text-align: center; }
+  canvas { max-height: 300px; }
+</style>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title"><i class="bi bi-shield-lock-fill" style="color:#dc2626"></i> Security Report</h1>
+    <p style="color:var(--eo-text-muted);font-size:.85rem;margin:4px 0 0">Authentication events, suspicious activity and access incidents across the organisation.</p>
+  </div>
+</div>
+
+<!-- KPIs -->
+<div class="sec-kpi-grid">
+  <div class="sec-kpi">
+    <div class="sec-kpi-val">{{ total_events_30d|intcomma }}</div>
+    <div class="sec-kpi-label">Total Events (30d)</div>
+  </div>
+  <div class="sec-kpi ok">
+    <div class="sec-kpi-val">{{ successful_logins_30d|intcomma }}</div>
+    <div class="sec-kpi-label">Successful Logins (30d)</div>
+  </div>
+  <div class="sec-kpi danger">
+    <div class="sec-kpi-val">{{ failed_logins_24h|intcomma }}</div>
+    <div class="sec-kpi-label">Failed Logins (24h)</div>
+  </div>
+  <div class="sec-kpi warn">
+    <div class="sec-kpi-val">{{ locked_accounts_30d }}</div>
+    <div class="sec-kpi-label">Account Lockouts (30d)</div>
+  </div>
+  <div class="sec-kpi warn">
+    <div class="sec-kpi-val">{{ untrusted_attempts_30d }}</div>
+    <div class="sec-kpi-label">Untrusted Device Attempts</div>
+  </div>
+  <div class="sec-kpi danger">
+    <div class="sec-kpi-val">{{ geo_alerts_30d }}</div>
+    <div class="sec-kpi-label">Geo-velocity Alerts</div>
+  </div>
+</div>
+
+<!-- Charts row 1: Events by type + login trend -->
+<div class="sec-grid">
+  <div class="sec-card">
+    <h3><i class="bi bi-pie-chart-fill"></i> Events by Type <span class="pill">last 30 days</span></h3>
+    {% if events_by_type %}
+      <canvas id="chartEventsByType"></canvas>
+    {% else %}
+      <div class="sec-empty">No security events in the last 30 days.</div>
+    {% endif %}
+  </div>
+  <div class="sec-card">
+    <h3><i class="bi bi-graph-up"></i> Login Success vs Failed <span class="pill">last 30 days</span></h3>
+    <canvas id="chartLoginTrend"></canvas>
+  </div>
+</div>
+
+<!-- Row 2: Top failed users + Top countries -->
+<div class="sec-grid">
+  <div class="sec-card">
+    <h3><i class="bi bi-person-x"></i> Top Failed-Login Users <span class="pill">last 30 days</span></h3>
+    {% if top_failed_users %}
+    <table class="sec-table">
+      <thead>
+        <tr><th>User</th><th>Email</th><th style="text-align:right">Attempts</th></tr>
+      </thead>
+      <tbody>
+        {% for u in top_failed_users %}
+        <tr>
+          <td>{{ u.user__first_name|default:"" }} {{ u.user__last_name|default:"" }}</td>
+          <td style="color:var(--eo-text-muted)">{{ u.user__email|default:"—" }}</td>
+          <td style="text-align:right;font-weight:700;color:#dc2626">{{ u.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="sec-empty">No failed login attempts. ✓</div>
+    {% endif %}
+  </div>
+
+  <div class="sec-card">
+    <h3><i class="bi bi-globe2"></i> Activity by Country <span class="pill">last 30 days</span></h3>
+    {% if top_countries %}
+    <table class="sec-table">
+      <thead>
+        <tr><th>Country</th><th style="text-align:right">Events</th></tr>
+      </thead>
+      <tbody>
+        {% for c in top_countries %}
+        <tr>
+          <td>{{ c.country }}</td>
+          <td style="text-align:right;font-weight:700">{{ c.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="sec-empty">No location data recorded.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Row 3: Recent alerts table (full width) -->
+<div class="sec-card">
+  <h3><i class="bi bi-exclamation-triangle-fill" style="color:#f59e0b"></i> Recent Security Alerts <span class="pill">last 7 days · top 25</span></h3>
+  {% if recent_alerts %}
+  <table class="sec-table">
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>User</th>
+        <th>Event</th>
+        <th>IP</th>
+        <th>Device</th>
+        <th>Location</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ev in recent_alerts %}
+      <tr>
+        <td style="white-space:nowrap;color:var(--eo-text-muted)">{{ ev.created_at|date:"M d, H:i" }}</td>
+        <td>{{ ev.user.email|default:"—" }}</td>
+        <td>
+          {% if ev.event_type == 'login_failed' %}<span class="sec-badge b-fail">Login Failed</span>
+          {% elif ev.event_type == 'account_locked' %}<span class="sec-badge b-lock">Account Locked</span>
+          {% elif ev.event_type == 'otp_failed' %}<span class="sec-badge b-otp">OTP Failed</span>
+          {% elif ev.event_type == 'otp_expired' %}<span class="sec-badge b-otp">OTP Expired</span>
+          {% elif ev.event_type == 'untrusted_attempt' %}<span class="sec-badge b-untr">Untrusted Device</span>
+          {% elif ev.event_type == 'geo_alert' %}<span class="sec-badge b-geo">Geo Alert</span>
+          {% else %}<span class="sec-badge b-other">{{ ev.get_event_type_display }}</span>
+          {% endif %}
+        </td>
+        <td style="font-family:monospace;font-size:.78rem">{{ ev.ip_address|default:"—" }}</td>
+        <td style="color:var(--eo-text-muted)">{{ ev.device_name|default:"—"|truncatechars:24 }}</td>
+        <td style="color:var(--eo-text-muted)">
+          {% if ev.city or ev.country %}{{ ev.city }}{% if ev.city and ev.country %}, {% endif %}{{ ev.country }}{% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div class="sec-empty">No security alerts in the last 7 days. ✓</div>
+  {% endif %}
+</div>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  const eventsByType = {{ events_by_type_json|safe }};
+  const loginTrend   = {{ login_trend_json|safe }};
+
+  const palette = ['#dc2626','#f59e0b','#10b981','#6366f1','#8b5cf6','#ec4899','#06b6d4','#84cc16','#0ea5e9','#f97316','#64748b','#14b8a6','#a855f7'];
+
+  // Donut: events by type
+  if (eventsByType.length && document.getElementById('chartEventsByType')) {
+    new Chart(document.getElementById('chartEventsByType'), {
+      type: 'doughnut',
+      data: {
+        labels: eventsByType.map(e => e.label),
+        datasets: [{
+          data: eventsByType.map(e => e.count),
+          backgroundColor: eventsByType.map((_, i) => palette[i % palette.length]),
+          borderWidth: 2, borderColor: '#fff',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } },
+        },
+        cutout: '62%',
+      },
+    });
+  }
+
+  // Line: login success vs failed (30d)
+  if (document.getElementById('chartLoginTrend')) {
+    new Chart(document.getElementById('chartLoginTrend'), {
+      type: 'line',
+      data: {
+        labels: loginTrend.map(r => r.date),
+        datasets: [
+          {
+            label: 'Successful',
+            data: loginTrend.map(r => r.success),
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16,185,129,0.12)',
+            fill: true, tension: 0.3, pointRadius: 2,
+          },
+          {
+            label: 'Failed',
+            data: loginTrend.map(r => r.failed),
+            borderColor: '#dc2626',
+            backgroundColor: 'rgba(220,38,38,0.12)',
+            fill: true, tension: 0.3, pointRadius: 2,
+          },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: { ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
+          y: { beginAtZero: true, ticks: { precision: 0 } },
+        },
+        plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } },
+      },
+    });
+  }
+})();
+</script>
+{% endblock %}

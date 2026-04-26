@@ -847,6 +847,24 @@ class LivePreviewSession(models.Model):
         help_text='If True, viewers may also draw, comment, and modify '
                   'the file during the live session.'
     )
+    # ── Office-doc proxy ──────────────────────────────────────────────────
+    # When the source file is a Word/Excel/PowerPoint doc, the preview
+    # surface needs a PDF version because (a) those formats can't be
+    # natively annotated in-browser and (b) iframe-rendered office viewers
+    # are cross-origin, blocking cursor/scroll/draw broadcast.
+    #
+    # On session start we render the source to PDF and store the result
+    # in a hidden SharedFile, linked here. Both presenter and viewers
+    # render *that* PDF (via the existing PDF.js path), but the session
+    # still belongs to the original file. On session end we delete the
+    # proxy so we don't leak temporary uploads.
+    proxy_pdf = models.ForeignKey(
+        'SharedFile', on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='live_preview_proxy_for',
+        help_text='Optional PDF version of the source used during the '
+                  'session. Created on start for office docs, deleted on end.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     ended_at = models.DateTimeField(null=True, blank=True)
 

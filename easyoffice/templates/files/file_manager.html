@@ -416,6 +416,61 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
 }
 .ann-tool-btn:hover::after { opacity: 1; }
 
+/* ── Presentation mode ────────────────────────────────────────────────
+   Active when (a) a live preview session is running AND (b) the file is
+   neither a PDF nor an Office document. In this mode the toolbar is
+   simplified to the three tools that make sense on an image / text /
+   code surface: highlighter, freehand draw, and text. The page-specific
+   tools (signature fields, checkbox markers, numbered stamps, etc.) are
+   hidden because they require a paginated document model that doesn't
+   exist for these surfaces.
+
+   The toolbar also gets a subtle accent glow so the presenter knows
+   they're in the broadcast/presentation context, not just regular
+   annotation. */
+.ann-overlay.ann-presentation-mode .ann-toolbar {
+  box-shadow: 0 8px 24px rgba(139,92,246,.35), 0 2px 6px rgba(0,0,0,.10);
+  border-color: #8b5cf6;
+}
+.ann-overlay.ann-presentation-mode .ann-toolbar::before {
+  content: 'Live';
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #8b5cf6;
+  color: #fff;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+/* Hide tools that don't make sense on an image / text surface during
+   presentation. Keep: highlight, draw, text, erase, clear, settings,
+   list, chat. Hide everything else. The hidden-tool list intentionally
+   matches the toolbar HTML order. */
+.ann-overlay.ann-presentation-mode .ann-tool-btn[data-tool="comment"],
+.ann-overlay.ann-presentation-mode .ann-tool-btn[data-tool="signature"],
+.ann-overlay.ann-presentation-mode .ann-tool-btn[data-tool="checkbox"],
+.ann-overlay.ann-presentation-mode .ann-tool-btn[data-tool="line"],
+.ann-overlay.ann-presentation-mode .ann-tool-btn[data-tool="arrow"],
+.ann-overlay.ann-presentation-mode .ann-tool-btn[data-tool="rect"],
+.ann-overlay.ann-presentation-mode .ann-tool-btn[data-tool="circle"],
+.ann-overlay.ann-presentation-mode .ann-tool-btn[data-tool="stamp"],
+.ann-overlay.ann-presentation-mode .ann-tool-btn[data-tool="date"],
+.ann-overlay.ann-presentation-mode .ann-tool-btn[data-tool="numbered"],
+.ann-overlay.ann-presentation-mode .ann-tool-btn[data-tool="bookmark"] {
+  display: none;
+}
+/* The separators between groups become noise once half the buttons in a
+   group are hidden. Hide them too — they're plain divs without data
+   attributes, but they're the only .ann-sep inside the toolbar. */
+.ann-overlay.ann-presentation-mode .ann-toolbar > .ann-sep:nth-of-type(-n+2) {
+  display: none;
+}
+
 /* Count badge on the Annotations button */
 .ann-count-badge {
   position: absolute;
@@ -4194,12 +4249,35 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   const AUDIO_EXTS  = new Set(['mp3','wav','ogg','m4a']);
   const ZIP_EXTS    = new Set(['zip']);
 
-  /* File types the annotation layer supports */
+  /* File types the annotation layer supports out of the box */
   const ANN_SUPPORTED_EXTS = new Set([
     'pdf','doc','docx','odt','rtf','xls','xlsx','ods',
     'ppt','pptx','odp','jpg','jpeg','png','gif','webp',
     'svg','bmp','txt','md','py','js','html','css','json','csv',
+    /* Additional text formats that fall through previewSurface as <pre> */
+    'sql','xml','yml','yaml','ini','log',
   ]);
+
+  /* In presentation mode (a live session is active), the highlighter,
+     freehand draw and text-area tools should appear over ANY visible
+     surface where overlay drawing makes sense — not just the curated
+     types above. We exclude formats that are inherently dynamic (video,
+     audio) where a static annotation would be meaningless. */
+  const ANN_PRESENTATION_BLOCKED_EXTS = new Set([
+    ...['mp4','mov','avi','mkv','webm'],   // video
+    ...['mp3','wav','ogg','m4a'],          // audio
+    ...['zip','rar','7z','tar','gz'],      // archives — preview is a listing
+  ]);
+
+  function annShouldShowToolbar(ext, livePresenting) {
+    const e = String(ext || '').toLowerCase().trim();
+    if (livePresenting) {
+      // During live preview, show on everything except inherently dynamic formats
+      return !ANN_PRESENTATION_BLOCKED_EXTS.has(e);
+    }
+    // Outside live preview, stick to the curated list
+    return ANN_SUPPORTED_EXTS.has(e);
+  }
 
   let currentFileId  = null;
   let currentFileExt = '';
@@ -6797,8 +6875,13 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       loading.style.display = 'none';
       content.style.display = 'block';
 
-      /* Start annotation layer for supported file types */
-      if (ANN_SUPPORTED_EXTS.has(currentFileExt)) {
+      /* Start annotation layer for supported file types.
+         When a live preview session is active (i.e. someone is
+         presenting), we expand the allowlist so highlighter / freehand
+         draw / text tools also appear on images, text, code, and most
+         other previewable formats — that's "presentation mode". */
+      const livePresenting = !!(_lpRole === 'presenter' || _lpRole === 'viewer');
+      if (annShouldShowToolbar(currentFileExt, livePresenting)) {
         setTimeout(function () { initAnnotationLayer(fileId); }, 320);
       }
     });
@@ -6847,6 +6930,14 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   let _lpReconnectAttempts = 0;      /* viewer-side exponential backoff */
   let _lpCanEdit       = false;      /* viewers may draw/edit when true */
   let _lpIntentionalClose  = false;  /* set on teardown so close handler doesn't reconnect */
+  /* ── Office-doc proxy state ─────────────────────────────────────────────
+     When the source file is a Word/Excel/PowerPoint doc, the server
+     converts it to PDF for the live session. We remember the originals
+     here so we can restore the modal back to the source file after the
+     session ends — viewers may want to keep reading the file they joined. */
+  let _lpOriginalFileId   = null;
+  let _lpOriginalFileExt  = null;
+  let _lpOriginalFileName = null;
 
   /* ── URL helpers ── */
   function lpStartUrl(fileId)   { return `/files/${fileId}/live-preview/start/`; }
@@ -6958,6 +7049,29 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       _lpSessionToken  = data.session_token;
       _lpRole          = 'presenter';
       lpClosePicker();
+
+      /* ── Office-doc proxy swap ────────────────────────────────────────
+         If the server converted the source to PDF for the live session,
+         the presenter is currently looking at the original (.docx in an
+         iframe — no cursor/draw/scroll integration). Reopen the modal
+         pointing at the proxy PDF so the presenter sees and operates on
+         the same document the viewers will see. We pass skipLp=true so
+         openPreviewModal doesn't try to start a new live-preview session
+         on top of the one we just created. */
+      if (data.proxy_file_id) {
+        // Remember the original so we can restore it on session end.
+        _lpOriginalFileId  = currentFileId;
+        _lpOriginalFileExt = currentFileExt;
+        _lpOriginalFileName = (document.getElementById('previewFileName')?.textContent) || '';
+        const proxyExt = data.proxy_file_ext || 'pdf';
+        const proxyName = (_lpOriginalFileName || 'document') + ' (live preview)';
+        try {
+          window.openPreviewModal(data.proxy_file_id, proxyName, proxyExt, true);
+        } catch (e) {
+          console.warn('[live-preview] proxy swap failed; continuing with original', e);
+        }
+      }
+
       lpConnectWebSocket(data.ws_path, 'presenter');
       lpShowShareBtn('live');
       lpInjectSessionUI();
@@ -6986,11 +7100,23 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       _lpRole          = 'viewer';
       _lpPresenterName = data.presenter_name;
 
-      const alreadyOpen = (currentFileId === data.file_id &&
+      /* ── Office-doc proxy swap (viewer side) ──────────────────────────
+         If the presenter's session uses a converted PDF, open THAT for
+         the viewer. The session belongs to the original file (so chat,
+         participants, etc. all key off the right SharedFile) but the
+         actual rendered content is the PDF — that's what makes cursor,
+         draw and scroll broadcast work. */
+      const renderFileId   = data.proxy_file_id || data.file_id;
+      const renderFileExt  = data.proxy_file_id ? (data.proxy_file_ext || 'pdf') : data.file_ext;
+      const renderFileName = data.proxy_file_id
+        ? (data.file_name + ' (live preview)')
+        : data.file_name;
+
+      const alreadyOpen = (currentFileId === renderFileId &&
                            document.getElementById('previewModal').classList.contains('open'));
 
       if (!alreadyOpen) {
-        window.openPreviewModal(data.file_id, data.file_name, data.file_ext, true);
+        window.openPreviewModal(renderFileId, renderFileName, renderFileExt, true);
       }
 
       /* Connect WebSocket immediately — messages buffer in the browser
@@ -7687,6 +7813,39 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         lpWaitForOverlayThen(_applyReadonly);
       }
     }
+
+    /* ── Presentation mode for non-PDF / non-Office files ────────────────
+       When a live session is running on an image, text file, code file,
+       or other non-paginated surface, simplify the toolbar to just the
+       three tools that actually work there: highlighter, freehand draw,
+       and text. The user explicitly asked for this — they want to be
+       able to mark up screen-shared content during a live session even
+       when it isn't a PDF or Word doc.
+
+       PDF and office docs (the latter via proxy PDF) keep the full
+       toolbar; the helper below is the source of truth on which surfaces
+       count as "presentation mode".
+
+       Also seed the active tool to 'highlight' since that's the most
+       common starting point for marking up presented content. */
+    function _applyPresentationMode() {
+      const ov = document.getElementById('annOverlay');
+      if (!ov) return false;
+      const ext = (currentFileExt || '').toLowerCase();
+      const isPaginated = (ext === 'pdf') ||
+                          OFFICE_EXTS.has(ext) ||
+                          ov.classList.contains('ann-pdf-mode');
+      ov.classList.toggle('ann-presentation-mode', !isPaginated);
+      if (!isPaginated && _annSettings.active_tool &&
+          !['highlight','draw','text'].includes(_annSettings.active_tool)) {
+        _annSettings.active_tool = 'highlight';
+        annApplySettings();
+      }
+      return true;
+    }
+    if (!_applyPresentationMode()) {
+      lpWaitForOverlayThen(_applyPresentationMode);
+    }
   }
 
   /* ── Chat ── */
@@ -7824,7 +7983,12 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
 
     /* Remove viewer read-only class */
     const annOv = document.getElementById('annOverlay');
-    if (annOv) annOv.classList.remove('lp-viewer-readonly');
+    if (annOv) {
+      annOv.classList.remove('lp-viewer-readonly');
+      // Drop presentation-mode too — outside a live session the full
+      // toolbar should be available again on supported file types.
+      annOv.classList.remove('ann-presentation-mode');
+    }
 
     /* Hide chat button in annotation toolbar */
     const chatBtn = document.getElementById('lpChatToggleBtn');
@@ -7866,6 +8030,28 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       lpShareBtn.hidden    = !previewOpen;
       lpShareBtn.className = 'lp-share-btn';
       if (lpShareBtnLabel) lpShareBtnLabel.textContent = 'Share Live';
+    }
+
+    /* ── Restore the original (non-proxy) file in the preview ──
+       If we swapped to a PDF proxy on session start, swap back so the
+       presenter is again looking at their .docx (or whatever it was)
+       once the session ends. We don't try to be clever about scroll
+       position — the file changes meaningfully from PDF to iframe view,
+       so a fresh load is fine. */
+    if (_lpOriginalFileId) {
+      const origId   = _lpOriginalFileId;
+      const origExt  = _lpOriginalFileExt;
+      const origName = _lpOriginalFileName;
+      _lpOriginalFileId  = null;
+      _lpOriginalFileExt = null;
+      _lpOriginalFileName = null;
+      try {
+        // Only swap back if the modal is still open — if the user
+        // already closed it, just reset the state vars (done above).
+        if (document.getElementById('previewModal')?.classList.contains('open')) {
+          window.openPreviewModal(origId, origName || '', origExt || '', true);
+        }
+      } catch (_) { /* best-effort */ }
     }
   }
 

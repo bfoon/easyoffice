@@ -6091,7 +6091,95 @@ class LivePreviewStartView(LoginRequiredMixin, View):
     Creates a new LivePreviewSession, sends invite notifications to the chosen
     users via the existing notify_user() helper, and returns the session token
     so the presenter can open their WebSocket.
+
+    For office documents (Word, Excel, PowerPoint, OpenOffice) the source
+    is converted to PDF on session start and a proxy SharedFile is
+    attached to the session — both presenter and viewers preview that PDF.
+    The proxy is deleted on session end.
     """
+
+    # File extensions for which we convert to PDF before previewing.
+    # Mirrors apps/files/models.py::CONVERTIBLE_TYPES, minus formats
+    # already viewable natively (txt/md/csv/images).
+    _PROXY_NEEDED_EXTS = {
+        'doc', 'docx', 'odt', 'rtf',
+        'xls', 'xlsx', 'ods', 'csv',
+        'ppt', 'pptx', 'odp',
+    }
+
+    @staticmethod
+    def _build_proxy_pdf_for(source_file, actor):
+        """
+        Convert `source_file` (a SharedFile) to PDF and persist the result
+        as a hidden SharedFile in the same folder. Returns the new
+        SharedFile, or None on failure.
+
+        The proxy is marked with description 'live_preview_proxy:<source-id>'
+        so an operator can identify and bulk-clean these if a session
+        crashes before reaching the cleanup path.
+        """
+        import os
+        import tempfile
+        from django.core.files.base import ContentFile
+
+        # Pull the source bytes to a temp file LibreOffice can read
+        try:
+            with source_file.file.open('rb') as src:
+                source_bytes = src.read()
+        except Exception as e:
+            print(f'[live_preview proxy] cannot read source file: {e}')
+            return None
+
+        ext = (source_file.extension or '').lower().lstrip('.')
+        suffix = f'.{ext}' if ext else ''
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_in:
+            tmp_in.write(source_bytes)
+            tmp_in_path = tmp_in.name
+
+        try:
+            pdf_path = _convert_to_pdf(tmp_in_path)
+        except Exception as e:
+            print(f'[live_preview proxy] LibreOffice conversion failed: {e}')
+            try:
+                os.unlink(tmp_in_path)
+            except Exception:
+                pass
+            return None
+
+        # Read the produced PDF, build a SharedFile from it
+        try:
+            with open(pdf_path, 'rb') as f:
+                pdf_bytes = f.read()
+        except Exception as e:
+            print(f'[live_preview proxy] cannot read produced PDF: {e}')
+            return None
+        finally:
+            # Remove temp inputs / outputs whether or not the read worked
+            for p in (tmp_in_path, pdf_path):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+
+        proxy_name = f'.live_preview_proxy_{source_file.pk}.pdf'
+        proxy = SharedFile(
+            name=proxy_name,
+            folder=source_file.folder,
+            uploaded_by=actor,
+            visibility=getattr(SharedFile.Visibility, 'PRIVATE', 'private'),
+            file_size=len(pdf_bytes),
+            file_type='application/pdf',
+            description=f'live_preview_proxy:{source_file.pk}',
+        )
+        # Use the storage-friendly file.save() — this writes through whatever
+        # storage backend (filesystem, S3, etc.) the project is configured for.
+        try:
+            proxy.file.save(proxy_name, ContentFile(pdf_bytes), save=False)
+            proxy.save()
+        except Exception as e:
+            print(f'[live_preview proxy] saving proxy SharedFile failed: {e}')
+            return None
+        return proxy
 
     def post(self, request, pk):
         # Outer try/except so ANY unexpected error becomes a JSON error
@@ -6126,10 +6214,26 @@ class LivePreviewStartView(LoginRequiredMixin, View):
                 presenter=request.user, file=f, ended_at__isnull=True
             ).update(ended_at=timezone.now())
 
+            # ── Build proxy PDF for office docs ──────────────────────────
+            # This is synchronous; LibreOffice headless typically takes
+            # 1–3 seconds for a normal Word doc. The presenter sees a
+            # spinner during that time. If conversion fails (LibreOffice
+            # missing, file corrupt, etc.) we fall through to the iframe
+            # path — the live-preview cursor/draw/scroll features won't
+            # work for that file but at least the session opens.
+            proxy = None
+            ext = (f.extension or '').lower().lstrip('.')
+            if ext in self._PROXY_NEEDED_EXTS:
+                proxy = self._build_proxy_pdf_for(f, request.user)
+                if proxy is None:
+                    print(f'[live_preview] could not build proxy PDF for {f.pk}; '
+                          f'session will fall back to iframe (limited features)')
+
             session = LivePreviewSession.objects.create(
                 presenter=request.user,
                 file=f,
                 viewers_can_edit=viewers_can_edit,
+                proxy_pdf=proxy,
             )
 
             # Resolve invitees — only users who can see this file
@@ -6158,6 +6262,12 @@ class LivePreviewStartView(LoginRequiredMixin, View):
                                     'action': 'live_preview_accept',
                                     'session_token': str(session.token),
                                     'file_id': str(f.id),
+                                    # If we built a proxy PDF, the viewer
+                                    # should load THAT file's preview, not
+                                    # the original .docx. The session
+                                    # itself still references the original.
+                                    'proxy_file_id': str(proxy.id) if proxy else '',
+                                    'proxy_file_ext': 'pdf' if proxy else '',
                                     'file_name': f.name,
                                     'file_ext': f.extension,
                                     'presenter_name': request.user.get_full_name() or request.user.email,
@@ -6181,6 +6291,10 @@ class LivePreviewStartView(LoginRequiredMixin, View):
                 'session_token': str(session.token),
                 'ws_path': session.ws_path,
                 'viewers_can_edit': viewers_can_edit,
+                # Tell the presenter's client to swap to the proxy preview.
+                # Empty string when no proxy was built (PDFs, images, etc.).
+                'proxy_file_id': str(proxy.id) if proxy else '',
+                'proxy_file_ext': 'pdf' if proxy else '',
             })
 
         except Exception as e:
@@ -6215,6 +6329,7 @@ class LivePreviewAcceptView(LoginRequiredMixin, View):
         session.viewers.add(request.user)
 
         f = session.file
+        proxy = session.proxy_pdf
         return JsonResponse({
             'ok': True,
             'session_token': str(session.token),
@@ -6224,6 +6339,12 @@ class LivePreviewAcceptView(LoginRequiredMixin, View):
             'file_ext': f.extension,
             'presenter_name': session.presenter.get_full_name(),
             'viewers_can_edit': bool(getattr(session, 'viewers_can_edit', False)),
+            # If the presenter's session uses a proxy PDF (because the
+            # source is a Word/Excel/PowerPoint doc), the viewer must
+            # render that PDF, not the original — otherwise the iframe
+            # path kicks in and cursor/draw/scroll broadcast all break.
+            'proxy_file_id':  str(proxy.id) if proxy else '',
+            'proxy_file_ext': 'pdf' if proxy else '',
         })
 
 
@@ -6259,6 +6380,14 @@ class LivePreviewEndView(LoginRequiredMixin, View):
                     )
             except Exception:
                 pass
+
+            # ── Clean up the office-doc proxy PDF, if any ────────────────
+            # We do this AFTER broadcasting session_end so any in-flight
+            # client requests for the proxy file have time to complete.
+            # Wrapped in try/except because a failure here must not stop
+            # the presenter from ending the session.
+            self._delete_proxy_pdf(session)
+
         elif session.viewers.filter(id=request.user.id).exists():
             # Viewer leaves → remove from viewers, notify presenter
             session.viewers.remove(request.user)
@@ -6277,6 +6406,36 @@ class LivePreviewEndView(LoginRequiredMixin, View):
             return JsonResponse({'ok': False, 'error': 'Not a participant'}, status=403)
 
         return JsonResponse({'ok': True})
+
+    @staticmethod
+    def _delete_proxy_pdf(session):
+        """
+        Best-effort cleanup of the proxy SharedFile created by
+        LivePreviewStartView for office docs. Removes both the storage
+        bytes and the DB row. Never raises — proxy cleanup is a janitorial
+        side-effect, not part of the user's flow.
+        """
+        proxy = session.proxy_pdf
+        if proxy is None:
+            return
+        # Detach from session first so a partial deletion can't leave a
+        # dangling FK pointing at a deleted row.
+        try:
+            session.proxy_pdf = None
+            session.save(update_fields=['proxy_pdf'])
+        except Exception as e:
+            print(f'[live_preview proxy cleanup] detach failed: {e}')
+        # Storage delete
+        try:
+            if proxy.file:
+                proxy.file.delete(save=False)
+        except Exception as e:
+            print(f'[live_preview proxy cleanup] storage delete failed: {e}')
+        # DB row delete
+        try:
+            proxy.delete()
+        except Exception as e:
+            print(f'[live_preview proxy cleanup] db delete failed: {e}')
 
 
 class LivePreviewStatusView(LoginRequiredMixin, View):
@@ -6306,6 +6465,7 @@ class LivePreviewStatusView(LoginRequiredMixin, View):
         if not session:
             return JsonResponse({'ok': True, 'session': None})
 
+        proxy = session.proxy_pdf
         return JsonResponse({
             'ok': True,
             'session': {
@@ -6316,6 +6476,10 @@ class LivePreviewStatusView(LoginRequiredMixin, View):
                 'file_ext':       f.extension,
                 'presenter_name': session.presenter.get_full_name() or session.presenter.username,
                 'viewers_can_edit': bool(getattr(session, 'viewers_can_edit', False)),
+                # See comment on the Accept view — proxy PDF is the actual
+                # render target for office docs.
+                'proxy_file_id':  str(proxy.id) if proxy else '',
+                'proxy_file_ext': 'pdf' if proxy else '',
             },
         })
 

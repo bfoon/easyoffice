@@ -849,7 +849,15 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
 .lp-live-dot { width:7px; height:7px; border-radius:50%; background:#fff; animation: lp-blink .9s ease-in-out infinite alternate; }
 .lp-status-bar.offline .lp-live-dot { animation: none; opacity: .6; }
 @keyframes lp-blink { 0%{opacity:1;}100%{opacity:.2;} }
-.lp-remote-cursor { position: absolute; pointer-events: none; z-index: 50; transition: left .06s linear, top .06s linear; }
+.lp-remote-cursor {
+  position: absolute; pointer-events: none; z-index: 50;
+  transition: left .06s linear, top .06s linear;
+  /* The 20×20 arrow SVG has its tip at (~3, ~2) inside its own box.
+     Without this offset the cursor lands ~3px right and ~2px below where
+     the presenter's actual cursor is — a visible mismatch on small
+     elements and noticeable drift across mismatched viewport sizes. */
+  transform: translate(-3px, -2px);
+}
 .lp-cursor-label {
   position: absolute; top: 20px; left: 14px;
   background: #8b5cf6; color: #fff; font-size: .64rem; font-weight: 700;
@@ -5707,6 +5715,12 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
 
   let _annActivePageN  = 0;    /* which PDF page is being drawn on */
   let _annActiveWrap   = null; /* the page wrap element for the current stroke */
+  /* State that lets annOnUp restore document scroll/pinch behaviour after a
+     stroke. Saved at mousedown so we always pair lock/unlock correctly. */
+  let _annPrevTouchAction        = null;
+  let _annPrevSurfaceTouchAction = null;
+  let _annLockedScrollTop        = null;
+  let _annLockedScrollLeft       = null;
 
   function annBindOverlayEvents(overlay) {
     const viewer = document.getElementById('pdfjsViewer');
@@ -5765,11 +5779,36 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       _annDrawStart   = annPctPos(overlay, e);
     }
     _annCurrentPath = [[_annDrawStart.x, _annDrawStart.y]];
+
+    /* ── Lock document scroll/pinch while drawing ────────────────────────
+       Without this, dragging across a PDF page on a touch device (and
+       even some trackpads) is interpreted as a pan/scroll gesture. The
+       document shifts under the cursor and the resulting stroke ends up
+       in the wrong place — the user reports it as "the file moves behind
+       my writing and the stroke doesn't stick".  We restore the previous
+       value in annOnUp so the user can scroll normally between strokes. */
+    if (_annActiveWrap) {
+      _annPrevTouchAction = _annActiveWrap.style.touchAction || '';
+      _annActiveWrap.style.touchAction = 'none';
+    }
+    const surface = document.getElementById('previewSurface');
+    if (surface) {
+      _annPrevSurfaceTouchAction = surface.style.touchAction || '';
+      surface.style.touchAction = 'none';
+      /* Remember scroll position so we can detect/undo any accidental
+         shift caused by inertia from a half-recognised scroll gesture. */
+      _annLockedScrollTop  = surface.scrollTop;
+      _annLockedScrollLeft = surface.scrollLeft;
+    }
     e.preventDefault();
   }
 
   function annOnMove(e) {
     if (!_annDrawing || !_annActiveWrap) return;
+
+    /* Stop the browser from selecting text or treating this drag as a
+       pan/scroll gesture while a stroke is in progress. */
+    if (e.cancelable) e.preventDefault();
 
     const posEl = _annActiveWrap; /* always relative to the element we started on */
     const pos   = annPctPos(posEl, e);
@@ -5855,6 +5894,30 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
     const pageN = _annActivePageN;
     _annActiveWrap  = null;
     _annActivePageN = 0;
+
+    /* ── Restore document scroll/pinch behaviour ───────────────────────── */
+    if (wrap && typeof _annPrevTouchAction === 'string') {
+      wrap.style.touchAction = _annPrevTouchAction;
+      _annPrevTouchAction = null;
+    }
+    const surface = document.getElementById('previewSurface');
+    if (surface) {
+      if (typeof _annPrevSurfaceTouchAction === 'string') {
+        surface.style.touchAction = _annPrevSurfaceTouchAction;
+        _annPrevSurfaceTouchAction = null;
+      }
+      /* If a scroll snuck through despite touch-action:none (e.g. an
+         inertia tail from before mousedown locked the surface), snap
+         back so the new annotation lines up with where the user was
+         actually looking when they drew it. */
+      if (typeof _annLockedScrollTop === 'number' &&
+          (Math.abs(surface.scrollTop  - _annLockedScrollTop)  > 1 ||
+           Math.abs(surface.scrollLeft - _annLockedScrollLeft) > 1)) {
+        surface.scrollTop  = _annLockedScrollTop;
+        surface.scrollLeft = _annLockedScrollLeft;
+      }
+      _annLockedScrollTop = _annLockedScrollLeft = null;
+    }
 
     if (!wrap) { _annCurrentPath = []; _annDrawStart = null; return; }
 
@@ -7148,6 +7211,94 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         // Remember the trailing timer so teardown can clear it.
         surface._lpCursorTrailing = () => { if (trailing) { clearTimeout(trailing); trailing = null; } };
       }
+
+      /* ── Broadcast scroll position so viewers mirror the presenter ──
+         The receiver-side handler (_pdfApplyRemoteScroll) was already
+         wired up but nothing on the presenter side was actually sending
+         pdf_scroll events. That's why "I move the file but it doesn't
+         mirror to the receiver" — the message was never being sent.
+
+         We listen on the PDF.js viewer (which is the actual scrollable
+         element for PDFs) and on the surface as a fallback for image /
+         HTML previews where the surface itself scrolls. Throttled to
+         ~12 Hz so we don't flood the socket on a fast scroll. */
+      const SCROLL_MIN_MS = 80;
+      let _lpLastScroll = 0;
+      let _lpScrollTrailing = null;
+
+      const sendScroll = () => {
+        if (!_lpSocket || _lpSocket.readyState !== WebSocket.OPEN) return;
+        const v = document.getElementById('pdfjsViewer');
+        const scroller = v || surface;
+        if (!scroller) return;
+        const range = scroller.scrollHeight - scroller.clientHeight;
+        const pct = range > 0 ? scroller.scrollTop / range : 0;
+        try {
+          _lpSocket.send(JSON.stringify({
+            type:       'pdf_scroll',
+            scroll_pct: +pct.toFixed(4),
+            page:       _pdfCurrentPage || 1,
+          }));
+        } catch (_) { /* socket race — drop silently */ }
+        _lpLastScroll = Date.now();
+      };
+
+      const scrollHandler = () => {
+        const since = Date.now() - _lpLastScroll;
+        if (since >= SCROLL_MIN_MS) {
+          sendScroll();
+        } else if (!_lpScrollTrailing) {
+          _lpScrollTrailing = setTimeout(() => {
+            _lpScrollTrailing = null;
+            sendScroll();
+          }, SCROLL_MIN_MS - since);
+        }
+      };
+
+      /* Bind to both — PDFs scroll inside #pdfjsViewer, while images and
+         HTML previews scroll the outer surface. The PDF.js viewer may
+         not exist yet at this point in the lifecycle (it's created when
+         a PDF actually loads), so we attach lazily via a MutationObserver
+         on the surface that picks up #pdfjsViewer the moment it appears. */
+      const bindScroller = (el) => {
+        if (!el || el._lpScrollHandler) return;
+        el._lpScrollHandler = scrollHandler;
+        el.addEventListener('scroll', scrollHandler, { passive: true });
+      };
+
+      if (surface) {
+        // Surface scroll (non-PDF previews)
+        if (surface._lpScrollHandler) surface.removeEventListener('scroll', surface._lpScrollHandler);
+        bindScroller(surface);
+
+        // PDF.js viewer scroll (if PDF is loaded now)
+        const v = document.getElementById('pdfjsViewer');
+        bindScroller(v);
+
+        // …and any time it appears later
+        if (!surface._lpScrollObserver) {
+          surface._lpScrollObserver = new MutationObserver(() => {
+            const v2 = document.getElementById('pdfjsViewer');
+            if (v2 && !v2._lpScrollHandler) bindScroller(v2);
+          });
+          surface._lpScrollObserver.observe(surface, { childList: true, subtree: true });
+        }
+      }
+      // Remember teardown hook — invoked when we drop the session.
+      surface._lpScrollTeardown = () => {
+        if (_lpScrollTrailing) { clearTimeout(_lpScrollTrailing); _lpScrollTrailing = null; }
+        const v = document.getElementById('pdfjsViewer');
+        for (const el of [surface, v]) {
+          if (el && el._lpScrollHandler) {
+            el.removeEventListener('scroll', el._lpScrollHandler);
+            el._lpScrollHandler = null;
+          }
+        }
+        if (surface._lpScrollObserver) {
+          surface._lpScrollObserver.disconnect();
+          surface._lpScrollObserver = null;
+        }
+      };
     }
   }
 
@@ -7661,6 +7812,14 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
         surface._lpCursorTrailing();
         surface._lpCursorTrailing = null;
       }
+    }
+    /* Remove scroll-broadcast listeners (presenter only — viewer never
+       attached any). The teardown closure cleans up the viewer scroll
+       listener, the surface scroll listener, the trailing timer, and
+       the MutationObserver in one shot. */
+    if (surface && typeof surface._lpScrollTeardown === 'function') {
+      surface._lpScrollTeardown();
+      surface._lpScrollTeardown = null;
     }
 
     /* Remove viewer read-only class */

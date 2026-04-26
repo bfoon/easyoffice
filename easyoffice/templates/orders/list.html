@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Orders — List{% endblock %}
+{% block breadcrumb %}<a href="{% url 'orders:dashboard' %}">Orders</a><span>/</span><span>List</span>{% endblock %}
+
+{% block content %}
+<style>
+  .ord-filter-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; align-items: end; }
+  .ord-filter-bar label { display: block; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--eo-text-muted); font-weight: 600; margin-bottom: 4px; }
+  .ord-filter-bar select, .ord-filter-bar input { padding: 8px 10px; border: 1px solid var(--eo-border); border-radius: 8px; font-size: .85rem; min-width: 140px; }
+  .ord-table { width: 100%; border-collapse: collapse; font-size: .85rem; background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); overflow: hidden; }
+  .ord-table th { text-align: left; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--eo-text-muted); font-weight: 600; padding: 12px 14px; border-bottom: 1px solid var(--eo-border); background: var(--eo-bg, #fafafa); }
+  .ord-table td { padding: 12px 14px; border-bottom: 1px solid var(--eo-border); }
+  .ord-table tr:last-child td { border-bottom: 0; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .68rem; font-weight: 600; }
+  .b-new { background: #e0e7ff; color: #3730a3; }
+  .b-confirmed { background: #cffafe; color: #155e75; }
+  .b-in_fulfillment { background: #fef3c7; color: #92400e; }
+  .b-fulfilled { background: #dcfce7; color: #166534; }
+  .b-cancelled { background: #e5e7eb; color: #374151; }
+  .pager { display: flex; gap: 6px; justify-content: center; margin-top: 18px; }
+  .pager a, .pager span { padding: 6px 12px; border: 1px solid var(--eo-border); border-radius: 6px; text-decoration: none; font-size: .82rem; color: var(--eo-text); }
+  .pager .current { background: var(--eo-accent, #6366f1); color: #fff; border-color: transparent; }
+</style>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Orders</h1>
+  </div>
+  <div>
+    <a href="{% url 'orders:order_create' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus-lg"></i> New order</a>
+  </div>
+</div>
+
+<form method="get" class="ord-filter-bar">
+  <div>
+    <label for="q">Search</label>
+    <input id="q" type="text" name="q" value="{{ q }}" placeholder="Order#, customer, phone…">
+  </div>
+  <div>
+    <label for="status">Status</label>
+    <select id="status" name="status">
+      <option value="">All</option>
+      {% for v, l in status_choices %}
+        <option value="{{ v }}" {% if v == current_status %}selected{% endif %}>{{ l }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label for="source">Source</label>
+    <select id="source" name="source">
+      <option value="">All</option>
+      {% for v, l in source_choices %}
+        <option value="{{ v }}" {% if v == current_source %}selected{% endif %}>{{ l }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="eo-btn">Filter</button>
+  {% if q or current_status or current_source %}
+    <a href="{% url 'orders:order_list' %}" class="eo-btn">Clear</a>
+  {% endif %}
+</form>
+
+<table class="ord-table">
+  <thead>
+    <tr>
+      <th>Order #</th><th>Source</th><th>Customer</th><th>Status</th>
+      <th>Documents</th><th>Created</th><th style="text-align:right">Total</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for o in orders %}
+    <tr>
+      <td><a href="{% url 'orders:order_detail' pk=o.pk %}" style="font-family:monospace;font-weight:600">{{ o.order_no }}</a></td>
+      <td>{{ o.get_source_display }}</td>
+      <td>{{ o.customer.display_name|default:o.contact_name|default:"—" }}</td>
+      <td><span class="badge b-{{ o.status }}">{{ o.get_status_display }}</span></td>
+      <td style="font-size:.78rem;color:var(--eo-text-muted)">
+        {% if o.invoice %}<i class="bi bi-receipt-cutoff"></i> {{ o.invoice.number }}{% else %}—{% endif %}
+      </td>
+      <td style="color:var(--eo-text-muted);white-space:nowrap">{{ o.created_at|date:"M d, H:i" }}</td>
+      <td style="text-align:right;font-weight:700">{{ o.currency }} {{ o.total|floatformat:2|intcomma }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="7" style="text-align:center;color:var(--eo-text-muted);padding:32px">No orders match these filters.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if is_paginated %}
+<div class="pager">
+  {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}{% if q %}&q={{ q }}{% endif %}{% if current_status %}&status={{ current_status }}{% endif %}{% if current_source %}&source={{ current_source }}{% endif %}">‹ Prev</a>{% endif %}
+  <span class="current">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+  {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}{% if q %}&q={{ q }}{% endif %}{% if current_status %}&status={{ current_status }}{% endif %}{% if current_source %}&source={{ current_source }}{% endif %}">Next ›</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -6094,78 +6094,103 @@ class LivePreviewStartView(LoginRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        f = get_object_or_404(SharedFile, pk=pk)
-        if not _file_permission_for(request.user, f):
-            raise Http404
-
+        # Outer try/except so ANY unexpected error becomes a JSON error
+        # rather than an HTML 500 page — the JS uses safeJsonFetch and
+        # gives up with "Server returned non-JSON response" if it gets
+        # HTML back.
         try:
-            body = json.loads(request.body)
-        except (ValueError, TypeError):
-            return JsonResponse({'ok': False, 'error': 'Invalid JSON'}, status=400)
+            f = get_object_or_404(SharedFile, pk=pk)
+            if not _file_permission_for(request.user, f):
+                return JsonResponse(
+                    {'ok': False, 'error': 'You do not have permission to share this file.'},
+                    status=403,
+                )
 
-        invite_ids = body.get('invite_user_ids', [])
-        if not invite_ids:
-            return JsonResponse({'ok': False, 'error': 'No users selected'}, status=400)
+            try:
+                body = json.loads(request.body)
+            except (ValueError, TypeError):
+                return JsonResponse({'ok': False, 'error': 'Invalid JSON'}, status=400)
 
-        # Optional flag — presenter can pre-allow viewers to edit the file
-        viewers_can_edit = bool(body.get('viewers_can_edit', False))
+            invite_ids = body.get('invite_user_ids', [])
+            if not invite_ids:
+                return JsonResponse({'ok': False, 'error': 'No users selected'}, status=400)
 
-        from apps.core.models import User as AppUser
-        from apps.files.models import LivePreviewSession
+            # Optional flag — presenter can pre-allow viewers to edit the file
+            viewers_can_edit = bool(body.get('viewers_can_edit', False))
 
-        # Close any previous active session by this presenter on this file
-        LivePreviewSession.objects.filter(
-            presenter=request.user, file=f, ended_at__isnull=True
-        ).update(ended_at=timezone.now())
+            from apps.core.models import User as AppUser
+            from apps.files.models import LivePreviewSession
 
-        session = LivePreviewSession.objects.create(
-            presenter=request.user,
-            file=f,
-            viewers_can_edit=viewers_can_edit,
-        )
+            # Close any previous active session by this presenter on this file
+            LivePreviewSession.objects.filter(
+                presenter=request.user, file=f, ended_at__isnull=True
+            ).update(ended_at=timezone.now())
 
-        # Resolve invitees — only users who can see this file
-        invitees = AppUser.objects.filter(id__in=invite_ids)
-        for invitee in invitees:
-            session.invited.add(invitee)
-            # Send a real-time invite notification
-            _notify_user(
-                user=invitee,
-                notif_type='live_preview_invite',
-                title=f'{request.user.get_full_name()} is sharing a live preview',
-                body=f'"{f.name}" — click to join',
-                link='',
-                icon='bi-cast',
-                color='#8b5cf6',
-                actions=[
-                    {
-                        'label': 'Join',
-                        'url': '',
-                        'style': 'primary',
-                        'data': {
-                            'action': 'live_preview_accept',
-                            'session_token': str(session.token),
-                            'file_id': str(f.id),
-                            'file_name': f.name,
-                            'file_ext': f.extension,
-                            'presenter_name': request.user.get_full_name(),
-                        },
-                    },
-                    {
-                        'label': 'Decline',
-                        'url': '',
-                        'style': 'secondary',
-                        'data': {'action': 'live_preview_decline'},
-                    },
-                ],
+            session = LivePreviewSession.objects.create(
+                presenter=request.user,
+                file=f,
+                viewers_can_edit=viewers_can_edit,
             )
 
-        return JsonResponse({
-            'ok': True,
-            'session_token': str(session.token),
-            'ws_path': session.ws_path,
-            'viewers_can_edit': viewers_can_edit,
-        })
+            # Resolve invitees — only users who can see this file
+            invitees = AppUser.objects.filter(id__in=invite_ids)
+            for invitee in invitees:
+                session.invited.add(invitee)
+                # Send a real-time invite notification — wrapped per-user
+                # so one bad notification recipient doesn't kill the whole
+                # request. _notify_user already swallows internal errors,
+                # but belt-and-braces here.
+                try:
+                    _notify_user(
+                        user=invitee,
+                        notif_type='live_preview_invite',
+                        title=f'{request.user.get_full_name() or request.user.email} is sharing a live preview',
+                        body=f'"{f.name}" — click to join',
+                        link='',
+                        icon='bi-cast',
+                        color='#8b5cf6',
+                        actions=[
+                            {
+                                'label': 'Join',
+                                'url': '',
+                                'style': 'primary',
+                                'data': {
+                                    'action': 'live_preview_accept',
+                                    'session_token': str(session.token),
+                                    'file_id': str(f.id),
+                                    'file_name': f.name,
+                                    'file_ext': f.extension,
+                                    'presenter_name': request.user.get_full_name() or request.user.email,
+                                },
+                            },
+                            {
+                                'label': 'Decline',
+                                'url': '',
+                                'style': 'secondary',
+                                'data': {'action': 'live_preview_decline'},
+                            },
+                        ],
+                    )
+                except Exception as e:
+                    # Log and continue — failing to notify one viewer should
+                    # NOT abort the session creation.
+                    print(f'[live_preview_start notify failed for {invitee}]: {e}')
+
+            return JsonResponse({
+                'ok': True,
+                'session_token': str(session.token),
+                'ws_path': session.ws_path,
+                'viewers_can_edit': viewers_can_edit,
+            })
+
+        except Exception as e:
+            # Last-ditch: log full traceback server-side, return JSON to client.
+            import traceback
+            traceback.print_exc()
+            return JsonResponse(
+                {'ok': False, 'error': f'Server error: {type(e).__name__}: {e}'},
+                status=500,
+            )
 
 
 class LivePreviewAcceptView(LoginRequiredMixin, View):

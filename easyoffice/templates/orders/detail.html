@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Order {{ order.order_no }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'orders:dashboard' %}">Orders</a><span>/</span>
+  <a href="{% url 'orders:order_list' %}">List</a><span>/</span>
+  <span>{{ order.order_no }}</span>
+{% endblock %}
+
+{% block content %}
+<style>
+  .od-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
+  @media (max-width: 900px) { .od-grid { grid-template-columns: 1fr; } }
+  .od-card { background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); padding: 22px; margin-bottom: 18px; }
+  .od-card h3 { font-size: .85rem; font-weight: 700; margin: 0 0 14px; }
+
+  .od-status-banner { padding: 14px 18px; border-radius: var(--eo-radius); margin-bottom: 18px; font-size: .9rem; display: flex; align-items: center; gap: 12px; border-left: 4px solid; }
+  .b-new { background: #e0e7ff; color: #3730a3; border-color: #6366f1; }
+  .b-confirmed { background: #cffafe; color: #155e75; border-color: #06b6d4; }
+  .b-in_fulfillment { background: #fef3c7; color: #92400e; border-color: #f59e0b; }
+  .b-fulfilled { background: #dcfce7; color: #166534; border-color: #10b981; }
+  .b-cancelled { background: #f3f4f6; color: #374151; border-color: #94a3b8; }
+
+  .od-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  .od-table th { text-align: left; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--eo-text-muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--eo-border); }
+  .od-table td { padding: 10px; border-bottom: 1px solid var(--eo-border); }
+  .od-table tr:last-child td { border-bottom: 0; }
+  .od-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .totals-box { margin-top: 14px; }
+  .totals-box div { display: flex; justify-content: space-between; padding: 4px 0; font-size: .9rem; }
+  .totals-box .grand { font-size: 1.15rem; font-weight: 800; padding-top: 10px; margin-top: 6px; border-top: 1px solid var(--eo-border); }
+
+  .meta-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: .85rem; border-bottom: 1px solid var(--eo-border); }
+  .meta-row:last-child { border-bottom: 0; }
+  .meta-row .lbl { color: var(--eo-text-muted); font-weight: 600; }
+
+  .doc-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--eo-border); }
+  .doc-row:last-child { border-bottom: 0; }
+  .doc-row .icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1rem; color: #fff; flex-shrink: 0; }
+  .doc-row .num { font-family: monospace; font-weight: 600; font-size: .9rem; }
+  .doc-row .label { font-size: .75rem; color: var(--eo-text-muted); text-transform: uppercase; letter-spacing: .04em; }
+  .doc-row .pending { color: var(--eo-text-muted); font-style: italic; font-size: .85rem; }
+
+  .events { font-size: .82rem; }
+  .events li { list-style: none; padding: 8px 0; border-bottom: 1px solid var(--eo-border); }
+  .events li:last-child { border-bottom: 0; }
+  .events .when { color: var(--eo-text-muted); font-size: .7rem; }
+
+  .actions-bar { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .inline-form { display: flex; gap: 8px; align-items: end; }
+  .inline-form select { padding: 8px 10px; border: 1px solid var(--eo-border); border-radius: 6px; font-size: .85rem; min-width: 220px; }
+</style>
+
+<!-- Status banner -->
+<div class="od-status-banner b-{{ order.status }}">
+  <i class="bi bi-info-circle-fill"></i>
+  <div style="flex:1">
+    <strong>{{ order.get_status_display }}</strong>
+    {% if order.status == 'new' %}— Awaiting confirmation. Review and confirm before fulfilling.
+    {% elif order.status == 'confirmed' %}— Ready to fulfill.
+    {% elif order.status == 'in_fulfillment' %}— Generating documents…
+    {% elif order.status == 'fulfilled' %}— All documents generated. Order complete.
+    {% elif order.status == 'cancelled' %}— {{ order.cancelled_reason|default:"No reason given" }}
+    {% endif %}
+  </div>
+</div>
+
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title" style="font-family:monospace">{{ order.order_no }}</h1>
+    <p style="color:var(--eo-text-muted);font-size:.85rem;margin:4px 0 0">
+      {{ order.get_source_display }} · created {{ order.created_at|date:"M d, Y H:i" }}
+      {% if order.created_by %} by {{ order.created_by.email }}{% endif %}
+    </p>
+  </div>
+  <div class="actions-bar">
+    {% if order.status == 'new' %}
+      <form method="post" action="{% url 'orders:order_confirm' pk=order.pk %}" style="display:inline">{% csrf_token %}
+        <button type="submit" class="eo-btn"><i class="bi bi-check-circle"></i> Confirm</button>
+      </form>
+    {% endif %}
+    {% if can_fulfill and order.is_fulfillable %}
+      <form method="post" action="{% url 'orders:order_fulfill' pk=order.pk %}" style="display:inline"
+            onsubmit="return confirm('This will generate Proforma, Invoice and Delivery Note PDFs and lock them. Continue?');">
+        {% csrf_token %}
+        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-magic"></i> Fulfill order</button>
+      </form>
+    {% endif %}
+    {% if can_cancel and order.status != 'cancelled' and order.status != 'fulfilled' %}
+      <button type="button" class="eo-btn" onclick="document.getElementById('cancelModal').style.display='block'">
+        <i class="bi bi-x-circle"></i> Cancel
+      </button>
+    {% endif %}
+  </div>
+</div>
+
+<div class="od-grid">
+  <!-- LEFT: items + customer -->
+  <div>
+    <!-- Customer / contact -->
+    <div class="od-card">
+      <h3><i class="bi bi-person-circle"></i> Customer &amp; Contact</h3>
+      {% if order.customer %}
+        <div class="meta-row"><span class="lbl">Customer</span><span><a href="#">{{ order.customer.display_name }}</a></span></div>
+        {% if order.customer.email %}<div class="meta-row"><span class="lbl">Customer email</span><span>{{ order.customer.email }}</span></div>{% endif %}
+        {% if order.customer.address %}<div class="meta-row"><span class="lbl">Customer address</span><span>{{ order.customer.address|truncatechars:60 }}</span></div>{% endif %}
+      {% else %}
+        <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:12px;margin-bottom:14px;font-size:.85rem">
+          <i class="bi bi-exclamation-triangle-fill" style="color:#d97706"></i>
+          <strong>No customer attached.</strong> This order needs a customer before it can be fulfilled.
+        </div>
+        <form method="post" action="{% url 'orders:order_attach_customer' pk=order.pk %}" class="inline-form">
+          {% csrf_token %}
+          {{ attach_customer_form.customer }}
+          <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-link-45deg"></i> Attach</button>
+        </form>
+      {% endif %}
+
+      <div style="margin-top:14px">
+        {% if order.contact_name %}<div class="meta-row"><span class="lbl">Contact name</span><span>{{ order.contact_name }}</span></div>{% endif %}
+        {% if order.contact_phone %}<div class="meta-row"><span class="lbl">Phone</span><span>{{ order.contact_phone }}</span></div>{% endif %}
+        {% if order.contact_email %}<div class="meta-row"><span class="lbl">Email</span><span>{{ order.contact_email }}</span></div>{% endif %}
+        {% if order.delivery_address %}<div class="meta-row"><span class="lbl">Delivery address</span><span>{{ order.delivery_address }}</span></div>{% endif %}
+        {% if order.notes %}<div class="meta-row"><span class="lbl">Notes</span><span>{{ order.notes }}</span></div>{% endif %}
+      </div>
+    </div>
+
+    <!-- Line items -->
+    <div class="od-card">
+      <h3><i class="bi bi-list-ul"></i> Line Items</h3>
+      {% if order.items.all %}
+      <table class="od-table">
+        <thead>
+          <tr>
+            <th>Description</th>
+            <th class="num">Qty</th>
+            <th class="num">Unit Price</th>
+            <th class="num">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for li in order.items.all %}
+          <tr>
+            <td>{{ li.description }}</td>
+            <td class="num">{{ li.quantity }}</td>
+            <td class="num">{{ li.unit_price|floatformat:2|intcomma }}</td>
+            <td class="num">{{ li.line_total|floatformat:2|intcomma }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="totals-box">
+        <div><span>Subtotal</span><span>{{ order.subtotal|floatformat:2|intcomma }}</span></div>
+        {% if order.discount_amount %}<div><span>Discount</span><span>-{{ order.discount_amount|floatformat:2|intcomma }}</span></div>{% endif %}
+        <div><span>Tax ({{ order.tax_rate }}%)</span><span>{{ order.tax_amount|floatformat:2|intcomma }}</span></div>
+        <div class="grand"><span>Total ({{ order.currency }})</span><span>{{ order.total|floatformat:2|intcomma }}</span></div>
+      </div>
+      {% else %}
+        <div style="color:var(--eo-text-muted);text-align:center;padding:24px">No line items.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- RIGHT: documents + audit -->
+  <div>
+    <div class="od-card">
+      <h3><i class="bi bi-file-earmark-text"></i> Documents</h3>
+
+      <div class="doc-row">
+        <div class="icon" style="background:#f59e0b"><i class="bi bi-file-earmark"></i></div>
+        <div style="flex:1">
+          <div class="label">Proforma</div>
+          {% if order.proforma %}
+            <div class="num"><a href="{% url 'invoice_detail' pk=order.proforma.pk %}">{{ order.proforma.number }}</a></div>
+          {% else %}
+            <div class="pending">Not generated yet</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="doc-row">
+        <div class="icon" style="background:#6366f1"><i class="bi bi-receipt"></i></div>
+        <div style="flex:1">
+          <div class="label">Invoice</div>
+          {% if order.invoice %}
+            <div class="num"><a href="{% url 'invoice_detail' pk=order.invoice.pk %}">{{ order.invoice.number }}</a></div>
+          {% else %}
+            <div class="pending">Not generated yet</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="doc-row">
+        <div class="icon" style="background:#10b981"><i class="bi bi-truck"></i></div>
+        <div style="flex:1">
+          <div class="label">Delivery Note</div>
+          {% if order.delivery_note %}
+            <div class="num"><a href="{% url 'invoice_detail' pk=order.delivery_note.pk %}">{{ order.delivery_note.number }}</a></div>
+          {% else %}
+            <div class="pending">Not generated yet</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="od-card">
+      <h3><i class="bi bi-info-circle"></i> Order Info</h3>
+      <div class="meta-row"><span class="lbl">Source</span><span>{{ order.get_source_display }}</span></div>
+      {% if order.external_ref %}<div class="meta-row"><span class="lbl">External ref</span><span style="font-family:monospace">{{ order.external_ref }}</span></div>{% endif %}
+      <div class="meta-row"><span class="lbl">Items</span><span>{{ order.items.count }}</span></div>
+      <div class="meta-row"><span class="lbl">Currency</span><span>{{ order.currency }}</span></div>
+      {% if order.fulfilled_at %}
+        <div class="meta-row"><span class="lbl">Fulfilled</span><span>{{ order.fulfilled_at|date:"M d, Y H:i" }}</span></div>
+        <div class="meta-row"><span class="lbl">Fulfilled by</span><span>{{ order.fulfilled_by.email|default:"—" }}</span></div>
+      {% endif %}
+    </div>
+
+    <div class="od-card">
+      <h3><i class="bi bi-clock-history"></i> Activity</h3>
+      <ul class="events" style="padding:0;margin:0">
+        {% for ev in order.events.all|slice:":15" %}
+        <li>
+          <div><strong>{{ ev.get_kind_display }}</strong> — {{ ev.message }}</div>
+          <div class="when">
+            {{ ev.created_at|naturaltime }}
+            {% if ev.actor %}· {{ ev.actor.email }}{% endif %}
+          </div>
+        </li>
+        {% empty %}
+          <li style="color:var(--eo-text-muted);text-align:center">No activity yet.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- Cancel modal -->
+<div id="cancelModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;padding:24px;max-width:480px;width:90%;margin:auto;margin-top:15vh">
+    <h3 style="margin-top:0">Cancel order?</h3>
+    <form method="post" action="{% url 'orders:order_cancel' pk=order.pk %}">
+      {% csrf_token %}
+      <div class="field" style="margin:12px 0">
+        <label>Reason (optional)</label>
+        {{ cancel_form.reason }}
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="button" class="eo-btn" onclick="document.getElementById('cancelModal').style.display='none'">Keep order</button>
+        <button type="submit" class="eo-btn" style="background:#ef4444;color:#fff;border-color:#ef4444">Cancel order</button>
+      </div>
+    </form>
+  </div>
+</div>
+<script>
+  // Show the cancel modal as flex when triggered
+  const cm = document.getElementById('cancelModal');
+  if (cm) {
+    const observer = new MutationObserver(() => { if (cm.style.display === 'block') cm.style.display = 'flex'; });
+    observer.observe(cm, { attributes: true, attributeFilter: ['style'] });
+  }
+</script>
+{% endblock %}

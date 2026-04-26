@@ -45,6 +45,8 @@ urlpatterns = [
 
     # Reports
     path('reports/', include('apps.reports.urls')),
+    path('orders/',     include('apps.orders.urls')),
+    path('api/',        include('apps.orders.api.urls')),
 
     # API
     path('api/v1/', include('apps.core.urls.api')),

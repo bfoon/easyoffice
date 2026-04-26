@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}New Order{% endblock %}
+{% block breadcrumb %}<a href="{% url 'orders:dashboard' %}">Orders</a><span>/</span><span>New</span>{% endblock %}
+
+{% block content %}
+<style>
+  .new-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  @media (max-width: 720px) { .new-grid { grid-template-columns: 1fr; } }
+  .new-card { background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); padding: 22px; margin-bottom: 18px; }
+  .new-card h3 { font-size: .9rem; font-weight: 700; margin: 0 0 16px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--eo-text-muted); font-weight: 600; margin-bottom: 4px; }
+  .field input, .field textarea, .field select { width: 100%; padding: 9px 11px; border: 1px solid var(--eo-border); border-radius: 8px; font-size: .9rem; box-sizing: border-box; }
+
+  .items-table { width: 100%; border-collapse: collapse; }
+  .items-table th { text-align: left; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--eo-text-muted); font-weight: 600; padding: 8px 6px; }
+  .items-table td { padding: 4px; }
+  .items-table input { width: 100%; padding: 8px 10px; border: 1px solid var(--eo-border); border-radius: 6px; font-size: .85rem; box-sizing: border-box; }
+  .items-table .col-desc { width: 50%; }
+  .items-table .col-qty, .items-table .col-price, .items-table .col-total { width: 14%; }
+  .items-table .col-actions { width: 8%; text-align: center; }
+  .row-total { padding: 8px; text-align: right; font-weight: 600; color: var(--eo-text-muted); font-variant-numeric: tabular-nums; }
+  .icon-btn { background: transparent; border: 1px solid var(--eo-border); border-radius: 6px; padding: 6px 10px; cursor: pointer; color: #ef4444; }
+  .icon-btn:hover { background: #fef2f2; }
+  .add-row-btn { margin-top: 10px; }
+  .totals { display: flex; justify-content: flex-end; gap: 30px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--eo-border); font-size: .9rem; }
+  .totals .grand { font-size: 1.2rem; font-weight: 800; color: var(--eo-text); }
+
+  .actions-bar { display: flex; gap: 10px; justify-content: flex-end; }
+</style>
+
+<div class="eo-page-header">
+  <h1 class="eo-page-title"><i class="bi bi-cart-plus"></i> New Order</h1>
+</div>
+
+<form method="post" id="orderForm">
+  {% csrf_token %}
+
+  <div class="new-card">
+    <h3>Order Source</h3>
+    <div class="field">
+      <label for="source">Source</label>
+      <select name="source" id="source">
+        {% for v, l in source_choices %}
+          <option value="{{ v }}" {% if v == 'phone' %}selected{% endif %}>{{ l }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+
+  <div class="new-card">
+    <h3>Customer</h3>
+    <div class="new-grid">
+      <div class="field">
+        <label for="{{ header_form.customer.id_for_label }}">Existing customer</label>
+        {{ header_form.customer }}
+        <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:4px">Leave blank if it's a new customer — fill in contact info below.</div>
+      </div>
+      <div></div>
+      <div class="field">
+        <label for="{{ header_form.contact_name.id_for_label }}">Contact name</label>
+        {{ header_form.contact_name }}
+      </div>
+      <div class="field">
+        <label for="{{ header_form.contact_phone.id_for_label }}">Phone</label>
+        {{ header_form.contact_phone }}
+      </div>
+      <div class="field">
+        <label for="{{ header_form.contact_email.id_for_label }}">Email</label>
+        {{ header_form.contact_email }}
+      </div>
+      <div class="field">
+        <label for="{{ header_form.delivery_address.id_for_label }}">Delivery address</label>
+        {{ header_form.delivery_address }}
+      </div>
+    </div>
+  </div>
+
+  <div class="new-card">
+    <h3>Line Items</h3>
+    <table class="items-table" id="itemsTable">
+      <thead>
+        <tr>
+          <th class="col-desc">Description</th>
+          <th class="col-qty">Qty</th>
+          <th class="col-price">Unit Price</th>
+          <th class="col-total">Total</th>
+          <th class="col-actions"></th>
+        </tr>
+      </thead>
+      <tbody id="itemsBody">
+        <!-- rows injected by JS -->
+      </tbody>
+    </table>
+    <button type="button" class="eo-btn add-row-btn" id="addRowBtn"><i class="bi bi-plus-lg"></i> Add row</button>
+
+    <div class="totals">
+      <div>Subtotal: <strong id="subtotal">0.00</strong></div>
+      <div>Tax: <strong id="taxAmt">0.00</strong></div>
+      <div class="grand">Total: <span id="grandTotal">0.00</span></div>
+    </div>
+  </div>
+
+  <div class="new-card">
+    <h3>Money &amp; Notes</h3>
+    <div class="new-grid">
+      <div class="field">
+        <label for="{{ header_form.currency.id_for_label }}">Currency</label>
+        {{ header_form.currency }}
+      </div>
+      <div class="field">
+        <label for="{{ header_form.tax_rate.id_for_label }}">Tax rate (%)</label>
+        {{ header_form.tax_rate }}
+      </div>
+      <div class="field">
+        <label for="{{ header_form.discount_amount.id_for_label }}">Discount</label>
+        {{ header_form.discount_amount }}
+      </div>
+      <div></div>
+      <div class="field" style="grid-column: 1 / -1">
+        <label for="{{ header_form.notes.id_for_label }}">Notes</label>
+        {{ header_form.notes }}
+      </div>
+    </div>
+  </div>
+
+  <div class="actions-bar">
+    <a href="{% url 'orders:dashboard' %}" class="eo-btn">Cancel</a>
+    <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-save"></i> Create order</button>
+  </div>
+</form>
+
+<script>
+(function () {
+  const tbody = document.getElementById('itemsBody');
+  const addBtn = document.getElementById('addRowBtn');
+  let rowIdx = 0;
+
+  function buildRow(idx) {
+    const tr = document.createElement('tr');
+    tr.dataset.idx = idx;
+    tr.innerHTML = `
+      <td class="col-desc"><input type="text" name="items-${idx}-description" placeholder="Description"></td>
+      <td class="col-qty"><input type="number" name="items-${idx}-quantity" value="1" step="0.01" min="0"></td>
+      <td class="col-price"><input type="number" name="items-${idx}-unit_price" value="0" step="0.01" min="0"></td>
+      <td class="row-total" data-role="rowtotal">0.00</td>
+      <td class="col-actions"><button type="button" class="icon-btn" data-role="del"><i class="bi bi-trash"></i></button></td>
+    `;
+    return tr;
+  }
+
+  function recalc() {
+    let subtotal = 0;
+    tbody.querySelectorAll('tr').forEach(tr => {
+      const qty = parseFloat(tr.querySelector('input[name$="-quantity"]').value || '0');
+      const up  = parseFloat(tr.querySelector('input[name$="-unit_price"]').value || '0');
+      const lt = qty * up;
+      tr.querySelector('[data-role=rowtotal]').textContent = lt.toFixed(2);
+      subtotal += lt;
+    });
+    const taxRateInput = document.getElementById('id_tax_rate');
+    const discountInput = document.getElementById('id_discount_amount');
+    const taxRate = parseFloat((taxRateInput && taxRateInput.value) || '0');
+    const discount = parseFloat((discountInput && discountInput.value) || '0');
+    const sub = Math.max(0, subtotal - discount);
+    const tax = sub * (taxRate / 100);
+    document.getElementById('subtotal').textContent = sub.toFixed(2);
+    document.getElementById('taxAmt').textContent = tax.toFixed(2);
+    document.getElementById('grandTotal').textContent = (sub + tax).toFixed(2);
+  }
+
+  function addRow() {
+    const tr = buildRow(rowIdx++);
+    tbody.appendChild(tr);
+    tr.querySelectorAll('input').forEach(i => i.addEventListener('input', recalc));
+    tr.querySelector('[data-role=del]').addEventListener('click', () => {
+      tr.remove();
+      recalc();
+    });
+  }
+
+  addBtn.addEventListener('click', addRow);
+  ['id_tax_rate', 'id_discount_amount'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', recalc);
+  });
+
+  // Seed two rows so the form isn't empty
+  addRow();
+  addRow();
+})();
+</script>
+{% endblock %}

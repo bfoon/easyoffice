@@ -12,4 +12,5 @@ urlpatterns = [
     # Supervisor / Admin tier
     path('storage/', views.FileStorageReportView.as_view(), name='file_storage_report'),
     path('invoicing/', views.InvoicingReportView.as_view(), name='invoicing_report'),
+    path('orders/', views.OrdersReportView.as_view(), name='orders_report'),
 ]

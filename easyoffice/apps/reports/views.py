@@ -907,3 +907,124 @@ class InvoicingReportView(_SupervisorReportsAccessMixin, TemplateView):
 
         ctx['currency'] = 'GMD'  # default currency on the model
         return ctx
+
+
+# ---------------------------------------------------------------------------
+# NEW: Orders Report (Supervisor / Admin)
+#   Sales orders from phone, walk-in, website and API — counts, totals,
+#   conversion rate, daily/monthly trends, source mix.
+# ---------------------------------------------------------------------------
+
+class OrdersReportView(_SupervisorReportsAccessMixin, TemplateView):
+    template_name = 'reports/orders_report.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        from apps.orders.models import SalesOrder, OrderStatus, OrderSource
+
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        twelve_months_ago = (now.replace(day=1) - timedelta(days=365)).replace(day=1)
+        thirty_days_ago = now - timedelta(days=30)
+
+        # ── Top-line KPIs ────────────────────────────────────────────────
+        ctx['total_orders']    = SalesOrder.objects.count()
+        ctx['orders_today']    = SalesOrder.objects.filter(created_at__gte=today_start).count()
+        ctx['orders_month']    = SalesOrder.objects.filter(created_at__gte=month_start).count()
+        ctx['fulfilled_total'] = SalesOrder.objects.filter(status=OrderStatus.FULFILLED).count()
+        ctx['fulfilled_month'] = SalesOrder.objects.filter(
+            status=OrderStatus.FULFILLED, fulfilled_at__gte=month_start
+        ).count()
+
+        # Money: total billed via fulfilled orders this month
+        month_qs = SalesOrder.objects.filter(
+            status=OrderStatus.FULFILLED, fulfilled_at__gte=month_start
+        )
+        ctx['fulfilled_total_month'] = month_qs.aggregate(t=Sum('total'))['t'] or 0
+
+        # Pending / cancelled snapshot
+        ctx['pending_orders']    = SalesOrder.objects.filter(
+            status__in=[OrderStatus.NEW, OrderStatus.CONFIRMED, OrderStatus.IN_FULFILLMENT]
+        ).count()
+        ctx['cancelled_orders']  = SalesOrder.objects.filter(status=OrderStatus.CANCELLED).count()
+
+        # Conversion rate (fulfilled / total non-cancelled)  — last 30d
+        ord30 = SalesOrder.objects.filter(created_at__gte=thirty_days_ago)
+        non_cancelled_30 = ord30.exclude(status=OrderStatus.CANCELLED).count()
+        fulfilled_30     = ord30.filter(status=OrderStatus.FULFILLED).count()
+        ctx['conversion_rate_30d'] = (
+            round(fulfilled_30 / non_cancelled_30 * 100, 1) if non_cancelled_30 else 0
+        )
+
+        # ── Source mix (donut, last 30d) ─────────────────────────────────
+        source_choices = {k: str(v) for k, v in OrderSource.choices}
+        sources = list(
+            ord30.values('source').annotate(count=Count('id'), total=Sum('total'))
+                 .order_by('-count')
+        )
+        for r in sources:
+            r['label'] = source_choices.get(r['source'], r['source'])
+            r['total'] = float(r['total'] or 0)
+        ctx['source_mix']      = sources
+        ctx['source_mix_json'] = json.dumps(sources)
+
+        # ── Status mix (donut, all-time current state) ───────────────────
+        status_choices = {k: str(v) for k, v in OrderStatus.choices}
+        statuses = list(
+            SalesOrder.objects.values('status').annotate(count=Count('id')).order_by('-count')
+        )
+        for r in statuses:
+            r['label'] = status_choices.get(r['status'], r['status'])
+        ctx['status_mix']      = statuses
+        ctx['status_mix_json'] = json.dumps(statuses)
+
+        # ── Monthly trend (last 12 months) ──────────────────────────────
+        monthly = list(
+            SalesOrder.objects.filter(created_at__gte=twelve_months_ago)
+            .annotate(m=TruncMonth('created_at'))
+            .values('m').annotate(count=Count('id'), total=Sum('total'))
+            .order_by('m')
+        )
+        ctx['monthly_json'] = json.dumps([
+            {
+                'month': r['m'].strftime('%Y-%m') if r['m'] else '',
+                'count': r['count'],
+                'total': float(r['total'] or 0),
+            }
+            for r in monthly
+        ])
+
+        # ── Daily trend (last 30 days) ──────────────────────────────────
+        daily = list(
+            SalesOrder.objects.filter(created_at__gte=thirty_days_ago)
+            .annotate(d=TruncDate('created_at'))
+            .values('d').annotate(count=Count('id'), total=Sum('total'))
+            .order_by('d')
+        )
+        ctx['daily_json'] = json.dumps([
+            {
+                'date': r['d'].isoformat() if r['d'] else '',
+                'count': r['count'],
+                'total': float(r['total'] or 0),
+            }
+            for r in daily
+        ])
+
+        # ── Top fulfillers ──────────────────────────────────────────────
+        ctx['top_fulfillers'] = list(
+            SalesOrder.objects.filter(status=OrderStatus.FULFILLED, fulfilled_by__isnull=False)
+            .filter(fulfilled_at__gte=thirty_days_ago)
+            .values('fulfilled_by__email', 'fulfilled_by__first_name', 'fulfilled_by__last_name')
+            .annotate(count=Count('id'), total=Sum('total'))
+            .order_by('-count')[:10]
+        )
+
+        # ── Recent orders ───────────────────────────────────────────────
+        ctx['recent_orders'] = (
+            SalesOrder.objects.select_related('customer', 'fulfilled_by')
+            .order_by('-created_at')[:20]
+        )
+
+        ctx['currency'] = 'GMD'
+        return ctx

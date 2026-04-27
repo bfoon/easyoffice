@@ -1,77 +1,340 @@
 {% extends 'base.html' %}
 {% load humanize %}
-{% block title %}{{ task.title }}{% endblock %}
-{% block breadcrumb %}<a href="{% url 'task_list' %}">Tasks</a> / {{ task.title|truncatechars:30 }}{% endblock %}
 
+{% block title %}{{ task.title }}{% endblock %}
+
+{% block breadcrumb %}
+  <a href="{% url 'task_list' %}">Tasks</a> / {{ task.title|truncatechars:30 }}
+{% endblock %}
+
+
+{# ─────────────────────────────────────────────────────────────────────────── #}
+{#  Page-scoped styles                                                          #}
+{#  Lives in extra_css so it's emitted in <head>, before any content renders.   #}
+{# ─────────────────────────────────────────────────────────────────────────── #}
+{% block extra_css %}
+<style>
+  /* ── Hero / header card ──────────────────────────────────────────────── */
+  .task-hero{
+    position:relative; overflow:hidden;
+    border-radius:var(--eo-radius);
+    padding:22px; margin-bottom:18px;
+    background:
+      radial-gradient(circle at top right, rgba(37,99,235,.14), transparent 34%),
+      linear-gradient(135deg, var(--eo-surface), var(--eo-bg));
+    border:1px solid var(--eo-border);
+  }
+  .task-hero::after{
+    content:""; position:absolute; right:-60px; top:-60px;
+    width:180px; height:180px; border-radius:50%;
+    background:rgba(37,99,235,.08);
+  }
+  .task-title{
+    font-size:1.45rem; font-weight:800;
+    color:var(--eo-text); margin:0 0 10px; line-height:1.25;
+  }
+  .task-muted{ color:var(--eo-text-muted); font-size:.82rem; }
+
+  .task-completion-alert{
+    border-radius:14px;
+    border:1px solid rgba(16,185,129,.22);
+    background:linear-gradient(135deg, rgba(16,185,129,.10), rgba(5,150,105,.04));
+    padding:12px 14px; font-size:.84rem; color:#047857;
+    margin-top:14px;
+  }
+
+  /* ── Quick-update card ───────────────────────────────────────────────── */
+  .task-quick-card{
+    background:var(--eo-bg);
+    border:1px solid var(--eo-border);
+    margin-bottom:20px; box-shadow:none;
+  }
+  .quick-status-form .eo-btn.active,
+  #quickUpdateForm .eo-btn.active{
+    background:var(--eo-accent); color:#fff; border-color:var(--eo-accent);
+  }
+  .task-submit-loading{ opacity:.65; pointer-events:none; }
+
+  /* ── Comments ────────────────────────────────────────────────────────── */
+  .task-comment-card{
+    background:var(--eo-bg);
+    border-radius:var(--eo-radius-sm);
+    padding:12px 14px;
+    font-size:.87rem; line-height:1.6;
+    border:1px solid rgba(148,163,184,.16);
+  }
+
+  /* ── Side panel ──────────────────────────────────────────────────────── */
+  .task-side-row{ display:flex; justify-content:space-between; gap:12px; align-items:center; }
+  .task-side-label{ color:var(--eo-text-muted); font-size:.82rem; }
+  .task-side-value{ font-weight:600; font-size:.84rem; text-align:right; }
+
+  .task-mini-card{
+    background:var(--eo-bg); border:1px solid var(--eo-border);
+    border-radius:14px; padding:12px;
+  }
+
+  .task-progress-ring{
+    width:54px; height:54px; border-radius:50%;
+    display:grid; place-items:center;
+    background: conic-gradient(
+      var(--eo-accent) calc({{ task.progress_pct|default:0 }} * 1%),
+      rgba(148,163,184,.18) 0
+    );
+    position:relative; flex:0 0 auto;
+  }
+  .task-progress-ring::before{
+    content:""; position:absolute; inset:5px;
+    border-radius:50%; background:var(--eo-surface);
+  }
+  .task-progress-ring span{
+    position:relative; z-index:1;
+    font-size:.72rem; font-weight:800; color:var(--eo-text);
+  }
+
+  /* ── Completion-note modal (custom, no Bootstrap dependency) ─────────── */
+  .tcn-backdrop{
+    position:fixed; inset:0; z-index:1090;
+    background:rgba(15,23,42,.55);
+    display:none; align-items:center; justify-content:center;
+    padding:16px;
+  }
+  .tcn-backdrop.is-open{ display:flex; }
+
+  .tcn-modal{
+    background:#fff; border-radius:16px;
+    width:100%; max-width:520px;
+    box-shadow:0 24px 60px -20px rgba(15,23,42,.4);
+    overflow:hidden;
+    animation:tcn-pop .18s ease;
+  }
+  @keyframes tcn-pop{
+    from{ transform:translateY(8px); opacity:0; }
+    to  { transform:translateY(0);   opacity:1; }
+  }
+  [data-bs-theme="dark"] .tcn-modal{ background:#1f2937; color:#e5e7eb; }
+
+  .tcn-head{
+    padding:18px 22px 14px;
+    background:linear-gradient(135deg,#10b981 0%,#059669 100%);
+    color:#fff;
+    display:flex; align-items:center; gap:12px;
+  }
+  .tcn-head-icon{
+    width:38px; height:38px; border-radius:50%;
+    background:rgba(255,255,255,.18);
+    display:flex; align-items:center; justify-content:center;
+    font-size:18px; flex-shrink:0;
+  }
+  .tcn-head h3{ margin:0; font-size:1rem; font-weight:600; }
+  .tcn-head p { margin:2px 0 0; font-size:.78rem; opacity:.92; }
+
+  .tcn-body{ padding:18px 22px 6px; }
+  .tcn-body label{
+    display:block; font-size:.78rem; font-weight:600;
+    color:#374151; margin-bottom:6px;
+  }
+  [data-bs-theme="dark"] .tcn-body label{ color:#d1d5db; }
+
+  .tcn-body textarea{
+    width:100%;
+    min-height:130px; max-height:260px;
+    padding:10px 12px;
+    border:1px solid #d1d5db; border-radius:10px;
+    font-family:inherit; font-size:.88rem;
+    resize:vertical;
+    background:#fff; color:#0f172a;
+    transition:border-color .15s, box-shadow .15s;
+  }
+  .tcn-body textarea:focus{
+    outline:none;
+    border-color:#10b981;
+    box-shadow:0 0 0 3px rgba(16,185,129,.15);
+  }
+  [data-bs-theme="dark"] .tcn-body textarea{
+    background:#111827; color:#e5e7eb; border-color:#4b5563;
+  }
+  .tcn-counter{
+    display:block; text-align:right;
+    font-size:.72rem; color:#94a3b8; margin-top:4px;
+  }
+  .tcn-error{
+    background:#fef2f2; color:#b91c1c;
+    border:1px solid #fecaca;
+    padding:8px 12px; border-radius:8px;
+    font-size:.8rem; margin-bottom:12px;
+    display:none;
+  }
+  .tcn-error.is-shown{ display:block; }
+
+  .tcn-summary{
+    background:#f0fdf4; border:1px solid #bbf7d0;
+    color:#166534; padding:8px 12px;
+    border-radius:8px; font-size:.78rem;
+    margin-bottom:14px;
+    display:flex; align-items:center; gap:8px;
+  }
+  [data-bs-theme="dark"] .tcn-summary{
+    background:rgba(16,185,129,.1);
+    border-color:rgba(16,185,129,.3);
+    color:#bbf7d0;
+  }
+
+  .tcn-foot{
+    padding:14px 22px 18px;
+    display:flex; gap:8px; justify-content:flex-end;
+  }
+  .tcn-btn{
+    padding:8px 16px; border-radius:8px;
+    font-size:.85rem; font-weight:500; cursor:pointer;
+    border:1px solid transparent;
+    display:inline-flex; align-items:center; gap:6px;
+    transition:background .15s, transform .15s;
+  }
+  .tcn-btn-cancel{ background:#f1f5f9; color:#475569; border-color:#e2e8f0; }
+  .tcn-btn-cancel:hover{ background:#e2e8f0; }
+  .tcn-btn-confirm{
+    background:linear-gradient(135deg,#10b981,#059669); color:#fff; border:0;
+  }
+  .tcn-btn-confirm:hover{ transform:translateY(-1px); }
+  .tcn-btn-confirm:disabled{ opacity:.55; cursor:not-allowed; transform:none; }
+  [data-bs-theme="dark"] .tcn-btn-cancel{
+    background:#374151; color:#e5e7eb; border-color:#4b5563;
+  }
+
+  /* ── Mobile tweaks ───────────────────────────────────────────────────── */
+  @media (max-width: 767.98px){
+    .task-hero{ padding:18px; }
+    .task-title{ font-size:1.2rem; }
+    .task-side-row{ align-items:flex-start; flex-direction:column; gap:4px; }
+    .task-side-value{ text-align:left; }
+  }
+</style>
+{% endblock %}
+
+
+{# ─────────────────────────────────────────────────────────────────────────── #}
+{#  Page content                                                                #}
+{# ─────────────────────────────────────────────────────────────────────────── #}
 {% block content %}
 <div class="row g-4">
+
+  {# ─── Main column ──────────────────────────────────────────────────── #}
   <div class="col-lg-8">
     <div class="eo-card">
-      <div class="d-flex align-items-start justify-content-between gap-3 mb-4">
-        <div>
-          <h1 style="font-size:1.4rem;font-weight:700;color:var(--eo-text);margin-bottom:8px">{{ task.title }}</h1>
-          <div class="d-flex flex-wrap gap-2">
-            <span class="eo-status eo-status-{{ task.status }}">{{ task.get_status_display }}</span>
-            <span class="eo-priority eo-priority-{{ task.priority }}"><i class="bi bi-flag-fill"></i> {{ task.get_priority_display }}</span>
-            {% if task.is_overdue %}
-            <span class="eo-status" style="background:#fee2e2;color:#991b1b">
-              <i class="bi bi-alarm"></i> Overdue
-            </span>
-            {% endif %}
-            {% if is_supervisor_monitor %}
-            <span class="eo-status" style="background:#dbeafe;color:#1d4ed8">
-              <i class="bi bi-eye"></i> Supervisor Monitoring
-            </span>
-            {% endif %}
+
+      {# ── Hero ── #}
+      <div class="task-hero">
+        <div style="position:relative;z-index:1">
+          <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
+            <div style="min-width:0;flex:1">
+              <div class="task-muted mb-1">
+                <i class="bi bi-check2-square me-1"></i>
+                Task Workspace
+                {% if task.project %} · Project {{ task.project.code }}{% endif %}
+              </div>
+
+              <h1 class="task-title">{{ task.title }}</h1>
+
+              <div class="d-flex flex-wrap gap-2">
+                <span class="eo-status eo-status-{{ task.status }}">{{ task.get_status_display }}</span>
+                <span class="eo-priority eo-priority-{{ task.priority }}">
+                  <i class="bi bi-flag-fill"></i> {{ task.get_priority_display }}
+                </span>
+
+                {% if task.is_overdue %}
+                <span class="eo-status" style="background:#fee2e2;color:#991b1b">
+                  <i class="bi bi-alarm"></i> Overdue
+                </span>
+                {% endif %}
+
+                {% if is_supervisor_monitor %}
+                <span class="eo-status" style="background:#dbeafe;color:#1d4ed8">
+                  <i class="bi bi-eye"></i> Supervisor Monitoring
+                </span>
+                {% endif %}
+
+                {% if task.project_milestone %}
+                <span class="eo-status" style="background:#ede9fe;color:#5b21b6">
+                  <i class="bi bi-flag"></i> Linked Milestone
+                </span>
+                {% endif %}
+              </div>
+            </div>
+
+            <div class="d-flex gap-2 align-items-start">
+              {% if can_full_edit_task %}
+              <a href="{% url 'task_edit' task.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+                <i class="bi bi-pencil"></i> Full Edit
+              </a>
+              {% endif %}
+            </div>
           </div>
-        </div>
-        <div class="d-flex gap-2">
-          {% if can_full_edit_task %}
-          <a href="{% url 'task_edit' task.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm">
-            <i class="bi bi-pencil"></i> Full Edit
-          </a>
+
+          {# ── Progress bar ── #}
+          <div class="d-flex align-items-center gap-3 mt-4">
+            <div class="task-progress-ring"><span>{{ task.progress_pct|default:0 }}%</span></div>
+
+            <div style="flex:1">
+              <div class="d-flex justify-content-between mb-2">
+                <span style="font-size:.83rem;font-weight:700;color:var(--eo-text)">Progress</span>
+                <span style="font-size:.83rem;font-weight:800;color:var(--eo-accent)">
+                  {{ task.progress_pct|default:0 }}%
+                </span>
+              </div>
+              <div class="eo-progress" style="height:10px">
+                <div class="eo-progress-bar
+                            {% if task.progress_pct == 100 %}success
+                            {% elif task.progress_pct < 30 %}danger{% endif %}"
+                     style="width:{{ task.progress_pct|default:0 }}%"></div>
+              </div>
+            </div>
+          </div>
+
+          {% if task.status == 'done' or task.progress_pct == 100 %}
+          <div class="task-completion-alert">
+            <i class="bi bi-check-circle-fill me-1"></i>
+            This task is marked as completed. The completion note is saved in the comments timeline.
+          </div>
           {% endif %}
         </div>
       </div>
 
+      {# ── Description ── #}
       {% if task.description %}
-      <div style="background:var(--eo-bg);border-radius:var(--eo-radius-sm);padding:16px;margin-bottom:20px;font-size:.9rem;line-height:1.7">
+      <div style="background:var(--eo-bg);border-radius:var(--eo-radius-sm);
+                  padding:16px;margin-bottom:20px;font-size:.9rem;line-height:1.7">
         {{ task.description|linebreaks }}
       </div>
       {% endif %}
 
-      <div class="mb-4">
-        <div class="d-flex justify-content-between mb-2">
-          <span style="font-size:.83rem;font-weight:600">Progress</span>
-          <span style="font-size:.83rem;font-weight:700;color:var(--eo-accent)">{{ task.progress_pct|default:0 }}%</span>
-        </div>
-        <div class="eo-progress" style="height:10px">
-          <div class="eo-progress-bar {% if task.progress_pct == 100 %}success{% elif task.progress_pct < 30 %}danger{% endif %}"
-               style="width:{{ task.progress_pct|default:0 }}%"></div>
-        </div>
-      </div>
-
+      {# ── Quick-update panel ── #}
       {% if can_update_task_progress %}
-      <div class="eo-card" style="background:var(--eo-bg);border:1px solid var(--eo-border);margin-bottom:20px">
+      <div class="eo-card task-quick-card">
         <div class="eo-card-header" style="padding-bottom:10px">
           <div>
             <h2 class="eo-card-title" style="font-size:1rem">Quick Update</h2>
-            <p class="eo-card-subtitle">Change status and progress without opening the full edit page.</p>
+            <p class="eo-card-subtitle">
+              Change status and progress without opening the full edit page.
+              If you select Done or 100%, you must explain what was completed.
+            </p>
           </div>
         </div>
 
-        <form method="post" action="{% url 'task_quick_update' task.pk %}" id="quickUpdateForm">
+        <form method="post"
+              action="{% url 'task_quick_update' task.pk %}"
+              id="quickUpdateForm">
           {% csrf_token %}
           <div class="row g-3">
             <div class="col-md-5">
               <label class="eo-form-label">Status</label>
-              <select name="status" class="eo-form-select">
-                <option value="todo" {% if task.status == 'todo' %}selected{% endif %}>To Do</option>
+              <select name="status" class="eo-form-select" id="quickStatusSelect">
+                <option value="todo"        {% if task.status == 'todo'        %}selected{% endif %}>To Do</option>
                 <option value="in_progress" {% if task.status == 'in_progress' %}selected{% endif %}>In Progress</option>
-                <option value="review" {% if task.status == 'review' %}selected{% endif %}>In Review</option>
-                <option value="done" {% if task.status == 'done' %}selected{% endif %}>Done</option>
-                <option value="blocked" {% if task.status == 'blocked' %}selected{% endif %}>Blocked</option>
-                <option value="cancelled" {% if task.status == 'cancelled' %}selected{% endif %}>Cancelled</option>
+                <option value="review"      {% if task.status == 'review'      %}selected{% endif %}>Under Review</option>
+                <option value="on_hold"     {% if task.status == 'on_hold'     %}selected{% endif %}>On Hold</option>
+                <option value="done"        {% if task.status == 'done'        %}selected{% endif %}>Done</option>
+                <option value="cancelled"   {% if task.status == 'cancelled'   %}selected{% endif %}>Cancelled</option>
               </select>
             </div>
 
@@ -79,62 +342,59 @@
               <label class="eo-form-label">Progress (%)</label>
               <input type="number"
                      name="progress_pct"
+                     id="quickProgressInput"
                      class="eo-form-control"
-                     min="0"
-                     max="100"
-                     step="1"
+                     min="0" max="100" step="1"
                      value="{{ task.progress_pct|default:0 }}">
             </div>
 
             <div class="col-md-3 d-flex align-items-end">
-              <button type="submit" class="eo-btn eo-btn-primary w-100">
+              <button type="submit" class="eo-btn eo-btn-primary w-100" id="quickUpdateBtn">
                 <i class="bi bi-check2-circle"></i> Update
               </button>
             </div>
           </div>
+
+          <div id="completionHint"
+               style="display:none;margin-top:12px;border-radius:12px;padding:10px 12px;
+                      background:#fffbeb;color:#92400e;font-size:.8rem;border:1px solid #fde68a">
+            <i class="bi bi-info-circle me-1"></i>
+            Completion note will be required because this update closes the task.
+          </div>
         </form>
 
+        {# ── Quick status pills ── #}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
-          <form method="post" action="{% url 'task_quick_update' task.pk %}" class="m-0 quick-status-form">
-            {% csrf_token %}
-            <input type="hidden" name="status" value="todo">
-            <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm {% if task.status == 'todo' %}active{% endif %}">
-              To Do
-            </button>
-          </form>
-
-          <form method="post" action="{% url 'task_quick_update' task.pk %}" class="m-0 quick-status-form">
-            {% csrf_token %}
-            <input type="hidden" name="status" value="in_progress">
-            <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm {% if task.status == 'in_progress' %}active{% endif %}">
-              In Progress
-            </button>
-          </form>
-
-          <form method="post" action="{% url 'task_quick_update' task.pk %}" class="m-0 quick-status-form">
-            {% csrf_token %}
-            <input type="hidden" name="status" value="review">
-            <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm {% if task.status == 'review' %}active{% endif %}">
-              Review
-            </button>
-          </form>
-
-          <form method="post" action="{% url 'task_quick_update' task.pk %}" class="m-0 quick-status-form">
-            {% csrf_token %}
-            <input type="hidden" name="status" value="done">
-            <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm {% if task.status == 'done' %}active{% endif %}">
-              Done
-            </button>
-          </form>
+          {% for value, label in task.Status.choices %}
+            {% if value != 'cancelled' %}
+            <form method="post"
+                  action="{% url 'task_quick_update' task.pk %}"
+                  class="m-0 quick-status-form">
+              {% csrf_token %}
+              <input type="hidden" name="status" value="{{ value }}">
+              <button type="submit"
+                      class="eo-btn eo-btn-secondary eo-btn-sm
+                             {% if task.status == value %}active{% endif %}">
+                {{ label }}
+              </button>
+            </form>
+            {% endif %}
+          {% endfor %}
         </div>
       </div>
       {% endif %}
 
+      {# ── Subtasks ── #}
       {% if subtasks %}
       <div class="mb-4">
-        <h3 style="font-size:.9rem;font-weight:700;margin-bottom:12px">Subtasks ({{ subtasks.count }})</h3>
+        <h3 style="font-size:.9rem;font-weight:700;margin-bottom:12px">
+          Subtasks ({{ subtasks.count }})
+        </h3>
+
         {% for sub in subtasks %}
-        <a href="{% url 'task_detail' sub.pk %}" class="d-flex align-items-center gap-3 p-2" style="text-decoration:none;border-radius:6px;transition:.15s">
+        <a href="{% url 'task_detail' sub.pk %}"
+           class="d-flex align-items-center gap-3 p-2"
+           style="text-decoration:none;border-radius:6px;transition:.15s">
           <i class="bi bi-{% if sub.status == 'done' %}check-circle-fill text-success{% else %}circle text-muted{% endif %}"></i>
           <span style="font-size:.87rem;color:var(--eo-text)">{{ sub.title }}</span>
           <span class="eo-status eo-status-{{ sub.status }} ms-auto">{{ sub.get_status_display }}</span>
@@ -143,24 +403,28 @@
       </div>
       {% endif %}
 
+      {# ── Comments ── #}
       <div>
-        <h3 style="font-size:.9rem;font-weight:700;margin-bottom:16px">Comments ({{ comments.count }})</h3>
+        <h3 style="font-size:.9rem;font-weight:700;margin-bottom:16px">
+          Comments ({{ comments.count }})
+        </h3>
+
         <div class="d-flex flex-column gap-3 mb-4">
           {% for comment in comments %}
           <div class="d-flex gap-3">
             {% if comment.author.avatar %}
-            <img src="{{ comment.author.avatar.url }}" class="eo-avatar-sm" alt=""/>
+              <img src="{{ comment.author.avatar.url }}" class="eo-avatar-sm" alt=""/>
             {% else %}
-            <div class="eo-avatar-initials-sm">{{ comment.author.initials }}</div>
+              <div class="eo-avatar-initials-sm">{{ comment.author.initials }}</div>
             {% endif %}
+
             <div style="flex:1">
-              <div style="display:flex;gap:10px;align-items:baseline;margin-bottom:6px">
-                <span style="font-size:.85rem;font-weight:600">{{ comment.author.full_name }}</span>
+              <div style="display:flex;gap:10px;align-items:baseline;
+                          margin-bottom:6px;flex-wrap:wrap">
+                <span style="font-size:.85rem;font-weight:700">{{ comment.author.full_name }}</span>
                 <span style="font-size:.73rem;color:var(--eo-text-muted)">{{ comment.created_at|naturaltime }}</span>
               </div>
-              <div style="background:var(--eo-bg);border-radius:var(--eo-radius-sm);padding:12px 14px;font-size:.87rem;line-height:1.6">
-                {{ comment.content|linebreaks }}
-              </div>
+              <div class="task-comment-card">{{ comment.content|linebreaks }}</div>
             </div>
           </div>
           {% empty %}
@@ -173,12 +437,14 @@
           {% csrf_token %}
           <div class="d-flex gap-3">
             {% if request.user.avatar %}
-            <img src="{{ request.user.avatar.url }}" class="eo-avatar-sm" alt=""/>
+              <img src="{{ request.user.avatar.url }}" class="eo-avatar-sm" alt=""/>
             {% else %}
-            <div class="eo-avatar-initials-sm">{{ request.user.initials }}</div>
+              <div class="eo-avatar-initials-sm">{{ request.user.initials }}</div>
             {% endif %}
+
             <div style="flex:1">
-              <textarea name="content" class="eo-form-control" rows="3" placeholder="Add a comment..."></textarea>
+              <textarea name="content" class="eo-form-control" rows="3"
+                        placeholder="Add a comment..."></textarea>
               <div class="mt-2">
                 <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm">
                   <i class="bi bi-chat-dots"></i> Comment
@@ -189,8 +455,10 @@
         </form>
         {% endif %}
       </div>
-    </div>
 
+    </div>{# /eo-card #}
+
+    {# ── Attachments ── #}
     {% if attachments %}
     <div class="eo-card mt-4">
       <div class="eo-card-header">
@@ -199,112 +467,180 @@
       {% for att in attachments %}
       <div class="d-flex align-items-center gap-3 py-2 border-bottom">
         <i class="bi bi-paperclip" style="color:var(--eo-text-muted)"></i>
-        <a href="{{ att.file.url }}" target="_blank" style="flex:1;font-size:.87rem;color:var(--eo-accent)">
+        <a href="{{ att.file.url }}" target="_blank"
+           style="flex:1;font-size:.87rem;color:var(--eo-accent)">
           {{ att.file_name }}
         </a>
-        <span style="font-size:.75rem;color:var(--eo-text-muted)">{{ att.uploaded_by.full_name }}</span>
+        <span style="font-size:.75rem;color:var(--eo-text-muted)">
+          {{ att.uploaded_by.full_name }}
+        </span>
       </div>
       {% endfor %}
     </div>
     {% endif %}
   </div>
 
+
+  {# ─── Side column ──────────────────────────────────────────────────── #}
   <div class="col-lg-4 d-flex flex-column gap-4">
+
+    {# ── Task details ── #}
     <div class="eo-card">
-      <h2 class="eo-card-title mb-3">Task Details</h2>
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <h2 class="eo-card-title mb-0">Task Details</h2>
+        <div class="task-progress-ring" style="width:46px;height:46px">
+          <span>{{ task.progress_pct|default:0 }}%</span>
+        </div>
+      </div>
+
       <div class="d-flex flex-column gap-3" style="font-size:.86rem">
-        <div class="d-flex justify-content-between">
-          <span style="color:var(--eo-text-muted)">Assigned to</span>
+
+        <div class="task-side-row">
+          <span class="task-side-label">Assigned to</span>
           <div class="d-flex align-items-center gap-2">
             {% if task.assigned_to.avatar %}
-            <img src="{{ task.assigned_to.avatar.url }}" class="eo-avatar-sm" alt=""/>
+              <img src="{{ task.assigned_to.avatar.url }}" class="eo-avatar-sm" alt=""/>
             {% else %}
-            <div class="eo-avatar-initials-sm">{{ task.assigned_to.initials }}</div>
+              <div class="eo-avatar-initials-sm">{{ task.assigned_to.initials }}</div>
             {% endif %}
-            <a href="{% url 'staff_detail' task.assigned_to.pk %}" style="color:var(--eo-text);font-weight:600">
+            <a href="{% url 'staff_detail' task.assigned_to.pk %}"
+               style="color:var(--eo-text);font-weight:700;text-decoration:none">
               {{ task.assigned_to.full_name }}
             </a>
           </div>
         </div>
 
         {% if task.assigned_by %}
-        <div class="d-flex justify-content-between">
-          <span style="color:var(--eo-text-muted)">Assigned by</span>
-          <span style="font-weight:500">{{ task.assigned_by.full_name }}</span>
+        <div class="task-side-row">
+          <span class="task-side-label">Assigned by</span>
+          <span class="task-side-value">{{ task.assigned_by.full_name }}</span>
         </div>
         {% endif %}
 
         {% if task.due_date %}
-        <div class="d-flex justify-content-between">
-          <span style="color:var(--eo-text-muted)">Due date</span>
-          <span class="{% if task.is_overdue %}text-danger fw-bold{% endif %}">
+        <div class="task-side-row">
+          <span class="task-side-label">Due date</span>
+          <span class="task-side-value {% if task.is_overdue %}text-danger fw-bold{% endif %}">
             {{ task.due_date|date:"N j, Y" }}
           </span>
         </div>
         {% endif %}
 
+        {% if task.start_date %}
+        <div class="task-side-row">
+          <span class="task-side-label">Start date</span>
+          <span class="task-side-value">{{ task.start_date|date:"N j, Y" }}</span>
+        </div>
+        {% endif %}
+
+        {% if task.completed_at %}
+        <div class="task-side-row">
+          <span class="task-side-label">Completed</span>
+          <span class="task-side-value text-success">{{ task.completed_at|date:"N j, Y" }}</span>
+        </div>
+        {% endif %}
+
         {% if task.estimated_hours %}
-        <div class="d-flex justify-content-between">
-          <span style="color:var(--eo-text-muted)">Estimated</span>
-          <span>{{ task.estimated_hours }}h</span>
+        <div class="task-side-row">
+          <span class="task-side-label">Estimated</span>
+          <span class="task-side-value">{{ task.estimated_hours }}h</span>
         </div>
         {% endif %}
 
         {% if task.actual_hours %}
-        <div class="d-flex justify-content-between">
-          <span style="color:var(--eo-text-muted)">Time logged</span>
-          <span style="font-weight:600;color:var(--eo-accent)">{{ task.actual_hours }}h</span>
+        <div class="task-side-row">
+          <span class="task-side-label">Time logged</span>
+          <span class="task-side-value" style="color:var(--eo-accent)">
+            {{ task.actual_hours }}h
+          </span>
         </div>
         {% endif %}
 
-        <div class="d-flex justify-content-between">
-          <span style="color:var(--eo-text-muted)">Created</span>
-          <span>{{ task.created_at|date:"N j, Y" }}</span>
+        <div class="task-side-row">
+          <span class="task-side-label">Created</span>
+          <span class="task-side-value">{{ task.created_at|date:"N j, Y" }}</span>
         </div>
 
         {% if task.project %}
-        <div class="d-flex justify-content-between">
-          <span style="color:var(--eo-text-muted)">Project</span>
-          <a href="{% url 'project_detail' task.project.pk %}" style="color:var(--eo-accent);font-weight:600">
+        <div class="task-side-row">
+          <span class="task-side-label">Project</span>
+          <a href="{% url 'project_detail' task.project.pk %}"
+             class="task-side-value"
+             style="color:var(--eo-accent);font-weight:700;text-decoration:none">
             {{ task.project.code }}
           </a>
+        </div>
+        {% endif %}
+
+        {% if task.parent_task %}
+        <div class="task-side-row">
+          <span class="task-side-label">Parent task</span>
+          <a href="{% url 'task_detail' task.parent_task.pk %}"
+             class="task-side-value"
+             style="color:var(--eo-accent);font-weight:700;text-decoration:none">
+            {{ task.parent_task.title|truncatechars:26 }}
+          </a>
+        </div>
+        {% endif %}
+
+        {% if task.project_milestone %}
+        <div class="task-mini-card">
+          <div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:4px">
+            Linked Milestone
+          </div>
+          <div style="font-size:.9rem;font-weight:800;color:var(--eo-text)">
+            {{ task.project_milestone.name }}
+          </div>
+          <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:4px">
+            <i class="bi bi-calendar3 me-1"></i>
+            Due {{ task.project_milestone.due_date|date:"N j, Y" }}
+          </div>
         </div>
         {% endif %}
       </div>
     </div>
 
+    {# ── Collaborators ── #}
     {% if task.collaborators.exists %}
     <div class="eo-card">
       <h2 class="eo-card-title mb-3">Collaborators</h2>
       <div class="d-flex flex-wrap gap-2">
         {% for c in task.collaborators.all %}
-        <a href="{% url 'staff_detail' c.pk %}" class="d-flex align-items-center gap-2" style="text-decoration:none;background:var(--eo-bg);border-radius:20px;padding:5px 10px">
+        <a href="{% url 'staff_detail' c.pk %}"
+           class="d-flex align-items-center gap-2"
+           style="text-decoration:none;background:var(--eo-bg);
+                  border-radius:20px;padding:5px 10px">
           {% if c.avatar %}
-          <img src="{{ c.avatar.url }}" class="eo-avatar-sm" alt=""/>
+            <img src="{{ c.avatar.url }}" class="eo-avatar-sm" alt=""/>
           {% else %}
-          <div class="eo-avatar-initials-sm">{{ c.initials }}</div>
+            <div class="eo-avatar-initials-sm">{{ c.initials }}</div>
           {% endif %}
-          <span style="font-size:.8rem;font-weight:600;color:var(--eo-text)">{{ c.full_name }}</span>
+          <span style="font-size:.8rem;font-weight:700;color:var(--eo-text)">
+            {{ c.full_name }}
+          </span>
         </a>
         {% endfor %}
       </div>
     </div>
     {% endif %}
 
+    {# ── Reassign ── #}
     {% if can_reassign_task %}
     <div class="eo-card">
       <h2 class="eo-card-title mb-3">Reassign Task</h2>
       <form method="post" action="{% url 'task_reassign' task.pk %}">
         {% csrf_token %}
+
         <div class="eo-form-group">
           <label class="eo-form-label">Reassign to</label>
           <select name="to_user" class="eo-form-select" required>
             <option value="">Select person...</option>
             {% for s in staff_list %}
-            <option value="{{ s.id }}">{{ s.full_name }}</option>
+              <option value="{{ s.id }}">{{ s.full_name }}</option>
             {% endfor %}
           </select>
         </div>
+
         <div class="eo-form-group">
           <label class="eo-form-label">Type</label>
           <select name="is_full" class="eo-form-select">
@@ -312,10 +648,13 @@
             <option value="false">Partial Delegation</option>
           </select>
         </div>
+
         <div class="eo-form-group">
           <label class="eo-form-label">Notes</label>
-          <textarea name="notes" class="eo-form-control" rows="2" placeholder="Optional notes..."></textarea>
+          <textarea name="notes" class="eo-form-control" rows="2"
+                    placeholder="Optional notes..."></textarea>
         </div>
+
         <button type="submit" class="eo-btn eo-btn-secondary w-100">
           <i class="bi bi-arrow-right-circle"></i> Reassign
         </button>
@@ -323,6 +662,7 @@
     </div>
     {% endif %}
 
+    {# ── Log time ── #}
     {% if can_log_time %}
     <div class="eo-card">
       <h2 class="eo-card-title mb-3">Log Time</h2>
@@ -331,14 +671,17 @@
         <div class="row g-2">
           <div class="col-6">
             <label class="eo-form-label">Hours</label>
-            <input type="number" name="hours" class="eo-form-control" step="0.25" min="0.25" placeholder="1.5" required/>
+            <input type="number" name="hours" class="eo-form-control"
+                   step="0.25" min="0.25" placeholder="1.5" required>
           </div>
           <div class="col-6">
             <label class="eo-form-label">Date</label>
-            <input type="date" name="date" class="eo-form-control" value="{% now 'Y-m-d' %}" required/>
+            <input type="date" name="date" class="eo-form-control"
+                   value="{% now 'Y-m-d' %}" required>
           </div>
           <div class="col-12">
-            <input type="text" name="description" class="eo-form-control" placeholder="What did you work on?"/>
+            <input type="text" name="description" class="eo-form-control"
+                   placeholder="What did you work on?">
           </div>
         </div>
         <button type="submit" class="eo-btn eo-btn-secondary w-100 mt-2">
@@ -347,61 +690,229 @@
       </form>
     </div>
     {% endif %}
-  </div>
+
+  </div>{# /side column #}
 </div>
 
-<script>
-(function () {
-  const quickUpdateForm = document.getElementById('quickUpdateForm');
-  if (quickUpdateForm) {
-    quickUpdateForm.addEventListener('submit', function (e) {
-      e.preventDefault();
 
-      fetch(quickUpdateForm.action, {
-        method: 'POST',
-        body: new FormData(quickUpdateForm),
-        headers: {
-          'X-Requested-With': 'XMLHttpRequest'
-        }
-      })
-      .then(response => response.json())
-      .then(data => {
-        if (data.status === 'ok') {
-          window.location.reload();
-        } else {
-          alert(data.message || 'Could not update task.');
-        }
-      })
-      .catch(() => {
-        alert('Could not update task.');
-      });
+{# ─────────────────────────────────────────────────────────────────────────── #}
+{#  Completion-note modal                                                       #}
+{#  Self-contained — no Bootstrap JS dependency. Triggered by the script        #}
+{#  in extra_js when the user tries to set status=done or progress=100.         #}
+{# ─────────────────────────────────────────────────────────────────────────── #}
+<div class="tcn-backdrop" id="tcnBackdrop" aria-hidden="true">
+  <div class="tcn-modal" role="dialog" aria-modal="true" aria-labelledby="tcnTitle">
+    <div class="tcn-head">
+      <div class="tcn-head-icon"><i class="bi bi-check2-circle"></i></div>
+      <div>
+        <h3 id="tcnTitle">Closing this task</h3>
+        <p>Tell your team what was actually completed.</p>
+      </div>
+    </div>
+
+    <div class="tcn-body">
+      <div class="tcn-summary" id="tcnSummary">
+        <i class="bi bi-info-circle"></i>
+        <span id="tcnSummaryText">Marking as Done at 100%.</span>
+      </div>
+
+      <div class="tcn-error" id="tcnError">A completion note is required.</div>
+
+      <label for="tcnTextarea">What was completed?</label>
+      <textarea id="tcnTextarea"
+                placeholder="Briefly describe what was delivered, any leftover follow-ups, and where the output lives (file links, ticket numbers, etc.)."
+                maxlength="2000"
+                required></textarea>
+      <span class="tcn-counter" id="tcnCounter">0 / 2000</span>
+    </div>
+
+    <div class="tcn-foot">
+      <button type="button" class="tcn-btn tcn-btn-cancel" id="tcnCancel">
+        Cancel
+      </button>
+      <button type="button" class="tcn-btn tcn-btn-confirm" id="tcnConfirm" disabled>
+        <i class="bi bi-send"></i> Submit &amp; close task
+      </button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+
+{# ─────────────────────────────────────────────────────────────────────────── #}
+{#  Page-scoped JS                                                              #}
+{#  Lives in extra_js so it runs AFTER bootstrap.bundle.min.js / easyoffice.js  #}
+{#  have already loaded. (Even though this modal doesn't depend on Bootstrap,   #}
+{#  putting all page JS here keeps load-order consistent across the project.)   #}
+{# ─────────────────────────────────────────────────────────────────────────── #}
+{% block extra_js %}
+<script>
+(function(){
+  'use strict';
+
+  // ── DOM refs ─────────────────────────────────────────────────────────
+  var quickForm      = document.getElementById('quickUpdateForm');
+  var statusSelect   = document.getElementById('quickStatusSelect');
+  var progressInput  = document.getElementById('quickProgressInput');
+  var completionHint = document.getElementById('completionHint');
+
+  var backdrop    = document.getElementById('tcnBackdrop');
+  var textarea    = document.getElementById('tcnTextarea');
+  var counter     = document.getElementById('tcnCounter');
+  var errBox      = document.getElementById('tcnError');
+  var summaryText = document.getElementById('tcnSummaryText');
+  var btnCancel   = document.getElementById('tcnCancel');
+  var btnConfirm  = document.getElementById('tcnConfirm');
+
+  if (!backdrop) return; // Modal not in template — safe no-op.
+
+  // The form whose submission we're holding hostage until the user
+  // provides a completion note.
+  var pendingForm = null;
+
+  // ── Helpers ──────────────────────────────────────────────────────────
+
+  /**
+   * Mirror of TaskQuickUpdateView.post's `will_complete` logic:
+   *   close the task if status=done OR progress=100,
+   *   UNLESS status is cancelled (cancelling != completing).
+   */
+  function isClosingValues(statusVal, progressVal){
+    if (statusVal === 'cancelled') return false;
+    var prog = parseInt(progressVal, 10);
+    return statusVal === 'done' || prog === 100;
+  }
+
+  function readFormState(form){
+    var statusEl   = form.querySelector('[name="status"]');
+    var progressEl = form.querySelector('[name="progress_pct"]');
+    return {
+      status:   statusEl   ? (statusEl.value   || '') : '',
+      progress: progressEl ? (progressEl.value || '') : ''
+    };
+  }
+
+  function describeClose(state){
+    if (state.status === 'done' && parseInt(state.progress, 10) === 100){
+      return 'Marking as Done at 100%.';
+    }
+    if (state.status === 'done'){
+      return 'Marking as Done.';
+    }
+    if (parseInt(state.progress, 10) === 100){
+      return 'Setting progress to 100% — this auto-closes the task.';
+    }
+    return 'Closing this task.';
+  }
+
+  // ── Modal open / close ───────────────────────────────────────────────
+  function openModal(form){
+    pendingForm = form;
+    summaryText.textContent = describeClose(readFormState(form));
+    textarea.value = '';
+    counter.textContent = '0 / 2000';
+    errBox.classList.remove('is-shown');
+    btnConfirm.disabled = true;
+    btnConfirm.innerHTML = '<i class="bi bi-send"></i> Submit & close task';
+    backdrop.classList.add('is-open');
+    backdrop.setAttribute('aria-hidden', 'false');
+    setTimeout(function(){ textarea.focus(); }, 60);
+  }
+
+  function closeModal(){
+    backdrop.classList.remove('is-open');
+    backdrop.setAttribute('aria-hidden', 'true');
+    pendingForm = null;
+  }
+
+  // ── Submit with the completion note attached ────────────────────────
+  function submitWithNote(){
+    if (!pendingForm) return;
+
+    var note = textarea.value.trim();
+    if (!note){
+      errBox.textContent = 'Please describe what was completed before closing.';
+      errBox.classList.add('is-shown');
+      textarea.focus();
+      return;
+    }
+
+    // Inject the note as a hidden field, then let the form submit
+    // normally so all server-side flow (status update, completed_at
+    // stamp, TaskComment creation, watcher notifications) runs as
+    // designed in TaskQuickUpdateView.
+    var existing = pendingForm.querySelector('input[name="completion_comment"]');
+    if (existing) existing.remove();
+
+    var hidden = document.createElement('input');
+    hidden.type  = 'hidden';
+    hidden.name  = 'completion_comment';
+    hidden.value = note;
+    pendingForm.appendChild(hidden);
+
+    btnConfirm.disabled = true;
+    btnConfirm.innerHTML = '<i class="bi bi-arrow-repeat"></i> Saving...';
+
+    pendingForm.submit();
+  }
+
+  // ── Textarea behaviour ──────────────────────────────────────────────
+  textarea.addEventListener('input', function(){
+    var v = textarea.value;
+    counter.textContent = v.length + ' / 2000';
+    btnConfirm.disabled = v.trim().length === 0;
+    if (v.trim().length > 0) errBox.classList.remove('is-shown');
+  });
+
+  textarea.addEventListener('keydown', function(e){
+    // Cmd/Ctrl + Enter submits the modal.
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter'){
+      e.preventDefault();
+      if (!btnConfirm.disabled) submitWithNote();
+    }
+  });
+
+  // ── Modal dismissal ─────────────────────────────────────────────────
+  btnCancel.addEventListener('click', closeModal);
+
+  backdrop.addEventListener('click', function(e){
+    if (e.target === backdrop) closeModal();
+  });
+
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape' && backdrop.classList.contains('is-open')){
+      closeModal();
+    }
+  });
+
+  btnConfirm.addEventListener('click', submitWithNote);
+
+  // ── Intercept ALL forms that can close the task ─────────────────────
+  // (the main #quickUpdateForm + every .quick-status-form pill)
+  function attachInterceptor(form){
+    form.addEventListener('submit', function(e){
+      var state = readFormState(form);
+      if (isClosingValues(state.status, state.progress)){
+        e.preventDefault();
+        openModal(form);
+      }
     });
   }
 
-  document.querySelectorAll('.quick-status-form').forEach(function(form) {
-    form.addEventListener('submit', function(e) {
-      e.preventDefault();
+  if (quickForm) attachInterceptor(quickForm);
+  document.querySelectorAll('.quick-status-form').forEach(attachInterceptor);
 
-      fetch(form.action, {
-        method: 'POST',
-        body: new FormData(form),
-        headers: {
-          'X-Requested-With': 'XMLHttpRequest'
-        }
-      })
-      .then(response => response.json())
-      .then(data => {
-        if (data.status === 'ok') {
-          window.location.reload();
-        } else {
-          alert(data.message || 'Could not update task status.');
-        }
-      })
-      .catch(() => {
-        alert('Could not update task status.');
-      });
-    });
-  });
+  // ── Live yellow hint on the main form ───────────────────────────────
+  function refreshHint(){
+    if (!completionHint) return;
+    var s = statusSelect  ? statusSelect.value  : '';
+    var p = progressInput ? progressInput.value : '';
+    completionHint.style.display = isClosingValues(s, p) ? 'block' : 'none';
+  }
+
+  if (statusSelect)  statusSelect.addEventListener('change', refreshHint);
+  if (progressInput) progressInput.addEventListener('input', refreshHint);
+  refreshHint();
 })();
 </script>
 {% endblock %}

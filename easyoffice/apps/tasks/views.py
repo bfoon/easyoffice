@@ -339,23 +339,55 @@ class TaskUpdateView(LoginRequiredMixin, View):
 class TaskQuickUpdateView(LoginRequiredMixin, View):
     """
     Quick update for status/progress.
-    Returns JSON for AJAX requests and redirects for normal form submits.
+    If a user marks a task as done or sets progress to 100%,
+    they must explain what was completed.
     """
+
+    def _error(self, request, task, message, status=400):
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse(
+                {'status': 'error', 'message': message},
+                status=status
+            )
+        messages.error(request, message)
+        return redirect('task_detail', pk=task.pk)
+
     def post(self, request, pk):
         task = get_object_or_404(Task, pk=pk)
 
         if not _can_update_task_progress(request.user, task):
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                return JsonResponse(
-                    {'status': 'error', 'message': 'Permission denied'},
-                    status=403
-                )
-            messages.error(request, 'You do not have permission to update this task.')
-            return redirect('task_detail', pk=task.pk)
+            return self._error(
+                request,
+                task,
+                'You do not have permission to update this task.',
+                status=403
+            )
 
         status_value = request.POST.get('status')
         progress_value = request.POST.get('progress_pct')
+        completion_comment = request.POST.get('completion_comment', '').strip()
+
         changed_fields = []
+        target_status = task.status
+        target_progress = task.progress_pct or 0
+
+        if status_value in dict(Task.Status.choices):
+            target_status = status_value
+
+        if progress_value not in [None, '']:
+            try:
+                target_progress = max(0, min(100, int(progress_value)))
+            except ValueError:
+                return self._error(request, task, 'Invalid progress value.')
+
+        will_complete = target_status == 'done' or target_progress == 100
+
+        if will_complete and not completion_comment:
+            return self._error(
+                request,
+                task,
+                'Please add a completion comment explaining what was done before marking this task as completed.'
+            )
 
         if status_value in dict(Task.Status.choices):
             task.status = status_value
@@ -364,6 +396,7 @@ class TaskQuickUpdateView(LoginRequiredMixin, View):
             if status_value == 'done':
                 task.completed_at = timezone.now()
                 task.progress_pct = 100
+                target_progress = 100
                 if 'progress_pct' not in changed_fields:
                     changed_fields.append('progress_pct')
                 if 'completed_at' not in changed_fields:
@@ -374,38 +407,29 @@ class TaskQuickUpdateView(LoginRequiredMixin, View):
                     changed_fields.append('completed_at')
 
         if progress_value not in [None, '']:
-            try:
-                progress_int = max(0, min(100, int(progress_value)))
-                task.progress_pct = progress_int
-                if 'progress_pct' not in changed_fields:
-                    changed_fields.append('progress_pct')
+            task.progress_pct = target_progress
+            if 'progress_pct' not in changed_fields:
+                changed_fields.append('progress_pct')
 
-                if progress_int == 100 and task.status != 'done':
-                    task.status = 'done'
-                    if 'status' not in changed_fields:
-                        changed_fields.append('status')
-                    task.completed_at = timezone.now()
-                    if 'completed_at' not in changed_fields:
-                        changed_fields.append('completed_at')
-            except ValueError:
-                if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                    return JsonResponse(
-                        {'status': 'error', 'message': 'Invalid progress value'},
-                        status=400
-                    )
-                messages.error(request, 'Invalid progress value.')
-                return redirect('task_detail', pk=task.pk)
+            if target_progress == 100 and task.status != 'done':
+                task.status = 'done'
+                if 'status' not in changed_fields:
+                    changed_fields.append('status')
+                task.completed_at = timezone.now()
+                if 'completed_at' not in changed_fields:
+                    changed_fields.append('completed_at')
 
         if not changed_fields:
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                return JsonResponse(
-                    {'status': 'error', 'message': 'Nothing to update'},
-                    status=400
-                )
-            messages.warning(request, 'Nothing to update.')
-            return redirect('task_detail', pk=task.pk)
+            return self._error(request, task, 'Nothing to update.')
 
         task.save(update_fields=changed_fields)
+
+        if will_complete:
+            TaskComment.objects.create(
+                task=task,
+                author=request.user,
+                content=f'✅ Completion note:\n{completion_comment}'
+            )
 
         _notify_task_watchers(
             task,
@@ -434,11 +458,21 @@ class TaskCommentView(LoginRequiredMixin, View):
         content = request.POST.get('content', '').strip()
         if content:
             TaskComment.objects.create(task=task, author=request.user, content=content)
+            try:
+                from apps.projects.views import sync_milestone_from_task
+                sync_milestone_from_task(task)
+            except Exception:
+                # Never block a task save on a project-side hiccup; log only.
+                import logging
+                logging.getLogger(__name__).exception(
+                    'Failed to sync milestone from task %s', task.pk
+                )
+
             _notify_task_watchers(
                 task,
                 request.user,
-                'New Comment on Task',
-                f'{request.user.full_name} commented on "{task.title}".'
+                'Task Updated',
+                f'{request.user.full_name} updated "{task.title}" to {task.get_status_display()} ({task.progress_pct}%).'
             )
         return redirect('task_detail', pk=pk)
 

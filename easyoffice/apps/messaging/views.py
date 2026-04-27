@@ -1210,17 +1210,34 @@ class ChatEditsPollView(LoginRequiredMixin, View):
 
 class ToggleReactionView(LoginRequiredMixin, View):
     def post(self, request, room_id, message_id):
-        room    = get_object_or_404(ChatRoom,    id=room_id,    members=request.user)
-        message = get_object_or_404(ChatMessage, id=message_id, room=room, is_deleted=False)
-        emoji   = (request.POST.get('emoji') or '').strip()
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        message = get_object_or_404(
+            ChatMessage,
+            id=message_id,
+            room=room,
+            is_deleted=False
+        )
+
+        emoji = (request.POST.get('emoji') or '').strip()
         if not emoji:
-            return JsonResponse({'ok': False, 'error': 'Emoji is required.'}, status=400)
-        reactions = _toggle_reaction_on_message(message, request.user, emoji)
-        summary   = _reaction_summary(reactions)
+            return JsonResponse(
+                {'ok': False, 'error': 'Emoji is required.'},
+                status=400
+            )
+
+        raw_reactions, summary = _toggle_reaction_on_message(
+            message,
+            request.user,
+            emoji
+        )
+
         _broadcast_reaction(room.id, message.id, summary)
-        return JsonResponse({'ok': True, 'message_id': str(message.id), 'reactions': summary})
 
-
+        return JsonResponse({
+            'ok': True,
+            'message_id': str(message.id),
+            'reactions': summary,
+        })
 # ---------------------------------------------------------------------------
 # Delete message (soft delete)
 # ---------------------------------------------------------------------------

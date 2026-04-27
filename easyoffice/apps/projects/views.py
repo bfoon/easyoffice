@@ -20,7 +20,7 @@ from apps.files.models import SharedFile
 import io
 import requests
 import logging
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, time
 from django.core.files.base import ContentFile
 from django.db import transaction
 from django.views.generic import ListView
@@ -39,6 +39,192 @@ def _is_project_member(user, project):
         project.project_manager == user or
         project.team_members.filter(id=user.id).exists()
     )
+
+def _is_project_owner(user, project):
+    return user.is_superuser or project.project_manager_id == user.id
+
+
+def _milestone_due_datetime(due_date):
+    if not due_date:
+        return None
+
+    # Accept either a date / datetime instance or an ISO 'YYYY-MM-DD' string.
+    if isinstance(due_date, str):
+        try:
+            due_date = datetime.strptime(due_date.strip(), '%Y-%m-%d').date()
+        except ValueError:
+            return None
+
+    # If a datetime was passed, pull just the date out so we can stamp 17:00.
+    if isinstance(due_date, datetime):
+        due_date = due_date.date()
+
+    dt = datetime.combine(due_date, time(hour=17, minute=0))
+
+    if timezone.is_naive(dt):
+        return timezone.make_aware(dt, timezone.get_current_timezone())
+
+    return dt
+
+
+def _create_or_update_milestone_task(milestone, actor):
+    """
+    Create or sync the task linked to a project milestone.
+    Selecting an assignee on a milestone automatically gives that person
+    a task with the same project and deadline.
+    """
+    if not milestone.assigned_to_id:
+        return None
+
+    from apps.tasks.models import Task
+    from apps.core.models import CoreNotification
+
+    project = milestone.project
+    due_dt = _milestone_due_datetime(milestone.due_date)
+
+    priority = project.priority
+    if priority not in dict(Task.Priority.choices):
+        priority = Task.Priority.MEDIUM
+
+    title = f'{project.code}: {milestone.name}'
+    description = (
+        f'Project milestone task for: {project.name}\n\n'
+        f'Milestone: {milestone.name}\n\n'
+        f'{milestone.description or ""}'
+    ).strip()
+
+    if milestone.task_id:
+        task = milestone.task
+        task.title = title
+        task.description = description
+        task.assigned_to = milestone.assigned_to
+        task.project = project
+        task.due_date = due_dt
+        task.priority = priority
+
+        if milestone.status == Milestone.Status.COMPLETED:
+            task.status = Task.Status.DONE
+            task.progress_pct = 100
+            task.completed_at = timezone.now()
+        elif milestone.status == Milestone.Status.IN_PROGRESS and task.status == Task.Status.TODO:
+            task.status = Task.Status.IN_PROGRESS
+
+        task.save(update_fields=[
+            'title',
+            'description',
+            'assigned_to',
+            'project',
+            'due_date',
+            'priority',
+            'status',
+            'progress_pct',
+            'completed_at',
+            'updated_at',
+        ])
+    else:
+        task = Task.objects.create(
+            title=title,
+            description=description,
+            assigned_to=milestone.assigned_to,
+            assigned_by=actor,
+            project=project,
+            priority=priority,
+            status=Task.Status.TODO,
+            due_date=due_dt,
+        )
+        milestone.task = task
+        milestone.save(update_fields=['task', 'updated_at'])
+
+    CoreNotification.objects.create(
+        recipient=milestone.assigned_to,
+        sender=actor,
+        notification_type='project',
+        title='Project Milestone Assigned',
+        message=f'You have been assigned milestone "{milestone.name}" under project "{project.name}".',
+        link=reverse('project_detail', kwargs={'pk': project.pk}),
+    )
+
+    return task
+
+
+def _log_milestone_activity(milestone, author, content, *, title='', is_milestone_update=True):
+    """
+    Create a ProjectUpdate row tied to this milestone so the milestone's
+    progress (assignment, completion, manual notes) appears in the
+    project's Activity Log. Idempotent-ish: callers should pass distinct
+    `content` per event — we don't try to dedupe identical posts.
+    """
+    if not milestone or not author:
+        return None
+
+    project = milestone.project
+    return ProjectUpdate.objects.create(
+        project=project,
+        author=author,
+        title=(title or f'Milestone — {milestone.name}')[:200],
+        content=content,
+        progress_at_time=project.progress_pct,
+        status_at_time=project.status,
+        is_milestone_update=is_milestone_update,
+        milestone=milestone,
+    )
+
+
+def sync_milestone_from_task(task):
+    """
+    Called from apps.tasks.views.TaskQuickUpdateView whenever a task is
+    saved. If the task is the auto-created counterpart of a Milestone:
+      * mark the milestone Completed when the task is Done, and
+      * post a ProjectUpdate tying the latest completion-note comment to
+        the project's Activity Log so supervisors can see what was done.
+
+    Lives in apps.projects.views (rather than tasks) because it crosses
+    app boundaries and the milestone-side ownership lives here.
+    """
+    milestone = getattr(task, 'project_milestone', None)
+    if milestone is None:
+        return
+
+    changed = []
+    if task.status == 'done' and milestone.status != Milestone.Status.COMPLETED:
+        milestone.status = Milestone.Status.COMPLETED
+        milestone.completed_at = task.completed_at or timezone.now()
+        changed += ['status', 'completed_at', 'updated_at']
+    elif task.status != 'done' and milestone.status == Milestone.Status.COMPLETED:
+        # Task got reopened — un-complete the milestone too.
+        milestone.status = Milestone.Status.IN_PROGRESS
+        milestone.completed_at = None
+        changed += ['status', 'completed_at', 'updated_at']
+
+    if changed:
+        milestone.save(update_fields=list(set(changed)))
+
+        # If this transition was task-done, log it to the project's
+        # Activity Log with the latest completion-note comment.
+        if task.status == 'done':
+            from apps.tasks.models import TaskComment
+            note = (
+                TaskComment.objects
+                .filter(task=task, content__startswith='✅ Completion note:')
+                .order_by('-created_at')
+                .first()
+            )
+            content_lines = [f'Milestone "{milestone.name}" was completed.']
+            if note:
+                # Strip the "✅ Completion note:\n" prefix the task layer adds.
+                stripped = note.content.split('\n', 1)
+                completion_text = stripped[1].strip() if len(stripped) > 1 else ''
+                if completion_text:
+                    content_lines.append('')
+                    content_lines.append(completion_text)
+            actor = (note.author if note else task.assigned_to) or task.assigned_by
+            _log_milestone_activity(
+                milestone,
+                actor,
+                '\n'.join(content_lines),
+                title=f'Milestone completed — {milestone.name}',
+            )
+
 
 logger = logging.getLogger(__name__)
 
@@ -1029,6 +1215,8 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         team = project.team_members.filter(is_active=True).select_related(
             'staffprofile', 'staffprofile__position'
         )
+        if project.project_manager_id:
+            team = team.exclude(id=project.project_manager_id)
 
         total_ms = milestones.count()
         completed_ms = milestones.filter(status='completed').count()
@@ -1146,6 +1334,8 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             'team_members': team,
             'is_member': _is_project_member(user, project),
             'is_manager': user.is_superuser or project.project_manager == user,
+            'can_manage_milestones': _is_project_owner(user, project),
+            'can_post_update': _is_project_owner(user, project),
 
             'total_ms': total_ms,
             'completed_ms': completed_ms,
@@ -1303,10 +1493,28 @@ class ProjectEditView(LoginRequiredMixin, View):
 # ---------------------------------------------------------------------------
 
 class ProjectUpdateStatusView(LoginRequiredMixin, View):
+    """
+    Post a status/progress update. Only the project manager and superusers
+    can post here — keeping ownership of the project narrative in their
+    hands. Other members can still comment via the chat / discussion area.
+
+    Optionally accepts `milestone` (UUID of a milestone in this project)
+    so manual updates can be tied to a milestone and surface in its
+    history alongside the auto-generated completion notes.
+    """
+
     def post(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
-        if not _is_project_member(request.user, project):
-            messages.error(request, 'Permission denied.')
+
+        # Permission check tightened: only PM / superuser. Was previously
+        # _is_project_member which let any team member move the project
+        # status — that wasn't the intent.
+        if not _is_project_owner(request.user, project):
+            messages.error(
+                request,
+                'Only the project manager or office admin can update the '
+                'project status.'
+            )
             return redirect('project_detail', pk=pk)
 
         content = request.POST.get('content', '').strip()
@@ -1316,6 +1524,19 @@ class ProjectUpdateStatusView(LoginRequiredMixin, View):
         except (ValueError, TypeError):
             progress = project.progress_pct
 
+        # Optional: tie this update to a milestone in the same project.
+        milestone_obj = None
+        milestone_id = (request.POST.get('milestone') or '').strip()
+        if milestone_id:
+            milestone_obj = (
+                Milestone.objects
+                .filter(pk=milestone_id, project=project)
+                .first()
+            )
+            if milestone_obj is None:
+                messages.error(request, 'That milestone does not belong to this project.')
+                return redirect('project_detail', pk=pk)
+
         if content:
             ProjectUpdate.objects.create(
                 project=project,
@@ -1324,16 +1545,19 @@ class ProjectUpdateStatusView(LoginRequiredMixin, View):
                 content=content,
                 progress_at_time=progress,
                 status_at_time=new_status,
+                milestone=milestone_obj,
+                is_milestone_update=bool(milestone_obj),
             )
 
         project.status = new_status
         project.progress_pct = progress
         if new_status == 'completed' and not project.completed_at:
             project.completed_at = timezone.now()
-        project.save(update_fields=['status', 'progress_pct', 'completed_at', 'updated_at'])
+        project.save(update_fields=[
+            'status', 'progress_pct', 'completed_at', 'updated_at',
+        ])
         messages.success(request, 'Project updated.')
         return redirect('project_detail', pk=pk)
-
 
 # ---------------------------------------------------------------------------
 # Add Milestone
@@ -1342,18 +1566,34 @@ class ProjectUpdateStatusView(LoginRequiredMixin, View):
 class ProjectMilestoneView(LoginRequiredMixin, View):
     def post(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
+
         if not _is_project_member(request.user, project):
             messages.error(request, 'Permission denied.')
             return redirect('project_detail', pk=pk)
 
-        Milestone.objects.create(
+        assigned_to_id = request.POST.get('assigned_to') or None
+
+        if assigned_to_id and not _is_project_owner(request.user, project):
+            messages.error(request, 'Only the project owner/manager can assign milestone owners.')
+            return redirect('project_detail', pk=pk)
+
+        milestone = Milestone.objects.create(
             project=project,
             name=request.POST['name'],
             description=request.POST.get('description', ''),
             due_date=request.POST['due_date'],
+            assigned_to_id=assigned_to_id,
+            created_by=request.user,
             order=project.milestones.count() + 1,
         )
-        messages.success(request, 'Milestone added.')
+
+        if assigned_to_id:
+            project.team_members.add(milestone.assigned_to)
+            _create_or_update_milestone_task(milestone, request.user)
+            messages.success(request, 'Milestone added and linked task created.')
+        else:
+            messages.success(request, 'Milestone added.')
+
         return redirect('project_detail', pk=pk)
 
 
@@ -1365,15 +1605,55 @@ class MilestoneStatusView(LoginRequiredMixin, View):
     def post(self, request, pk, mid):
         project = get_object_or_404(Project, pk=pk)
         milestone = get_object_or_404(Milestone, pk=mid, project=project)
+
         if not _is_project_member(request.user, project):
             messages.error(request, 'Permission denied.')
             return redirect('project_detail', pk=pk)
 
-        new_status = request.POST.get('status', milestone.status)
-        milestone.status = new_status
-        if new_status == 'completed' and not milestone.completed_at:
-            milestone.completed_at = timezone.now()
-        milestone.save()
+        is_owner = _is_project_owner(request.user, project)
+        changed_fields = []
+
+        new_status = request.POST.get('status')
+        if new_status in dict(Milestone.Status.choices):
+            milestone.status = new_status
+            changed_fields.append('status')
+
+            if new_status == Milestone.Status.COMPLETED and not milestone.completed_at:
+                milestone.completed_at = timezone.now()
+                changed_fields.append('completed_at')
+            elif new_status != Milestone.Status.COMPLETED and milestone.completed_at:
+                milestone.completed_at = None
+                changed_fields.append('completed_at')
+
+        if 'due_date' in request.POST:
+            if not is_owner:
+                messages.error(request, 'Only the project owner/manager can adjust milestone dates.')
+                return redirect('project_detail', pk=pk)
+
+            due_date = request.POST.get('due_date')
+            if due_date:
+                milestone.due_date = due_date
+                changed_fields.append('due_date')
+
+        if 'assigned_to' in request.POST:
+            if not is_owner:
+                messages.error(request, 'Only the project owner/manager can assign milestone owners.')
+                return redirect('project_detail', pk=pk)
+
+            assigned_to_id = request.POST.get('assigned_to') or None
+            milestone.assigned_to_id = assigned_to_id
+            changed_fields.append('assigned_to')
+
+        if changed_fields:
+            if 'updated_at' not in changed_fields:
+                changed_fields.append('updated_at')
+
+            milestone.save(update_fields=list(set(changed_fields)))
+
+            if milestone.assigned_to_id:
+                project.team_members.add(milestone.assigned_to)
+                _create_or_update_milestone_task(milestone, request.user)
+
         messages.success(request, f'Milestone "{milestone.name}" updated.')
         return redirect('project_detail', pk=pk)
 

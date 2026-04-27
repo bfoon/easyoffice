@@ -65,7 +65,31 @@ class Milestone(models.Model):
     due_date = models.DateField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     order = models.PositiveSmallIntegerField(default=0)
+
+    assigned_to = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_project_milestones'
+    )
+    task = models.OneToOneField(
+        'tasks.Task',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='project_milestone'
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_project_milestones'
+    )
+
     completed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['order', 'due_date']

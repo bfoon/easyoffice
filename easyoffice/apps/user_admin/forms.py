@@ -71,3 +71,46 @@ class ForcedPasswordChangeForm(forms.Form):
         if p1 and self.user:
             validate_password(p1, user=self.user)
         return cleaned
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Append to existing forms.py — they reuse the same imports already there
+# (django.forms, validate_password, ValidationError, User).
+# ─────────────────────────────────────────────────────────────────────
+
+
+class PasswordResetRequestForm(forms.Form):
+    """
+    'Forgot password' — user enters their email, we (maybe) email them a
+    reset link. We deliberately do NOT validate that the email exists,
+    so the form can't be used as a user-enumeration oracle. The view
+    silently no-ops when the email doesn't match an account.
+    """
+    email = forms.EmailField()
+
+    def clean_email(self):
+        return (self.cleaned_data.get('email') or '').lower().strip()
+
+
+class PasswordResetSetForm(forms.Form):
+    """
+    Form shown after clicking a valid reset link from an email — user
+    chooses their new password. Mirrors ForcedPasswordChangeForm except
+    `user` is supplied by the view from the decoded uidb64, not from the
+    session.
+    """
+    new_password1 = forms.CharField(widget=forms.PasswordInput, label='New password')
+    new_password2 = forms.CharField(widget=forms.PasswordInput, label='Confirm new password')
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.user = user
+
+    def clean(self):
+        cleaned = super().clean()
+        p1, p2 = cleaned.get('new_password1'), cleaned.get('new_password2')
+        if p1 and p2 and p1 != p2:
+            raise ValidationError('Passwords do not match.')
+        if p1 and self.user:
+            validate_password(p1, user=self.user)
+        return cleaned

@@ -28,6 +28,9 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
 from django.views.generic import TemplateView, View
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 
 from apps.core.models import User, AuditLog, CoreNotification
 from apps.user_admin.models import (
@@ -35,6 +38,7 @@ from apps.user_admin.models import (
 )
 from apps.user_admin.forms import (
     AcceptInvitationForm, SelfRegisterForm, ForcedPasswordChangeForm,
+    PasswordResetRequestForm, PasswordResetSetForm,
 )
 
 
@@ -372,24 +376,16 @@ class UserActionView(UserAdminRequiredMixin, View):
     # ── Action handlers ───────────────────────────────────────────────────
 
     def _do_reset_email(self, request, target):
-        """Send a Django password-reset link."""
+        """Send a password-reset link from the admin console."""
         try:
-            from django.contrib.auth.tokens import default_token_generator
-            from django.utils.http import urlsafe_base64_encode
-            from django.utils.encoding import force_bytes
-
-            uid = urlsafe_base64_encode(force_bytes(target.pk))
-            token = default_token_generator.make_token(target)
-            # Uses the stock django.contrib.auth password-reset flow if wired up
-            path = f'/reset/{uid}/{token}/'
-            url = _build_absolute_url(request, path)
-
+            url = _build_password_reset_url(request, target)
             body = (
-                f'Hello {target.full_name or target.email},\n\n'
-                f'A password reset has been requested for your account.\n'
-                f'Open this link to set a new password (expires in 24 hours):\n\n'
+                f'Hello {getattr(target, "full_name", None) or target.email},\n\n'
+                f'A password reset has been requested for your account by an administrator.\n'
+                f'Open this link to set a new password '
+                f'(the link expires shortly and can only be used once):\n\n'
                 f'{url}\n\n'
-                f'If you did not expect this email, ignore it — your password remains unchanged.'
+                f'If you did not expect this email, ignore it — your password remains unchanged.\n'
             )
             _send_mail_safe('Password reset', body, target.email, request=request)
             _audit(request.user, AuditLog.Action.UPDATE, target,
@@ -787,3 +783,162 @@ class ForcedPasswordChangeView(LoginRequiredMixin, View):
 
         messages.success(request, 'Password updated.')
         return redirect('/')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public: Password reset by email
+#
+# Two views, mirroring Django's stock flow but living entirely inside
+# user_admin so we can:
+#   - reuse our _audit / _send_mail_safe helpers
+#   - consume any outstanding TempPassword on successful reset
+#   - keep templates in user_admin/ alongside force_change_password.html
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _build_password_reset_url(request, user):
+    """
+    Returns the absolute URL the user should click in their email.
+    Centralised so both _do_reset_email (admin-initiated) and
+    PasswordResetRequestView (user-initiated) generate the same URL.
+    """
+    from django.contrib.auth.tokens import default_token_generator
+    from django.utils.http import urlsafe_base64_encode
+    from django.utils.encoding import force_bytes
+
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = default_token_generator.make_token(user)
+    path = reverse('user_admin:password_reset_confirm',
+                   kwargs={'uidb64': uid, 'token': token})
+    return _build_absolute_url(request, path)
+
+
+class PasswordResetRequestView(View):
+    """
+    'Forgot your password?' — anonymous user enters their email; if it
+    matches an account, we send a reset link. We always show the same
+    confirmation page regardless of whether the email matched (no
+    enumeration leaks).
+    """
+    template_name = 'user_admin/password_reset_request.html'
+    done_template = 'user_admin/password_reset_done.html'
+
+    def get(self, request):
+        return render(request, self.template_name,
+                      {'form': PasswordResetRequestForm()})
+
+    def post(self, request):
+        form = PasswordResetRequestForm(request.POST)
+        if not form.is_valid():
+            return render(request, self.template_name, {'form': form})
+
+        email = form.cleaned_data['email']
+        # Look up case-insensitively. We don't reveal whether a match was
+        # found — the response page is identical either way.
+        user = (
+            User.objects
+            .filter(email__iexact=email, is_active=True)
+            .first()
+        )
+        if user:
+            try:
+                url = _build_password_reset_url(request, user)
+                body = (
+                    f'Hello {getattr(user, "full_name", None) or user.email},\n\n'
+                    f'We received a request to reset the password on your account.\n'
+                    f'Click the link below to choose a new password '
+                    f'(the link expires shortly and can only be used once):\n\n'
+                    f'{url}\n\n'
+                    f'If you did not request this, you can safely ignore this email — '
+                    f'your password will stay the same.\n'
+                )
+                _send_mail_safe('Reset your password', body, user.email, request=request)
+                _audit(user, AuditLog.Action.UPDATE, user,
+                       notes='User requested password-reset email', request=request)
+            except Exception:
+                # Never break the user-facing flow on email errors.
+                pass
+
+        return render(request, self.done_template, {'email': email})
+
+
+class PasswordResetConfirmView(View):
+    """
+    The link from the reset email lands here. We decode `uidb64` to find
+    the user, validate `token`, then either show the 'set new password'
+    form or an 'invalid link' page.
+
+    On successful change:
+      - update_session_auth_hash isn't needed (user is anonymous here)
+      - any outstanding TempPassword for this user is marked consumed
+      - audit log gets a row
+      - user is redirected to login (NOT auto-logged-in, deliberately —
+        forces a fresh sign-in with the new credentials and re-engages
+        OTP / device-trust if those exist)
+    """
+    template_name = 'user_admin/password_reset_confirm.html'
+    invalid_template = 'user_admin/password_reset_invalid.html'
+
+    def _resolve_user(self, uidb64, token):
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_decode
+        try:
+            uid = urlsafe_base64_decode(uidb64).decode()
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            return None
+        if not default_token_generator.check_token(user, token):
+            return None
+        if not user.is_active:
+            return None
+        return user
+
+    def get(self, request, uidb64, token):
+        user = self._resolve_user(uidb64, token)
+        if not user:
+            return render(request, self.invalid_template, status=400)
+        return render(request, self.template_name, {
+            'form': PasswordResetSetForm(user=user),
+            'validlink': True,
+        })
+
+    def post(self, request, uidb64, token):
+        user = self._resolve_user(uidb64, token)
+        if not user:
+            return render(request, self.invalid_template, status=400)
+
+        form = PasswordResetSetForm(request.POST, user=user)
+        if not form.is_valid():
+            return render(request, self.template_name, {
+                'form': form, 'validlink': True,
+            })
+
+        with transaction.atomic():
+            user.set_password(form.cleaned_data['new_password1'])
+            user.save(update_fields=['password'])
+            # If they had a temp password outstanding, this satisfies it
+            # — no double-prompt to change again on next login.
+            TempPassword.mark_user_pw_changed(user)
+
+        _audit(user, AuditLog.Action.UPDATE, user,
+               notes='Password reset via email link', request=request)
+
+        messages.success(
+            request,
+            'Your password has been updated. Please sign in with your new password.',
+        )
+        # Send to login. We deliberately do NOT auto-login so that any
+        # OTP / device-trust flow on the login view runs as normal.
+        login_url = reverse('login') if _has_url('login') else '/login/'
+        return redirect(login_url)
+
+
+def _has_url(name):
+    """Cheap check for whether a URL name resolves; defined locally so the
+    middleware-style `_safe_reverse` doesn't have to be imported."""
+    from django.urls import NoReverseMatch
+    try:
+        reverse(name)
+        return True
+    except NoReverseMatch:
+        return False

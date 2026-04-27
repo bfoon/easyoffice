@@ -42,4 +42,14 @@ urlpatterns = [
     path('invite/<str:token>/',       views.AcceptInvitationView.as_view(),    name='accept_invite'),
     path('register/<str:token>/',     views.SelfRegisterView.as_view(),        name='register_with_link'),
     path('change-password/',          views.ForcedPasswordChangeView.as_view(),name='force_change_password'),
+
+    # ── Password reset (public — no login required) ───────────────────────
+    path('password-reset/',
+         views.PasswordResetRequestView.as_view(),
+         name='password_reset_request'),
+
+    path('reset/<str:uidb64>/<str:token>/',
+         views.PasswordResetConfirmView.as_view(),
+         name='password_reset_confirm'),
+
 ]

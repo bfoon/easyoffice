@@ -55,6 +55,9 @@ class PasswordChangeRequiredMiddleware:
         # Django auth default names — may or may not be wired up in the project.
         self._logout_url = _safe_reverse('logout')
         self._login_url  = _safe_reverse('login') or getattr(settings, 'LOGIN_URL', '/accounts/login/')
+        self._reset_request_url = _safe_reverse('user_admin:password_reset_request')
+        # Reset-confirm URLs are dynamic (uidb64/token), so we match by prefix.
+        self._reset_confirm_prefix = '/users/reset/'  # adjust if user_admin is mounted elsewher
 
     def __call__(self, request):
         user = getattr(request, 'user', None)
@@ -70,6 +73,10 @@ class PasswordChangeRequiredMiddleware:
         if self._logout_url and path == self._logout_url:
             return True
         if self._login_url and path == self._login_url:
+            return True
+        if self._reset_request_url and path == self._reset_request_url:
+            return True
+        if path.startswith(self._reset_confirm_prefix):
             return True
         for prefix in self._STATIC_ALLOW_PREFIXES:
             if path.startswith(prefix):

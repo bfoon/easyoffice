@@ -1388,10 +1388,101 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
 .fm-card-actions {
   position: absolute;
   top: 6px; right: 6px;
+  /* Cap the available width so buttons can't expand past the card.
+     Without this, on a card narrower than the action toolbar, the
+     toolbar overflows the card body and the right edge of the buttons
+     gets clipped behind the next card. */
+  max-width: calc(100% - 12px);
   opacity: 0;
   transition: opacity .12s;
   display: flex;
+  align-items: center;
   gap: 3px;
+}
+
+/* The scrollable button track sits between the optional left/right
+   chevrons. Hiding the scrollbar across browsers keeps the look clean
+   while still allowing wheel/swipe to scroll. */
+.fm-card-actions-track {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  scrollbar-width: none;       /* Firefox */
+  -ms-overflow-style: none;    /* IE/old Edge */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.fm-card-actions-track::-webkit-scrollbar { display: none; }
+
+/* Chevron + pin nav buttons injected by JS only when the track overflows.
+   We give them a slightly smaller footprint than the action buttons so
+   they read as nav, not as another action. */
+.fm-card-actions-nav {
+  width: 22px; height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--eo-border);
+  background: var(--eo-surface);
+  color: var(--eo-text-muted);
+  /* v2: always show the chevrons — disable them visually when
+     there's nothing to scroll, but keep them present so the user can
+     see the feature exists. v1 hid them entirely on no-overflow which
+     made it look like nothing had been implemented. */
+  display: flex;
+  align-items: center; justify-content: center;
+  cursor: pointer; flex-shrink: 0;
+  font-size: .72rem;
+  padding: 0;
+  transition: background .12s, color .12s, border-color .12s, opacity .12s;
+}
+.fm-card-actions-nav:hover:not(:disabled) {
+  background: var(--eo-bg);
+  color: var(--eo-text);
+  border-color: var(--eo-text-muted);
+}
+.fm-card-actions-nav:disabled {
+  opacity: .35;
+  cursor: default;
+}
+/* Stronger hint when there IS overflow — chevrons get a subtle accent
+   border so the user knows there's something to scroll to. */
+.fm-card-actions.has-overflow .fm-card-actions-nav:not(:disabled) {
+  border-color: var(--eo-accent);
+  color: var(--eo-accent);
+}
+
+/* Pin toggle — slightly different visual, sits AFTER the right chevron */
+.fm-card-actions-pin {
+  width: 22px; height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--eo-border);
+  background: var(--eo-surface);
+  color: var(--eo-text-muted);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; flex-shrink: 0;
+  font-size: .72rem;
+  padding: 0;
+}
+.fm-card-actions-pin:hover { background: var(--eo-bg); color: var(--eo-text); }
+/* Active state — pin engaged. Use the green "shared-active" hue so it
+   matches the rest of the file manager's "this is on" affordance. */
+.fm-card-actions-pin.active {
+  background: #16a34a; color: #fff; border-color: #16a34a;
+}
+
+/* Pinned mode: drop the scroll track and let buttons wrap onto a 2nd
+   row INSIDE the card. We keep them anchored to the top-right and let
+   the card grow taller — that's the "don't move" behaviour the user
+   asked for. The track stays a flex container; we just allow wrapping
+   and remove the overflow clip. */
+.fm-card-actions.pinned .fm-card-actions-track {
+  flex-wrap: wrap;
+  overflow-x: visible;
+  justify-content: flex-end;
+}
+.fm-card-actions.pinned .fm-card-actions-nav {
+  /* No need for chevrons once everything is visible at once. */
+  display: none !important;
 }
 
 /* ── Shared indicator ── */
@@ -4225,6 +4316,209 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
 
 })();
 
+
+/* ════════════════════════════════════════════════════════════════════════
+   ACTION TOOLBAR — overflow scroll arrows + pin toggle  (v2 — defensive)
+   ────────────────────────────────────────────────────────────────────────
+   Every .fm-card-actions gets:
+     ◂  scroll-left chevron   (always present; disabled when not needed)
+     [scrollable track of the original buttons]
+     ▸  scroll-right chevron  (always present; disabled when not needed)
+     📌 pin toggle            (always visible — global pin/unpin)
+
+   v1 was too clever — it gated the chevron visibility on a runtime
+   overflow measurement that didn't always fire. This rewrite ALWAYS
+   shows the controls so the user can see them on hover, and only
+   disables them when they're not useful. The pin toggle is global and
+   persistent (localStorage); when pinned, all action toolbars wrap
+   their buttons onto multiple rows and stay anchored to the top-right
+   of their card — "the action column doesn't move".
+
+   Logs to console with a distinct prefix so you can verify init in
+   DevTools. Remove the LOG line if too chatty.
+   ════════════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+
+  const TAG     = '[fm-actions]';
+  const PIN_KEY = 'fm.actions.pinned.v1';
+
+  function LOG() {
+    try { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
+    catch (_) {}
+  }
+
+  function readPinned() {
+    try { return localStorage.getItem(PIN_KEY) === '1'; }
+    catch (_) { return false; }
+  }
+  function writePinned(on) {
+    try { localStorage.setItem(PIN_KEY, on ? '1' : '0'); }
+    catch (_) { /* ignore */ }
+  }
+
+  /* Add the chevrons + pin button into a .fm-card-actions, wrapping
+     existing buttons in a scroll track. Idempotent — calling twice on
+     the same element is a no-op. */
+  function decorate(actions) {
+    if (!actions) return;
+    if (actions.dataset.fmActionsDecorated === '1') return;
+    actions.dataset.fmActionsDecorated = '1';
+
+    LOG('decorating', actions, 'with', actions.children.length, 'buttons');
+
+    /* Move all existing buttons into the new scroll track */
+    const track = document.createElement('div');
+    track.className = 'fm-card-actions-track';
+    while (actions.firstChild) track.appendChild(actions.firstChild);
+
+    const left = document.createElement('button');
+    left.type = 'button';
+    left.className = 'fm-card-actions-nav';
+    left.setAttribute('aria-label', 'Scroll actions left');
+    left.title = 'Scroll left';
+    left.innerHTML = '<i class="bi bi-chevron-left"></i>';
+
+    const right = document.createElement('button');
+    right.type = 'button';
+    right.className = 'fm-card-actions-nav';
+    right.setAttribute('aria-label', 'Scroll actions right');
+    right.title = 'Scroll right';
+    right.innerHTML = '<i class="bi bi-chevron-right"></i>';
+
+    const pin = document.createElement('button');
+    pin.type = 'button';
+    pin.className = 'fm-card-actions-pin';
+    pin.setAttribute('aria-label', 'Pin actions in place');
+    pin.title = 'Pin / unpin actions';
+    pin.innerHTML = '<i class="bi bi-pin-angle"></i>';
+
+    actions.appendChild(left);
+    actions.appendChild(track);
+    actions.appendChild(right);
+    actions.appendChild(pin);
+
+    /* Click handlers — stop propagation so the surrounding card link
+       doesn't navigate when a chevron is clicked. */
+    function stopAndScroll(delta) {
+      return function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        track.scrollBy({ left: delta, behavior: 'smooth' });
+      };
+    }
+    left.addEventListener('click',  stopAndScroll(-100));
+    right.addEventListener('click', stopAndScroll(100));
+
+    pin.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = !document.body.classList.contains('fm-actions-pinned');
+      writePinned(next);
+      applyPinnedToAll(next);
+      LOG('pin toggled =>', next);
+    });
+
+    function refresh() {
+      /* Pinned mode wraps everything; chevrons aren't needed there. */
+      if (actions.classList.contains('pinned')) {
+        actions.classList.remove('has-overflow');
+        return;
+      }
+      /* Measurement happens against the track. If track isn't visible
+         (display:none ancestor, etc.) scrollWidth and clientWidth will
+         both be 0; treat that as "no overflow" and bail. */
+      const sw = track.scrollWidth, cw = track.clientWidth;
+      const overflow = sw > 0 && cw > 0 && sw - cw > 1;
+      actions.classList.toggle('has-overflow', overflow);
+      left.disabled  = !overflow || track.scrollLeft <= 0;
+      right.disabled = !overflow ||
+                       track.scrollLeft + track.clientWidth >= track.scrollWidth - 1;
+    }
+    track.addEventListener('scroll', refresh, { passive: true });
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(refresh);
+      ro.observe(actions);
+      ro.observe(track);
+    }
+
+    /* Refresh once we KNOW layout has settled — multiple frames helps
+       on slow devices where the first measurement fires before
+       stylesheets are fully applied. */
+    actions._fmRefresh = refresh;
+    refresh();
+    requestAnimationFrame(refresh);
+    setTimeout(refresh, 100);
+    setTimeout(refresh, 500);
+  }
+
+  function applyPinnedToAll(on) {
+    document.body.classList.toggle('fm-actions-pinned', on);
+    document.querySelectorAll('.fm-card-actions').forEach(function (actions) {
+      actions.classList.toggle('pinned', on);
+      const pinBtn = actions.querySelector('.fm-card-actions-pin');
+      if (pinBtn) {
+        pinBtn.classList.toggle('active', on);
+        const ic = pinBtn.querySelector('i');
+        if (ic) ic.className = on ? 'bi bi-pin-angle-fill' : 'bi bi-pin-angle';
+        pinBtn.title = on ? 'Unpin actions' : 'Pin actions in place';
+      }
+      if (typeof actions._fmRefresh === 'function') actions._fmRefresh();
+    });
+  }
+
+  function decorateAll() {
+    const all = document.querySelectorAll('.fm-card-actions');
+    LOG('decorateAll: found', all.length, 'toolbars');
+    all.forEach(decorate);
+    applyPinnedToAll(readPinned());
+  }
+
+  /* Run NOW if DOM is ready, else wait for it. The original code only
+     ran on DOMContentLoaded — but if this script is loaded after that
+     event fired (e.g. injected by another script), nothing happens. */
+  function init() {
+    decorateAll();
+
+    const root = document.querySelector('.fm-content') || document.body;
+    if (typeof MutationObserver !== 'undefined') {
+      let pending = false;
+      const mo = new MutationObserver(function () {
+        if (pending) return;
+        pending = true;
+        requestAnimationFrame(function () {
+          pending = false;
+          decorateAll();
+        });
+      });
+      mo.observe(root, { childList: true, subtree: true });
+    }
+    window.addEventListener('load',   decorateAll);
+    window.addEventListener('resize', function () {
+      document.querySelectorAll('.fm-card-actions').forEach(function (a) {
+        if (typeof a._fmRefresh === 'function') a._fmRefresh();
+      });
+    });
+
+    /* Expose for manual debugging in DevTools — type
+       window.fmActionsDecorate() in the console to force a re-run. */
+    window.fmActionsDecorate = decorateAll;
+    window.fmActionsPinToggle = function () {
+      const next = !document.body.classList.contains('fm-actions-pinned');
+      writePinned(next);
+      applyPinnedToAll(next);
+    };
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    /* DOM already parsed — run on next tick so other init scripts on
+       this page get a chance to finish their own DOM work first. */
+    setTimeout(init, 0);
+  }
+})();
 
 /* ════════════════════════════════════════════════════════════════════════
    FILE PREVIEW  +  PDF PAGE RAIL  +  ANNOTATION ENGINE

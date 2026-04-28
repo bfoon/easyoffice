@@ -106,6 +106,37 @@
                 style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3)">
           <i class="bi bi-bar-chart-steps"></i> Gantt Chart
         </button>
+        {% if is_member %}
+        <div style="position:relative" id="reportsMenuWrap">
+          <button type="button" onclick="toggleReportsMenu(event)" class="eo-btn eo-btn-sm"
+                  style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3)">
+            <i class="bi bi-file-earmark-arrow-down"></i> Reports <i class="bi bi-caret-down-fill" style="font-size:.65rem"></i>
+          </button>
+          <div id="reportsMenu" style="display:none;position:absolute;right:0;top:calc(100% + 4px);
+                                       background:#fff;border:1px solid var(--eo-border);
+                                       border-radius:var(--eo-radius);box-shadow:0 6px 20px rgba(15,23,42,.18);
+                                       min-width:220px;z-index:50;padding:6px 0">
+            <a href="{% url 'project_report_xlsx' project.pk %}"
+               style="display:flex;align-items:center;gap:10px;padding:10px 14px;color:var(--eo-text);
+                      text-decoration:none;font-size:.85rem;border-bottom:1px solid var(--eo-border)">
+              <i class="bi bi-file-earmark-spreadsheet" style="color:#107C41;font-size:1.1rem"></i>
+              <div style="display:flex;flex-direction:column">
+                <span style="font-weight:600">Excel Workbook</span>
+                <span style="font-size:.7rem;color:var(--eo-text-muted)">.xlsx · all data, multi-sheet</span>
+              </div>
+            </a>
+            <a href="{% url 'project_report_docx' project.pk %}"
+               style="display:flex;align-items:center;gap:10px;padding:10px 14px;color:var(--eo-text);
+                      text-decoration:none;font-size:.85rem">
+              <i class="bi bi-file-earmark-word" style="color:#185ABD;font-size:1.1rem"></i>
+              <div style="display:flex;flex-direction:column">
+                <span style="font-weight:600">Word Document</span>
+                <span style="font-size:.7rem;color:var(--eo-text-muted)">.docx · narrative report with charts</span>
+              </div>
+            </a>
+          </div>
+        </div>
+        {% endif %}
         {% if can_post_update %}
         <button onclick="openModal('updateModal')" class="eo-btn eo-btn-sm"
                 style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3)">
@@ -234,6 +265,364 @@
   </div>
   {% endif %}
 </div>
+
+<!--{# ═══════════════════════════════════════════════════════════════════════-->
+<!--   Charts Panel — small, professional, inline SVG (no JS chart library)-->
+<!--   ═══════════════════════════════════════════════════════════════════════ #}-->
+<style>
+.eo-chart-grid {
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap:14px;
+  margin-bottom:24px;
+}
+.eo-chart-card {
+  background:var(--eo-card-bg, #fff);
+  border:1px solid var(--eo-border);
+  border-radius:var(--eo-radius);
+  padding:16px 18px;
+  box-shadow:0 1px 2px rgba(15,23,42,.04);
+  display:flex;
+  flex-direction:column;
+}
+.eo-chart-card.span-2 { grid-column: span 2; }
+@media (max-width: 720px) {
+  .eo-chart-card.span-2 { grid-column: span 1; }
+}
+.eo-chart-title {
+  font-size:.78rem;
+  font-weight:700;
+  color:var(--eo-text-muted);
+  text-transform:uppercase;
+  letter-spacing:.04em;
+  margin:0 0 4px;
+}
+.eo-chart-subtitle {
+  font-size:.72rem;
+  color:var(--eo-text-muted);
+  margin:0 0 12px;
+}
+.eo-chart-empty {
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  color:var(--eo-text-muted);
+  padding:18px 0;
+  text-align:center;
+}
+.eo-chart-empty i { font-size:1.6rem; opacity:.35; margin-bottom:6px; }
+.eo-chart-empty span { font-size:.78rem; }
+.eo-chart-legend {
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px 14px;
+  margin-top:8px;
+  font-size:.72rem;
+}
+.eo-chart-legend > span {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  color:var(--eo-text-muted);
+}
+.eo-chart-legend-dot {
+  display:inline-block;
+  width:9px; height:9px;
+  border-radius:2px;
+}
+.eo-chart-legend strong {
+  color:var(--eo-text);
+  font-weight:700;
+}
+.eo-chart-bar-row {
+  display:grid;
+  grid-template-columns: 70px 1fr 32px;
+  align-items:center;
+  gap:8px;
+  margin-bottom:6px;
+  font-size:.74rem;
+}
+.eo-chart-bar-row:last-child { margin-bottom:0; }
+.eo-chart-bar-row .lbl { color:var(--eo-text-muted); }
+.eo-chart-bar-row .val { font-weight:700; color:var(--eo-text); text-align:right; font-variant-numeric:tabular-nums; }
+.eo-chart-bar-track {
+  height:8px; background:#f1f5f9; border-radius:4px; overflow:hidden;
+}
+.eo-chart-bar-fill {
+  height:100%; border-radius:4px;
+  transition: width .45s ease;
+}
+.eo-timeline-strip {
+  position:relative;
+  height:50px;
+  margin:14px 8px 8px;
+  background:linear-gradient(to right, #f8fafc, #f1f5f9);
+  border-radius:6px;
+  border:1px solid var(--eo-border);
+}
+.eo-timeline-axis {
+  position:absolute;
+  top:50%; left:8px; right:8px;
+  height:2px;
+  background:#cbd5e1;
+  transform:translateY(-50%);
+}
+.eo-timeline-marker {
+  position:absolute;
+  top:50%;
+  width:14px; height:14px;
+  border-radius:50%;
+  border:2px solid #fff;
+  transform:translate(-50%, -50%);
+  box-shadow:0 1px 3px rgba(15,23,42,.18);
+  cursor:help;
+  z-index:2;
+}
+.eo-timeline-today {
+  position:absolute;
+  top:4px; bottom:4px;
+  width:2px;
+  background:var(--eo-accent);
+  border-radius:1px;
+  z-index:1;
+}
+.eo-timeline-today::before {
+  content:'TODAY';
+  position:absolute;
+  top:-12px; left:50%;
+  transform:translateX(-50%);
+  font-size:.6rem;
+  font-weight:700;
+  color:var(--eo-accent);
+  letter-spacing:.06em;
+  white-space:nowrap;
+}
+.eo-timeline-ends {
+  display:flex; justify-content:space-between;
+  font-size:.7rem; color:var(--eo-text-muted);
+  margin:4px 8px 0;
+}
+.eo-spark-grid line { stroke:#e2e8f0; stroke-width:.5; }
+.eo-spark-bar { fill:var(--eo-accent); transition: fill .2s; }
+.eo-spark-bar:hover { fill:#0f2940; }
+.eo-spark-label { font-size:9px; fill:var(--eo-text-muted); font-family:inherit; }
+.eo-spark-value { font-size:9px; fill:var(--eo-text); font-weight:700; font-family:inherit; }
+.eo-gauge-track { fill:none; stroke:#e2e8f0; stroke-width:14; }
+.eo-gauge-fill { fill:none; stroke-width:14; stroke-linecap:round; transition: stroke-dasharray .6s ease; }
+</style>
+
+<div class="eo-chart-grid">
+
+  {# ── Progress donut (weighted) ─────────────────────────────────────── #}
+  <div class="eo-chart-card">
+    <p class="eo-chart-title">Weighted Progress</p>
+    <p class="eo-chart-subtitle">Sum of completed milestone weights</p>
+    <div style="display:flex;align-items:center;justify-content:center;flex:1;min-height:130px">
+      {% if total_ms %}
+      <svg viewBox="0 0 120 120" width="130" height="130" style="overflow:visible">
+        <circle cx="60" cy="60" r="48" fill="none" stroke="#e2e8f0" stroke-width="14"/>
+        <circle cx="60" cy="60" r="48" fill="none"
+                stroke="#1e3a5f" stroke-width="14" stroke-linecap="round"
+                stroke-dasharray="{{ total_completed_weight|floatformat:0 }} 100"
+                pathLength="100"
+                transform="rotate(-90 60 60)"/>
+        <text x="60" y="62" text-anchor="middle" font-size="22" font-weight="800" fill="#0f2940"
+              font-family="inherit">{{ total_completed_weight }}%</text>
+        <text x="60" y="78" text-anchor="middle" font-size="9" fill="#64748b"
+              font-family="inherit" letter-spacing=".05em">COMPLETED</text>
+      </svg>
+      {% else %}
+      <div class="eo-chart-empty">
+        <i class="bi bi-pie-chart"></i><span>No milestones yet</span>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ── Milestone status donut ────────────────────────────────────────── #}
+  <div class="eo-chart-card">
+    <p class="eo-chart-title">Milestone Status</p>
+    <p class="eo-chart-subtitle">{{ chart_milestone_status_total }} milestone{{ chart_milestone_status_total|pluralize }}</p>
+    {% if chart_milestone_status_total %}
+    <div style="display:flex;align-items:center;justify-content:center;gap:14px;flex:1;min-height:130px">
+      <svg viewBox="0 0 120 120" width="120" height="120">
+        <circle cx="60" cy="60" r="48" fill="none" stroke="#f1f5f9" stroke-width="14"/>
+        {% for slice in chart_ms_donut_slices %}
+        <circle cx="60" cy="60" r="48" fill="none"
+                stroke="{{ slice.color }}" stroke-width="14"
+                stroke-dasharray="{{ slice.pct }} 100"
+                stroke-dashoffset="{{ slice.offset }}"
+                pathLength="100"
+                transform="rotate(-90 60 60)"/>
+        {% endfor %}
+        <circle cx="60" cy="60" r="34" fill="#fff"/>
+        <text x="60" y="58" text-anchor="middle" font-size="20" font-weight="800" fill="#0f2940"
+              font-family="inherit">{{ chart_milestone_status_total }}</text>
+        <text x="60" y="74" text-anchor="middle" font-size="8" fill="#64748b"
+              font-family="inherit" letter-spacing=".06em">TOTAL</text>
+      </svg>
+    </div>
+    <div class="eo-chart-legend" style="justify-content:center">
+      {% for slice in chart_milestone_status %}
+        {% if slice.value %}
+        <span><span class="eo-chart-legend-dot" style="background:{{ slice.color }}"></span>
+              <strong>{{ slice.value }}</strong> {{ slice.label }}</span>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="eo-chart-empty">
+      <i class="bi bi-flag"></i><span>No milestones yet</span>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Budget gauge ──────────────────────────────────────────────────── #}
+  <div class="eo-chart-card">
+    <p class="eo-chart-title">Budget Utilisation</p>
+    <p class="eo-chart-subtitle">
+      {% if project.budget %}
+        D{{ project.budget_spent|floatformat:0|intcomma }} of D{{ project.budget|floatformat:0|intcomma }}
+      {% else %}
+        Not set
+      {% endif %}
+    </p>
+    {% if project.budget %}
+    <div style="display:flex;align-items:center;justify-content:center;flex:1;min-height:130px">
+      <svg viewBox="0 0 160 100" width="160" height="100">
+        {# Half-circle gauge: pathLength=100 along arc #}
+        <path d="M 20 90 A 60 60 0 0 1 140 90"
+              class="eo-gauge-track" pathLength="100"/>
+        <path d="M 20 90 A 60 60 0 0 1 140 90"
+              class="eo-gauge-fill" pathLength="100"
+              stroke="{% if budget_pct > 90 %}#ef4444{% elif budget_pct > 70 %}#f59e0b{% else %}#10b981{% endif %}"
+              stroke-dasharray="{{ budget_pct|floatformat:0 }} 100"/>
+        <text x="80" y="78" text-anchor="middle" font-size="22" font-weight="800" fill="#0f2940"
+              font-family="inherit">{{ budget_pct }}%</text>
+        <text x="80" y="94" text-anchor="middle" font-size="9" fill="#64748b"
+              font-family="inherit" letter-spacing=".05em">SPENT</text>
+      </svg>
+    </div>
+    {% else %}
+    <div class="eo-chart-empty">
+      <i class="bi bi-cash-stack"></i><span>No budget set</span>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Task status bars ──────────────────────────────────────────────── #}
+  <div class="eo-chart-card">
+    <p class="eo-chart-title">Task Status</p>
+    <p class="eo-chart-subtitle">{{ chart_task_status_total }} linked task{{ chart_task_status_total|pluralize }}</p>
+    {% if chart_task_status_total %}
+    <div style="flex:1;display:flex;flex-direction:column;justify-content:center;padding:6px 0">
+      {% for slice in chart_task_status %}
+      <div class="eo-chart-bar-row">
+        <span class="lbl">{{ slice.label }}</span>
+        <span class="eo-chart-bar-track">
+          <span class="eo-chart-bar-fill"
+                style="background:{{ slice.color }};
+                       width:{% widthratio slice.value chart_task_status_max 100 %}%"></span>
+        </span>
+        <span class="val">{{ slice.value }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="eo-chart-empty">
+      <i class="bi bi-check2-square"></i><span>No tasks linked</span>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Risk levels ───────────────────────────────────────────────────── #}
+  <div class="eo-chart-card">
+    <p class="eo-chart-title">Open Risks by Level</p>
+    <p class="eo-chart-subtitle">{{ chart_risk_total }} open risk{{ chart_risk_total|pluralize }}</p>
+    {% if chart_risk_total %}
+    <div style="flex:1;display:flex;flex-direction:column;justify-content:center;padding:6px 0">
+      {% for slice in chart_risk_levels %}
+        {% if slice.value %}
+        <div class="eo-chart-bar-row">
+          <span class="lbl">{{ slice.label }}</span>
+          <span class="eo-chart-bar-track">
+            <span class="eo-chart-bar-fill"
+                  style="background:{{ slice.color }};
+                         width:{% widthratio slice.value chart_risk_total 100 %}%"></span>
+          </span>
+          <span class="val">{{ slice.value }}</span>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="eo-chart-empty">
+      <i class="bi bi-shield-check" style="color:#10b981"></i>
+      <span>No open risks</span>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Activity over last 8 weeks (sparkbars) ────────────────────────── #}
+  <div class="eo-chart-card span-2">
+    <p class="eo-chart-title">Activity — Updates per Week</p>
+    <p class="eo-chart-subtitle">Last 8 weeks · max {{ chart_activity_max }}/week</p>
+    <div style="flex:1">
+      <svg viewBox="0 0 320 110" width="100%" height="110" preserveAspectRatio="xMidYMid meet"
+           style="display:block">
+        <g class="eo-spark-grid">
+          <line x1="0"  y1="20" x2="320" y2="20"/>
+          <line x1="0"  y1="50" x2="320" y2="50"/>
+          <line x1="0"  y1="80" x2="320" y2="80"/>
+        </g>
+        {% for bar in chart_activity_bars %}
+          {% if bar.value %}
+            <rect class="eo-spark-bar" x="{{ bar.x }}" y="{{ bar.y }}"
+                  width="28" height="{{ bar.h }}" rx="2"/>
+            <text class="eo-spark-value" x="{{ bar.cx }}" y="{{ bar.y }}"
+                  text-anchor="middle" dy="-3">{{ bar.value }}</text>
+          {% endif %}
+          <text class="eo-spark-label" x="{{ bar.cx }}" y="98"
+                text-anchor="middle">{{ bar.label }}</text>
+        {% endfor %}
+      </svg>
+    </div>
+  </div>
+
+</div>
+
+{# ── Milestone timeline strip (full-width) ────────────────────────────── #}
+{% if chart_timeline_points %}
+<div class="eo-chart-card" style="margin-bottom:24px">
+  <p class="eo-chart-title">Milestone Timeline</p>
+  <p class="eo-chart-subtitle">
+    {{ project.start_date|date:"M j, Y" }} → {{ project.end_date|date:"M j, Y" }}
+  </p>
+  <div class="eo-timeline-strip">
+    <div class="eo-timeline-axis"></div>
+    {% if chart_today_pos is not None %}
+    <div class="eo-timeline-today" style="left:{{ chart_today_pos }}%"></div>
+    {% endif %}
+    {% for pt in chart_timeline_points %}
+    <div class="eo-timeline-marker"
+         style="left:{{ pt.pos }}%; background:{{ pt.color }}"
+         title="{{ pt.name }} — {{ pt.due|date:'M j, Y' }} · {{ pt.status }}"></div>
+    {% endfor %}
+  </div>
+  <div class="eo-timeline-ends">
+    <span>Start</span>
+    <span>End</span>
+  </div>
+  <div class="eo-chart-legend" style="margin-top:12px">
+    <span><span class="eo-chart-legend-dot" style="background:#94a3b8"></span>Pending</span>
+    <span><span class="eo-chart-legend-dot" style="background:#3b82f6"></span>In Progress</span>
+    <span><span class="eo-chart-legend-dot" style="background:#10b981"></span>Completed</span>
+    <span><span class="eo-chart-legend-dot" style="background:#ef4444"></span>Missed</span>
+  </div>
+</div>
+{% endif %}
 
 <div class="row g-4">
   <div class="col-lg-8 d-flex flex-column gap-4">
@@ -1878,6 +2267,21 @@ function searchProjectFiles() {
 // ── Modal helpers ────────────────────────────────────────────────────────────
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+// Reports dropdown menu — opens on click, closes on outside click or Escape
+function toggleReportsMenu(ev) {
+  ev.stopPropagation();
+  var menu = document.getElementById('reportsMenu');
+  if (!menu) return;
+  menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';
+}
+document.addEventListener('click', function(e) {
+  var wrap = document.getElementById('reportsMenuWrap');
+  var menu = document.getElementById('reportsMenu');
+  if (menu && wrap && !wrap.contains(e.target)) {
+    menu.style.display = 'none';
+  }
+});
 
 document.querySelectorAll('.proj-modal-backdrop').forEach(function(el) {
   el.addEventListener('click', function(e) {

@@ -1556,6 +1556,119 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         total_purchase_est = purchase_requests.aggregate(t=Sum('estimated_cost'))['t'] if purchase_requests else 0
         finance_totals['total_purchase_est'] = total_purchase_est or 0
 
+        # ── Chart data for the detail page ──────────────────────────────────
+        # Prepared server-side because the SVG renders inline — no JS lib.
+        from collections import Counter as _Counter
+        from datetime import timedelta as _td
+
+        # Milestone status counts (donut)
+        ms_status_counts = _Counter(m.status for m in milestones)
+        chart_milestone_status = [
+            {'label': 'Pending',     'value': ms_status_counts.get('pending', 0),     'color': '#94a3b8'},
+            {'label': 'In Progress', 'value': ms_status_counts.get('in_progress', 0), 'color': '#3b82f6'},
+            {'label': 'Completed',   'value': ms_status_counts.get('completed', 0),   'color': '#10b981'},
+            {'label': 'Missed',      'value': ms_status_counts.get('missed', 0),      'color': '#ef4444'},
+        ]
+        chart_milestone_status_total = sum(c['value'] for c in chart_milestone_status)
+
+        # Pre-compute donut arcs (stroke-dasharray + dashoffset for each slice)
+        # using pathLength=100 so each slice's "length" is just its percentage.
+        chart_ms_donut_slices = []
+        if chart_milestone_status_total:
+            cum = 0
+            for slice_ in chart_milestone_status:
+                if slice_['value']:
+                    pct = round(slice_['value'] / chart_milestone_status_total * 100, 2)
+                    chart_ms_donut_slices.append({
+                        'color': slice_['color'],
+                        'pct': pct,
+                        'offset': -round(cum, 2),
+                    })
+                    cum += pct
+
+        # Task status counts (bars)
+        task_status_counts = _Counter(t.status for t in tasks)
+        chart_task_status = [
+            {'label': 'To Do',       'value': task_status_counts.get('todo', 0),        'color': '#94a3b8'},
+            {'label': 'In Progress', 'value': task_status_counts.get('in_progress', 0), 'color': '#3b82f6'},
+            {'label': 'Review',      'value': task_status_counts.get('review', 0),      'color': '#f59e0b'},
+            {'label': 'Done',        'value': task_status_counts.get('done', 0),        'color': '#10b981'},
+        ]
+        chart_task_status_max = max((c['value'] for c in chart_task_status), default=0)
+        chart_task_status_total = sum(c['value'] for c in chart_task_status)
+
+        # Risk level counts
+        risk_level_counts = _Counter(r.level for r in risks if not r.is_resolved)
+        chart_risk_levels = [
+            {'label': 'Low',      'value': risk_level_counts.get('low', 0),      'color': '#10b981'},
+            {'label': 'Medium',   'value': risk_level_counts.get('medium', 0),   'color': '#f59e0b'},
+            {'label': 'High',     'value': risk_level_counts.get('high', 0),     'color': '#ef4444'},
+            {'label': 'Critical', 'value': risk_level_counts.get('critical', 0), 'color': '#be123c'},
+        ]
+        chart_risk_total = sum(c['value'] for c in chart_risk_levels)
+
+        # Activity over time — last 8 weeks of project updates
+        activity_weeks = []
+        today_dt = timezone.now().date()
+        # Anchor on Monday of the current week for stable buckets
+        this_monday = today_dt - _td(days=today_dt.weekday())
+        for offset in range(7, -1, -1):
+            week_start = this_monday - _td(weeks=offset)
+            week_end = week_start + _td(days=6)
+            count = sum(
+                1 for u in updates
+                if u.created_at and week_start <= u.created_at.date() <= week_end
+            )
+            activity_weeks.append({
+                'label': week_start.strftime('%b %d'),
+                'value': count,
+            })
+        chart_activity_max = max((w['value'] for w in activity_weeks), default=0) or 1
+
+        # Pre-compute SVG geometry for the activity chart so the template
+        # doesn't have to do arithmetic with widthratio.
+        # Canvas: 320 wide × 110 tall, axis at y=80, max bar height 60.
+        chart_activity_bars = []
+        col_width = 320 / 8  # 40px each
+        for idx, week in enumerate(activity_weeks):
+            bar_h = (week['value'] / chart_activity_max) * 60 if chart_activity_max else 0
+            col_left = idx * col_width
+            chart_activity_bars.append({
+                'x': round(col_left + 6, 1),       # bar left edge (slight inset)
+                'y': round(80 - bar_h, 1),         # SVG y is top-left of rect
+                'h': round(bar_h, 1),
+                'cx': round(col_left + col_width / 2, 1),  # centre for label
+                'value': week['value'],
+                'label': week['label'],
+            })
+
+        # Milestone timeline — relative position 0–100% along the project window
+        chart_timeline_points = []
+        if project.start_date and project.end_date:
+            window_days = max(1, (project.end_date - project.start_date).days)
+            for m in milestones:
+                if not m.due_date:
+                    continue
+                pos = (m.due_date - project.start_date).days / window_days * 100
+                pos = max(0, min(100, pos))
+                chart_timeline_points.append({
+                    'name': m.name,
+                    'pos': round(pos, 2),
+                    'status': m.status,
+                    'due': m.due_date,
+                    'color': {
+                        'pending':     '#94a3b8',
+                        'in_progress': '#3b82f6',
+                        'completed':   '#10b981',
+                        'missed':      '#ef4444',
+                    }.get(m.status, '#94a3b8'),
+                })
+            today_pos = max(0, min(100, (today_dt - project.start_date).days / window_days * 100))
+        else:
+            today_pos = None
+
+        # Weighted progress for the donut — already computed as total_completed_weight
+
         ctx.update({
             'milestones': milestones,
             'updates': updates,
@@ -1581,6 +1694,21 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             'total_completed_weight': total_completed_weight,
             'auto_share_per_milestone': auto_share,
             'unweighted_milestone_count': unweighted_count,
+
+            # Charts (inline SVG, server-prepared)
+            'chart_milestone_status': chart_milestone_status,
+            'chart_milestone_status_total': chart_milestone_status_total,
+            'chart_ms_donut_slices': chart_ms_donut_slices,
+            'chart_task_status': chart_task_status,
+            'chart_task_status_max': chart_task_status_max,
+            'chart_task_status_total': chart_task_status_total,
+            'chart_risk_levels': chart_risk_levels,
+            'chart_risk_total': chart_risk_total,
+            'chart_activity_weeks': activity_weeks,
+            'chart_activity_max': chart_activity_max,
+            'chart_activity_bars': chart_activity_bars,
+            'chart_timeline_points': chart_timeline_points,
+            'chart_today_pos': today_pos,
             'budget_pct': budget_pct,
             'days_remaining': days_remaining,
             'days_remaining_abs': days_remaining_abs,
@@ -4688,4 +4816,1017 @@ class ReverseGeocodeView(View):
             )
 
         address = reverse_geocode(lat, lng)
-        return JsonResponse({'ok': True, 'address': address or ''})
+        return JsonResponse({'ok': True, 'address': address or ''})# =============================================================================
+# Project Reports — Excel (XLSX) + Word (DOCX) downloads
+# =============================================================================
+#
+# Permissions: any project member can download. The reports are read-only
+# snapshots and do not modify project state.
+#
+# Dependencies (add to requirements.txt if not present):
+#   openpyxl>=3.1
+#   python-docx>=1.1
+#   matplotlib>=3.7   (only for chart embedding in the DOCX)
+
+
+class ProjectReportXLSXView(LoginRequiredMixin, View):
+    """
+    Multi-sheet Excel workbook covering executive summary, milestones,
+    tasks, risks, activity log, team, and budget.
+    """
+
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden('You do not have access to this project.')
+
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            from openpyxl.utils import get_column_letter
+        except ImportError:
+            return HttpResponse(
+                'openpyxl is not installed. Run: pip install openpyxl',
+                status=500,
+            )
+
+        # ── Theme ────────────────────────────────────────────────────────────
+        BRAND      = '1E3A5F'   # title bar / accents
+        HEADER_BG  = '0F2940'   # table header
+        HEADER_FG  = 'FFFFFF'
+        ZEBRA      = 'F5F7FA'
+        GRID       = 'E2E8F0'
+        FONT       = 'Calibri'
+
+        thin = Side(border_style='thin', color=GRID)
+        cell_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        def header_style(cell):
+            cell.font = Font(name=FONT, bold=True, color=HEADER_FG, size=11)
+            cell.fill = PatternFill('solid', start_color=HEADER_BG, end_color=HEADER_BG)
+            cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+            cell.border = cell_border
+
+        def body_style(cell, *, bold=False, zebra=False, color=None):
+            cell.font = Font(name=FONT, size=10, bold=bold, color=color or '111827')
+            cell.alignment = Alignment(vertical='center', wrap_text=True)
+            cell.border = cell_border
+            if zebra:
+                cell.fill = PatternFill('solid', start_color=ZEBRA, end_color=ZEBRA)
+
+        def autosize(sheet, max_widths=None):
+            max_widths = max_widths or {}
+            for col_idx, column_cells in enumerate(sheet.columns, start=1):
+                letter = get_column_letter(col_idx)
+                width = max(
+                    (len(str(c.value)) for c in column_cells if c.value is not None),
+                    default=10,
+                )
+                width = min(max_widths.get(letter, 60), max(12, width + 2))
+                sheet.column_dimensions[letter].width = width
+
+        wb = Workbook()
+
+        # ── Sheet 1: Summary ─────────────────────────────────────────────────
+        s = wb.active
+        s.title = 'Summary'
+
+        title_cell = s.cell(row=1, column=1, value=f'{project.code} · {project.name}')
+        title_cell.font = Font(name=FONT, size=18, bold=True, color='FFFFFF')
+        title_cell.fill = PatternFill('solid', start_color=BRAND, end_color=BRAND)
+        title_cell.alignment = Alignment(vertical='center', indent=1)
+        s.row_dimensions[1].height = 32
+        s.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
+
+        s.cell(row=2, column=1, value=f'Generated {timezone.now().strftime("%B %d, %Y at %H:%M")} '
+                                     f'by {request.user.full_name}').font = Font(
+            name=FONT, size=9, italic=True, color='6B7280'
+        )
+        s.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4)
+
+        # Compute weighted progress for accuracy.
+        ms_list = list(project.milestones.all())
+        weights_map = _compute_milestone_weights(ms_list)
+        completed_weight = sum(
+            weights_map.get(m.id, 0) for m in ms_list if m.status == 'completed'
+        )
+        total_explicit = sum(
+            int(m.weight_pct) for m in ms_list if m.weight_pct is not None
+        )
+
+        budget_pct = 0
+        if project.budget and project.budget > 0:
+            budget_pct = min(100, round(float(project.budget_spent) / float(project.budget) * 100, 1))
+
+        days_remaining = None
+        if project.end_date:
+            days_remaining = (project.end_date - timezone.now().date()).days
+
+        summary_rows = [
+            ('Status',           project.get_status_display()),
+            ('Priority',         project.get_priority_display()),
+            ('Progress',         f'{project.progress_pct}%'),
+            ('Weighted progress',f'{completed_weight}% completed · {total_explicit}% set explicitly'),
+            ('Project owner',    project.owner.full_name if project.owner else '—'),
+            ('Project manager',  project.project_manager.full_name if project.project_manager else '—'),
+            ('Department',       project.department.name if project.department else '—'),
+            ('Start date',       project.start_date.strftime('%B %d, %Y') if project.start_date else '—'),
+            ('End date',         project.end_date.strftime('%B %d, %Y') if project.end_date else '—'),
+            ('Days remaining',   f'{days_remaining} days' if days_remaining is not None else '—'),
+            ('Budget',           f'{project.budget:,.2f}' if project.budget else '—'),
+            ('Budget spent',     f'{project.budget_spent:,.2f}' if project.budget else '—'),
+            ('Budget utilization', f'{budget_pct}%' if project.budget else '—'),
+            ('Total milestones', str(len(ms_list))),
+            ('Completed milestones', str(sum(1 for m in ms_list if m.status == 'completed'))),
+            ('Open risks',       str(project.risks.filter(is_resolved=False).count())),
+            ('Tags',             project.tags or '—'),
+        ]
+        if project.description:
+            summary_rows.append(('Description', project.description))
+
+        row_idx = 4
+        for label, value in summary_rows:
+            lc = s.cell(row=row_idx, column=1, value=label)
+            lc.font = Font(name=FONT, bold=True, size=10, color='374151')
+            lc.alignment = Alignment(vertical='top')
+            lc.border = cell_border
+            lc.fill = PatternFill('solid', start_color=ZEBRA, end_color=ZEBRA)
+
+            vc = s.cell(row=row_idx, column=2, value=value)
+            body_style(vc)
+            s.merge_cells(start_row=row_idx, start_column=2, end_row=row_idx, end_column=4)
+            if label == 'Description':
+                s.row_dimensions[row_idx].height = max(42, min(140, 14 * (len(value) // 70 + 1)))
+            row_idx += 1
+
+        s.column_dimensions['A'].width = 24
+        s.column_dimensions['B'].width = 30
+        s.column_dimensions['C'].width = 30
+        s.column_dimensions['D'].width = 30
+        s.freeze_panes = 'A4'
+
+        # ── Sheet 2: Milestones ──────────────────────────────────────────────
+        ms_sheet = wb.create_sheet('Milestones')
+        headers = ['#', 'Name', 'Description', 'Due Date', 'Status', 'Weight %', 'Assignee', 'Completed On']
+        for col, h in enumerate(headers, 1):
+            header_style(ms_sheet.cell(row=1, column=col, value=h))
+        ms_sheet.row_dimensions[1].height = 26
+
+        STATUS_COLORS = {
+            'pending':     ('64748B', 'F1F5F9'),
+            'in_progress': ('1E40AF', 'DBEAFE'),
+            'completed':   ('065F46', 'D1FAE5'),
+            'missed':      ('991B1B', 'FEE2E2'),
+        }
+
+        for i, m in enumerate(ms_list, start=2):
+            zebra = (i % 2 == 0)
+            row = [
+                m.order or (i - 1),
+                m.name,
+                m.description or '',
+                m.due_date.strftime('%Y-%m-%d') if m.due_date else '',
+                m.get_status_display(),
+                weights_map.get(m.id, 0),
+                m.assigned_to.full_name if m.assigned_to else '—',
+                m.completed_at.strftime('%Y-%m-%d') if m.completed_at else '—',
+            ]
+            for col, value in enumerate(row, 1):
+                c = ms_sheet.cell(row=i, column=col, value=value)
+                body_style(c, zebra=zebra)
+                if col == 5:  # status
+                    fg, bg = STATUS_COLORS.get(m.status, ('111827', 'FFFFFF'))
+                    c.font = Font(name=FONT, size=10, bold=True, color=fg)
+                    c.fill = PatternFill('solid', start_color=bg, end_color=bg)
+                    c.alignment = Alignment(horizontal='center', vertical='center')
+                if col == 6:  # weight
+                    c.alignment = Alignment(horizontal='right', vertical='center')
+                    c.number_format = '0"%"'
+
+        ms_sheet.freeze_panes = 'A2'
+        autosize(ms_sheet, max_widths={'C': 50, 'B': 36})
+
+        # Total row
+        if ms_list:
+            total_row = len(ms_list) + 2
+            tc = ms_sheet.cell(row=total_row, column=1, value='TOTAL')
+            tc.font = Font(name=FONT, bold=True, color=HEADER_FG)
+            tc.fill = PatternFill('solid', start_color=HEADER_BG, end_color=HEADER_BG)
+            tc.alignment = Alignment(horizontal='right', vertical='center')
+            tc.border = cell_border
+            for col in range(2, 6):
+                cc = ms_sheet.cell(row=total_row, column=col, value='')
+                cc.fill = PatternFill('solid', start_color=HEADER_BG, end_color=HEADER_BG)
+                cc.border = cell_border
+            sum_cell = ms_sheet.cell(row=total_row, column=6, value=f'=SUM(F2:F{total_row - 1})')
+            sum_cell.font = Font(name=FONT, bold=True, color=HEADER_FG)
+            sum_cell.fill = PatternFill('solid', start_color=HEADER_BG, end_color=HEADER_BG)
+            sum_cell.alignment = Alignment(horizontal='right', vertical='center')
+            sum_cell.border = cell_border
+            sum_cell.number_format = '0"%"'
+            for col in range(7, 9):
+                cc = ms_sheet.cell(row=total_row, column=col, value='')
+                cc.fill = PatternFill('solid', start_color=HEADER_BG, end_color=HEADER_BG)
+                cc.border = cell_border
+
+        # ── Sheet 3: Tasks ───────────────────────────────────────────────────
+        tasks_sheet = wb.create_sheet('Tasks')
+        headers = ['Title', 'Assignee', 'Status', 'Priority', 'Progress %', 'Due Date', 'Created']
+        for col, h in enumerate(headers, 1):
+            header_style(tasks_sheet.cell(row=1, column=col, value=h))
+        tasks_sheet.row_dimensions[1].height = 26
+
+        TASK_STATUS_COLORS = {
+            'todo':        ('64748B', 'F1F5F9'),
+            'in_progress': ('1E40AF', 'DBEAFE'),
+            'review':      ('92400E', 'FEF3C7'),
+            'on_hold':     ('991B1B', 'FEE2E2'),
+            'done':        ('065F46', 'D1FAE5'),
+            'cancelled':   ('6B7280', 'F3F4F6'),
+        }
+
+        tasks_qs = project.tasks.select_related('assigned_to').order_by('-created_at')
+        for i, t in enumerate(tasks_qs, start=2):
+            zebra = (i % 2 == 0)
+            row = [
+                t.title,
+                t.assigned_to.full_name if t.assigned_to else '—',
+                t.get_status_display(),
+                t.get_priority_display(),
+                t.progress_pct or 0,
+                t.due_date.strftime('%Y-%m-%d %H:%M') if t.due_date else '—',
+                t.created_at.strftime('%Y-%m-%d'),
+            ]
+            for col, value in enumerate(row, 1):
+                c = tasks_sheet.cell(row=i, column=col, value=value)
+                body_style(c, zebra=zebra)
+                if col == 3:
+                    fg, bg = TASK_STATUS_COLORS.get(t.status, ('111827', 'FFFFFF'))
+                    c.font = Font(name=FONT, size=10, bold=True, color=fg)
+                    c.fill = PatternFill('solid', start_color=bg, end_color=bg)
+                    c.alignment = Alignment(horizontal='center', vertical='center')
+                if col == 5:
+                    c.alignment = Alignment(horizontal='right', vertical='center')
+                    c.number_format = '0"%"'
+
+        tasks_sheet.freeze_panes = 'A2'
+        autosize(tasks_sheet, max_widths={'A': 50, 'B': 28})
+
+        # ── Sheet 4: Risks ───────────────────────────────────────────────────
+        risks_sheet = wb.create_sheet('Risks')
+        headers = ['Title', 'Level', 'Status', 'Owner', 'Description', 'Mitigation', 'Logged']
+        for col, h in enumerate(headers, 1):
+            header_style(risks_sheet.cell(row=1, column=col, value=h))
+        risks_sheet.row_dimensions[1].height = 26
+
+        RISK_COLORS = {
+            'low':      ('065F46', 'D1FAE5'),
+            'medium':   ('92400E', 'FEF3C7'),
+            'high':     ('991B1B', 'FEE2E2'),
+            'critical': ('9D174D', 'FCE7F3'),
+        }
+
+        risks_qs = project.risks.select_related('owner').order_by('is_resolved', '-created_at')
+        for i, r in enumerate(risks_qs, start=2):
+            zebra = (i % 2 == 0)
+            row = [
+                r.title,
+                r.get_level_display(),
+                'Resolved' if r.is_resolved else 'Open',
+                r.owner.full_name if r.owner else '—',
+                r.description or '',
+                r.mitigation or '',
+                r.created_at.strftime('%Y-%m-%d'),
+            ]
+            for col, value in enumerate(row, 1):
+                c = risks_sheet.cell(row=i, column=col, value=value)
+                body_style(c, zebra=zebra)
+                if col == 2:
+                    fg, bg = RISK_COLORS.get(r.level, ('111827', 'FFFFFF'))
+                    c.font = Font(name=FONT, size=10, bold=True, color=fg)
+                    c.fill = PatternFill('solid', start_color=bg, end_color=bg)
+                    c.alignment = Alignment(horizontal='center', vertical='center')
+                if col == 3:
+                    if r.is_resolved:
+                        c.font = Font(name=FONT, size=10, color='6B7280')
+                    else:
+                        c.font = Font(name=FONT, size=10, bold=True, color='991B1B')
+
+        risks_sheet.freeze_panes = 'A2'
+        autosize(risks_sheet, max_widths={'A': 32, 'E': 50, 'F': 50})
+
+        # ── Sheet 5: Activity Log ────────────────────────────────────────────
+        act_sheet = wb.create_sheet('Activity Log')
+        headers = ['Date', 'Author', 'Title', 'Linked Milestone', 'Progress', 'Status', 'Content']
+        for col, h in enumerate(headers, 1):
+            header_style(act_sheet.cell(row=1, column=col, value=h))
+        act_sheet.row_dimensions[1].height = 26
+
+        updates_qs = project.updates.select_related('author', 'milestone').order_by('-created_at')
+        for i, u in enumerate(updates_qs, start=2):
+            zebra = (i % 2 == 0)
+            row = [
+                u.created_at.strftime('%Y-%m-%d %H:%M'),
+                u.author.full_name if u.author else '—',
+                u.title or '—',
+                u.milestone.name if u.milestone else '—',
+                f'{u.progress_at_time}%' if u.progress_at_time is not None else '—',
+                u.status_at_time or '—',
+                u.content,
+            ]
+            for col, value in enumerate(row, 1):
+                c = act_sheet.cell(row=i, column=col, value=value)
+                body_style(c, zebra=zebra)
+
+        act_sheet.freeze_panes = 'A2'
+        autosize(act_sheet, max_widths={'C': 30, 'D': 28, 'G': 80})
+
+        # ── Sheet 6: Team ────────────────────────────────────────────────────
+        team_sheet = wb.create_sheet('Team')
+        headers = ['Name', 'Role', 'Email', 'Department']
+        for col, h in enumerate(headers, 1):
+            header_style(team_sheet.cell(row=1, column=col, value=h))
+        team_sheet.row_dimensions[1].height = 26
+
+        all_members = []
+        if project.owner:
+            all_members.append((project.owner, 'Owner'))
+        if project.project_manager and project.project_manager_id != getattr(project.owner, 'id', None):
+            all_members.append((project.project_manager, 'Project Manager'))
+        existing_ids = {u.id for u, _ in all_members}
+        for member in project.team_members.filter(is_active=True).select_related('staffprofile'):
+            if member.id in existing_ids:
+                continue
+            all_members.append((member, 'Team Member'))
+
+        for i, (user_obj, role) in enumerate(all_members, start=2):
+            zebra = (i % 2 == 0)
+            profile = getattr(user_obj, 'staffprofile', None)
+            dept_name = getattr(getattr(profile, 'department', None), 'name', '—') if profile else '—'
+            row = [
+                user_obj.full_name,
+                role,
+                user_obj.email or '—',
+                dept_name,
+            ]
+            for col, value in enumerate(row, 1):
+                c = team_sheet.cell(row=i, column=col, value=value)
+                body_style(c, zebra=zebra)
+                if col == 2:
+                    if role == 'Owner':
+                        c.font = Font(name=FONT, size=10, bold=True, color='1E3A5F')
+                    elif role == 'Project Manager':
+                        c.font = Font(name=FONT, size=10, bold=True, color='1E40AF')
+
+        team_sheet.freeze_panes = 'A2'
+        autosize(team_sheet, max_widths={'A': 28, 'C': 36})
+
+        # ── Sheet 7: Budget ──────────────────────────────────────────────────
+        if project.budget:
+            budget_sheet = wb.create_sheet('Budget')
+            for col, h in enumerate(['Category', 'Amount'], 1):
+                header_style(budget_sheet.cell(row=1, column=col, value=h))
+            budget_sheet.row_dimensions[1].height = 26
+
+            budget_rows = [
+                ('Total budget',     float(project.budget),         False),
+                ('Spent to date',    float(project.budget_spent),   False),
+                ('Remaining',        '=B2-B3',                       True),
+                ('Utilization',      '=B3/B2',                       True),
+            ]
+            for i, (label, value, is_formula) in enumerate(budget_rows, start=2):
+                lc = budget_sheet.cell(row=i, column=1, value=label)
+                body_style(lc, bold=(i in (4, 5)), zebra=(i % 2 == 0))
+                vc = budget_sheet.cell(row=i, column=2, value=value)
+                body_style(vc, zebra=(i % 2 == 0))
+                vc.alignment = Alignment(horizontal='right', vertical='center')
+                if label == 'Utilization':
+                    vc.number_format = '0.0%'
+                else:
+                    vc.number_format = '#,##0.00'
+
+            budget_sheet.column_dimensions['A'].width = 28
+            budget_sheet.column_dimensions['B'].width = 22
+
+        # ── Output ───────────────────────────────────────────────────────────
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+        filename = f'{project.code}-report-{timezone.now().strftime("%Y%m%d")}.xlsx'
+        response = HttpResponse(
+            buf.read(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+
+# ---------------------------------------------------------------------------
+# Word (DOCX) Project Report
+# ---------------------------------------------------------------------------
+
+def _render_progress_donut_png(completed_pct, total_pct=100):
+    """Generate a small donut chart as a PNG byte-string for embedding in DOCX."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+
+    completed_pct = max(0, min(100, int(completed_pct)))
+    fig, ax = plt.subplots(figsize=(3.0, 3.0), dpi=180)
+    fig.patch.set_alpha(0)
+    sizes = [completed_pct, max(0, 100 - completed_pct)]
+    colors = ['#1E3A5F', '#E2E8F0']
+    wedges, _ = ax.pie(
+        sizes, colors=colors, startangle=90, counterclock=False,
+        wedgeprops=dict(width=0.32, edgecolor='white', linewidth=2),
+    )
+    ax.text(0, 0.05, f'{completed_pct}%', ha='center', va='center',
+            fontsize=28, fontweight='bold', color='#1E3A5F')
+    ax.text(0, -0.22, 'progress', ha='center', va='center',
+            fontsize=9, color='#64748B')
+    ax.set_aspect('equal')
+    ax.axis('off')
+    plt.tight_layout(pad=0.2)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', transparent=True, bbox_inches='tight', pad_inches=0.05)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def _render_milestone_status_png(status_counts):
+    """Generate a small bar chart of milestone status counts."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+
+    labels = ['Pending', 'In Progress', 'Completed', 'Missed']
+    values = [
+        status_counts.get('pending', 0),
+        status_counts.get('in_progress', 0),
+        status_counts.get('completed', 0),
+        status_counts.get('missed', 0),
+    ]
+    colors = ['#94A3B8', '#3B82F6', '#10B981', '#EF4444']
+
+    if sum(values) == 0:
+        return None
+
+    fig, ax = plt.subplots(figsize=(4.6, 2.4), dpi=180)
+    fig.patch.set_alpha(0)
+    bars = ax.bar(labels, values, color=colors, width=0.6, edgecolor='white', linewidth=1.5)
+    for bar, v in zip(bars, values):
+        if v:
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
+                    str(v), ha='center', va='bottom', fontsize=10, fontweight='bold',
+                    color='#0F172A')
+    ax.set_ylim(0, max(values) * 1.25 if max(values) > 0 else 1)
+    ax.set_ylabel('Milestones', fontsize=9, color='#64748B')
+    ax.tick_params(axis='x', labelsize=9, colors='#0F172A')
+    ax.tick_params(axis='y', labelsize=8, colors='#64748B')
+    for spine in ('top', 'right'):
+        ax.spines[spine].set_visible(False)
+    ax.spines['left'].set_color('#CBD5E1')
+    ax.spines['bottom'].set_color('#CBD5E1')
+    ax.set_axisbelow(True)
+    ax.yaxis.grid(True, color='#E2E8F0', linewidth=0.6)
+    plt.tight_layout(pad=0.4)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', transparent=True, bbox_inches='tight', pad_inches=0.1)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+class ProjectReportDOCXView(LoginRequiredMixin, View):
+    """
+    Polished Word document covering all aspects of the project. Embeds two
+    matplotlib charts (progress donut + milestone status breakdown) and
+    formatted tables for milestones, risks, activity log, tasks, team, and
+    budget.
+    """
+
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if not _is_project_member(request.user, project):
+            return HttpResponseForbidden('You do not have access to this project.')
+
+        try:
+            from docx import Document
+            from docx.shared import Pt, Inches, RGBColor, Cm
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.enum.table import WD_ALIGN_VERTICAL
+            from docx.oxml.ns import qn
+            from docx.oxml import OxmlElement
+        except ImportError:
+            return HttpResponse(
+                'python-docx is not installed. Run: pip install python-docx',
+                status=500,
+            )
+
+        doc = Document()
+
+        # ── Theme ────────────────────────────────────────────────────────────
+        BRAND      = RGBColor(0x1E, 0x3A, 0x5F)
+        BRAND_DARK = RGBColor(0x0F, 0x29, 0x40)
+        MUTED      = RGBColor(0x6B, 0x72, 0x80)
+        TEXT       = RGBColor(0x11, 0x18, 0x27)
+        SUCCESS    = RGBColor(0x06, 0x5F, 0x46)
+        DANGER     = RGBColor(0x99, 0x1B, 0x1B)
+
+        def shade_cell(cell, hex_color):
+            tc_pr = cell._tc.get_or_add_tcPr()
+            shd = OxmlElement('w:shd')
+            shd.set(qn('w:fill'), hex_color)
+            shd.set(qn('w:val'), 'clear')
+            tc_pr.append(shd)
+
+        def set_cell_borders(cell, color='E2E8F0'):
+            tc_pr = cell._tc.get_or_add_tcPr()
+            tc_borders = OxmlElement('w:tcBorders')
+            for edge in ('top', 'left', 'bottom', 'right'):
+                b = OxmlElement(f'w:{edge}')
+                b.set(qn('w:val'), 'single')
+                b.set(qn('w:sz'), '4')
+                b.set(qn('w:space'), '0')
+                b.set(qn('w:color'), color)
+                tc_borders.append(b)
+            tc_pr.append(tc_borders)
+
+        # Default font
+        style = doc.styles['Normal']
+        style.font.name = 'Calibri'
+        style.font.size = Pt(10)
+
+        # Page margins
+        for section in doc.sections:
+            section.top_margin = Cm(1.8)
+            section.bottom_margin = Cm(1.8)
+            section.left_margin = Cm(2.0)
+            section.right_margin = Cm(2.0)
+
+        # ── Cover header ─────────────────────────────────────────────────────
+        code_p = doc.add_paragraph()
+        code_run = code_p.add_run(project.code)
+        code_run.font.size = Pt(10)
+        code_run.font.bold = True
+        code_run.font.color.rgb = MUTED
+
+        title = doc.add_paragraph()
+        title_run = title.add_run(project.name)
+        title_run.font.size = Pt(24)
+        title_run.font.bold = True
+        title_run.font.color.rgb = BRAND_DARK
+
+        subtitle = doc.add_paragraph()
+        sub = subtitle.add_run(
+            f'Project Report · Generated {timezone.now().strftime("%B %d, %Y")} '
+            f'by {request.user.full_name}'
+        )
+        sub.font.size = Pt(9)
+        sub.italic = True
+        sub.font.color.rgb = MUTED
+
+        # Decorative rule
+        rule = doc.add_paragraph()
+        rule_pr = rule._p.get_or_add_pPr()
+        pBdr = OxmlElement('w:pBdr')
+        bottom = OxmlElement('w:bottom')
+        bottom.set(qn('w:val'), 'single')
+        bottom.set(qn('w:sz'), '12')
+        bottom.set(qn('w:space'), '1')
+        bottom.set(qn('w:color'), '1E3A5F')
+        pBdr.append(bottom)
+        rule_pr.append(pBdr)
+
+        # ── Computed values ──────────────────────────────────────────────────
+        ms_list = list(project.milestones.all())
+        weights_map = _compute_milestone_weights(ms_list)
+        completed_weight = sum(
+            weights_map.get(m.id, 0) for m in ms_list if m.status == 'completed'
+        )
+        status_counts = {
+            'pending':     sum(1 for m in ms_list if m.status == 'pending'),
+            'in_progress': sum(1 for m in ms_list if m.status == 'in_progress'),
+            'completed':   sum(1 for m in ms_list if m.status == 'completed'),
+            'missed':      sum(1 for m in ms_list if m.status == 'missed'),
+        }
+
+        budget_pct = 0
+        if project.budget and project.budget > 0:
+            budget_pct = min(100, round(float(project.budget_spent) / float(project.budget) * 100, 1))
+
+        days_remaining = None
+        if project.end_date:
+            days_remaining = (project.end_date - timezone.now().date()).days
+
+        # ── Section heading helper ───────────────────────────────────────────
+        def add_h(text, *, top_space=True):
+            if top_space:
+                spacer = doc.add_paragraph()
+                spacer.add_run('').font.size = Pt(4)
+            h = doc.add_paragraph()
+            run = h.add_run(text.upper())
+            run.font.size = Pt(11)
+            run.font.bold = True
+            run.font.color.rgb = BRAND
+            # Letter spacing via XML
+            r_pr = run._r.get_or_add_rPr()
+            spacing = OxmlElement('w:spacing')
+            spacing.set(qn('w:val'), '40')
+            r_pr.append(spacing)
+            # Bottom border on heading
+            pBdr = OxmlElement('w:pBdr')
+            b = OxmlElement('w:bottom')
+            b.set(qn('w:val'), 'single')
+            b.set(qn('w:sz'), '4')
+            b.set(qn('w:space'), '4')
+            b.set(qn('w:color'), 'E2E8F0')
+            pBdr.append(b)
+            h._p.get_or_add_pPr().append(pBdr)
+
+        # ── Executive Summary ────────────────────────────────────────────────
+        add_h('Executive Summary', top_space=False)
+
+        summary_data = [
+            ('Status',          project.get_status_display()),
+            ('Priority',        project.get_priority_display()),
+            ('Progress',        f'{project.progress_pct}% (weighted: {completed_weight}%)'),
+            ('Owner',           project.owner.full_name if project.owner else '—'),
+            ('Project Manager', project.project_manager.full_name if project.project_manager else '—'),
+            ('Department',      project.department.name if project.department else '—'),
+            ('Start Date',      project.start_date.strftime('%B %d, %Y') if project.start_date else '—'),
+            ('End Date',        project.end_date.strftime('%B %d, %Y') if project.end_date else '—'),
+            ('Days Remaining',  f'{days_remaining} days' if days_remaining is not None else '—'),
+            ('Budget',          f'{project.budget:,.2f}' if project.budget else '—'),
+            ('Budget Used',     f'{budget_pct}%' if project.budget else '—'),
+        ]
+
+        summary_tbl = doc.add_table(rows=len(summary_data), cols=2)
+        summary_tbl.autofit = False
+        for r_idx, (label, value) in enumerate(summary_data):
+            cell_l = summary_tbl.cell(r_idx, 0)
+            cell_v = summary_tbl.cell(r_idx, 1)
+            cell_l.width = Inches(2.0)
+            cell_v.width = Inches(4.4)
+
+            cell_l.text = ''
+            p = cell_l.paragraphs[0]
+            run = p.add_run(label)
+            run.font.size = Pt(9)
+            run.font.bold = True
+            run.font.color.rgb = MUTED
+            shade_cell(cell_l, 'F8FAFC')
+            set_cell_borders(cell_l)
+            cell_l.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+            cell_v.text = ''
+            p = cell_v.paragraphs[0]
+            run = p.add_run(value)
+            run.font.size = Pt(10)
+            run.font.color.rgb = TEXT
+            set_cell_borders(cell_v)
+            cell_v.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+        if project.description:
+            d = doc.add_paragraph()
+            d.paragraph_format.space_before = Pt(8)
+            run = d.add_run('Description: ')
+            run.bold = True
+            run.font.size = Pt(10)
+            run.font.color.rgb = MUTED
+            run2 = d.add_run(project.description)
+            run2.font.size = Pt(10)
+            run2.font.color.rgb = TEXT
+
+        # ── Charts (progress donut + milestone status) ───────────────────────
+        add_h('Visual Overview')
+
+        donut_buf = _render_progress_donut_png(completed_weight)
+        bar_buf = _render_milestone_status_png(status_counts)
+
+        if donut_buf or bar_buf:
+            chart_tbl = doc.add_table(rows=1, cols=2)
+            chart_tbl.autofit = False
+
+            left_cell = chart_tbl.cell(0, 0)
+            right_cell = chart_tbl.cell(0, 1)
+            left_cell.width = Inches(2.6)
+            right_cell.width = Inches(3.8)
+
+            for c in (left_cell, right_cell):
+                set_cell_borders(c, 'F1F5F9')
+                c.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+            if donut_buf:
+                p = left_cell.paragraphs[0]
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.add_run().add_picture(donut_buf, width=Inches(2.2))
+                cap = left_cell.add_paragraph()
+                cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                cap_run = cap.add_run('Weighted Progress')
+                cap_run.font.size = Pt(9)
+                cap_run.font.bold = True
+                cap_run.font.color.rgb = MUTED
+
+            if bar_buf:
+                p = right_cell.paragraphs[0]
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.add_run().add_picture(bar_buf, width=Inches(3.4))
+                cap = right_cell.add_paragraph()
+                cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                cap_run = cap.add_run('Milestone Status Breakdown')
+                cap_run.font.size = Pt(9)
+                cap_run.font.bold = True
+                cap_run.font.color.rgb = MUTED
+        else:
+            note = doc.add_paragraph()
+            note_run = note.add_run('Charts unavailable: matplotlib is not installed.')
+            note_run.italic = True
+            note_run.font.color.rgb = MUTED
+            note_run.font.size = Pt(9)
+
+        # ── Helper for styled table rendering ────────────────────────────────
+        def render_table(headers, rows, *, col_widths_in=None, status_col_idx=None,
+                        status_color_map=None):
+            tbl = doc.add_table(rows=1 + len(rows), cols=len(headers))
+            tbl.autofit = False
+
+            for c_idx, h in enumerate(headers):
+                cell = tbl.cell(0, c_idx)
+                if col_widths_in and c_idx < len(col_widths_in):
+                    cell.width = Inches(col_widths_in[c_idx])
+                cell.text = ''
+                p = cell.paragraphs[0]
+                run = p.add_run(h)
+                run.font.bold = True
+                run.font.size = Pt(9)
+                run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                shade_cell(cell, '0F2940')
+                set_cell_borders(cell, '0F2940')
+                cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+            for r_idx, row in enumerate(rows, start=1):
+                zebra = (r_idx % 2 == 0)
+                for c_idx, value in enumerate(row):
+                    cell = tbl.cell(r_idx, c_idx)
+                    if col_widths_in and c_idx < len(col_widths_in):
+                        cell.width = Inches(col_widths_in[c_idx])
+                    cell.text = ''
+                    p = cell.paragraphs[0]
+                    run = p.add_run(str(value) if value is not None else '')
+                    run.font.size = Pt(9)
+                    run.font.color.rgb = TEXT
+
+                    if zebra:
+                        shade_cell(cell, 'F8FAFC')
+                    set_cell_borders(cell)
+
+                    if status_col_idx is not None and c_idx == status_col_idx and status_color_map:
+                        key = str(value).lower().replace(' ', '_')
+                        # Try both display label and key form
+                        match = status_color_map.get(key) or status_color_map.get(str(value))
+                        if match:
+                            fg, bg = match
+                            run.font.color.rgb = RGBColor(int(fg[0:2], 16), int(fg[2:4], 16), int(fg[4:6], 16))
+                            run.font.bold = True
+                            shade_cell(cell, bg)
+                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+                    cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+            return tbl
+
+        # ── Milestones ───────────────────────────────────────────────────────
+        add_h(f'Milestones ({len(ms_list)})')
+        if ms_list:
+            ms_status_colors = {
+                'Pending':     ('64748B', 'F1F5F9'),
+                'In Progress': ('1E40AF', 'DBEAFE'),
+                'Completed':   ('065F46', 'D1FAE5'),
+                'Missed':      ('991B1B', 'FEE2E2'),
+            }
+            rows = []
+            for m in ms_list:
+                rows.append([
+                    f'{m.order or ""}'.strip() or '—',
+                    m.name,
+                    m.due_date.strftime('%b %d, %Y') if m.due_date else '—',
+                    m.get_status_display(),
+                    f'{weights_map.get(m.id, 0)}%',
+                    m.assigned_to.full_name if m.assigned_to else '—',
+                ])
+            render_table(
+                ['#', 'Name', 'Due', 'Status', 'Weight', 'Assignee'],
+                rows,
+                col_widths_in=[0.4, 2.4, 1.0, 1.1, 0.7, 1.4],
+                status_col_idx=3,
+                status_color_map=ms_status_colors,
+            )
+        else:
+            doc.add_paragraph('No milestones recorded.').runs[0].font.color.rgb = MUTED
+
+        # ── Risks ────────────────────────────────────────────────────────────
+        risks_qs = list(project.risks.select_related('owner').order_by('is_resolved', '-created_at'))
+        active_count = sum(1 for r in risks_qs if not r.is_resolved)
+        resolved_count = len(risks_qs) - active_count
+        add_h(f'Risks ({active_count} open · {resolved_count} resolved)')
+        if risks_qs:
+            risk_level_colors = {
+                'Low':      ('065F46', 'D1FAE5'),
+                'Medium':   ('92400E', 'FEF3C7'),
+                'High':     ('991B1B', 'FEE2E2'),
+                'Critical': ('9D174D', 'FCE7F3'),
+            }
+            rows = []
+            for r in risks_qs:
+                rows.append([
+                    r.title,
+                    r.get_level_display(),
+                    'Resolved' if r.is_resolved else 'Open',
+                    r.owner.full_name if r.owner else '—',
+                    (r.description or '')[:120] + ('…' if r.description and len(r.description) > 120 else ''),
+                ])
+            render_table(
+                ['Title', 'Level', 'Status', 'Owner', 'Description'],
+                rows,
+                col_widths_in=[1.7, 0.8, 0.8, 1.3, 2.4],
+                status_col_idx=1,
+                status_color_map=risk_level_colors,
+            )
+        else:
+            doc.add_paragraph('No risks recorded.').runs[0].font.color.rgb = MUTED
+
+        # ── Activity Log ─────────────────────────────────────────────────────
+        updates_qs = list(project.updates.select_related('author', 'milestone').order_by('-created_at')[:30])
+        add_h(f'Activity Log ({len(updates_qs)} most recent)')
+        if updates_qs:
+            for u in updates_qs:
+                # Header row for this entry
+                head = doc.add_paragraph()
+                head.paragraph_format.space_before = Pt(6)
+                head.paragraph_format.space_after = Pt(2)
+
+                author_run = head.add_run(u.author.full_name if u.author else 'Unknown')
+                author_run.bold = True
+                author_run.font.size = Pt(10)
+                author_run.font.color.rgb = TEXT
+
+                meta_run = head.add_run(f'  ·  {u.created_at.strftime("%b %d, %Y at %H:%M")}')
+                meta_run.font.size = Pt(9)
+                meta_run.font.color.rgb = MUTED
+
+                if u.title:
+                    title_run = head.add_run(f'  ·  {u.title}')
+                    title_run.font.size = Pt(9)
+                    title_run.font.color.rgb = MUTED
+                    title_run.italic = True
+
+                if u.milestone:
+                    ms_run = head.add_run(f'  ·  🏁 {u.milestone.name}')
+                    ms_run.font.size = Pt(9)
+                    ms_run.font.color.rgb = BRAND
+
+                if u.progress_at_time is not None:
+                    pr_run = head.add_run(f'  ·  {u.progress_at_time}% progress')
+                    pr_run.font.size = Pt(9)
+                    pr_run.font.color.rgb = MUTED
+
+                # Body paragraph
+                body = doc.add_paragraph()
+                body.paragraph_format.left_indent = Inches(0.2)
+                body.paragraph_format.space_after = Pt(6)
+                # Border on left side for a quote-like feel
+                pBdr = OxmlElement('w:pBdr')
+                left = OxmlElement('w:left')
+                left.set(qn('w:val'), 'single')
+                left.set(qn('w:sz'), '12')
+                left.set(qn('w:space'), '8')
+                left.set(qn('w:color'), '1E3A5F')
+                pBdr.append(left)
+                body._p.get_or_add_pPr().append(pBdr)
+
+                body_run = body.add_run(u.content)
+                body_run.font.size = Pt(10)
+                body_run.font.color.rgb = TEXT
+        else:
+            doc.add_paragraph('No activity recorded.').runs[0].font.color.rgb = MUTED
+
+        # ── Tasks ────────────────────────────────────────────────────────────
+        tasks_qs = list(project.tasks.select_related('assigned_to').order_by('-created_at'))
+        add_h(f'Linked Tasks ({len(tasks_qs)})')
+        if tasks_qs:
+            task_status_colors = {
+                'To Do':         ('64748B', 'F1F5F9'),
+                'In Progress':   ('1E40AF', 'DBEAFE'),
+                'Under Review':  ('92400E', 'FEF3C7'),
+                'On Hold':       ('991B1B', 'FEE2E2'),
+                'Done':          ('065F46', 'D1FAE5'),
+                'Cancelled':     ('6B7280', 'F3F4F6'),
+            }
+            rows = []
+            for t in tasks_qs[:50]:  # cap at 50 to keep document readable
+                rows.append([
+                    t.title[:60] + ('…' if len(t.title) > 60 else ''),
+                    t.assigned_to.full_name if t.assigned_to else '—',
+                    t.get_status_display(),
+                    t.get_priority_display(),
+                    f'{t.progress_pct or 0}%',
+                    t.due_date.strftime('%b %d, %Y') if t.due_date else '—',
+                ])
+            render_table(
+                ['Title', 'Assignee', 'Status', 'Priority', 'Progress', 'Due'],
+                rows,
+                col_widths_in=[2.1, 1.3, 1.0, 0.8, 0.7, 1.1],
+                status_col_idx=2,
+                status_color_map=task_status_colors,
+            )
+            if len(tasks_qs) > 50:
+                more = doc.add_paragraph()
+                more_run = more.add_run(
+                    f'… and {len(tasks_qs) - 50} more tasks. See the Excel export for the full list.'
+                )
+                more_run.italic = True
+                more_run.font.size = Pt(9)
+                more_run.font.color.rgb = MUTED
+        else:
+            doc.add_paragraph('No tasks linked to this project.').runs[0].font.color.rgb = MUTED
+
+        # ── Budget ───────────────────────────────────────────────────────────
+        if project.budget:
+            add_h('Budget')
+            remaining = float(project.budget) - float(project.budget_spent)
+            rows = [
+                ['Total Budget',     f'{project.budget:,.2f}'],
+                ['Spent to Date',    f'{project.budget_spent:,.2f}'],
+                ['Remaining',        f'{remaining:,.2f}'],
+                ['Utilization',      f'{budget_pct}%'],
+            ]
+            render_table(
+                ['Category', 'Amount'],
+                rows,
+                col_widths_in=[2.5, 4.0],
+            )
+
+        # ── Team ─────────────────────────────────────────────────────────────
+        all_members = []
+        if project.owner:
+            all_members.append((project.owner, 'Owner'))
+        if project.project_manager and project.project_manager_id != getattr(project.owner, 'id', None):
+            all_members.append((project.project_manager, 'Project Manager'))
+        existing_ids = {u.id for u, _ in all_members}
+        for member in project.team_members.filter(is_active=True).select_related('staffprofile'):
+            if member.id in existing_ids:
+                continue
+            all_members.append((member, 'Team Member'))
+
+        add_h(f'Team ({len(all_members)})')
+        if all_members:
+            rows = []
+            for u, role in all_members:
+                profile = getattr(u, 'staffprofile', None)
+                dept_name = getattr(getattr(profile, 'department', None), 'name', '—') if profile else '—'
+                rows.append([
+                    u.full_name,
+                    role,
+                    u.email or '—',
+                    dept_name,
+                ])
+            render_table(
+                ['Name', 'Role', 'Email', 'Department'],
+                rows,
+                col_widths_in=[1.8, 1.4, 2.2, 1.5],
+            )
+
+        # ── Footer ───────────────────────────────────────────────────────────
+        footer_p = doc.add_paragraph()
+        footer_p.paragraph_format.space_before = Pt(20)
+        footer_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        footer_run = footer_p.add_run(
+            f'Confidential — {project.code} · Report generated '
+            f'{timezone.now().strftime("%B %d, %Y at %H:%M")}'
+        )
+        footer_run.font.size = Pt(8)
+        footer_run.italic = True
+        footer_run.font.color.rgb = MUTED
+
+        # ── Output ───────────────────────────────────────────────────────────
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+
+        filename = f'{project.code}-report-{timezone.now().strftime("%Y%m%d")}.docx'
+        response = HttpResponse(
+            buf.read(),
+            content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response

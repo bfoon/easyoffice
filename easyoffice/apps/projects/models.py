@@ -28,6 +28,15 @@ class Project(models.Model):
     units = models.ManyToManyField('organization.Unit', related_name='projects', blank=True)
     project_manager = models.ForeignKey(User, on_delete=models.SET_NULL, null=True,
                                         related_name='managed_projects')
+    owner = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='owned_projects',
+        help_text='The project owner — the only role allowed to edit core project fields. '
+                  'Defaults to the creator. May be the same as the project manager.',
+    )
     team_members = models.ManyToManyField(User, related_name='projects', blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PLANNING)
     priority = models.CharField(max_length=20, choices=Priority.choices, default=Priority.MEDIUM)
@@ -65,6 +74,14 @@ class Milestone(models.Model):
     due_date = models.DateField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     order = models.PositiveSmallIntegerField(default=0)
+
+    weight_pct = models.PositiveSmallIntegerField(
+        null=True, blank=True,
+        help_text=(
+            'How much this milestone is worth toward overall project progress, 0-100. '
+            'Leave blank to share the remainder equally with other unweighted milestones.'
+        ),
+    )
 
     assigned_to = models.ForeignKey(
         User,

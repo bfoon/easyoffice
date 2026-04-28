@@ -37,11 +37,203 @@ def _is_project_member(user, project):
     return (
         user.is_superuser or
         project.project_manager == user or
+        project.owner_id == user.id or
         project.team_members.filter(id=user.id).exists()
     )
 
 def _is_project_owner(user, project):
-    return user.is_superuser or project.project_manager_id == user.id
+    """
+    'Owner-level' actions — historically this checked PM/superuser. We now
+    treat *both* the dedicated `owner` and the `project_manager` as having
+    these powers (assigning milestones, posting updates, logging risks, etc.).
+    Use `_can_edit_project` for the stricter owner-only gate.
+    """
+    if user.is_superuser:
+        return True
+    if project.project_manager_id == user.id:
+        return True
+    if getattr(project, 'owner_id', None) == user.id:
+        return True
+    return False
+
+
+def _can_edit_project(user, project):
+    """Strict: only the owner (or superuser) may edit core project fields."""
+    if user.is_superuser:
+        return True
+    return getattr(project, 'owner_id', None) == user.id
+
+
+def _is_project_closed(project):
+    """A closed project is read-only for milestones, risks, and updates."""
+    return project.status in ('completed', 'cancelled')
+
+
+def _validate_milestone_due_date(due_date, project):
+    """
+    Returns (cleaned_date, error_message).
+    Ensures the milestone falls within the project's end date.
+    Accepts a date instance or 'YYYY-MM-DD' string.
+    """
+    if not due_date:
+        return None, 'Milestone due date is required.'
+
+    if isinstance(due_date, str):
+        try:
+            due_date = datetime.strptime(due_date.strip(), '%Y-%m-%d').date()
+        except ValueError:
+            return None, 'Invalid date format — please use YYYY-MM-DD.'
+    elif isinstance(due_date, datetime):
+        due_date = due_date.date()
+
+    if project.end_date and due_date > project.end_date:
+        return None, (
+            f'Milestone due date ({due_date.strftime("%b %d, %Y")}) cannot be '
+            f'after the project end date ({project.end_date.strftime("%b %d, %Y")}).'
+        )
+
+    if project.start_date and due_date < project.start_date:
+        return None, (
+            f'Milestone due date ({due_date.strftime("%b %d, %Y")}) cannot be '
+            f'before the project start date ({project.start_date.strftime("%b %d, %Y")}).'
+        )
+
+    return due_date, None
+
+
+# =============================================================================
+# Milestone weighting & project progress
+# =============================================================================
+#
+# Each milestone has an OPTIONAL `weight_pct` (0-100). Milestones with no
+# weight share the leftover percentage equally — so a brand-new project with
+# 4 unweighted milestones gives each one 25%. As soon as you pin one to 60%,
+# the remaining 3 split 40% (≈13.3% each) automatically.
+#
+# Sum of *explicit* weights can never exceed 100. Sum of effective weights
+# always sums to 100 (or 0 if there are no milestones).
+
+def _can_create_project(user):
+    """
+    Project creation is restricted to superusers and the CEO/Admin/Office
+    Manager groups — same shape as `_is_admin_user` in apps.tasks.views.
+    """
+    if user.is_superuser:
+        return True
+    return user.groups.filter(name__in=['CEO', 'Admin', 'Office Manager']).exists()
+
+
+def _compute_milestone_weights(milestones):
+    """
+    Given an iterable of Milestone instances, return
+        {milestone_id: effective_weight_int}
+    where:
+      • milestones with an explicit `weight_pct` keep that exact value
+      • the remainder (100 - sum of explicit weights) is distributed equally
+        across unweighted milestones
+      • residue from integer rounding is dropped onto the last unweighted
+        milestone so the dict sums to (100 - already_explicit).
+    The dict always contains an entry for every passed milestone.
+    """
+    milestones = list(milestones)
+    if not milestones:
+        return {}
+
+    explicit = {
+        m.id: int(m.weight_pct)
+        for m in milestones
+        if m.weight_pct is not None
+    }
+    explicit_sum = sum(explicit.values())
+    explicit_sum = max(0, min(100, explicit_sum))
+
+    unweighted = [m for m in milestones if m.weight_pct is None]
+    remaining = max(0, 100 - explicit_sum)
+
+    weights = dict(explicit)
+
+    if unweighted:
+        share = remaining // len(unweighted)
+        residue = remaining - share * len(unweighted)
+        for m in unweighted:
+            weights[m.id] = share
+        # dump rounding leftover onto the last unweighted milestone
+        if residue and unweighted:
+            weights[unweighted[-1].id] += residue
+
+    return weights
+
+
+def _validate_explicit_weight(project, milestone, new_weight):
+    """
+    Validate that setting `milestone.weight_pct = new_weight` would not push
+    the explicit-weight total over 100% for this project.
+    Returns (cleaned_weight_or_None, error_or_None). `new_weight` may be:
+      • '' / None  → cleared (becomes None, auto-share)
+      • '0'..'100' → explicit weight
+    """
+    if new_weight in (None, '', 'auto'):
+        return None, None
+
+    try:
+        w = int(new_weight)
+    except (TypeError, ValueError):
+        return None, 'Milestone weight must be a whole number between 0 and 100.'
+
+    if w < 0 or w > 100:
+        return None, 'Milestone weight must be between 0 and 100.'
+
+    # Sum of OTHER milestones' explicit weights
+    other_explicit = (
+        project.milestones
+        .exclude(pk=milestone.pk if milestone and milestone.pk else None)
+        .exclude(weight_pct__isnull=True)
+        .aggregate(t=Sum('weight_pct'))['t']
+        or 0
+    )
+    if other_explicit + w > 100:
+        return None, (
+            f'Total milestone weight would be {other_explicit + w}% — '
+            f'cannot exceed 100%. Other milestones already use {other_explicit}%.'
+        )
+    return w, None
+
+
+def _recalculate_project_progress(project, *, save=True):
+    """
+    Sum the effective weights of all COMPLETED milestones to derive the
+    project's progress %. Called whenever a milestone is added, removed,
+    reweighted, or transitions to/from completed.
+
+    Falls back to the manually-entered `progress_pct` if the project has
+    no milestones at all (so the value posted from the Update modal still
+    works for projects without milestones).
+    """
+    milestones = list(project.milestones.all())
+    if not milestones:
+        return project.progress_pct
+
+    weights = _compute_milestone_weights(milestones)
+    completed_pct = sum(
+        weights.get(m.id, 0)
+        for m in milestones
+        if m.status == Milestone.Status.COMPLETED
+    )
+    completed_pct = max(0, min(100, int(completed_pct)))
+
+    if save and project.progress_pct != completed_pct:
+        project.progress_pct = completed_pct
+        # If milestones drove progress to 100%, also stamp completion.
+        if completed_pct == 100 and project.status not in ('completed', 'cancelled'):
+            project.status = Project.Status.COMPLETED
+            project.completed_at = timezone.now()
+            project.save(update_fields=[
+                'progress_pct', 'status', 'completed_at', 'updated_at',
+            ])
+        else:
+            project.save(update_fields=['progress_pct', 'updated_at'])
+
+    return completed_pct
 
 
 def _milestone_due_datetime(due_date):
@@ -76,7 +268,7 @@ def _create_or_update_milestone_task(milestone, actor):
     if not milestone.assigned_to_id:
         return None
 
-    from apps.tasks.models import Task
+    from apps.tasks.models import Task, TaskReassignment
     from apps.core.models import CoreNotification
 
     project = milestone.project
@@ -95,6 +287,7 @@ def _create_or_update_milestone_task(milestone, actor):
 
     if milestone.task_id:
         task = milestone.task
+        prev_assignee_id = task.assigned_to_id
         task.title = title
         task.description = description
         task.assigned_to = milestone.assigned_to
@@ -121,6 +314,20 @@ def _create_or_update_milestone_task(milestone, actor):
             'completed_at',
             'updated_at',
         ])
+
+        # Audit a reassignment whenever the milestone's owner changes.
+        if prev_assignee_id and prev_assignee_id != milestone.assigned_to_id:
+            TaskReassignment.objects.create(
+                task=task,
+                from_user_id=prev_assignee_id,
+                to_user=milestone.assigned_to,
+                reassigned_by=actor,
+                is_full_reassignment=True,
+                notes=(
+                    f'Auto-reassigned because milestone "{milestone.name}" '
+                    f'was reassigned on the parent project.'
+                ),
+            )
     else:
         task = Task.objects.create(
             title=title,
@@ -224,6 +431,10 @@ def sync_milestone_from_task(task):
                 '\n'.join(content_lines),
                 title=f'Milestone completed — {milestone.name}',
             )
+
+        # Either way (completed or reopened), the project's weighted progress
+        # changed. Recompute and persist it.
+        _recalculate_project_progress(milestone.project)
 
 
 logger = logging.getLogger(__name__)
@@ -1190,6 +1401,7 @@ class ProjectListView(LoginRequiredMixin, TemplateView):
             'active_count': my_projects.filter(status='active').count(),
             'completed_count': my_projects.filter(status='completed').count(),
             'my_count': my_projects.count(),
+            'can_create_project': _can_create_project(user),
         })
         return ctx
 
@@ -1209,6 +1421,25 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         user = self.request.user
 
         milestones = project.milestones.all().order_by('order', 'due_date')
+        # Compute effective weights so the template can show "12% · auto" or "30% (set)".
+        milestones = list(milestones)
+        weights_map = _compute_milestone_weights(milestones)
+        for ms in milestones:
+            ms.effective_weight = weights_map.get(ms.id, 0)
+            ms.weight_is_auto = ms.weight_pct is None
+
+        total_explicit_weight = sum(
+            int(m.weight_pct) for m in milestones if m.weight_pct is not None
+        )
+        total_completed_weight = sum(
+            weights_map.get(m.id, 0)
+            for m in milestones if m.status == Milestone.Status.COMPLETED
+        )
+        unweighted_count = sum(1 for m in milestones if m.weight_pct is None)
+        auto_share = (
+            (100 - total_explicit_weight) // unweighted_count
+            if unweighted_count else 0
+        )
         tasks = project.tasks.select_related('assigned_to').order_by('status', '-created_at')[:15]
         updates = project.updates.select_related('author').order_by('-created_at')[:15]
         risks = project.risks.select_related('owner')
@@ -1218,12 +1449,13 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         if project.project_manager_id:
             team = team.exclude(id=project.project_manager_id)
 
-        total_ms = milestones.count()
-        completed_ms = milestones.filter(status='completed').count()
-        overdue_ms = milestones.filter(
-            status__in=['pending', 'in_progress'],
-            due_date__lt=timezone.now().date()
-        ).count()
+        total_ms = len(milestones)
+        completed_ms = sum(1 for m in milestones if m.status == 'completed')
+        today = timezone.now().date()
+        overdue_ms = sum(
+            1 for m in milestones
+            if m.status in ('pending', 'in_progress') and m.due_date and m.due_date < today
+        )
 
         budget_pct = 0
         if project.budget and project.budget > 0:
@@ -1333,13 +1565,22 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             'tasks': tasks,
             'team_members': team,
             'is_member': _is_project_member(user, project),
-            'is_manager': user.is_superuser or project.project_manager == user,
-            'can_manage_milestones': _is_project_owner(user, project),
-            'can_post_update': _is_project_owner(user, project),
+            'is_manager': _is_project_owner(user, project),
+            'is_owner': _can_edit_project(user, project),
+            'can_edit_project': _can_edit_project(user, project),
+            'can_create_project': _can_create_project(user),
+            'project_closed': _is_project_closed(project),
+            'can_manage_milestones': _is_project_owner(user, project) and not _is_project_closed(project),
+            'can_post_update': _is_project_owner(user, project) and not _is_project_closed(project),
+            'can_manage_risks': _is_project_owner(user, project) and not _is_project_closed(project),
 
             'total_ms': total_ms,
             'completed_ms': completed_ms,
             'overdue_ms': overdue_ms,
+            'total_explicit_weight': total_explicit_weight,
+            'total_completed_weight': total_completed_weight,
+            'auto_share_per_milestone': auto_share,
+            'unweighted_milestone_count': unweighted_count,
             'budget_pct': budget_pct,
             'days_remaining': days_remaining,
             'days_remaining_abs': days_remaining_abs,
@@ -1379,6 +1620,15 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
 class ProjectCreateView(LoginRequiredMixin, View):
     template_name = 'projects/project_form.html'
 
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated and not _can_create_project(request.user):
+            messages.error(
+                request,
+                'Only the CEO, Admin, or Office Manager can create projects.'
+            )
+            return redirect('project_list')
+        return super().dispatch(request, *args, **kwargs)
+
     def get(self, request):
         from apps.organization.models import Department, Unit
         return render(request, self.template_name, {
@@ -1398,11 +1648,19 @@ class ProjectCreateView(LoginRequiredMixin, View):
             import random, string
             code = request.POST.get('code', '').strip() or ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
+        # Resolve owner — defaults to the creating user if not specified.
+        owner_id = request.POST.get('owner') or request.user.id
+        try:
+            owner_user = User.objects.get(id=owner_id)
+        except User.DoesNotExist:
+            owner_user = request.user
+
         project = Project.objects.create(
             name=request.POST['name'],
             code=code,
             description=request.POST.get('description', ''),
             project_manager_id=request.POST.get('project_manager') or request.user.id,
+            owner=owner_user,
             priority=request.POST.get('priority', 'medium'),
             status=request.POST.get('status', 'planning'),
             start_date=request.POST.get('start_date') or None,
@@ -1436,8 +1694,14 @@ class ProjectEditView(LoginRequiredMixin, View):
 
     def get(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
-        if not _is_project_member(request.user, project):
-            messages.error(request, 'You do not have permission to edit this project.')
+        if not _can_edit_project(request.user, project):
+            messages.error(request, 'Only the project owner can edit this project.')
+            return redirect('project_detail', pk=pk)
+        if _is_project_closed(project):
+            messages.error(
+                request,
+                'This project is closed and can no longer be edited.'
+            )
             return redirect('project_detail', pk=pk)
         from apps.organization.models import Department, Unit
         return render(request, self.template_name, {
@@ -1452,16 +1716,44 @@ class ProjectEditView(LoginRequiredMixin, View):
 
     def post(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
-        if not _is_project_member(request.user, project):
-            messages.error(request, 'Permission denied.')
+        if not _can_edit_project(request.user, project):
+            messages.error(request, 'Only the project owner can edit this project.')
             return redirect('project_detail', pk=pk)
+        if _is_project_closed(project):
+            messages.error(
+                request,
+                'This project is closed and can no longer be edited.'
+            )
+            return redirect('project_detail', pk=pk)
+
+        # Validate end_date isn't being moved before any existing milestone
+        new_end_date = request.POST.get('end_date') or None
+        if new_end_date:
+            try:
+                parsed_end = datetime.strptime(new_end_date, '%Y-%m-%d').date()
+                latest_ms = (
+                    project.milestones
+                    .order_by('-due_date')
+                    .values_list('due_date', flat=True)
+                    .first()
+                )
+                if latest_ms and latest_ms > parsed_end:
+                    messages.error(
+                        request,
+                        f'Cannot set end date to {parsed_end.strftime("%b %d, %Y")} — '
+                        f'milestone "{project.milestones.filter(due_date=latest_ms).first().name}" '
+                        f'is due {latest_ms.strftime("%b %d, %Y")}. Move the milestone first.'
+                    )
+                    return redirect('project_edit', pk=pk)
+            except ValueError:
+                pass
 
         project.name = request.POST.get('name', project.name)
         project.description = request.POST.get('description', project.description)
         project.priority = request.POST.get('priority', project.priority)
         project.status = request.POST.get('status', project.status)
         project.start_date = request.POST.get('start_date') or None
-        project.end_date = request.POST.get('end_date') or None
+        project.end_date = new_end_date
         project.budget = request.POST.get('budget') or None
         project.cover_color = request.POST.get('cover_color', project.cover_color)
         project.tags = request.POST.get('tags', project.tags)
@@ -1472,12 +1764,22 @@ class ProjectEditView(LoginRequiredMixin, View):
                 project.project_manager = User.objects.get(id=pm_id)
             except User.DoesNotExist:
                 pass
+        # Owner can transfer ownership
+        new_owner_id = request.POST.get('owner')
+        if new_owner_id:
+            try:
+                project.owner = User.objects.get(id=new_owner_id)
+            except User.DoesNotExist:
+                pass
         if request.POST.get('dept_id'):
             try:
                 from apps.organization.models import Department
                 project.department = Department.objects.get(id=request.POST['dept_id'])
             except Exception:
                 pass
+        # Auto-stamp completed_at when transitioning to completed
+        if project.status == 'completed' and not project.completed_at:
+            project.completed_at = timezone.now()
         project.save()
 
         member_ids = request.POST.getlist('team_members')
@@ -1512,8 +1814,16 @@ class ProjectUpdateStatusView(LoginRequiredMixin, View):
         if not _is_project_owner(request.user, project):
             messages.error(
                 request,
-                'Only the project manager or office admin can update the '
-                'project status.'
+                'Only the project owner or project manager can update the '
+                'project status or post activity logs.'
+            )
+            return redirect('project_detail', pk=pk)
+
+        if _is_project_closed(project):
+            messages.error(
+                request,
+                'This project is closed — no further activity log entries '
+                'can be posted.'
             )
             return redirect('project_detail', pk=pk)
 
@@ -1567,32 +1877,69 @@ class ProjectMilestoneView(LoginRequiredMixin, View):
     def post(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
 
-        if not _is_project_member(request.user, project):
-            messages.error(request, 'Permission denied.')
+        # Only owner / PM can create or assign milestones.
+        if not _is_project_owner(request.user, project):
+            messages.error(
+                request,
+                'Only the project owner or project manager can add milestones.'
+            )
+            return redirect('project_detail', pk=pk)
+
+        if _is_project_closed(project):
+            messages.error(
+                request,
+                'This project is closed — milestones cannot be added.'
+            )
+            return redirect('project_detail', pk=pk)
+
+        # Validate the due date against project bounds.
+        cleaned_due_date, due_date_error = _validate_milestone_due_date(
+            request.POST.get('due_date'),
+            project,
+        )
+        if due_date_error:
+            messages.error(request, due_date_error)
+            return redirect('project_detail', pk=pk)
+
+        # Validate the weight (optional, integer 0-100, sum of explicit ≤ 100).
+        cleaned_weight, weight_error = _validate_explicit_weight(
+            project, None, request.POST.get('weight_pct')
+        )
+        if weight_error:
+            messages.error(request, weight_error)
             return redirect('project_detail', pk=pk)
 
         assigned_to_id = request.POST.get('assigned_to') or None
-
-        if assigned_to_id and not _is_project_owner(request.user, project):
-            messages.error(request, 'Only the project owner/manager can assign milestone owners.')
-            return redirect('project_detail', pk=pk)
 
         milestone = Milestone.objects.create(
             project=project,
             name=request.POST['name'],
             description=request.POST.get('description', ''),
-            due_date=request.POST['due_date'],
+            due_date=cleaned_due_date,
             assigned_to_id=assigned_to_id,
             created_by=request.user,
             order=project.milestones.count() + 1,
+            weight_pct=cleaned_weight,
         )
 
         if assigned_to_id:
             project.team_members.add(milestone.assigned_to)
             _create_or_update_milestone_task(milestone, request.user)
+            _log_milestone_activity(
+                milestone,
+                request.user,
+                f'Milestone "{milestone.name}" assigned to '
+                f'{milestone.assigned_to.full_name}. A task has been created '
+                f'with the same deadline ({milestone.due_date.strftime("%b %d, %Y")}).',
+                title=f'Milestone assigned — {milestone.name}',
+            )
             messages.success(request, 'Milestone added and linked task created.')
         else:
             messages.success(request, 'Milestone added.')
+
+        # Adding a milestone redistributes auto-share weights, so the project
+        # progress can shift even though no milestone is "completed" yet.
+        _recalculate_project_progress(project)
 
         return redirect('project_detail', pk=pk)
 
@@ -1606,15 +1953,38 @@ class MilestoneStatusView(LoginRequiredMixin, View):
         project = get_object_or_404(Project, pk=pk)
         milestone = get_object_or_404(Milestone, pk=mid, project=project)
 
-        if not _is_project_member(request.user, project):
-            messages.error(request, 'Permission denied.')
+        # Only owner / PM can update milestone status, dates, or assignment.
+        if not _is_project_owner(request.user, project):
+            messages.error(
+                request,
+                'Only the project owner or project manager can update milestones.'
+            )
             return redirect('project_detail', pk=pk)
 
-        is_owner = _is_project_owner(request.user, project)
+        # Block any change while the project is closed.
+        if _is_project_closed(project):
+            messages.error(
+                request,
+                'This project is closed — milestones cannot be updated.'
+            )
+            return redirect('project_detail', pk=pk)
+
+        # Block any change to a milestone that's already completed.
+        if milestone.status == Milestone.Status.COMPLETED:
+            messages.error(
+                request,
+                f'Milestone "{milestone.name}" is already completed and '
+                f'cannot be updated.'
+            )
+            return redirect('project_detail', pk=pk)
+
         changed_fields = []
+        prev_assignee_id = milestone.assigned_to_id
+        prev_due_date = milestone.due_date
+        prev_status = milestone.status
 
         new_status = request.POST.get('status')
-        if new_status in dict(Milestone.Status.choices):
+        if new_status and new_status in dict(Milestone.Status.choices):
             milestone.status = new_status
             changed_fields.append('status')
 
@@ -1626,23 +1996,33 @@ class MilestoneStatusView(LoginRequiredMixin, View):
                 changed_fields.append('completed_at')
 
         if 'due_date' in request.POST:
-            if not is_owner:
-                messages.error(request, 'Only the project owner/manager can adjust milestone dates.')
-                return redirect('project_detail', pk=pk)
-
-            due_date = request.POST.get('due_date')
-            if due_date:
-                milestone.due_date = due_date
+            due_date_raw = request.POST.get('due_date')
+            if due_date_raw:
+                cleaned_due_date, due_date_error = _validate_milestone_due_date(
+                    due_date_raw, project
+                )
+                if due_date_error:
+                    messages.error(request, due_date_error)
+                    return redirect('project_detail', pk=pk)
+                milestone.due_date = cleaned_due_date
                 changed_fields.append('due_date')
 
         if 'assigned_to' in request.POST:
-            if not is_owner:
-                messages.error(request, 'Only the project owner/manager can assign milestone owners.')
-                return redirect('project_detail', pk=pk)
-
             assigned_to_id = request.POST.get('assigned_to') or None
             milestone.assigned_to_id = assigned_to_id
             changed_fields.append('assigned_to')
+
+        # weight_pct: explicit integer 0-100, or '' / 'auto' to clear (NULL = auto-share).
+        if 'weight_pct' in request.POST:
+            cleaned_weight, weight_error = _validate_explicit_weight(
+                project, milestone, request.POST.get('weight_pct')
+            )
+            if weight_error:
+                messages.error(request, weight_error)
+                return redirect('project_detail', pk=pk)
+            if cleaned_weight != milestone.weight_pct:
+                milestone.weight_pct = cleaned_weight
+                changed_fields.append('weight_pct')
 
         if changed_fields:
             if 'updated_at' not in changed_fields:
@@ -1653,6 +2033,56 @@ class MilestoneStatusView(LoginRequiredMixin, View):
             if milestone.assigned_to_id:
                 project.team_members.add(milestone.assigned_to)
                 _create_or_update_milestone_task(milestone, request.user)
+
+            # Log assignment-change activity (the completion log already happens
+            # via sync_milestone_from_task when the linked task is marked done).
+            if 'assigned_to' in changed_fields and milestone.assigned_to_id != prev_assignee_id:
+                if milestone.assigned_to_id:
+                    _log_milestone_activity(
+                        milestone,
+                        request.user,
+                        f'Milestone "{milestone.name}" assigned to '
+                        f'{milestone.assigned_to.full_name}. A task has been '
+                        f'created with the same deadline '
+                        f'({milestone.due_date.strftime("%b %d, %Y")}).',
+                        title=f'Milestone assigned — {milestone.name}',
+                    )
+                else:
+                    _log_milestone_activity(
+                        milestone,
+                        request.user,
+                        f'Milestone "{milestone.name}" is now unassigned.',
+                        title=f'Milestone unassigned — {milestone.name}',
+                    )
+
+            if 'due_date' in changed_fields and milestone.due_date != prev_due_date:
+                _log_milestone_activity(
+                    milestone,
+                    request.user,
+                    f'Milestone "{milestone.name}" deadline changed from '
+                    f'{prev_due_date.strftime("%b %d, %Y") if prev_due_date else "—"} '
+                    f'to {milestone.due_date.strftime("%b %d, %Y")}.',
+                    title=f'Milestone deadline updated — {milestone.name}',
+                )
+
+            if (
+                'status' in changed_fields
+                and milestone.status != prev_status
+                and milestone.status != Milestone.Status.COMPLETED
+            ):
+                # Completion is logged elsewhere via sync_milestone_from_task,
+                # so we only log non-completion transitions here.
+                _log_milestone_activity(
+                    milestone,
+                    request.user,
+                    f'Milestone "{milestone.name}" status changed to '
+                    f'{milestone.get_status_display()}.',
+                    title=f'Milestone status — {milestone.name}',
+                )
+
+        # Any change to a milestone (status, weight, dates) can shift the
+        # weighted-progress total — recompute and persist it on the project.
+        _recalculate_project_progress(project)
 
         messages.success(request, f'Milestone "{milestone.name}" updated.')
         return redirect('project_detail', pk=pk)
@@ -1674,8 +2104,11 @@ class MilestoneReorderView(LoginRequiredMixin, View):
     def post(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
 
-        if not _is_project_member(request.user, project):
-            return JsonResponse({'ok': False, 'error': 'Permission denied.'}, status=403)
+        if not _is_project_owner(request.user, project):
+            return JsonResponse(
+                {'ok': False, 'error': 'Only the project owner or project manager can reorder milestones.'},
+                status=403,
+            )
 
         if project.status in self.CLOSED_STATUSES:
             return JsonResponse(
@@ -1713,8 +2146,18 @@ class MilestoneReorderView(LoginRequiredMixin, View):
 class ProjectRiskView(LoginRequiredMixin, View):
     def post(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
-        if not _is_project_member(request.user, project):
-            messages.error(request, 'Permission denied.')
+        if not _is_project_owner(request.user, project):
+            messages.error(
+                request,
+                'Only the project owner or project manager can add or clear risks.'
+            )
+            return redirect('project_detail', pk=pk)
+
+        if _is_project_closed(project):
+            messages.error(
+                request,
+                'This project is closed — risks cannot be modified.'
+            )
             return redirect('project_detail', pk=pk)
 
         action = request.POST.get('action', 'add')

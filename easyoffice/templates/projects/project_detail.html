@@ -70,6 +70,20 @@
 }
 </style>
 
+{% if project_closed %}
+<div style="background:#fef3c7;border:1px solid #fde68a;border-left:4px solid #d97706;border-radius:var(--eo-radius);padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+  <i class="bi bi-lock-fill" style="color:#92400e;font-size:1.1rem"></i>
+  <div style="flex:1;min-width:0">
+    <div style="font-size:.88rem;font-weight:700;color:#92400e">
+      This project is {{ project.get_status_display|lower }}
+    </div>
+    <div style="font-size:.78rem;color:#78350f">
+      Milestones, risks, and activity-log entries cannot be added or modified. Linked tasks remain accessible.
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div style="background:{{ project.cover_color }};border-radius:var(--eo-radius);padding:28px 28px 24px;margin-bottom:24px;position:relative;overflow:hidden">
   <div style="position:absolute;right:-40px;top:-40px;width:200px;height:200px;border-radius:50%;background:rgba(255,255,255,.06)"></div>
   <div style="position:absolute;right:60px;bottom:-60px;width:180px;height:180px;border-radius:50%;background:rgba(255,255,255,.04)"></div>
@@ -92,13 +106,13 @@
                 style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3)">
           <i class="bi bi-bar-chart-steps"></i> Gantt Chart
         </button>
-        {% if is_member %}
+        {% if can_post_update %}
         <button onclick="openModal('updateModal')" class="eo-btn eo-btn-sm"
                 style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3)">
           <i class="bi bi-pencil-square"></i> Post Update
         </button>
         {% endif %}
-        {% if is_manager %}
+        {% if can_edit_project and not project_closed %}
         <a href="{% url 'project_edit' project.pk %}" class="eo-btn eo-btn-sm"
            style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3)">
           <i class="bi bi-pencil"></i> Edit
@@ -227,9 +241,18 @@
       <div class="eo-card-header">
         <div>
           <h2 class="eo-card-title">Milestones</h2>
-          <p class="eo-card-subtitle">{{ completed_ms }} of {{ total_ms }} completed{% if overdue_ms %} · <span style="color:var(--eo-danger)">{{ overdue_ms }} overdue</span>{% endif %}</p>
+          <p class="eo-card-subtitle">
+            {{ completed_ms }} of {{ total_ms }} completed{% if overdue_ms %} · <span style="color:var(--eo-danger)">{{ overdue_ms }} overdue</span>{% endif %}
+            {% if total_ms %}
+              · <span title="Sum of completed milestone weights">{{ total_completed_weight }}% weighted progress</span>
+              {% if unweighted_milestone_count %}
+                · <span style="color:var(--eo-text-muted);font-size:.78rem"
+                        title="{{ unweighted_milestone_count }} milestone{{ unweighted_milestone_count|pluralize }} share {{ auto_share_per_milestone }}% each">auto-share {{ auto_share_per_milestone }}%</span>
+              {% endif %}
+            {% endif %}
+          </p>
         </div>
-        {% if is_member %}
+        {% if can_manage_milestones %}
         <button onclick="openModal('milestoneModal')" class="eo-btn eo-btn-secondary eo-btn-sm">
           <i class="bi bi-plus"></i> Add
         </button>
@@ -238,7 +261,7 @@
 
       {% if milestones %}
       <div class="ms-timeline" id="msTimeline"
-           data-can-reorder="{% if is_member and project.status != 'completed' and project.status != 'cancelled' %}1{% else %}0{% endif %}"
+           data-can-reorder="{% if can_manage_milestones %}1{% else %}0{% endif %}"
            data-reorder-url="{% url 'milestone_reorder' project.pk %}">
         {% for ms in milestones %}
         <div class="ms-item" data-id="{{ ms.pk }}"
@@ -257,7 +280,7 @@
 
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
             <div style="flex:1;min-width:0;display:flex;align-items:flex-start;gap:8px">
-              {% if is_member and project.status != 'completed' and project.status != 'cancelled' %}
+              {% if can_manage_milestones %}
               <span class="ms-drag-handle" title="Drag to reorder"
                     style="cursor:grab;color:var(--eo-text-muted);font-size:1rem;line-height:1;padding-top:2px;user-select:none">
                 <i class="bi bi-grip-vertical"></i>
@@ -267,14 +290,43 @@
                 <div style="font-size:.9rem;font-weight:600;color:var(--eo-text);margin-bottom:2px
                   {% if ms.status == 'completed' %};text-decoration:line-through;color:var(--eo-text-muted){% endif %}">
                   {{ ms.name }}
+                  {% if ms.status == 'completed' %}
+                  <i class="bi bi-lock-fill ms-1" style="font-size:.7rem;color:var(--eo-success)"
+                     title="Completed milestones are locked from edits"></i>
+                  {% endif %}
                 </div>
                 {% if ms.description %}
                 <div style="font-size:.78rem;color:var(--eo-text-muted);line-height:1.5">{{ ms.description }}</div>
                 {% endif %}
-                <div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:4px;display:flex;align-items:center;gap:10px">
+                <div style="font-size:.75rem;color:var(--eo-text-muted);margin-top:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                   <span><i class="bi bi-calendar3 me-1"></i>Due {{ ms.due_date|date:"N j, Y" }}</span>
                   {% if ms.completed_at %}
                   <span><i class="bi bi-check2 me-1" style="color:var(--eo-success)"></i>Done {{ ms.completed_at|date:"N j, Y" }}</span>
+                  {% endif %}
+                  <span title="{% if ms.weight_is_auto %}Auto-shared with other unweighted milestones{% else %}Set manually{% endif %}"
+                        style="display:inline-flex;align-items:center;gap:4px;background:var(--eo-bg);border:1px solid var(--eo-border);padding:1px 8px;border-radius:10px;font-size:.7rem;font-weight:600;color:var(--eo-text)">
+                    <i class="bi bi-pie-chart-fill" style="font-size:.65rem;color:var(--eo-accent)"></i>
+                    {{ ms.effective_weight }}%
+                    {% if ms.weight_is_auto %}<span style="color:var(--eo-text-muted);font-weight:400">auto</span>{% endif %}
+                  </span>
+                  {% if ms.assigned_to %}
+                  <span style="display:inline-flex;align-items:center;gap:5px">
+                    <i class="bi bi-person-fill" style="color:var(--eo-accent)"></i>
+                    {% if ms.assigned_to.avatar %}
+                      <img src="{{ ms.assigned_to.avatar.url }}"
+                           style="width:18px;height:18px;border-radius:50%;object-fit:cover"/>
+                    {% else %}
+                      <span style="width:18px;height:18px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.55rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center">{{ ms.assigned_to.initials }}</span>
+                    {% endif %}
+                    <span style="color:var(--eo-text)">{{ ms.assigned_to.full_name }}</span>
+                    {% if ms.task %}
+                    <a href="{% url 'task_detail' ms.task.pk %}"
+                       title="Linked task — opens in Tasks"
+                       style="color:var(--eo-accent);font-size:.7rem;text-decoration:none">
+                      <i class="bi bi-link-45deg"></i> task
+                    </a>
+                    {% endif %}
+                  </span>
                   {% endif %}
                 </div>
               </div>
@@ -283,7 +335,7 @@
               <span style="font-size:.72rem;font-weight:600;padding:3px 9px;border-radius:20px;" class="ms-{{ ms.status }}">
                 {{ ms.get_status_display }}
               </span>
-              {% if is_member %}
+              {% if can_manage_milestones and ms.status != 'completed' %}
               <form method="post" action="{% url 'milestone_status' project.pk ms.pk %}" style="display:inline">
                 {% csrf_token %}
                 <select name="status" class="eo-form-select" style="font-size:.75rem;padding:4px 8px;height:auto"
@@ -293,26 +345,36 @@
                   {% endfor %}
                 </select>
               </form>
+              <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm ms-edit-btn"
+                      style="padding:4px 8px;font-size:.72rem"
+                      data-ms-id="{{ ms.pk }}"
+                      data-ms-name="{{ ms.name }}"
+                      data-ms-due="{{ ms.due_date|date:'Y-m-d' }}"
+                      data-ms-assigned="{% if ms.assigned_to %}{{ ms.assigned_to.id }}{% endif %}"
+                      data-ms-weight="{% if ms.weight_pct is not None %}{{ ms.weight_pct }}{% endif %}"
+                      title="Edit milestone deadline / assignee / weight">
+                <i class="bi bi-pencil"></i>
+              </button>
               {% endif %}
             </div>
           </div>
         </div>
         {% endfor %}
       </div>
-      {% if is_member and project.status != 'completed' and project.status != 'cancelled' %}
+      {% if can_manage_milestones %}
       <p style="font-size:.72rem;color:var(--eo-text-muted);margin-top:10px;margin-bottom:0">
-        <i class="bi bi-info-circle me-1"></i>Drag <i class="bi bi-grip-vertical"></i> to reorder milestones.
+        <i class="bi bi-info-circle me-1"></i>Drag <i class="bi bi-grip-vertical"></i> to reorder milestones. Completed milestones are locked from further edits.
       </p>
-      {% elif project.status == 'completed' or project.status == 'cancelled' %}
+      {% elif project_closed %}
       <p style="font-size:.72rem;color:var(--eo-text-muted);margin-top:10px;margin-bottom:0">
-        <i class="bi bi-lock me-1"></i>Project is closed — milestone order is locked.
+        <i class="bi bi-lock me-1"></i>Project is closed — milestones are locked.
       </p>
       {% endif %}
       {% else %}
       <div style="text-align:center;padding:32px;color:var(--eo-text-muted)">
         <i class="bi bi-flag" style="font-size:1.8rem;display:block;margin-bottom:8px;opacity:.4"></i>
-        <p style="font-size:.85rem">No milestones yet.{% if is_member %} Add one to track key deliverables.{% endif %}</p>
-        {% if is_member %}
+        <p style="font-size:.85rem">No milestones yet.{% if can_manage_milestones %} Add one to track key deliverables.{% endif %}</p>
+        {% if can_manage_milestones %}
         <button onclick="openModal('milestoneModal')" class="eo-btn eo-btn-secondary eo-btn-sm mt-2">
           <i class="bi bi-plus"></i> Add Milestone
         </button>
@@ -327,7 +389,7 @@
           <h2 class="eo-card-title">Activity Log</h2>
           <p class="eo-card-subtitle">Latest updates and progress reports</p>
         </div>
-        {% if is_member %}
+        {% if can_post_update %}
         <button onclick="openModal('updateModal')" class="eo-btn eo-btn-secondary eo-btn-sm">
           <i class="bi bi-plus"></i> Post Update
         </button>
@@ -349,6 +411,13 @@
               {% if update.title %}
               <span style="font-size:.8rem;color:var(--eo-text-muted)">· {{ update.title }}</span>
               {% endif %}
+              {% if update.milestone %}
+              <span style="font-size:.7rem;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;padding:2px 8px;border-radius:12px;display:inline-flex;align-items:center;gap:4px"
+                    title="Linked to milestone">
+                <i class="bi bi-flag-fill" style="font-size:.65rem"></i>
+                {{ update.milestone.name|truncatechars:32 }}
+              </span>
+              {% endif %}
               {% if update.progress_at_time is not None %}
               <span style="font-size:.72rem;background:var(--eo-bg);border:1px solid var(--eo-border);padding:2px 8px;border-radius:12px;color:var(--eo-text-muted)">
                 {{ update.progress_at_time }}% progress
@@ -358,7 +427,7 @@
               <span class="eo-status eo-status-{{ update.status_at_time }}" style="font-size:.68rem">{{ update.status_at_time|capfirst }}</span>
               {% endif %}
             </div>
-            <div style="font-size:.84rem;color:var(--eo-text);line-height:1.6">{{ update.content }}</div>
+            <div style="font-size:.84rem;color:var(--eo-text);line-height:1.6;white-space:pre-wrap">{{ update.content }}</div>
             <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:5px">{{ update.created_at|naturaltime }}</div>
           </div>
         </div>
@@ -367,7 +436,7 @@
       {% else %}
       <div style="text-align:center;padding:32px;color:var(--eo-text-muted)">
         <i class="bi bi-chat-square-text" style="font-size:1.8rem;display:block;margin-bottom:8px;opacity:.4"></i>
-        <p style="font-size:.85rem">No updates yet.{% if is_member %} Post the first update below.{% endif %}</p>
+        <p style="font-size:.85rem">No updates yet.{% if can_post_update %} Post the first update below.{% endif %}</p>
       </div>
       {% endif %}
     </div>
@@ -675,7 +744,7 @@
             <i class="bi bi-eye" id="resolvedRisksIcon"></i> Resolved
           </button>
           {% endif %}
-          {% if is_member %}
+          {% if can_manage_risks %}
           <button onclick="openModal('riskModal')" class="eo-btn eo-btn-secondary eo-btn-sm">
             <i class="bi bi-plus"></i> Log
           </button>
@@ -703,7 +772,7 @@
             <i class="bi bi-shield-check me-1" style="color:var(--eo-success)"></i>{{ risk.mitigation|truncatechars:60 }}
           </p>
           {% endif %}
-          {% if is_member %}
+          {% if can_manage_risks %}
           <form method="post" action="{% url 'project_risk' project.pk %}" style="margin-top:8px">
             {% csrf_token %}
             <input type="hidden" name="action" value="resolve"/>
@@ -740,7 +809,7 @@
               </span>
             </div>
             <p style="font-size:.77rem;color:var(--eo-text-muted);margin:0 0 6px;line-height:1.5">{{ risk.description|truncatechars:80 }}</p>
-            {% if is_member %}
+            {% if can_manage_risks %}
             <form method="post" action="{% url 'project_risk' project.pk %}" style="margin-top:8px">
               {% csrf_token %}
               <input type="hidden" name="action" value="unresolve"/>
@@ -1414,6 +1483,24 @@
           <textarea name="content" class="eo-form-control" rows="4" required
                     placeholder="What has been accomplished? Any blockers?"></textarea>
         </div>
+        {% if milestones %}
+        <div class="eo-form-group">
+          <label class="eo-form-label">
+            Link to Milestone <span style="color:var(--eo-text-muted);font-weight:400">(optional)</span>
+          </label>
+          <select name="milestone" class="eo-form-select">
+            <option value="">— No milestone —</option>
+            {% for ms in milestones %}
+            <option value="{{ ms.pk }}">
+              {{ ms.name }}{% if ms.assigned_to %} · {{ ms.assigned_to.full_name }}{% endif %} · {{ ms.get_status_display }}
+            </option>
+            {% endfor %}
+          </select>
+          <p style="font-size:.72rem;color:var(--eo-text-muted);margin:4px 0 0">
+            <i class="bi bi-info-circle me-1"></i>Linking to a milestone groups this entry under it in the activity log.
+          </p>
+        </div>
+        {% endif %}
         <div class="row g-3">
           <div class="col-sm-6">
             <label class="eo-form-label">Progress (%)</label>
@@ -1460,13 +1547,102 @@
           <textarea name="description" class="eo-form-control" rows="2"
                     placeholder="What must be achieved at this milestone?"></textarea>
         </div>
-        <div class="eo-form-group">
-          <label class="eo-form-label">Due Date *</label>
-          <input type="date" name="due_date" class="eo-form-control" required/>
+        <div class="row g-3">
+          <div class="col-sm-6">
+            <label class="eo-form-label">Due Date *</label>
+            <input type="date" name="due_date" class="eo-form-control" required
+                   {% if project.start_date %}min="{{ project.start_date|date:'Y-m-d' }}"{% endif %}
+                   {% if project.end_date %}max="{{ project.end_date|date:'Y-m-d' }}"{% endif %}/>
+            {% if project.end_date %}
+            <p style="font-size:.7rem;color:var(--eo-text-muted);margin:4px 0 0">
+              <i class="bi bi-info-circle me-1"></i>Cannot be after project end date ({{ project.end_date|date:"N j, Y" }}).
+            </p>
+            {% endif %}
+          </div>
+          <div class="col-sm-6">
+            <label class="eo-form-label">
+              Assign To <span style="color:var(--eo-text-muted);font-weight:400">(optional)</span>
+            </label>
+            <select name="assigned_to" class="eo-form-select">
+              <option value="">— Unassigned —</option>
+              {% for staff in staff_list %}
+              <option value="{{ staff.id }}">{{ staff.full_name }}</option>
+              {% endfor %}
+            </select>
+            <p style="font-size:.7rem;color:var(--eo-text-muted);margin:4px 0 0">
+              <i class="bi bi-info-circle me-1"></i>Assigning a member auto-creates a task with this deadline.
+            </p>
+          </div>
         </div>
-        <div style="display:flex;gap:8px">
+        <div class="eo-form-group" style="margin-top:12px">
+          <label class="eo-form-label">
+            Weight toward project progress (%)
+            <span style="color:var(--eo-text-muted);font-weight:400">(optional)</span>
+          </label>
+          <input type="number" name="weight_pct" class="eo-form-control"
+                 min="0" max="100" step="1" placeholder="Leave blank for auto-share"/>
+          <p style="font-size:.7rem;color:var(--eo-text-muted);margin:4px 0 0">
+            <i class="bi bi-info-circle me-1"></i>Total of explicit weights cannot exceed 100%.
+            Currently {{ total_explicit_weight }}% is set explicitly.
+            Leave blank to share the remainder equally with other unweighted milestones.
+          </p>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px">
           <button type="submit" class="eo-btn eo-btn-primary flex-grow-1"><i class="bi bi-flag-fill"></i> Add Milestone</button>
           <button type="button" onclick="closeModal('milestoneModal')" class="eo-btn eo-btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{# Edit-milestone modal: deadline + reassignment for owner/PM. Action URL is set dynamically by JS. #}
+<div class="proj-modal-backdrop" id="milestoneEditModal">
+  <div class="proj-modal">
+    <div class="proj-modal-head">
+      <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">
+        Edit Milestone <span id="msEditName" style="color:var(--eo-text-muted);font-weight:500"></span>
+      </div>
+      <button onclick="closeModal('milestoneEditModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div class="proj-modal-body">
+      <form id="msEditForm" method="post" action="">
+        {% csrf_token %}
+        <div class="eo-form-group">
+          <label class="eo-form-label">Due Date *</label>
+          <input type="date" name="due_date" id="msEditDueDate" class="eo-form-control" required
+                 {% if project.start_date %}min="{{ project.start_date|date:'Y-m-d' }}"{% endif %}
+                 {% if project.end_date %}max="{{ project.end_date|date:'Y-m-d' }}"{% endif %}/>
+          {% if project.end_date %}
+          <p style="font-size:.7rem;color:var(--eo-text-muted);margin:4px 0 0">
+            <i class="bi bi-info-circle me-1"></i>Cannot be after project end date ({{ project.end_date|date:"N j, Y" }}).
+          </p>
+          {% endif %}
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Assigned To</label>
+          <select name="assigned_to" id="msEditAssigned" class="eo-form-select">
+            <option value="">— Unassigned —</option>
+            {% for staff in staff_list %}
+            <option value="{{ staff.id }}">{{ staff.full_name }}</option>
+            {% endfor %}
+          </select>
+          <p style="font-size:.7rem;color:var(--eo-text-muted);margin:4px 0 0">
+            <i class="bi bi-info-circle me-1"></i>Reassigning will sync the linked task and create an audit entry.
+          </p>
+        </div>
+        <div class="eo-form-group">
+          <label class="eo-form-label">Weight toward project progress (%)</label>
+          <input type="number" name="weight_pct" id="msEditWeight" class="eo-form-control"
+                 min="0" max="100" step="1" placeholder="Leave blank for auto-share"/>
+          <p style="font-size:.7rem;color:var(--eo-text-muted);margin:4px 0 0">
+            <i class="bi bi-info-circle me-1"></i>Total of explicit weights cannot exceed 100%.
+            Clear the field to switch back to auto-share.
+          </p>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button type="submit" class="eo-btn eo-btn-primary flex-grow-1"><i class="bi bi-save"></i> Save Changes</button>
+          <button type="button" onclick="closeModal('milestoneEditModal')" class="eo-btn eo-btn-secondary">Cancel</button>
         </div>
       </form>
     </div>
@@ -1717,6 +1893,38 @@ document.addEventListener('keydown', function(e) {
     closeGantt();
   }
 });
+
+// ── Milestone edit modal — wires the pencil button on each milestone row ─────
+(function() {
+  var msEditUrlTpl = "{% url 'milestone_status' project.pk '00000000-0000-0000-0000-000000000000' %}";
+  document.querySelectorAll('.ms-edit-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var msId     = btn.getAttribute('data-ms-id') || '';
+      var msName   = btn.getAttribute('data-ms-name') || '';
+      var msDue    = btn.getAttribute('data-ms-due') || '';
+      var msAssig  = btn.getAttribute('data-ms-assigned') || '';
+      var msWeight = btn.getAttribute('data-ms-weight') || '';
+
+      var form = document.getElementById('msEditForm');
+      if (!form) return;
+      form.action = msEditUrlTpl.replace('00000000-0000-0000-0000-000000000000', msId);
+
+      var nameLabel = document.getElementById('msEditName');
+      if (nameLabel) nameLabel.textContent = '· ' + msName;
+
+      var dateInput = document.getElementById('msEditDueDate');
+      if (dateInput) dateInput.value = msDue;
+
+      var assigSel = document.getElementById('msEditAssigned');
+      if (assigSel) assigSel.value = msAssig;
+
+      var weightInput = document.getElementById('msEditWeight');
+      if (weightInput) weightInput.value = msWeight;
+
+      openModal('milestoneEditModal');
+    });
+  });
+})();
 
 var rangeEl = document.getElementById('progressRange');
 var valEl   = document.getElementById('progressVal');

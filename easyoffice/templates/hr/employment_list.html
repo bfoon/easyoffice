@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Staff Employment Records{% endblock %}
+{% block breadcrumb %}<a href="{% url 'hr_dashboard' %}">HR Dashboard</a> / Staff Records{% endblock %}
+
+{% block content %}
+<style>
+  .hrp-employ{--brand:#0f3d73;--brand2:#0d9488;--ink:#172033;--muted:#667085;--line:#e6edf6;--soft:#f7faff;--red:#b91c1c}
+  .hrp-hero{border-radius:28px;padding:28px;margin-bottom:20px;color:#fff;background:linear-gradient(135deg,#0f3d73,#145aa0 58%,#0d9488);box-shadow:0 18px 48px rgba(15,61,115,.18);position:relative;overflow:hidden}.hrp-hero:after{content:"";position:absolute;right:-40px;bottom:-90px;width:270px;height:270px;border-radius:50%;border:1px solid rgba(255,255,255,.24)}.hrp-hero-inner{position:relative;z-index:1;display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap}.hrp-kicker{font-size:.78rem;text-transform:uppercase;letter-spacing:.16em;font-weight:850;opacity:.85;margin-bottom:8px}.hrp-title{margin:0;font-size:clamp(1.75rem,3vw,2.55rem);font-weight:950;line-height:1.08}.hrp-subtitle{margin:10px 0 0;max-width:760px;opacity:.9}.hrp-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .hrp-card{background:#fff;border:1px solid var(--line);border-radius:24px;box-shadow:0 14px 36px rgba(17,24,39,.06);padding:18px;margin-bottom:18px}.hrp-filter{display:grid;grid-template-columns:minmax(260px,1fr) auto;gap:12px;align-items:end}.hrp-table-wrap{border:1px solid var(--line);border-radius:22px;overflow:hidden;background:#fff}.hrp-table{margin:0}.hrp-table thead th{background:#f4f7fb;color:#42526b;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;border:0;padding:14px 12px;white-space:nowrap}.hrp-table tbody td{padding:15px 12px;border-top:1px solid #edf2f7;vertical-align:middle}.hrp-staff{display:flex;align-items:center;gap:12px;min-width:240px}.hrp-avatar{width:44px;height:44px;border-radius:16px;background:linear-gradient(135deg,#0f3d73,#0d9488);color:#fff;display:grid;place-items:center;font-weight:900;box-shadow:0 10px 22px rgba(15,61,115,.17)}.hrp-name{font-weight:900;color:var(--ink);line-height:1.15}.hrp-meta{font-size:.74rem;color:var(--muted);margin-top:3px}.hrp-money{font-weight:900;color:var(--ink);white-space:nowrap}.hrp-action-wrap{min-width:315px}.hrp-inline{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0}.hrp-discipline{margin-top:9px;border:1px solid var(--line);border-radius:16px;padding:10px;background:#fbfdff}.hrp-discipline summary{cursor:pointer;font-size:.78rem;color:var(--brand);font-weight:850}.hrp-empty{text-align:center;color:var(--muted);padding:46px 20px}.hrp-empty i{font-size:2.2rem;color:#9aa8bd;display:block;margin-bottom:8px}
+  @media(max-width:980px){.hrp-filter{grid-template-columns:1fr}.hrp-table tbody td{min-width:130px}}
+</style>
+
+<div class="hrp-employ">
+  <section class="hrp-hero">
+    <div class="hrp-hero-inner">
+      <div><div class="hrp-kicker">Employment Registry</div><h1 class="hrp-title">Staff Employment Records</h1><p class="hrp-subtitle">Track active staff, resigned staff, contract terms, supervisors, salary records and disciplinary actions from one professional HR register.</p></div>
+      <div class="hrp-actions"><a href="{% url 'employee_onboarding_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-person-plus"></i> Onboarding</a><a href="{% url 'payroll' %}" class="eo-btn eo-btn-primary"><i class="bi bi-cash-stack"></i> Payroll</a></div>
+    </div>
+  </section>
+
+  <div class="hrp-card">
+    <form method="get" class="hrp-filter">
+      <div><label class="eo-form-label">Search Staff</label><input name="q" value="{{ q }}" class="eo-form-control" placeholder="Name, employee code, department or job title"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="eo-btn eo-btn-primary" type="submit"><i class="bi bi-funnel"></i> Filter</button><a class="eo-btn eo-btn-secondary" href="{% url 'employment_list' %}">Reset</a></div>
+    </form>
+  </div>
+
+  <div class="hrp-card">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px"><div><h2 class="eo-card-title" style="margin:0">Employment Register</h2><p class="eo-card-subtitle">{{ records.count }} staff record{{ records.count|pluralize }}</p></div></div>
+    <div class="table-responsive hrp-table-wrap">
+      <table class="table align-middle hrp-table">
+        <thead><tr><th>Staff</th><th>Department / Role</th><th>Hire Type</th><th>Salary</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+          {% for rec in records %}
+          <tr>
+            <td><div class="hrp-staff"><div class="hrp-avatar">{{ rec.user.first_name|first|default:"S" }}{{ rec.user.last_name|first }}</div><div><div class="hrp-name">{{ rec.user.get_full_name|default:rec.user.username }}</div><div class="hrp-meta">{{ rec.employee_code }} · {{ rec.user.email }}</div></div></div></td>
+            <td><div class="hrp-name" style="font-size:.9rem">{{ rec.department_display|default:"—" }}</div><div class="hrp-meta">{{ rec.job_title_display|default:"—" }}</div></td>
+            <td>{{ rec.hire_category|default:"—" }}</td>
+            <td><div class="hrp-money">{{ rec.monthly_salary|floatformat:2|intcomma }}</div></td>
+            <td><span class="eo-status eo-status-{{ rec.status }}">{{ rec.get_status_display }}</span></td>
+            <td class="hrp-action-wrap">
+              <form method="post" action="{% url 'employment_action' rec.pk %}" class="hrp-inline">
+                {% csrf_token %}<input type="hidden" name="action" value="resign"><input type="date" name="resignation_date" class="eo-form-control" style="width:145px"><button class="eo-btn eo-btn-secondary eo-btn-sm" type="submit"><i class="bi bi-box-arrow-right"></i> Resign</button>
+              </form>
+              <details class="hrp-discipline">
+                <summary><i class="bi bi-exclamation-triangle"></i> Discipline / Unpaid Leave</summary>
+                <form method="post" action="{% url 'disciplinary_action_create' rec.user.pk %}" class="row g-2 mt-2">
+                  {% csrf_token %}
+                  <div class="col-md-4"><select name="action_type" class="eo-form-select"><option value="warning">Warning</option><option value="query">Query</option><option value="unpaid_leave">Unpaid Leave</option><option value="suspension">Suspension</option></select></div>
+                  <div class="col-md-3"><input type="date" name="start_date" class="eo-form-control"></div>
+                  <div class="col-md-3"><input type="date" name="end_date" class="eo-form-control"></div>
+                  <div class="col-md-2"><label style="font-size:.75rem;display:flex;gap:4px;align-items:center"><input type="checkbox" name="salary_paused"> Pause Pay</label></div>
+                  <div class="col-12"><input name="reason" required class="eo-form-control" placeholder="Reason"></div>
+                  <div class="col-12"><button class="eo-btn eo-btn-secondary eo-btn-sm" type="submit">Save Discipline</button></div>
+                </form>
+              </details>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6" class="hrp-empty"><i class="bi bi-people"></i>No staff records found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

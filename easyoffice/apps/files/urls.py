@@ -37,6 +37,7 @@ urlpatterns = [
     path('sign/<uuid:token>/preview/',          views.SignDocumentPreviewView.as_view(),        name='sign_document_preview'),
     path('sign/<uuid:token>/download/',         views.SignDocumentDownloadView.as_view(),       name='sign_document_download'),
     path('sign/<uuid:token>/field/<uuid:field_id>/', views.FillSignatureFieldView.as_view(),   name='fill_signature_field'),
+    path('sign/<uuid:token>/complete/', views.SignatureCompleteView.as_view(), name='sign_document_complete'),
 
     path('pdf-tools/',                          views.PDFToolsPageView.as_view(),               name='pdf_tools_page'),
     path('pdf-tools/merge/',                    views.PDFMergeView.as_view(),                   name='pdf_merge'),
@@ -50,6 +51,7 @@ urlpatterns = [
 
     path('quick-sign/',                         views.QuickSignView.as_view(),                  name='quick_sign'),
     path('quick-sign/<uuid:pk>/',               views.QuickSignView.as_view(),                  name='quick_sign_file'),
+path('quick-sign/<uuid:pk>/preview/', views.QuickSignPreviewView.as_view(), name='quick_sign_preview'),
 
     path('tools/notes/',                        views.NotesToPDFView.as_view(),                 name='notes_to_pdf'),
     path('tools/pdf-to-word/',                  views.PDFToWordView.as_view(),                  name='pdf_to_word'),
@@ -67,6 +69,9 @@ urlpatterns = [
     path('note/bulk-status/',                   views.FileNoteBulkStatusView.as_view(),          name='file_note_bulk_status'),
     path('recycle-bin/<int:pk>/delete/',        views.PermanentDeleteTrashFileView.as_view(),   name='delete_trash_file'),
     path('<uuid:pk>/annotations/',              views.FileAnnotationView.as_view(),              name='file_annotations'),
+
+    path('<uuid:pk>/convert-for-signing/', views.SignatureConvertForSigningView.as_view(), name='convert_for_signing'),
+
 
     # ── Live Preview Session ─────────────────────────────────────────────────
     path('<uuid:pk>/live-preview/start/',       views.LivePreviewStartView.as_view(),           name='live_preview_start'),

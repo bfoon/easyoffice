@@ -1,149 +1,67 @@
 {% extends "base.html" %}
 {% load humanize %}
 {% block title %}Attendance Sheet{% endblock %}
-{% block breadcrumb %}
-<a href="{% url 'hr_dashboard' %}">HR Dashboard</a> / Attendance Sheet
-{% endblock %}
+{% block breadcrumb %}<a href="{% url 'hr_dashboard' %}">HR Dashboard</a> / Attendance Sheet{% endblock %}
 
 {% block content %}
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title">Attendance Sheet</h1>
-    <p class="eo-page-subtitle">
-      Monthly attendance record for {{ sheet_staff.full_name }}
-    </p>
-  </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap">
-    <button onclick="window.print()" class="eo-btn eo-btn-secondary">
-      <i class="bi bi-printer"></i> Print
-    </button>
-    {% if can_manage_attendance %}
-    <a href="{% url 'attendance' %}?date={{ start_date|date:'Y-m-d' }}" class="eo-btn eo-btn-primary">
-      <i class="bi bi-clock-history"></i> Manage Attendance
-    </a>
-    {% endif %}
-  </div>
-</div>
+<style>
+  .hrp-sheet{--brand:#0f3d73;--brand2:#0d9488;--ink:#172033;--muted:#667085;--line:#e6edf6;--soft:#f7faff}
+  .hrp-hero{border-radius:28px;padding:28px;margin-bottom:20px;color:#fff;background:linear-gradient(135deg,#0f3d73,#145aa0 58%,#0d9488);box-shadow:0 18px 48px rgba(15,61,115,.18);position:relative;overflow:hidden}.hrp-hero:after{content:"";position:absolute;right:-45px;bottom:-95px;width:280px;height:280px;border-radius:50%;border:1px solid rgba(255,255,255,.24)}.hrp-hero-inner{position:relative;z-index:1;display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap}.hrp-kicker{font-size:.78rem;text-transform:uppercase;letter-spacing:.16em;font-weight:850;opacity:.85;margin-bottom:8px}.hrp-title{margin:0;font-size:clamp(1.75rem,3vw,2.55rem);font-weight:950;line-height:1.08}.hrp-subtitle{margin:10px 0 0;max-width:760px;opacity:.9}.hrp-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .hrp-card{background:#fff;border:1px solid var(--line);border-radius:24px;box-shadow:0 14px 36px rgba(17,24,39,.06);padding:18px;margin-bottom:18px}.hrp-filter{display:grid;grid-template-columns:minmax(220px,1fr) 180px 160px auto;gap:12px;align-items:end}.hrp-stat-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:18px}.hrp-stat{border:1px solid var(--line);border-radius:20px;background:linear-gradient(180deg,#fff,#f8fbff);padding:15px;min-height:92px}.hrp-stat span{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:850}.hrp-stat strong{display:block;font-size:1.55rem;color:var(--ink);margin-top:8px}.hrp-table-wrap{border:1px solid var(--line);border-radius:22px;overflow:hidden;background:#fff}.hrp-table{margin:0}.hrp-table thead th{background:#f4f7fb;color:#42526b;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;border:0;padding:13px 12px;white-space:nowrap}.hrp-table tbody td{padding:13px 12px;border-top:1px solid #edf2f7;vertical-align:middle}.hrp-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}.hrp-name{font-weight:900;color:var(--ink)}.hrp-meta{font-size:.82rem;color:var(--muted);margin-top:3px}.hrp-empty{text-align:center;color:var(--muted);padding:36px 20px}
+  @media(max-width:1000px){.hrp-filter,.hrp-stat-grid{grid-template-columns:1fr 1fr}.hrp-table tbody td{min-width:120px}}
+  @media(max-width:640px){.hrp-filter,.hrp-stat-grid{grid-template-columns:1fr}}
+  @media print{.hrp-hero,.hrp-card:first-of-type,.hrp-actions,.eo-btn,form{display:none!important}.hrp-card{box-shadow:none;border:0;padding:0}.hrp-table-wrap{border:0}.hrp-table thead th{background:#f3f4f6!important;color:#111!important}.hrp-sheet{font-size:12px}}
+</style>
 
-<div class="eo-card mb-4">
-  <form method="get" class="row g-3 align-items-end">
-    <div class="col-md-4">
-      <label class="eo-form-label">Staff</label>
-      <select name="staff" class="eo-form-select">
-        {% for s in selectable_staff %}
-        <option value="{{ s.id }}" {% if s.id == sheet_staff.id %}selected{% endif %}>
-          {{ s.full_name }}
-        </option>
-        {% endfor %}
-      </select>
+<div class="hrp-sheet">
+  <section class="hrp-hero">
+    <div class="hrp-hero-inner">
+      <div><div class="hrp-kicker">Attendance Register</div><h1 class="hrp-title">{{ sheet_staff.full_name }}</h1><p class="hrp-subtitle">Professional monthly attendance sheet for {{ start_date|date:"F Y" }} with present, late, absent, leave, remote and worked hours summary.</p></div>
+      <div class="hrp-actions"><button onclick="window.print()" class="eo-btn eo-btn-secondary"><i class="bi bi-printer"></i> Print Sheet</button>{% if can_manage_attendance %}<a href="{% url 'attendance' %}?date={{ start_date|date:'Y-m-d' }}" class="eo-btn eo-btn-primary"><i class="bi bi-clock-history"></i> Manage Attendance</a>{% endif %}</div>
     </div>
-    <div class="col-md-3">
-      <label class="eo-form-label">Month</label>
-      <select name="month" class="eo-form-select">
-        {% for val,label in month_choices %}
-        <option value="{{ val }}" {% if val == selected_month %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="col-md-3">
-      <label class="eo-form-label">Year</label>
-      <select name="year" class="eo-form-select">
-        {% for y in year_choices %}
-        <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="col-auto d-flex gap-2">
-      <button type="submit" class="eo-btn eo-btn-primary">
-        <i class="bi bi-file-earmark-text"></i> Generate
-      </button>
-      <a href="{% url 'attendance_sheet' %}" class="eo-btn eo-btn-secondary">Reset</a>
-    </div>
-  </form>
-</div>
+  </section>
 
-<div class="row g-3 mb-4">
-  <div class="col-6 col-lg-2">
-    <div class="eo-stat eo-stat-success">
-      <div class="eo-stat-label">Present</div>
-      <div class="eo-stat-value">{{ present_count }}</div>
-    </div>
-  </div>
-  <div class="col-6 col-lg-2">
-    <div class="eo-stat eo-stat-warning">
-      <div class="eo-stat-label">Late</div>
-      <div class="eo-stat-value">{{ late_count }}</div>
-    </div>
-  </div>
-  <div class="col-6 col-lg-2">
-    <div class="eo-stat eo-stat-danger">
-      <div class="eo-stat-label">Absent</div>
-      <div class="eo-stat-value">{{ absent_count }}</div>
-    </div>
-  </div>
-  <div class="col-6 col-lg-2">
-    <div class="eo-stat eo-stat-info">
-      <div class="eo-stat-label">Leave</div>
-      <div class="eo-stat-value">{{ leave_count }}</div>
-    </div>
-  </div>
-  <div class="col-6 col-lg-2">
-    <div class="eo-stat eo-stat-primary">
-      <div class="eo-stat-label">Remote</div>
-      <div class="eo-stat-value">{{ remote_count }}</div>
-    </div>
-  </div>
-  <div class="col-6 col-lg-2">
-    <div class="eo-stat">
-      <div class="eo-stat-label">Worked Hours</div>
-      <div class="eo-stat-value">{{ total_hours }}</div>
-    </div>
-  </div>
-</div>
-
-<div class="eo-card">
-  <div class="eo-card-header">
-    <div>
-      <h2 class="eo-card-title">{{ sheet_staff.full_name }}</h2>
-      <p class="eo-card-subtitle">{{ start_date|date:"F Y" }} attendance sheet</p>
-    </div>
+  <div class="hrp-card">
+    <form method="get" class="hrp-filter">
+      <div><label class="eo-form-label">Staff</label><select name="staff" class="eo-form-select">{% for s in selectable_staff %}<option value="{{ s.id }}" {% if s.id == sheet_staff.id %}selected{% endif %}>{{ s.full_name }}</option>{% endfor %}</select></div>
+      <div><label class="eo-form-label">Month</label><select name="month" class="eo-form-select">{% for val,label in month_choices %}<option value="{{ val }}" {% if val == selected_month %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+      <div><label class="eo-form-label">Year</label><select name="year" class="eo-form-select">{% for y in year_choices %}<option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>{% endfor %}</select></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-file-earmark-text"></i> Generate</button><a href="{% url 'attendance_sheet' %}" class="eo-btn eo-btn-secondary">Reset</a></div>
+    </form>
   </div>
 
-  <div class="table-responsive">
-    <table class="table align-middle">
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Day</th>
-          <th>Status</th>
-          <th>Check In</th>
-          <th>Check Out</th>
-          <th>Late (mins)</th>
-          <th>Worked Hours</th>
-          <th>Notes</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for item in days %}
-        <tr>
-          <td>{{ item.date|date:"Y-m-d" }}</td>
-          <td>{{ item.date|date:"D" }}</td>
-          <td>
-            {% if item.record %}
-              <span class="eo-status eo-status-{{ item.record.status }}">{{ item.record.get_status_display }}</span>
-            {% else %}
-              <span class="eo-status">—</span>
-            {% endif %}
-          </td>
-          <td>{% if item.record and item.record.check_in %}{{ item.record.check_in|time:"H:i" }}{% else %}—{% endif %}</td>
-          <td>{% if item.record and item.record.check_out %}{{ item.record.check_out|time:"H:i" }}{% else %}—{% endif %}</td>
-          <td>{% if item.record %}{{ item.record.minutes_late }}{% else %}—{% endif %}</td>
-          <td>{% if item.record %}{{ item.record.worked_hours }}{% else %}—{% endif %}</td>
-          <td>{% if item.record and item.record.notes %}{{ item.record.notes }}{% else %}—{% endif %}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="hrp-stat-grid">
+    <div class="hrp-stat"><span>Present</span><strong>{{ present_count }}</strong></div>
+    <div class="hrp-stat"><span>Late</span><strong>{{ late_count }}</strong></div>
+    <div class="hrp-stat"><span>Absent</span><strong>{{ absent_count }}</strong></div>
+    <div class="hrp-stat"><span>Leave</span><strong>{{ leave_count }}</strong></div>
+    <div class="hrp-stat"><span>Remote</span><strong>{{ remote_count }}</strong></div>
+    <div class="hrp-stat"><span>Worked Hours</span><strong>{{ total_hours }}</strong></div>
+  </div>
+
+  <div class="hrp-card">
+    <div class="hrp-card-head"><div><h2 class="eo-card-title" style="margin:0">{{ sheet_staff.full_name }}</h2><p class="eo-card-subtitle">{{ start_date|date:"F Y" }} attendance sheet</p></div><div class="hrp-meta">Generated {% now "Y-m-d H:i" %}</div></div>
+    <div class="table-responsive hrp-table-wrap">
+      <table class="table align-middle hrp-table">
+        <thead><tr><th>Date</th><th>Day</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Late (mins)</th><th>Worked Hours</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for item in days %}
+          <tr>
+            <td><strong>{{ item.date|date:"Y-m-d" }}</strong></td>
+            <td>{{ item.date|date:"D" }}</td>
+            <td>{% if item.record %}<span class="eo-status eo-status-{{ item.record.status }}">{{ item.record.get_status_display }}</span>{% else %}<span class="eo-status">—</span>{% endif %}</td>
+            <td>{% if item.record and item.record.check_in %}{{ item.record.check_in|time:"H:i" }}{% else %}—{% endif %}</td>
+            <td>{% if item.record and item.record.check_out %}{{ item.record.check_out|time:"H:i" }}{% else %}—{% endif %}</td>
+            <td>{% if item.record %}{{ item.record.minutes_late }}{% else %}—{% endif %}</td>
+            <td>{% if item.record %}{{ item.record.worked_hours }}{% else %}—{% endif %}</td>
+            <td>{% if item.record and item.record.notes %}{{ item.record.notes }}{% else %}—{% endif %}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="8" class="hrp-empty">No attendance days available for this period.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 {% endblock %}

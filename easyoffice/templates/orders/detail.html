@@ -41,6 +41,8 @@
   .doc-row .num { font-family: monospace; font-weight: 600; font-size: .9rem; }
   .doc-row .label { font-size: .75rem; color: var(--eo-text-muted); text-transform: uppercase; letter-spacing: .04em; }
   .doc-row .pending { color: var(--eo-text-muted); font-style: italic; font-size: .85rem; }
+  .doc-actions { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .doc-locked { display:inline-flex;align-items:center;gap:6px;font-size:.75rem;color:var(--eo-text-muted);padding:6px 9px;border-radius:999px;background:#f8fafc;border:1px dashed var(--eo-border); }
 
   .events { font-size: .82rem; }
   .events li { list-style: none; padding: 8px 0; border-bottom: 1px solid var(--eo-border); }
@@ -60,8 +62,12 @@
     <strong>{{ order.get_status_display }}</strong>
     {% if order.status == 'new' %}— Awaiting confirmation. Review and confirm before fulfilling.
     {% elif order.status == 'confirmed' %}— Ready to fulfill.
-    {% elif order.status == 'in_fulfillment' %}— Generating documents…
-    {% elif order.status == 'fulfilled' %}— All documents generated. Order complete.
+    {% elif order.status == 'in_fulfillment' %}
+      {% if order.proforma and not order.invoice %}— Proforma generated. Invoice generation is now active.
+      {% elif order.invoice and not order.delivery_note %}— Invoice generated. Delivery Note generation is now active.
+      {% else %}— Document generation is in progress.
+      {% endif %}
+    {% elif order.status == 'fulfilled' %}— Proforma, Invoice and Delivery Note generated. Order complete.
     {% elif order.status == 'cancelled' %}— {{ order.cancelled_reason|default:"No reason given" }}
     {% endif %}
   </div>
@@ -81,11 +87,25 @@
         <button type="submit" class="eo-btn"><i class="bi bi-check-circle"></i> Confirm</button>
       </form>
     {% endif %}
-    {% if can_fulfill and order.is_fulfillable %}
+    {% if can_generate_proforma %}
       <form method="post" action="{% url 'orders:order_fulfill' pk=order.pk %}" style="display:inline"
-            onsubmit="return confirm('This will generate Proforma, Invoice and Delivery Note PDFs and lock them. Continue?');">
+            onsubmit="return confirm('This will generate only the Proforma. Invoice and Delivery Note will be generated later. Continue?');">
         {% csrf_token %}
-        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-magic"></i> Fulfill order</button>
+        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-file-earmark-plus"></i> Generate Proforma</button>
+      </form>
+    {% endif %}
+    {% if can_generate_invoice %}
+      <form method="post" action="{% url 'orders:order_generate_invoice' pk=order.pk %}" style="display:inline"
+            onsubmit="return confirm('Generate the Invoice from this Proforma now?');">
+        {% csrf_token %}
+        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-receipt"></i> Generate Invoice</button>
+      </form>
+    {% endif %}
+    {% if can_generate_delivery_note %}
+      <form method="post" action="{% url 'orders:order_generate_delivery_note' pk=order.pk %}" style="display:inline"
+            onsubmit="return confirm('Generate the Delivery Note from this Invoice now?');">
+        {% csrf_token %}
+        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-truck"></i> Generate DN</button>
       </form>
     {% endif %}
     {% if can_cancel and order.status != 'cancelled' and order.status != 'fulfilled' %}
@@ -176,6 +196,14 @@
             <div class="num"><a href="{% url 'invoice_detail' pk=order.proforma.pk %}">{{ order.proforma.number }}</a></div>
           {% else %}
             <div class="pending">Not generated yet</div>
+            {% if can_generate_proforma %}
+              <div class="doc-actions">
+                <form method="post" action="{% url 'orders:order_fulfill' pk=order.pk %}" onsubmit="return confirm('Generate Proforma for this order?');">
+                  {% csrf_token %}
+                  <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm"><i class="bi bi-file-earmark-plus"></i> Generate</button>
+                </form>
+              </div>
+            {% endif %}
           {% endif %}
         </div>
       </div>
@@ -188,6 +216,16 @@
             <div class="num"><a href="{% url 'invoice_detail' pk=order.invoice.pk %}">{{ order.invoice.number }}</a></div>
           {% else %}
             <div class="pending">Not generated yet</div>
+            {% if can_generate_invoice %}
+              <div class="doc-actions">
+                <form method="post" action="{% url 'orders:order_generate_invoice' pk=order.pk %}" onsubmit="return confirm('Generate Invoice from the Proforma?');">
+                  {% csrf_token %}
+                  <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm"><i class="bi bi-receipt"></i> Generate</button>
+                </form>
+              </div>
+            {% elif not order.proforma %}
+              <div class="doc-actions"><span class="doc-locked"><i class="bi bi-lock"></i> Generate Proforma first</span></div>
+            {% endif %}
           {% endif %}
         </div>
       </div>
@@ -200,6 +238,16 @@
             <div class="num"><a href="{% url 'invoice_detail' pk=order.delivery_note.pk %}">{{ order.delivery_note.number }}</a></div>
           {% else %}
             <div class="pending">Not generated yet</div>
+            {% if can_generate_delivery_note %}
+              <div class="doc-actions">
+                <form method="post" action="{% url 'orders:order_generate_delivery_note' pk=order.pk %}" onsubmit="return confirm('Generate Delivery Note from the Invoice?');">
+                  {% csrf_token %}
+                  <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm"><i class="bi bi-truck"></i> Generate DN</button>
+                </form>
+              </div>
+            {% elif not order.invoice %}
+              <div class="doc-actions"><span class="doc-locked"><i class="bi bi-lock"></i> Generate Invoice first</span></div>
+            {% endif %}
           {% endif %}
         </div>
       </div>

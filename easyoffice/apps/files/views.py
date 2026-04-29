@@ -1113,137 +1113,43 @@ def _embed_signatures_in_pdf(sig_req):
         # SIGNATURE FIELDS
         # ══════════════════════════════════════════════════════════════════════
         for field in fields_by_page.get(page_num, []):
-            value = field.value.strip()
+            value = (field.value or '').strip()
             if not value:
                 continue
 
-            # Coordinate conversion (% → pt, flip Y axis)
-            fx = (field.x_pct      / 100.0) * page_w
-            fw = (field.width_pct  / 100.0) * page_w
+            # Coordinate conversion: percentage → PDF points, flip Y axis
+            fx = (field.x_pct / 100.0) * page_w
+            fw = (field.width_pct / 100.0) * page_w
             fh = (field.height_pct / 100.0) * page_h
             fy = page_h * (1.0 - (field.y_pct + field.height_pct) / 100.0)
 
-            is_sig  = field.field_type in ('signature', 'initials')
-            is_date = field.field_type == 'date'
+            # Minimum readable size
+            fw = max(fw, 70)
+            fh = max(fh, 32)
 
-            label_h = max(9.0, min(fh * 0.24, 16.0)) if fh >= 20 else 0.0
-            sig_h   = fh - label_h
-            sig_y   = fy + label_h
+            if field.field_type in ('signature', 'initials'):
+                _draw_easyoffice_signature_box(
+                    c=c,
+                    field=field,
+                    value=value,
+                    fx=fx,
+                    fy=fy,
+                    fw=fw,
+                    fh=fh,
+                    sig_req=sig_req,
+                    document=document,
+                )
 
-            # ── Background + border ──────────────────────────────────────────
-            bg = DS_BLUE_LIGHT if is_sig else DS_DATE_BG
-            c.setFillColorRGB(*bg)
-            c.setStrokeColorRGB(*DS_BLUE)
-            c.setLineWidth(0.6)
-            c.roundRect(fx, fy, fw, fh, radius=2, stroke=1, fill=1)
-
-            if label_h:
-                c.setStrokeColorRGB(*DS_BLUE)
-                c.setLineWidth(1.0)
-                c.line(fx + 2, fy + label_h, fx + fw - 2, fy + label_h)
-
-            # ── Drawn / uploaded (base64 PNG) ────────────────────────────────
-            if is_sig and value.startswith('data:image'):
-                try:
-                    _, b64 = value.split(',', 1)
-                    raw    = base64.b64decode(b64)
-                    img    = Image.open(BytesIO(raw)).convert('RGBA')
-                    bg_img = Image.new('RGBA', img.size, (255, 255, 255, 255))
-                    bg_img.paste(img, mask=img)
-                    bg_img = bg_img.convert('RGB')
-                    img_buf = BytesIO()
-                    bg_img.save(img_buf, format='PNG')
-                    img_buf.seek(0)
-                    pad = 5
-                    c.drawImage(
-                        ImageReader(img_buf),
-                        fx + pad, sig_y + pad,
-                        width=fw - pad * 2, height=sig_h - pad * 2,
-                        preserveAspectRatio=True, anchor='c', mask='auto',
-                    )
-                except Exception:
-                    pass
-
-            # ── Typed signature — render as PIL image for cursive font ────────
-            elif is_sig:
-                # Strip font-prefix if present: "font:Dancing Script|John Doe"
-                display_text = value
-                font_hint    = 'Dancing Script'
-                if value.startswith('font:') and '|' in value:
-                    parts        = value.split('|', 1)
-                    font_hint    = parts[0][5:]   # strip "font:"
-                    display_text = parts[1]
-
-                img_buf = None
-                try:
-                    img_buf = _typed_sig_to_image(display_text, fw, sig_h, font_name=font_hint)
-                except Exception:
-                    pass
-
-                if img_buf:
-                    pad = 4
-                    c.drawImage(
-                        ImageReader(img_buf),
-                        fx + pad, sig_y + pad,
-                        width=fw - pad * 2, height=sig_h - pad * 2,
-                        preserveAspectRatio=True, anchor='c', mask='auto',
-                    )
-                else:
-                    # Final fallback: reportlab italic
-                    font_size = max(8.0, min(sig_h * 0.62, 30.0))
-                    c.setFont('Helvetica-BoldOblique', font_size)
-                    c.setFillColorRGB(*DS_INK)
-                    c.saveState()
-                    p = c.beginPath()
-                    p.rect(fx + 4, sig_y, fw - 8, sig_h)
-                    c.clipPath(p, stroke=0, fill=0)
-                    c.drawString(fx + 6, sig_y + (sig_h - font_size) * 0.40, display_text)
-                    c.restoreState()
-
-            # ── Date / text ──────────────────────────────────────────────────
-            else:
-                font_size = max(7.0, min(sig_h * 0.52, 11.0))
-                c.setFont('Helvetica', font_size)
-                c.setFillColorRGB(0.08, 0.08, 0.08)
-                c.saveState()
-                p = c.beginPath()
-                p.rect(fx + 3, sig_y, fw - 6, sig_h)
-                c.clipPath(p, stroke=0, fill=0)
-                c.drawString(fx + 5, sig_y + (sig_h - font_size) * 0.40, value)
-                c.restoreState()
-
-            # ── Label strip ──────────────────────────────────────────────────
-            if label_h:
-                lbl_font = max(5.5, min(label_h * 0.50, 7.5))
-                mid_y    = fy + (label_h - lbl_font) * 0.45
-
-                c.setFont('Helvetica-Bold', lbl_font)
-                c.setFillColorRGB(*DS_CHECK)
-                c.drawString(fx + 3, mid_y, '\u2713')
-
-                c.setFont('Helvetica', lbl_font)
-                c.setFillColorRGB(*DS_LABEL)
-                if is_sig and field.signer:
-                    left_label = f' {field.signer.name[:24]}'
-                elif is_sig:
-                    left_label = ' Signed'
-                elif is_date:
-                    left_label = ' Date'
-                else:
-                    left_label = ' Text'
-
-                c.saveState()
-                p = c.beginPath()
-                p.rect(fx + 3, fy, fw * 0.62, label_h)
-                c.clipPath(p, stroke=0, fill=0)
-                c.drawString(fx + 3 + lbl_font, mid_y, left_label)
-                c.restoreState()
-
-                if field.filled_at:
-                    c.setFont('Helvetica', lbl_font)
-                    c.setFillColorRGB(*DS_LABEL)
-                    c.drawRightString(fx + fw - 4, mid_y, field.filled_at.strftime('%d %b %Y'))
-
+            elif field.field_type in ('date', 'text'):
+                _draw_easyoffice_text_box(
+                    c=c,
+                    field=field,
+                    value=value,
+                    fx=fx,
+                    fy=fy,
+                    fw=fw,
+                    fh=fh,
+                )
         c.save()
         overlay_buf.seek(0)
         page.merge_page(PdfReader(overlay_buf).pages[0])
@@ -1562,7 +1468,391 @@ def _apply_pdf_letterhead(
     return output
 
 
+def _get_or_create_signature_preview_pdf(sig_req):
+    """
+    Ensure a signature request document is a real PDF.
 
+    If the selected document is already PDF, return it.
+    If it is Word/Excel/PowerPoint/image and convertible, convert it to PDF,
+    update sig_req.document to the converted PDF, and return the converted file.
+    """
+    document = sig_req.document
+
+    if not document or not getattr(document, 'file', None):
+        raise Http404("Document file not found.")
+
+    name = document.name or os.path.basename(document.file.name or '')
+    ext = os.path.splitext(name)[1].lower().replace('.', '')
+
+    is_pdf = (
+        ext == 'pdf'
+        or getattr(document, 'file_type', '') == 'application/pdf'
+        or getattr(document, 'is_pdf', False)
+    )
+
+    if is_pdf:
+        return document
+
+    if not getattr(document, 'is_convertible', False) and ext not in CONVERTIBLE_TYPES:
+        raise Http404("This document is not a PDF and cannot be converted for signing.")
+
+    owner = sig_req.created_by or document.uploaded_by
+
+    tmp_path = None
+    pdf_path = None
+
+    try:
+        suffix = f'.{ext}' if ext else ''
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = tmp.name
+            document.file.open('rb')
+            for chunk in document.file.chunks():
+                tmp.write(chunk)
+            document.file.close()
+
+        base_name = os.path.splitext(name or 'document')[0]
+        pdf_name = f'{base_name}.pdf'
+
+        image_exts = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff', 'tif'}
+
+        if ext in image_exts:
+            pdf_buffer = _convert_image_to_pdf(tmp_path)
+            pdf_bytes = pdf_buffer.getvalue()
+        else:
+            pdf_path = _convert_to_pdf(tmp_path)
+            with open(pdf_path, 'rb') as fh:
+                pdf_bytes = fh.read()
+
+        converted = SharedFile.objects.create(
+            name=pdf_name,
+            uploaded_by=owner,
+            folder=document.folder,
+            visibility=document.visibility,
+            description=f'Auto-converted for signature request: {sig_req.title}',
+            tags=getattr(document, 'tags', ''),
+            file_size=len(pdf_bytes),
+            file_type='application/pdf',
+        )
+        converted.file.save(pdf_name, ContentFile(pdf_bytes), save=True)
+
+        try:
+            converted.file_hash = converted.compute_hash()
+            converted.save(update_fields=['file_hash'])
+        except Exception:
+            pass
+
+        try:
+            _log_file_history(
+                converted,
+                FileHistory.Action.CREATED,
+                actor=owner,
+                notes=f'Converted from {document.name} for signature preview/signing.'
+            )
+        except Exception:
+            pass
+
+        sig_req.document = converted
+        sig_req.save(update_fields=['document'])
+
+        return converted
+
+    finally:
+        try:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        except Exception:
+            pass
+
+        try:
+            if pdf_path and os.path.exists(pdf_path):
+                os.unlink(pdf_path)
+        except Exception:
+            pass
+
+
+def _uploaded_image_to_data_url(upload):
+    """
+    Convert an uploaded signature image to a reusable data:image URL.
+    This makes uploaded signatures usable in:
+      - saved signatures page
+      - signing modal
+      - final PDF stamping
+    """
+    import base64
+    import mimetypes
+
+    if not upload:
+        return ''
+
+    raw = upload.read()
+    try:
+        upload.seek(0)
+    except Exception:
+        pass
+
+    mime = getattr(upload, 'content_type', None)
+    if not mime:
+        mime, _ = mimetypes.guess_type(getattr(upload, 'name', '') or '')
+    mime = mime or 'image/png'
+
+    return f'data:{mime};base64,{base64.b64encode(raw).decode("ascii")}'
+
+
+def _saved_signature_data(sig, request=None):
+    """
+    Return the reusable value for a SavedSignature.
+
+    For draw/type: use sig.data.
+    For upload: prefer sig.data; if missing, convert stored image to data:image.
+    """
+    import base64
+    import mimetypes
+
+    if not sig:
+        return ''
+
+    if sig.data:
+        return sig.data
+
+    if getattr(sig, 'image', None):
+        try:
+            sig.image.open('rb')
+            raw = sig.image.read()
+            sig.image.close()
+
+            mime, _ = mimetypes.guess_type(sig.image.name or '')
+            mime = mime or 'image/png'
+
+            return f'data:{mime};base64,{base64.b64encode(raw).decode("ascii")}'
+        except Exception:
+            try:
+                return request.build_absolute_uri(sig.image.url) if request else sig.image.url
+            except Exception:
+                return ''
+
+    return ''
+
+
+def _saved_signature_json(sig, request=None):
+    """
+    JSON shape used by saved signature API and signing pages.
+    """
+    raw = _saved_signature_data(sig, request=request)
+
+    item = {
+        'id': str(sig.id),
+        'name': sig.name,
+        'type': sig.sig_type,
+        'sig_type': sig.sig_type,
+        'is_default': sig.is_default,
+        'data': raw,
+    }
+
+    if sig.sig_type == 'type':
+        if raw.startswith('font:') and '|' in raw:
+            font_part, text_part = raw.split('|', 1)
+            item['font'] = font_part[5:]
+            item['text'] = text_part
+        else:
+            item['font'] = 'Dancing Script'
+            item['text'] = raw
+
+    return item
+
+def _short_ref(text, length=14):
+    text = str(text or '').replace('-', '').upper()
+    return text[:length] + '…' if len(text) > length else text
+
+
+def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, document):
+    """
+    EasyOffice DocuSign-style signature/initial badge.
+    Works for:
+      - typed signatures: font:Dancing Script|John Doe
+      - drawn/uploaded signatures: data:image/...
+      - initials
+    """
+    import base64
+    from reportlab.lib.utils import ImageReader
+
+    EO_BLUE = (0.055, 0.341, 0.760)       # professional EasyOffice blue
+    EO_BLUE_DARK = (0.020, 0.180, 0.420)
+    EO_BG = (0.950, 0.970, 1.000)
+    EO_INK = (0.045, 0.110, 0.250)
+    EO_MUTED = (0.300, 0.360, 0.460)
+
+    field_type = field.field_type
+    signer_name = field.signer.name if field.signer else 'Signer'
+    signer_initials = ''.join([p[0] for p in signer_name.split()[:2]]).upper() or 'EO'
+
+    ref = (
+        getattr(document, 'file_hash', '')
+        or getattr(sig_req, 'audit_hash', '')
+        or str(sig_req.id)
+    )
+    ref = _short_ref(ref, 16)
+
+    is_initial = field_type == 'initials'
+
+    # Main field card
+    c.setFillColorRGB(*EO_BG)
+    c.setStrokeColorRGB(*EO_BLUE)
+    c.setLineWidth(1.2)
+    c.roundRect(fx, fy, fw, fh, radius=7, stroke=1, fill=1)
+
+    # White content area for stronger contrast
+    inner_pad = max(3, min(fw, fh) * 0.05)
+    content_x = fx + inner_pad
+    content_y = fy + inner_pad
+    content_w = fw - (inner_pad * 2)
+    content_h = fh - (inner_pad * 2)
+
+    c.setFillColorRGB(1, 1, 1)
+    c.roundRect(content_x, content_y, content_w, content_h, radius=5, stroke=0, fill=1)
+
+    # Label tab sitting on top-left
+    label = 'EasyOffice Signed by:' if not is_initial else 'EO Initials'
+    label_w = min(fw * 0.72, max(54, len(label) * 4.1))
+    label_h = max(8, min(13, fh * 0.20))
+    label_x = fx + 6
+    label_y = fy + fh - (label_h * 0.52)
+
+    c.setFillColorRGB(1, 1, 1)
+    c.rect(label_x - 2, label_y - 1, label_w + 4, label_h + 2, stroke=0, fill=1)
+
+    c.setFont('Helvetica-Bold', max(5.5, min(7.5, label_h * 0.72)))
+    c.setFillColorRGB(*EO_BLUE_DARK)
+    c.drawString(label_x, label_y + 1, label)
+
+    # Small EasyOffice mark on top-right
+    mark = 'EO'
+    c.setFont('Helvetica-Bold', max(6, min(8, fh * 0.11)))
+    c.setFillColorRGB(*EO_BLUE)
+    c.drawRightString(fx + fw - 7, label_y + 1, mark)
+
+    # Signature rendering area
+    sig_area_x = fx + 6
+    sig_area_y = fy + (fh * 0.23)
+    sig_area_w = fw - 12
+    sig_area_h = fh * 0.56
+
+    if is_initial:
+        sig_area_y = fy + (fh * 0.26)
+        sig_area_h = fh * 0.50
+
+    # Drawn/uploaded image signature
+    if value.startswith('data:image'):
+        try:
+            _, b64 = value.split(',', 1)
+            raw = base64.b64decode(b64)
+            img = Image.open(BytesIO(raw)).convert('RGBA')
+
+            # Keep transparent signature background
+            img_buf = BytesIO()
+            img.save(img_buf, format='PNG')
+            img_buf.seek(0)
+
+            c.drawImage(
+                ImageReader(img_buf),
+                sig_area_x,
+                sig_area_y,
+                width=sig_area_w,
+                height=sig_area_h,
+                preserveAspectRatio=True,
+                anchor='c',
+                mask='auto',
+            )
+        except Exception:
+            pass
+
+    # Typed signature or initials
+    else:
+        display_text = value
+        font_hint = 'Dancing Script'
+
+        if value.startswith('font:') and '|' in value:
+            font_part, display_text = value.split('|', 1)
+            font_hint = font_part[5:] or 'Dancing Script'
+
+        if is_initial:
+            display_text = display_text.replace('font:', '').split('|')[-1].upper()
+
+        img_buf = None
+        try:
+            img_buf = _typed_sig_to_image(
+                display_text,
+                sig_area_w,
+                sig_area_h,
+                font_name=font_hint,
+            )
+        except Exception:
+            img_buf = None
+
+        if img_buf:
+            c.drawImage(
+                ImageReader(img_buf),
+                sig_area_x,
+                sig_area_y,
+                width=sig_area_w,
+                height=sig_area_h,
+                preserveAspectRatio=True,
+                anchor='c',
+                mask='auto',
+            )
+        else:
+            font_size = max(10, min(sig_area_h * 0.60, 28))
+            c.setFont('Helvetica-BoldOblique', font_size)
+            c.setFillColorRGB(*EO_INK)
+            c.drawCentredString(
+                fx + fw / 2,
+                sig_area_y + (sig_area_h - font_size) / 2,
+                display_text,
+            )
+
+    # Verification line / hash
+    c.setFont('Courier', max(4.8, min(6.2, fh * 0.08)))
+    c.setFillColorRGB(*EO_MUTED)
+    c.drawString(fx + 8, fy + 6, ref)
+
+    # Decorative blue bottom accent
+    c.setStrokeColorRGB(*EO_BLUE)
+    c.setLineWidth(1.0)
+    c.line(fx + 8, fy + 14, fx + min(fw * 0.55, fw - 8), fy + 14)
+
+
+def _draw_easyoffice_text_box(c, field, value, fx, fy, fw, fh):
+    """
+    EasyOffice compact badge for date/text fields.
+    """
+    EO_BLUE = (0.055, 0.341, 0.760)
+    EO_BG = (0.965, 0.980, 1.000)
+    EO_TEXT = (0.080, 0.110, 0.180)
+
+    label = 'EO Date' if field.field_type == 'date' else 'EO Text'
+
+    c.setFillColorRGB(*EO_BG)
+    c.setStrokeColorRGB(*EO_BLUE)
+    c.setLineWidth(0.9)
+    c.roundRect(fx, fy, fw, fh, radius=5, stroke=1, fill=1)
+
+    label_h = max(8, min(13, fh * 0.25))
+    c.setFillColorRGB(1, 1, 1)
+    c.rect(fx + 6, fy + fh - label_h * 0.55, max(38, len(label) * 4.5), label_h + 2, stroke=0, fill=1)
+
+    c.setFont('Helvetica-Bold', max(5.5, min(7.5, label_h * 0.72)))
+    c.setFillColorRGB(*EO_BLUE)
+    c.drawString(fx + 8, fy + fh - label_h * 0.30, label)
+
+    font_size = max(7.5, min(fh * 0.34, 11))
+    c.setFont('Helvetica', font_size)
+    c.setFillColorRGB(*EO_TEXT)
+
+    c.saveState()
+    p = c.beginPath()
+    p.rect(fx + 7, fy + 5, fw - 14, fh - 13)
+    c.clipPath(p, stroke=0, fill=0)
+    c.drawString(fx + 8, fy + (fh - font_size) * 0.42, str(value))
+    c.restoreState()
 # ─────────────────────────────────────────────────────────────────────────────
 # File Manager
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3320,9 +3610,12 @@ class CreatorSignView(LoginRequiredMixin, View):
             )
             return redirect('signature_request_detail', pk=sig_req.pk)
 
-        if signer.status in ('signed', 'declined'):
-            messages.info(request, 'You have already responded to this document.')
-            return redirect('signature_request_detail', pk=sig_req.pk)
+        if signer.status == 'signed':
+            return redirect('sign_document_complete', token=token)
+
+        if signer.status == 'declined':
+            messages.info(request, 'You have already declined this request.')
+            return redirect('sign_document', token=token)
 
         # Redirect to the standard token-based signing page
         return redirect('sign_document', token=signer.token)
@@ -3353,47 +3646,138 @@ class SignDocumentView(View):
                 'sig_req': sig_req,
             })
 
-        if signer.status in ('signed', 'declined'):
+        if signer.status == 'signed':
+            return redirect('sign_document_complete', token=token)
+
+        if signer.status == 'declined':
             return render(request, self.template_name, {
                 'already_done': True,
                 'signer': signer,
                 'sig_req': sig_req,
                 'document': sig_req.document,
+                'download_url': reverse('sign_document_download', kwargs={'token': signer.token}),
                 'audit': sig_req.audit_trail.all() if hasattr(sig_req, 'audit_trail') else [],
             })
 
         # Ordered signing — previous signer must finish first
         if getattr(sig_req, 'ordered_signing', False) and signer.order > 1:
-            prev_pending = sig_req.signers.filter(order__lt=signer.order).exclude(status='signed').first()
+            prev_pending = sig_req.signers.filter(
+                order__lt=signer.order
+            ).exclude(status='signed').first()
+
             if prev_pending:
                 return render(request, self.template_name, {
                     'error': 'Please wait — a previous signer has not yet completed their signature.',
                     'signer': signer,
                     'sig_req': sig_req,
+                    'document': sig_req.document,
                 })
+
+        # Ensure document is a real PDF before the page tries to preview it.
+        try:
+            preview_document = _get_or_create_signature_preview_pdf(sig_req)
+        except Exception as exc:
+            return render(request, self.template_name, {
+                'error': f'Could not prepare document preview: {exc}',
+                'signer': signer,
+                'sig_req': sig_req,
+                'document': sig_req.document,
+            })
 
         # Mark as viewed
         if signer.status == 'pending':
             signer.status = 'viewed'
             signer.viewed_at = timezone.now()
-            signer.ip_address = _get_client_ip(request)
-            signer.save(update_fields=['status', 'viewed_at', 'ip_address'])
-            _log_audit(sig_req, 'viewed', signer=signer, request=request)
-            # Notify creator via WS (no email — too noisy for a view event)
-            if sig_req.created_by != signer.user:
-                _notify(
-                    sig_req.created_by, 'sign_viewed',
-                    title=f'{signer.name} viewed your document',
-                    body=sig_req.title,
-                    link=f'/files/signatures/{sig_req.pk}/',
-                )
+
+            update_fields = ['status', 'viewed_at']
+
+            if hasattr(signer, 'ip_address'):
+                signer.ip_address = _get_client_ip(request)
+                update_fields.append('ip_address')
+
+            signer.save(update_fields=update_fields)
+
+            try:
+                _log_audit(sig_req, 'viewed', signer=signer, request=request)
+            except Exception:
+                pass
+
+            try:
+                if sig_req.created_by and sig_req.created_by != signer.user:
+                    _notify(
+                        sig_req.created_by,
+                        'sign_viewed',
+                        title=f'{signer.name} viewed your document',
+                        body=sig_req.title,
+                        link=f'/files/signatures/{sig_req.pk}/',
+                    )
+            except Exception:
+                pass
+
+        preview_url = reverse('sign_document_preview', kwargs={'token': signer.token})
+        download_url = reverse('sign_document_download', kwargs={'token': signer.token})
+
+        dummy_uuid = '00000000-0000-0000-0000-000000000000'
+        fill_field_url_template = reverse(
+            'fill_signature_field',
+            kwargs={
+                'token': signer.token,
+                'field_id': dummy_uuid,
+            }
+        ).replace(dummy_uuid, '__FIELD_ID__')
+
+        name_parts = [p for p in (signer.name or '').replace('.', ' ').split() if p]
+        if len(name_parts) >= 2:
+            default_initials = (name_parts[0][0] + name_parts[-1][0]).upper()
+        elif name_parts:
+            default_initials = name_parts[0][:2].upper()
+        else:
+            default_initials = (signer.email[:2] if signer.email else 'IN').upper()
+
+        try:
+            from apps.files.models import SignatureField
+            my_fields = SignatureField.objects.filter(
+                request=sig_req,
+                signer=signer,
+            ).order_by('page', 'created_at', 'id')
+        except Exception:
+            my_fields = signer.fields.all() if hasattr(signer, 'fields') else []
+
+        saved_signatures = []
+
+        try:
+            from apps.files.models import SavedSignature
+
+            signature_owner = None
+
+            if request.user.is_authenticated:
+                signature_owner = request.user
+            elif getattr(signer, 'user_id', None):
+                signature_owner = signer.user
+
+            if signature_owner:
+                saved_signatures = SavedSignature.objects.filter(
+                    user=signature_owner
+                ).order_by('-is_default', '-created_at')[:12]
+
+                for sig in saved_signatures:
+                    sig.preview_data = _saved_signature_data(sig, request=request)
+
+        except Exception:
+            saved_signatures = []
 
         return render(request, self.template_name, {
             'signer': signer,
             'sig_req': sig_req,
-            'document': sig_req.document,
+            'document': preview_document,
             'audit': sig_req.audit_trail.all() if hasattr(sig_req, 'audit_trail') else [],
-            'my_fields': signer.fields.all() if hasattr(signer, 'fields') else [],
+            'my_fields': my_fields,
+            'preview_url': preview_url,
+            'download_url': download_url,
+            'fill_field_url_template': fill_field_url_template,
+            'default_initials': default_initials,
+            'saved_signatures': saved_signatures,
+            'signing_token': signer.token,
         })
 
     def post(self, request, token):
@@ -3401,8 +3785,11 @@ class SignDocumentView(View):
         sig_req = signer.request
         action = request.POST.get('action')
 
-        if signer.status in ('signed', 'declined'):
-            messages.info(request, 'You have already responded.')
+        if signer.status == 'signed':
+            return redirect('sign_document_complete', token=token)
+
+        if signer.status == 'declined':
+            messages.info(request, 'You have already declined this request.')
             return redirect('sign_document', token=token)
 
         if action == 'sign':
@@ -3411,7 +3798,7 @@ class SignDocumentView(View):
 
             if not sig_data:
                 messages.error(request, 'Signature is required.')
-                return redirect('sign_document', token=token)
+                return redirect('sign_document_complete', token=token)
 
             # Require all signer fields to be completed before final sign
             if hasattr(signer, 'fields'):
@@ -3419,7 +3806,7 @@ class SignDocumentView(View):
                 my_filled_fields = signer.fields.exclude(value='').count()
                 if my_total_fields and my_filled_fields != my_total_fields:
                     messages.error(request, 'Please complete all required fields before signing.')
-                    return redirect('sign_document', token=token)
+                    return redirect('sign_document_complete', token=token)
 
             signer.status = 'signed'
             signer.signed_at = timezone.now()
@@ -3505,7 +3892,7 @@ class SignDocumentView(View):
                     pass
 
             messages.success(request, 'Thank you! Your signature has been recorded.')
-            return redirect('sign_document', token=token)
+            return redirect('sign_document_complete', token=token)
 
         if action == 'decline':
             signer.status = 'declined'
@@ -3542,10 +3929,10 @@ class SignDocumentView(View):
                 sig_req.update_status()
 
             messages.warning(request, 'You declined to sign this document.')
-            return redirect('sign_document', token=token)
+            return redirect('sign_document_complete', token=token)
 
         messages.error(request, 'Invalid action.')
-        return redirect('sign_document', token=token)
+        return redirect('sign_document_complete', token=token)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3655,83 +4042,100 @@ class SaveSignatureFieldsView(LoginRequiredMixin, View):
 
 class FillSignatureFieldView(View):
     """
-    Token-based — no login required.
-    Called when a signer fills one specific field from the signing page.
+    Saves one signer field value from the signing page:
+    signature, initials, date, or text.
     """
     def post(self, request, token, field_id):
         import json as _json
         from apps.files.models import SignatureField
 
         signer = get_object_or_404(SignatureRequestSigner, token=token)
-
-        # Optional ordered signing guard
         sig_req = signer.request
-        if sig_req.ordered_signing and signer.order > 1:
-            prev_pending = sig_req.signers.filter(order__lt=signer.order).exclude(status='signed').exists()
-            if prev_pending:
+
+        if sig_req.status in ('cancelled', 'expired'):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'This signing request is no longer available.'
+            }, status=403)
+
+        # Ordered signing guard
+        if getattr(sig_req, 'ordered_signing', False) and signer.order > 1:
+            previous_pending = sig_req.signers.filter(
+                order__lt=signer.order
+            ).exclude(status='signed').exists()
+
+            if previous_pending:
                 return JsonResponse({
                     'status': 'error',
-                    'message': 'A previous signer must complete their fields first.'
+                    'message': 'A previous signer must sign before you.'
                 }, status=403)
 
         field = get_object_or_404(
             SignatureField,
             id=field_id,
             request=sig_req,
-            signer=signer
+            signer=signer,
         )
 
         try:
-            body = _json.loads(request.body or '{}')
+            payload = _json.loads(request.body.decode('utf-8') or '{}')
         except Exception:
             return JsonResponse({
                 'status': 'error',
-                'message': 'Invalid JSON payload.'
+                'message': 'Invalid field payload.'
             }, status=400)
 
-        value = (body.get('value') or '').strip()
-        field_type = (body.get('type') or field.field_type).strip()
+        value = str(payload.get('value') or '').strip()
 
         if not value:
             return JsonResponse({
                 'status': 'error',
-                'message': 'No signature value was provided.'
+                'message': 'Please complete this field.'
             }, status=400)
 
-        # Save field value
         field.value = value
-        field.filled_at = timezone.now()
-        field.save(update_fields=['value', 'filled_at'])
 
-        # If signer was still pending, mark viewed at minimum
+        if hasattr(field, 'filled_at'):
+            field.filled_at = timezone.now()
+            field.save(update_fields=['value', 'filled_at'])
+        else:
+            field.save(update_fields=['value'])
+
         changed = []
-        if signer.status == SignatureRequestSigner.Status.PENDING:
-            signer.status = SignatureRequestSigner.Status.VIEWED
+
+        if signer.status == 'pending':
+            signer.status = 'viewed'
             changed.append('status')
 
         if not signer.viewed_at:
             signer.viewed_at = timezone.now()
             changed.append('viewed_at')
 
-        if not signer.ip_address:
+        if hasattr(signer, 'ip_address') and not signer.ip_address:
             signer.ip_address = _get_client_ip(request)
             changed.append('ip_address')
 
         if changed:
             signer.save(update_fields=changed)
 
-        my_total_fields = signer.fields.count()
-        my_filled_fields = signer.fields.exclude(value='').count()
-        all_fields_done = (my_total_fields == 0) or (my_total_fields == my_filled_fields)
+        total_fields = SignatureField.objects.filter(
+            request=sig_req,
+            signer=signer,
+        ).count()
+
+        filled_fields = SignatureField.objects.filter(
+            request=sig_req,
+            signer=signer,
+        ).exclude(value='').count()
 
         return JsonResponse({
             'status': 'ok',
             'field_id': str(field.id),
             'field_type': field.field_type,
-            'filled_fields': my_filled_fields,
-            'total_fields': my_total_fields,
-            'all_fields_done': all_fields_done,
-            'message': 'Field signed successfully.'
+            'filled_fields': filled_fields,
+            'total_fields': total_fields,
+            'all_fields_done': total_fields == filled_fields,
+            'message': 'Field saved successfully.'
         })
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3739,12 +4143,30 @@ class FillSignatureFieldView(View):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SavedSignaturesView(LoginRequiredMixin, View):
+    """
+    Manage reusable signatures:
+      - draw
+      - type
+      - upload image
+
+    Uploaded images are also stored as data:image values so they can be
+    stamped into the final PDF like DocuSign.
+    """
     template_name = 'files/saved_signatures.html'
 
     def get(self, request):
         from apps.files.models import SavedSignature
+
+        signatures = SavedSignature.objects.filter(
+            user=request.user
+        ).order_by('-is_default', '-created_at')
+
+        # Attach reusable preview data for templates.
+        for sig in signatures:
+            sig.preview_data = _saved_signature_data(sig, request=request)
+
         return render(request, self.template_name, {
-            'signatures': SavedSignature.objects.filter(user=request.user),
+            'signatures': signatures,
         })
 
     def post(self, request):
@@ -3752,24 +4174,38 @@ class SavedSignaturesView(LoginRequiredMixin, View):
 
         action = (request.POST.get('action') or '').strip()
 
-        def _json_ok(message, extra=None):
-            payload = {'status': 'ok', 'message': message}
+        wants_json = (
+            request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+            or 'application/json' in request.headers.get('Accept', '').lower()
+        )
+
+        def json_ok(message, extra=None):
+            payload = {
+                'status': 'ok',
+                'message': message,
+            }
             if extra:
                 payload.update(extra)
             return JsonResponse(payload)
 
-        def _json_err(message, status=400):
-            return JsonResponse({'status': 'error', 'message': message}, status=status)
-
-        wants_json = (
-            request.headers.get('X-Requested-With') == 'XMLHttpRequest'
-            or request.headers.get('Accept', '').lower().find('application/json') >= 0
-        )
+        def json_error(message, status=400):
+            return JsonResponse({
+                'status': 'error',
+                'message': message,
+            }, status=status)
 
         if action == 'save':
-            sig_type = request.POST.get('sig_type', 'draw').strip()
-            sig_name = request.POST.get('name', 'My Signature').strip() or 'My Signature'
-            is_default = str(request.POST.get('is_default', '')).lower() in ('1', 'true', 'yes', 'on')
+            sig_type = (request.POST.get('sig_type') or 'draw').strip()
+            sig_name = (request.POST.get('name') or 'My Signature').strip() or 'My Signature'
+            is_default = str(
+                request.POST.get('is_default', '')
+            ).lower() in ('1', 'true', 'yes', 'on')
+
+            if sig_type not in ('draw', 'type', 'upload'):
+                if wants_json:
+                    return json_error('Invalid signature type.')
+                messages.error(request, 'Invalid signature type.')
+                return redirect('saved_signatures')
 
             sig = SavedSignature(
                 user=request.user,
@@ -3779,159 +4215,192 @@ class SavedSignaturesView(LoginRequiredMixin, View):
             )
 
             if sig_type == 'draw':
-                sig.data = request.POST.get('data', '').strip()
+                sig.data = (request.POST.get('data') or '').strip()
+
                 if not sig.data:
-                    return _json_err('No drawn signature data provided.') if wants_json else redirect('saved_signatures')
+                    if wants_json:
+                        return json_error('No drawn signature data provided.')
+                    messages.error(request, 'No drawn signature data provided.')
+                    return redirect('saved_signatures')
 
             elif sig_type == 'type':
-                sig.data = request.POST.get('data', '').strip()
+                sig.data = (request.POST.get('data') or '').strip()
+
                 if not sig.data:
-                    return _json_err('No typed signature data provided.') if wants_json else redirect('saved_signatures')
+                    typed_text = (request.POST.get('typed_text') or '').strip()
+                    font_name = (request.POST.get('font_name') or 'Dancing Script').strip()
+
+                    if typed_text:
+                        sig.data = f'font:{font_name}|{typed_text}'
+
+                if not sig.data:
+                    if wants_json:
+                        return json_error('No typed signature data provided.')
+                    messages.error(request, 'No typed signature data provided.')
+                    return redirect('saved_signatures')
 
             elif sig_type == 'upload':
-                if 'image' not in request.FILES:
-                    return _json_err('No uploaded signature image provided.') if wants_json else redirect('saved_signatures')
-                sig.image = request.FILES['image']
+                upload = request.FILES.get('image')
+                data_value = (request.POST.get('data') or '').strip()
 
-            else:
-                return _json_err('Invalid signature type.') if wants_json else redirect('saved_signatures')
+                # From saved-signatures page: real uploaded image file.
+                if upload:
+                    sig.data = _uploaded_image_to_data_url(upload)
+                    sig.image = upload
+
+                # From signing modal: already converted browser data:image value.
+                elif data_value.startswith('data:image'):
+                    sig.data = data_value
+
+                else:
+                    if wants_json:
+                        return json_error('No uploaded signature image provided.')
+                    messages.error(request, 'No uploaded signature image provided.')
+                    return redirect('saved_signatures')
+
+            if is_default:
+                SavedSignature.objects.filter(user=request.user).update(is_default=False)
 
             sig.save()
 
-            message = f'Signature "{sig.name}" saved.'
-            if wants_json:
-                payload = {
-                    'id': str(sig.id),
-                    'name': sig.name,
-                    'type': sig.sig_type,
-                    'is_default': sig.is_default,
-                    'data': sig.data if sig.sig_type in ('draw', 'type') else request.build_absolute_uri(sig.image.url),
-                }
-                return _json_ok(message, payload)
+            payload = _saved_signature_json(sig, request=request)
 
-            messages.success(request, message)
+            if wants_json:
+                return json_ok('Signature saved.', payload)
+
+            messages.success(request, 'Signature saved.')
             return redirect('saved_signatures')
 
-        elif action == 'delete':
-            sig_id = request.POST.get('sig_id')
+        if action == 'set_default':
+            sig_id = (
+                request.POST.get('signature_id')
+                or request.POST.get('sig_id')
+                or request.POST.get('id')
+            )
+
+            sig = get_object_or_404(SavedSignature, id=sig_id, user=request.user)
+
+            SavedSignature.objects.filter(user=request.user).update(is_default=False)
+            sig.is_default = True
+            sig.save(update_fields=['is_default'])
+
+            if wants_json:
+                return json_ok('Default signature updated.')
+
+            messages.success(request, 'Default signature updated.')
+            return redirect('saved_signatures')
+
+        if action == 'delete':
+            sig_id = (
+                request.POST.get('signature_id')
+                or request.POST.get('sig_id')
+                or request.POST.get('id')
+            )
+
             sig = get_object_or_404(SavedSignature, id=sig_id, user=request.user)
             sig.delete()
 
             if wants_json:
-                return _json_ok('Signature deleted.', {'sig_id': sig_id})
+                return json_ok('Signature deleted.')
 
             messages.success(request, 'Signature deleted.')
             return redirect('saved_signatures')
 
-        elif action == 'set_default':
-            sig_id = request.POST.get('sig_id')
-            sig = get_object_or_404(SavedSignature, id=sig_id, user=request.user)
-            sig.is_default = True
-            sig.save()
-
-            if wants_json:
-                return _json_ok(f'"{sig.name}" set as default.', {'sig_id': str(sig.id)})
-
-            messages.success(request, f'"{sig.name}" set as default.')
-            return redirect('saved_signatures')
-
         if wants_json:
-            return _json_err('Invalid action.')
+            return json_error('Invalid action.')
 
         messages.error(request, 'Invalid action.')
         return redirect('saved_signatures')
 
 
-
 class SignDocumentPreviewView(View):
     """
     Token-based PDF preview endpoint for the signing page.
-    No login required.
-    Returns the document inline so PDF.js can render it.
+    No login required. Always returns a real PDF.
     """
     def get(self, request, token):
-        signer = get_object_or_404(SignatureRequestSigner, token=token)
+        signer = get_object_or_404(
+            SignatureRequestSigner.objects.select_related(
+                'request',
+                'request__document',
+                'request__created_by',
+            ),
+            token=token,
+        )
         sig_req = signer.request
-        document = sig_req.document
 
         if sig_req.status in ('cancelled', 'expired'):
             raise Http404("This signing request is no longer available.")
 
-        if not document or not getattr(document, 'file', None):
-            raise Http404("Document file not found.")
+        document = _get_or_create_signature_preview_pdf(sig_req)
 
-        file_name = document.name or os.path.basename(document.file.name)
+        file_name = document.name or os.path.basename(document.file.name) or 'document.pdf'
+
+        try:
+            fh = document.file.open('rb')
+        except Exception:
+            raise Http404("Could not open document file.")
 
         response = FileResponse(
-            document.file.open('rb'),
+            fh,
             content_type='application/pdf'
         )
         response['Content-Disposition'] = f'inline; filename="{file_name}"'
         response['Accept-Ranges'] = 'bytes'
+        response['X-Frame-Options'] = 'SAMEORIGIN'
+        response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         return response
 
 
 class SignDocumentDownloadView(View):
     """
-    Token-based document download endpoint for the signer.
-    No login required.
+    Token-based document download endpoint for signer.
+    No login required. Downloads the PDF prepared for signing.
     """
     def get(self, request, token):
-        signer = get_object_or_404(SignatureRequestSigner, token=token)
+        signer = get_object_or_404(
+            SignatureRequestSigner.objects.select_related(
+                'request',
+                'request__document',
+                'request__created_by',
+            ),
+            token=token,
+        )
         sig_req = signer.request
-        document = sig_req.document
 
         if sig_req.status in ('cancelled', 'expired'):
             raise Http404("This signing request is no longer available.")
 
-        if not document or not getattr(document, 'file', None):
-            raise Http404("Document file not found.")
+        document = _get_or_create_signature_preview_pdf(sig_req)
 
-        file_name = document.name or os.path.basename(document.file.name)
-        content_type, _ = mimetypes.guess_type(file_name)
-        content_type = content_type or 'application/octet-stream'
+        file_name = document.name or os.path.basename(document.file.name) or 'document.pdf'
+
+        try:
+            fh = document.file.open('rb')
+        except Exception:
+            raise Http404("Could not open document file.")
 
         response = FileResponse(
-            document.file.open('rb'),
-            content_type=content_type
+            fh,
+            content_type='application/pdf'
         )
         response['Content-Disposition'] = f'attachment; filename="{file_name}"'
         return response
 
+
 class SavedSignatureAPIView(LoginRequiredMixin, View):
-    """Return user's saved signatures as JSON for the signing page."""
+    """
+    Return user's saved signatures as JSON for signing pages.
+    Upload signatures are returned as data:image values so they can be
+    placed and burned into PDF.
+    """
     def get(self, request):
         from apps.files.models import SavedSignature
 
-        sigs = []
-        for s in SavedSignature.objects.filter(user=request.user):
-            entry = {
-                'id': str(s.id),
-                'name': s.name,
-                'type': s.sig_type,
-                'is_default': s.is_default,
-            }
-
-            if s.sig_type == 'draw':
-                entry['data'] = s.data
-
-            elif s.sig_type == 'type':
-                raw = s.data or ''
-                if raw.startswith('font:') and '|' in raw:
-                    font_part, text_part = raw.split('|', 1)
-                    entry['font'] = font_part[5:]
-                    entry['text'] = text_part
-                else:
-                    entry['font'] = 'Dancing Script'
-                    entry['text'] = raw
-                entry['data'] = raw
-
-            elif s.image:
-                entry['data'] = request.build_absolute_uri(s.image.url)
-            else:
-                entry['data'] = s.data or ''
-
-            sigs.append(entry)
+        sigs = [
+            _saved_signature_json(sig, request=request)
+            for sig in SavedSignature.objects.filter(user=request.user).order_by('-is_default', '-created_at')
+        ]
 
         return JsonResponse({'signatures': sigs})
 
@@ -4689,6 +5158,38 @@ class QuickSignView(LoginRequiredMixin, View):
         except Exception as e:
             messages.error(request, f'Signing failed: {e}')
             return redirect('quick_sign')
+
+class QuickSignPreviewView(LoginRequiredMixin, View):
+    """
+    Inline PDF preview endpoint for Quick Sign.
+    This is used by PDF.js and iframe fallback.
+    """
+
+    def get(self, request, pk):
+        pdf = get_object_or_404(SharedFile, pk=pk)
+
+        if not _can_edit_file(request.user, pdf):
+            raise Http404("You do not have permission to preview this file.")
+
+        if not getattr(pdf, 'is_pdf', False):
+            raise Http404("Only PDF files can be previewed in Quick Sign.")
+
+        file_name = pdf.name or os.path.basename(pdf.file.name) or 'document.pdf'
+
+        try:
+            pdf.file.open('rb')
+        except Exception:
+            raise Http404("Could not open PDF file.")
+
+        response = FileResponse(
+            pdf.file,
+            content_type='application/pdf'
+        )
+        response['Content-Disposition'] = f'inline; filename="{file_name}"'
+        response['Accept-Ranges'] = 'bytes'
+        response['X-Frame-Options'] = 'SAMEORIGIN'
+        response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        return response
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NOTE EDITOR → PDF
@@ -6518,4 +7019,184 @@ class LivePreviewUsersView(LoginRequiredMixin, View):
                 }
                 for u in qs
             ],
+        })
+
+class SignatureConvertForSigningView(LoginRequiredMixin, View):
+    """
+    Converts a selected file to PDF for the signature workflow.
+
+    Used by the Send for Signature page when the selected document is not already a PDF.
+    Returns JSON:
+        {
+            "ok": true,
+            "document_id": "...",
+            "preview_url": "...",
+            "name": "converted-file.pdf"
+        }
+    """
+
+    def post(self, request, pk):
+        source_file = get_object_or_404(SharedFile, pk=pk)
+
+        if not _can_edit_file(request.user, source_file):
+            return JsonResponse({
+                'ok': False,
+                'error': 'You do not have permission to use this file for signing.'
+            }, status=403)
+
+        file_name = source_file.name or ''
+        extension = os.path.splitext(file_name)[1].lower().replace('.', '')
+
+        # If already PDF, just return the same file.
+        if extension == 'pdf' or source_file.file_type == 'application/pdf':
+            return JsonResponse({
+                'ok': True,
+                'document_id': str(source_file.pk),
+                'name': source_file.name,
+                'preview_url': reverse('file_preview', kwargs={'pk': source_file.pk}),
+                'converted': False,
+            })
+
+        if extension not in CONVERTIBLE_TYPES:
+            return JsonResponse({
+                'ok': False,
+                'error': 'This file type cannot be converted for signing. Please select a PDF, Word, Excel, PowerPoint, or image file.'
+            }, status=400)
+
+        temp_input = None
+
+        try:
+            # Save original file temporarily.
+            source_file.file.open('rb')
+            original_bytes = source_file.file.read()
+            source_file.file.close()
+
+            suffix = f'.{extension}' if extension else ''
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(original_bytes)
+                temp_input = tmp.name
+
+            # Convert image files with Pillow, office docs with LibreOffice.
+            if extension in ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff', 'tif']:
+                pdf_buffer = _convert_image_to_pdf(temp_input)
+                pdf_bytes = pdf_buffer.getvalue()
+            else:
+                pdf_path = _convert_to_pdf(temp_input)
+                with open(pdf_path, 'rb') as pdf_file:
+                    pdf_bytes = pdf_file.read()
+
+            base_name = os.path.splitext(source_file.name or 'document')[0]
+            converted_name = f'{base_name}.pdf'
+
+            converted_file = SharedFile.objects.create(
+                name=converted_name,
+                file=ContentFile(pdf_bytes, name=converted_name),
+                uploaded_by=request.user,
+                folder=source_file.folder,
+                visibility=source_file.visibility,
+                file_size=len(pdf_bytes),
+                file_type='application/pdf',
+                file_hash=hashlib.sha256(pdf_bytes).hexdigest(),
+                is_latest=True,
+            )
+
+            # Preserve sharing-related fields safely where they exist.
+            try:
+                converted_file.shared_with.set(source_file.shared_with.all())
+            except Exception:
+                pass
+
+            try:
+                converted_file.unit = getattr(source_file, 'unit', None)
+                converted_file.department = getattr(source_file, 'department', None)
+                converted_file.save(update_fields=['unit', 'department'])
+            except Exception:
+                pass
+
+            try:
+                _log_file_history(
+                    converted_file,
+                    FileHistory.Action.CREATED,
+                    actor=request.user,
+                    notes=f'Converted from {source_file.name} for signature workflow.'
+                )
+            except Exception:
+                pass
+
+            return JsonResponse({
+                'ok': True,
+                'document_id': str(converted_file.pk),
+                'name': converted_file.name,
+                'preview_url': reverse('file_preview', kwargs={'pk': converted_file.pk}),
+                'converted': True,
+            })
+
+        except Exception as exc:
+            return JsonResponse({
+                'ok': False,
+                'error': f'Could not convert file for signing: {exc}'
+            }, status=500)
+
+        finally:
+            if temp_input and os.path.exists(temp_input):
+                try:
+                    os.remove(temp_input)
+                except Exception:
+                    pass
+
+    def get(self, request, pk):
+        """
+        Allow GET too, because some template JavaScript may call this endpoint
+        using fetch() without explicitly setting method: 'POST'.
+        """
+        return self.post(request, pk)
+
+class SignatureCompleteView(View):
+    """
+    Beautiful completion page after a signer completes their signature.
+    Logged-in EasyOffice users are redirected to File Manager after a short delay.
+    External signers stay on the completion page with download access.
+    """
+    template_name = 'files/sign_complete.html'
+
+    def get(self, request, token):
+        signer = get_object_or_404(
+            SignatureRequestSigner.objects.select_related(
+                'request',
+                'request__document',
+                'request__created_by',
+                'user',
+            ),
+            token=token,
+        )
+        sig_req = signer.request
+
+        is_signed = signer.status == 'signed'
+        all_completed = not sig_req.signers.exclude(status='signed').exists()
+
+        try:
+            download_url = reverse('sign_document_download', kwargs={'token': signer.token})
+        except Exception:
+            download_url = f'/files/sign/{signer.token}/download/'
+
+        file_manager_url = ''
+        if request.user.is_authenticated:
+            try:
+                file_manager_url = reverse('file_manager')
+            except Exception:
+                file_manager_url = '/files/'
+
+        signers_total = sig_req.signers.count()
+        signers_done = sig_req.signers.filter(status='signed').count()
+
+        return render(request, self.template_name, {
+            'signer': signer,
+            'sig_req': sig_req,
+            'document': sig_req.document,
+            'is_signed': is_signed,
+            'all_completed': all_completed,
+            'download_url': download_url,
+            'file_manager_url': file_manager_url,
+            'signers_total': signers_total,
+            'signers_done': signers_done,
         })

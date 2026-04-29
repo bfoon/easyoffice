@@ -11,6 +11,8 @@ urlpatterns = [
     path('<uuid:pk>/',                       views.OrderDetailView.as_view(),         name='order_detail'),
     path('<uuid:pk>/confirm/',               views.OrderConfirmView.as_view(),        name='order_confirm'),
     path('<uuid:pk>/fulfill/',               views.OrderFulfillView.as_view(),        name='order_fulfill'),
+    path('<uuid:pk>/generate-invoice/',      views.OrderGenerateInvoiceView.as_view(), name='order_generate_invoice'),
+    path('<uuid:pk>/generate-delivery-note/', views.OrderGenerateDeliveryNoteView.as_view(), name='order_generate_delivery_note'),
     path('<uuid:pk>/cancel/',                views.OrderCancelView.as_view(),         name='order_cancel'),
     path('<uuid:pk>/attach-customer/',       views.OrderAttachCustomerView.as_view(), name='order_attach_customer'),
 ]

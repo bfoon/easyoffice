@@ -1,7 +1,7 @@
 """
 apps/orders/views.py
 ────────────────────
-Internal HTML views — list, detail, create, fulfill, cancel.
+Internal HTML views — list, detail, create, staged document generation, cancel.
 
 These are agent-facing. The public API lives in apps/orders/api/views.py.
 """
@@ -184,6 +184,23 @@ class OrderDetailView(OrdersAccessMixin, DetailView):
         ctx = super().get_context_data(**kwargs)
         ctx['can_fulfill']        = can_fulfill_order(self.request.user, self.object)
         ctx['can_cancel']         = can_cancel_order(self.request.user, self.object)
+        ctx['can_generate_proforma'] = (
+            ctx['can_fulfill']
+            and self.object.is_fulfillable
+            and not self.object.proforma_id
+        )
+        ctx['can_generate_invoice'] = (
+            ctx['can_fulfill']
+            and self.object.proforma_id
+            and not self.object.invoice_id
+            and self.object.status != OrderStatus.CANCELLED
+        )
+        ctx['can_generate_delivery_note'] = (
+            ctx['can_fulfill']
+            and self.object.invoice_id
+            and not self.object.delivery_note_id
+            and self.object.status != OrderStatus.CANCELLED
+        )
         ctx['attach_customer_form'] = AttachCustomerForm()
         ctx['cancel_form']        = CancelOrderForm()
         return ctx
@@ -192,49 +209,81 @@ class OrderDetailView(OrdersAccessMixin, DetailView):
 # ── Action endpoints ───────────────────────────────────────────────────────
 
 class OrderFulfillView(OrdersAccessMixin, View):
-    """POST /<pk>/fulfill/  → builds Proforma → Invoice → Delivery Note chain."""
+    """POST /<pk>/fulfill/ → Sales fulfillment creates ONLY the Proforma."""
     def post(self, request, pk):
         order = get_object_or_404(SalesOrder, pk=pk)
         if not can_fulfill_order(request.user, order):
             messages.error(request, "You don't have permission to fulfill orders.")
             return redirect('orders:order_detail', pk=order.pk)
         try:
-            # fulfill_order does its work on a row it locked via
-            # select_for_update — the local `order` we passed in is stale
-            # by the time the function returns. Capture the refreshed
-            # instance and re-fetch the FKs so the success message
-            # reflects the new state.
             order = services.fulfill_order(order, request.user)
         except ValueError as e:
             messages.error(request, str(e))
             return redirect('orders:order_detail', pk=order.pk)
         except Exception as e:
-            messages.error(request, f'Could not fulfill order: {e}')
+            messages.error(request, f'Could not generate proforma: {e}')
             return redirect('orders:order_detail', pk=order.pk)
 
-        # Re-load with the doc FKs joined in case the returned instance
-        # came from select_for_update (which can leave related-object
-        # caches unfilled).
         order = (
             SalesOrder.objects
             .select_related('proforma', 'invoice', 'delivery_note')
             .get(pk=order.pk)
         )
-
-        # Build a defensive list of generated doc numbers — every doc
-        # SHOULD be present after a successful fulfillment, but we don't
-        # want a missing one to crash the success path.
-        generated = [
-            d.number for d in (order.proforma, order.invoice, order.delivery_note)
-            if d and getattr(d, 'number', None)
-        ]
-        if generated:
+        if order.proforma:
             messages.success(
                 request,
-                f'Order fulfilled. Generated {", ".join(generated)}.',
+                f'Proforma {order.proforma.number} generated. The Invoice button is now active.',
             )
         else:
-            messages.success(request, 'Order fulfilled.')
+            messages.success(request, 'Proforma generated.')
+        return redirect('orders:order_detail', pk=order.pk)
+
+
+class OrderGenerateInvoiceView(OrdersAccessMixin, View):
+    """POST /<pk>/generate-invoice/ → generate Invoice from the Proforma."""
+    def post(self, request, pk):
+        order = get_object_or_404(SalesOrder, pk=pk)
+        if not can_fulfill_order(request.user, order):
+            messages.error(request, "You don't have permission to generate invoices.")
+            return redirect('orders:order_detail', pk=order.pk)
+        try:
+            order = services.generate_invoice_for_order(order, request.user)
+        except ValueError as e:
+            messages.error(request, str(e))
+            return redirect('orders:order_detail', pk=order.pk)
+        except Exception as e:
+            messages.error(request, f'Could not generate invoice: {e}')
+            return redirect('orders:order_detail', pk=order.pk)
+
+        order = SalesOrder.objects.select_related('invoice').get(pk=order.pk)
+        messages.success(
+            request,
+            f'Invoice {order.invoice.number} generated. The Delivery Note button is now active.',
+        )
+        return redirect('orders:order_detail', pk=order.pk)
+
+
+class OrderGenerateDeliveryNoteView(OrdersAccessMixin, View):
+    """POST /<pk>/generate-delivery-note/ → generate DN from the Invoice."""
+    def post(self, request, pk):
+        order = get_object_or_404(SalesOrder, pk=pk)
+        if not can_fulfill_order(request.user, order):
+            messages.error(request, "You don't have permission to generate delivery notes.")
+            return redirect('orders:order_detail', pk=order.pk)
+        try:
+            order = services.generate_delivery_note_for_order(order, request.user)
+        except ValueError as e:
+            messages.error(request, str(e))
+            return redirect('orders:order_detail', pk=order.pk)
+        except Exception as e:
+            messages.error(request, f'Could not generate delivery note: {e}')
+            return redirect('orders:order_detail', pk=order.pk)
+
+        order = SalesOrder.objects.select_related('delivery_note').get(pk=order.pk)
+        messages.success(
+            request,
+            f'Delivery Note {order.delivery_note.number} generated. Order is now fulfilled.',
+        )
         return redirect('orders:order_detail', pk=order.pk)
 
 

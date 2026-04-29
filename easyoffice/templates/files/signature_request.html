@@ -68,10 +68,11 @@
   <div class="step" data-step="3"><i class="bi bi-send me-1"></i>3. Review & Send</div>
 </div>
 
-<form method="post" id="sigForm" enctype="multipart/form-data">
+<form method="post" id="sigForm" enctype="multipart/form-data" novalidate>
   {% csrf_token %}
   <!-- Hidden field to store JSON of placed fields -->
   <input type="hidden" name="fields_json" id="fieldsJson"/>
+  <input type="hidden" name="document_id" id="documentIdHidden" value="{% if document %}{{ document.id }}{% endif %}"/>
 
   <div class="row g-4">
 
@@ -85,7 +86,6 @@
               <h2 class="eo-card-title">Document</h2>
             </div>
             {% if document %}
-            <input type="hidden" name="document_id" value="{{ document.id }}"/>
             <div style="display:flex;align-items:center;gap:12px;padding:13px;background:var(--eo-bg);border-radius:9px;border:1.5px solid var(--eo-accent)">
               <i class="bi {{ document.icon_class }}" style="font-size:1.8rem;color:{{ document.icon_color }};flex-shrink:0"></i>
               <div style="flex:1;min-width:0">
@@ -95,7 +95,7 @@
               <i class="bi bi-check-circle-fill" style="color:var(--eo-success);font-size:1.2rem"></i>
             </div>
             {% else %}
-            <select name="document_id" class="eo-form-select" required id="docSelect"
+            <select class="eo-form-select" id="docSelect"
                     onchange="onDocSelect(this)">
               <option value="">— Select a document —</option>
               {% for f in my_files %}
@@ -341,6 +341,32 @@ var SIGNER_COLORS = ['#3b82f6','#8b5cf6','#ef4444','#10b981','#f59e0b','#06b6d4'
 var selectedDocIsPdf = {% if document %}{% if document.is_pdf %}true{% else %}false{% endif %}{% else %}true{% endif %};
 var selectedDocId    = '{% if document %}{{ document.id }}{% endif %}';
 
+function syncDocumentHidden(value) {
+  var hidden = document.getElementById('documentIdHidden');
+  if (hidden) hidden.value = value || '';
+}
+
+function syncSignerStateFromInputs() {
+  var rows = document.querySelectorAll('#signersContainer .signer-row');
+  rows.forEach(function(row, idx) {
+    if (!signers[idx]) return;
+    var nameInput = row.querySelector('input[name="signer_name"]');
+    var emailInput = row.querySelector('input[name="signer_email"]');
+    signers[idx].name = nameInput ? nameInput.value.trim() : (signers[idx].name || '').trim();
+    signers[idx].email = emailInput ? emailInput.value.trim() : (signers[idx].email || '').trim();
+  });
+}
+
+function cleanEmptySigners() {
+  syncSignerStateFromInputs();
+  signers = signers.filter(function(s) {
+    return (s.name || '').trim() || (s.email || '').trim();
+  });
+  signers.forEach(function(s, idx) { s.order = idx + 1; });
+  if (currentSigner >= signers.length) currentSigner = Math.max(0, signers.length - 1);
+}
+
+
 // ─── Steps ───────────────────────────────────────────────
 function goStep(n) {
   [1,2,3].forEach(function(i) {
@@ -361,6 +387,7 @@ function goStep2() {
 
   var docId = selectedDocId || (document.getElementById('docSelect') && document.getElementById('docSelect').value);
   if (!docId) { alert('Please select a document first.'); return; }
+  syncDocumentHidden(docId);
 
   if (selectedDocIsPdf) {
     goStep(2);
@@ -400,18 +427,8 @@ function goStep2() {
       opt.selected = true;
       sel.appendChild(opt);
     }
-    // Also add / update a hidden input so the POST always sends the right ID
-    var hidden = document.getElementById('convertedDocId');
-    if (!hidden) {
-      hidden = document.createElement('input');
-      hidden.type = 'hidden';
-      hidden.name = 'document_id';
-      hidden.id   = 'convertedDocId';
-      document.getElementById('sigForm').appendChild(hidden);
-      // Disable the original select so it doesn't override
-      if (sel) sel.removeAttribute('name');
-    }
-    hidden.value = data.file_id;
+    // Always submit the converted PDF ID through the dedicated hidden field.
+    syncDocumentHidden(data.file_id);
 
     selectedDocId    = data.file_id;
     selectedDocIsPdf = true;
@@ -448,9 +465,11 @@ function onDocSelect(sel) {
   if (n1) n1.style.display = (opt.value && !selectedDocIsPdf &&  isConvertible) ? 'flex' : 'none';
   if (n2) n2.style.display = (opt.value && !selectedDocIsPdf && !isConvertible) ? 'flex'  : 'none';
 
-  // Reset PDF viewer when document changes
+  syncDocumentHidden(selectedDocId);
+
+  // Reset PDF viewer when document changes. PDF files can be previewed immediately.
   pdfDoc = null;
-  docUrl = '';
+  docUrl = selectedDocIsPdf && selectedDocId ? ('/files/' + selectedDocId + '/download/') : '';
 }
 
 // ─── Signers ─────────────────────────────────────────────
@@ -464,7 +483,14 @@ function addSigner(name, email) {
   signers.push({id:id, name:name||'', email:email||'', color:color, order:signers.length+1});
   renderSigners();
 }
-function addStaff(name, email) { addSigner(name, email); }
+function addStaff(name, email) {
+  // If the page has the initial empty signer row, replace it with the selected staff.
+  if (signers.length === 1 && !(signers[0].name || '').trim() && !(signers[0].email || '').trim()) {
+    signers = [];
+    signerIdx = 0;
+  }
+  addSigner(name, email);
+}
 
 function removeSignerById(id) {
   var idx = signers.findIndex(function(s){ return s.id===id; });
@@ -760,11 +786,43 @@ function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 
 // Form submit — serialize fields then submit
 document.getElementById('sigForm').addEventListener('submit', function(e) {
-  if (!signers.length) { e.preventDefault(); alert('Add at least one signer.'); return; }
+  cleanEmptySigners();
+
+  var docId = selectedDocId || (document.getElementById('docSelect') && document.getElementById('docSelect').value) || '';
+  syncDocumentHidden(docId);
+
+  if (!docId) {
+    e.preventDefault();
+    alert('Please select a document first.');
+    goStep(1);
+    return;
+  }
+
+  if (!signers.length) {
+    e.preventDefault();
+    alert('Add at least one signer.');
+    goStep(1);
+    addSigner();
+    return;
+  }
+
+  var invalid = signers.find(function(s) {
+    return !(s.name || '').trim() || !(s.email || '').trim();
+  });
+  if (invalid) {
+    e.preventDefault();
+    alert('Please enter both name and email for every signer.');
+    renderSigners();
+    goStep(1);
+    return;
+  }
+
+  // Re-render after removing empty signer rows so hidden/required fields do not block submission.
+  renderSigners();
   serializeFields();
 });
 
-// Init: add first signer automatically
+// Init: add first signer row for manual entry.
 addSigner();
 
 // ── CC / Viewer rows ──────────────────────────────────────────────────────

@@ -1,87 +1,214 @@
 {% extends "base.html" %}
 {% load humanize %}
-{% block title %}Payroll{% endblock %}
+{% block title %}Payroll Command Center{% endblock %}
 {% block breadcrumb %}<a href="{% url 'hr_dashboard' %}">HR Dashboard</a> / Payroll{% endblock %}
 
 {% block content %}
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title">Payroll</h1>
-    <p class="eo-page-subtitle">Monthly payroll records, approval status, and payment overview.</p>
-  </div>
-</div>
+<style>
+  .hrp-shell{--hrp-blue:#0f3d73;--hrp-blue-2:#155a9f;--hrp-ink:#172033;--hrp-muted:#6b7280;--hrp-soft:#f6f8fc;--hrp-line:#e7edf5;--hrp-green:#12805c;--hrp-amber:#b45309;--hrp-red:#b91c1c}
+  .hrp-hero{position:relative;overflow:hidden;border-radius:26px;padding:28px;background:linear-gradient(135deg,#0d3769 0%,#14569a 50%,#0d9488 100%);color:#fff;box-shadow:0 18px 50px rgba(15,61,115,.18);margin-bottom:22px}
+  .hrp-hero:before{content:"";position:absolute;inset:-35% -20% auto auto;width:420px;height:420px;border-radius:50%;background:rgba(255,255,255,.12)}
+  .hrp-hero:after{content:"";position:absolute;right:28px;bottom:-80px;width:230px;height:230px;border:1px solid rgba(255,255,255,.28);border-radius:42px;transform:rotate(18deg)}
+  .hrp-hero-inner{position:relative;z-index:1;display:flex;justify-content:space-between;gap:24px;align-items:flex-start;flex-wrap:wrap}
+  .hrp-eyebrow{font-size:.78rem;text-transform:uppercase;letter-spacing:.16em;opacity:.82;font-weight:800;margin-bottom:8px}
+  .hrp-title{font-size:clamp(1.8rem,3vw,2.65rem);font-weight:900;margin:0;line-height:1.08}
+  .hrp-subtitle{margin:10px 0 0;max-width:760px;opacity:.9;font-size:.96rem}
+  .hrp-period-pill{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.25);border-radius:18px;padding:12px 16px;backdrop-filter:blur(8px);min-width:190px;text-align:center}
+  .hrp-period-pill strong{display:block;font-size:1.25rem}
+  .hrp-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px;margin-bottom:18px}
+  .hrp-card{background:#fff;border:1px solid var(--hrp-line);border-radius:22px;box-shadow:0 12px 32px rgba(17,24,39,.06);padding:18px}
+  .hrp-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px}
+  .hrp-card-title{margin:0;font-size:1rem;font-weight:850;color:var(--hrp-ink)}
+  .hrp-card-subtitle{margin:3px 0 0;color:var(--hrp-muted);font-size:.82rem}
+  .hrp-stat{position:relative;overflow:hidden;min-height:118px;display:flex;flex-direction:column;justify-content:space-between}
+  .hrp-stat:after{content:"";position:absolute;right:-25px;top:-25px;width:100px;height:100px;border-radius:50%;background:linear-gradient(135deg,rgba(21,90,159,.12),rgba(13,148,136,.08))}
+  .hrp-stat-label{font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;color:var(--hrp-muted);font-weight:800}
+  .hrp-stat-value{font-size:1.75rem;font-weight:900;color:var(--hrp-ink);line-height:1;margin-top:8px}
+  .hrp-stat-note{font-size:.78rem;color:var(--hrp-muted);margin-top:8px}
+  .hrp-tools{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+  .hrp-tools .eo-form-control{min-width:140px}
+  .hrp-action-strip{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;padding:14px;border-radius:18px;background:linear-gradient(180deg,#f8fbff,#fff);border:1px solid var(--hrp-line)}
+  .hrp-check{display:flex;gap:8px;align-items:center;color:var(--hrp-muted);font-size:.82rem;font-weight:650}
+  .hrp-table-wrap{border-radius:20px;border:1px solid var(--hrp-line);overflow:hidden;background:#fff}
+  .hrp-table{margin:0}
+  .hrp-table thead th{background:#f4f7fb;color:#42526b;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--hrp-line);padding:14px 12px;white-space:nowrap}
+  .hrp-table tbody td{padding:15px 12px;vertical-align:middle;border-bottom:1px solid #edf2f7}
+  .hrp-staff{display:flex;align-items:center;gap:11px;min-width:210px}
+  .hrp-avatar{width:42px;height:42px;border-radius:15px;background:linear-gradient(135deg,#0f3d73,#0d9488);color:#fff;display:grid;place-items:center;font-weight:900;box-shadow:0 10px 20px rgba(15,61,115,.16)}
+  .hrp-name{font-weight:850;color:var(--hrp-ink);line-height:1.15}
+  .hrp-meta{font-size:.75rem;color:var(--hrp-muted);margin-top:3px}
+  .hrp-money{font-weight:850;color:var(--hrp-ink);white-space:nowrap}
+  .hrp-mini{font-size:.72rem;color:var(--hrp-muted);margin-top:4px;line-height:1.35}
+  .hrp-status-note{font-size:.72rem;margin-top:5px;line-height:1.35}
+  .hrp-status-note.ok{color:var(--hrp-green)}.hrp-status-note.err{color:var(--hrp-red)}
+  .hrp-actions{display:flex;gap:7px;flex-wrap:wrap;align-items:center;min-width:270px}
+  .hrp-inline-form{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin:0}
+  .hrp-empty{text-align:center;padding:48px 20px;color:var(--hrp-muted)}
+  .hrp-empty i{font-size:2.3rem;color:#9aa8bd;display:block;margin-bottom:10px}
+  @media(max-width:992px){.hrp-grid{grid-template-columns:1fr}.hrp-grid>*{grid-column:1/-1!important}.hrp-hero{padding:22px}.hrp-table tbody td{min-width:130px}.hrp-actions{min-width:240px}}
+  @media print{.eo-page-header,.hrp-hero,.hrp-card:first-of-type,.hrp-actions,.eo-btn,form{display:none!important}.hrp-card{box-shadow:none;border:0;padding:0}.hrp-table-wrap{border:0}.hrp-table thead th{background:#f3f4f6!important;color:#111!important}}
+</style>
 
-<div class="eo-card mb-4">
-  <form method="get" class="row g-3 align-items-end">
-    <div class="col-md-3">
-      <label class="eo-form-label">Year</label>
-      <input type="number" name="year" class="eo-form-control" value="{{ year }}">
+<div class="hrp-shell">
+  <section class="hrp-hero">
+    <div class="hrp-hero-inner">
+      <div>
+        <div class="hrp-eyebrow">Payroll Command Center</div>
+        <h1 class="hrp-title">Salary run, payslips & payment control</h1>
+        <p class="hrp-subtitle">Generate payroll from HR rules, attendance, paid leave, unpaid leave, resignation and disciplinary actions. HR can print payslips, email payslips, approve records and mark payments as paid.</p>
+      </div>
+      <div class="hrp-period-pill">
+        <span>Selected period</span>
+        <strong>{{ month }}/{{ year }}</strong>
+        <small>{{ records.count }} record{{ records.count|pluralize }}</small>
+      </div>
     </div>
-    <div class="col-md-3">
-      <label class="eo-form-label">Month</label>
-      <input type="number" min="1" max="12" name="month" class="eo-form-control" value="{{ month }}">
-    </div>
-    <div class="col-auto d-flex gap-2">
-      <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
-      <a href="{% url 'payroll' %}" class="eo-btn eo-btn-secondary">Reset</a>
-    </div>
-  </form>
-</div>
+  </section>
 
-<div class="row g-3 mb-4">
-  <div class="col-md-6">
-    <div class="eo-stat eo-stat-info">
-      <div class="eo-stat-label">Total Gross Salary</div>
-      <div class="eo-stat-value">{{ total_gross|floatformat:2|intcomma }}</div>
+  <div class="hrp-grid">
+    <div class="hrp-card hrp-stat" style="grid-column:span 4">
+      <div>
+        <div class="hrp-stat-label">Total Gross Salary</div>
+        <div class="hrp-stat-value">{{ total_gross|floatformat:2|intcomma }}</div>
+      </div>
+      <div class="hrp-stat-note">Before deductions and net adjustments</div>
+    </div>
+    <div class="hrp-card hrp-stat" style="grid-column:span 4">
+      <div>
+        <div class="hrp-stat-label">Total Net Salary</div>
+        <div class="hrp-stat-value">{{ total_net|floatformat:2|intcomma }}</div>
+      </div>
+      <div class="hrp-stat-note">Amount payable to staff</div>
+    </div>
+    <div class="hrp-card hrp-stat" style="grid-column:span 4">
+      <div>
+        <div class="hrp-stat-label">Payroll Records</div>
+        <div class="hrp-stat-value">{{ records.count }}</div>
+      </div>
+      <div class="hrp-stat-note">For the selected month and year</div>
     </div>
   </div>
-  <div class="col-md-6">
-    <div class="eo-stat eo-stat-success">
-      <div class="eo-stat-label">Total Net Salary</div>
-      <div class="eo-stat-value">{{ total_net|floatformat:2|intcomma }}</div>
+
+  <div class="hrp-card mb-4">
+    <div class="hrp-card-header">
+      <div>
+        <h2 class="hrp-card-title">Payroll Controls</h2>
+        <p class="hrp-card-subtitle">Filter, generate, refresh and distribute payslips.</p>
+      </div>
+    </div>
+
+    <form method="get" class="hrp-tools mb-3">
+      <div>
+        <label class="eo-form-label">Year</label>
+        <input type="number" name="year" class="eo-form-control" value="{{ year }}">
+      </div>
+      <div>
+        <label class="eo-form-label">Month</label>
+        <input type="number" min="1" max="12" name="month" class="eo-form-control" value="{{ month }}">
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
+        <a href="{% url 'payroll' %}" class="eo-btn eo-btn-secondary">Reset</a>
+      </div>
+    </form>
+
+    <div class="hrp-action-strip">
+      <form method="post" action="{% url 'payroll_generate' %}" class="hrp-inline-form">
+        {% csrf_token %}
+        <input type="hidden" name="year" value="{{ year }}">
+        <input type="hidden" name="month" value="{{ month }}">
+        <label class="hrp-check"><input type="checkbox" name="send_payslips"> Email payslips after run</label>
+        <button class="eo-btn eo-btn-primary" type="submit"><i class="bi bi-calculator"></i> Generate / Refresh Payroll</button>
+      </form>
+
+      <form method="post" action="{% url 'payroll_payslips_email' %}" class="hrp-inline-form">
+        {% csrf_token %}
+        <input type="hidden" name="year" value="{{ year }}">
+        <input type="hidden" name="month" value="{{ month }}">
+        <button class="eo-btn eo-btn-secondary" type="submit"><i class="bi bi-envelope-paper"></i> Email Existing Payslips</button>
+      </form>
     </div>
   </div>
-</div>
 
-<div class="eo-card">
-  <div class="eo-card-header">
-    <div>
-      <h2 class="eo-card-title">Payroll Records</h2>
-      <p class="eo-card-subtitle">{{ records.count }} record{{ records.count|pluralize }}</p>
+  <div class="hrp-card">
+    <div class="hrp-card-header">
+      <div>
+        <h2 class="hrp-card-title">Payroll Register</h2>
+        <p class="hrp-card-subtitle">Review salary calculation, payslip delivery and payment status.</p>
+      </div>
     </div>
-  </div>
 
-  <div class="table-responsive">
-    <table class="table align-middle">
-      <thead>
-        <tr>
-          <th>Staff</th>
-          <th>Period</th>
-          <th>Gross</th>
-          <th>Net</th>
-          <th>Tax</th>
-          <th>Status</th>
-          <th>Payment Date</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for rec in records %}
-        <tr>
-          <td>{{ rec.staff.full_name }}</td>
-          <td>{{ rec.period_month }}/{{ rec.period_year }}</td>
-          <td>{{ rec.gross_salary|floatformat:2|intcomma }}</td>
-          <td>{{ rec.net_salary|floatformat:2|intcomma }}</td>
-          <td>{{ rec.tax_deducted|floatformat:2|intcomma }}</td>
-          <td><span class="eo-status eo-status-{{ rec.status }}">{{ rec.get_status_display }}</span></td>
-          <td>{% if rec.payment_date %}{{ rec.payment_date }}{% else %}—{% endif %}</td>
-        </tr>
-        {% empty %}
-        <tr>
-          <td colspan="7" style="text-align:center;color:var(--eo-text-muted);padding:32px">No payroll records found.</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="table-responsive hrp-table-wrap">
+      <table class="table align-middle hrp-table">
+        <thead>
+          <tr>
+            <th>Staff</th>
+            <th>Period</th>
+            <th>Attendance Basis</th>
+            <th>Gross</th>
+            <th>Net</th>
+            <th>Leave Payout</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for rec in records %}
+          <tr>
+            <td>
+              <div class="hrp-staff">
+                <div class="hrp-avatar">{{ rec.staff.first_name|first|default:"S" }}{{ rec.staff.last_name|first }}</div>
+                <div>
+                  <div class="hrp-name">{{ rec.staff.get_full_name|default:rec.staff.username }}</div>
+                  <div class="hrp-meta">{{ rec.staff.email|default:"No email" }}</div>
+                </div>
+              </div>
+            </td>
+            <td>
+              <div class="hrp-money">{{ rec.period_month }}/{{ rec.period_year }}</div>
+              <div class="hrp-mini">Payroll cycle</div>
+            </td>
+            <td>
+              <div class="hrp-money">{{ rec.payable_days }} / {{ rec.total_work_days }} days</div>
+              <div class="hrp-mini">Absent {{ rec.absent_days }} · Half {{ rec.half_days }} · Unpaid {{ rec.unpaid_leave_days }}</div>
+            </td>
+            <td><div class="hrp-money">{{ rec.gross_salary|floatformat:2|intcomma }}</div></td>
+            <td><div class="hrp-money">{{ rec.net_salary|floatformat:2|intcomma }}</div></td>
+            <td><div class="hrp-money">{{ rec.leave_payout|floatformat:2|intcomma }}</div></td>
+            <td>
+              <span class="eo-status eo-status-{{ rec.status }}">{{ rec.get_status_display }}</span>
+              {% if rec.payslip_sent_at %}
+              <div class="hrp-status-note ok"><i class="bi bi-check2-circle"></i> Payslip sent {{ rec.payslip_sent_at|date:'Y-m-d H:i' }}</div>
+              {% elif rec.payslip_last_error %}
+              <div class="hrp-status-note err"><i class="bi bi-exclamation-triangle"></i> {{ rec.payslip_last_error|truncatechars:60 }}</div>
+              {% endif %}
+            </td>
+            <td>
+              <div class="hrp-actions">
+                <a href="{% url 'payroll_payslip_print' rec.pk %}" target="_blank" class="eo-btn eo-btn-secondary eo-btn-sm"><i class="bi bi-printer"></i> Print</a>
+                <form method="post" action="{% url 'payroll_action' rec.pk %}" class="hrp-inline-form">
+                  {% csrf_token %}
+                  {% if rec.status == 'draft' %}
+                  <button name="action" value="approve" class="eo-btn eo-btn-secondary eo-btn-sm" type="submit"><i class="bi bi-check2"></i> Approve</button>
+                  {% endif %}
+                  <button name="action" value="email_payslip" class="eo-btn eo-btn-secondary eo-btn-sm" type="submit"><i class="bi bi-envelope"></i> Email</button>
+                  {% if rec.status != 'paid' %}
+                  <input name="payment_reference" class="eo-form-control" style="width:132px" placeholder="Reference">
+                  <label class="hrp-check"><input type="checkbox" name="send_payslip"> send</label>
+                  <button name="action" value="mark_paid" class="eo-btn eo-btn-primary eo-btn-sm" type="submit">Mark Paid</button>
+                  {% endif %}
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="8" class="hrp-empty"><i class="bi bi-wallet2"></i>No payroll records found. Choose a period and click Generate / Refresh Payroll.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 {% endblock %}

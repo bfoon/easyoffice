@@ -6,13 +6,70 @@
 {% block extra_css %}
 <style>
 /* ── Signer chips ── */
-.signer-row { display:flex;gap:10px;align-items:flex-start;padding:12px 14px;background:var(--eo-bg);border-radius:9px;border:1.5px solid var(--eo-border);margin-bottom:8px;position:relative; }
+.signer-row { display:flex;gap:10px;align-items:flex-start;padding:12px 14px 12px 36px;background:var(--eo-bg);border-radius:9px;border:1.5px solid var(--eo-border);margin-bottom:8px;position:relative;transition:opacity .12s,transform .12s,box-shadow .12s; }
+.signer-row.dragging { opacity:.45;transform:scale(.98); }
+.signer-row.drag-over { border-color:var(--eo-accent);box-shadow:0 0 0 3px var(--eo-accent)25; }
 .signer-order { width:26px;height:26px;border-radius:50%;color:#fff;font-size:.72rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:5px; }
 .signer-remove { position:absolute;right:8px;top:8px;background:none;border:none;color:var(--eo-text-muted);cursor:pointer;font-size:.9rem;transition:color .12s; }
 .signer-remove:hover { color:var(--eo-danger); }
+.signer-drag {
+  position:absolute;left:8px;top:50%;transform:translateY(-50%);
+  width:20px;height:36px;display:flex;align-items:center;justify-content:center;
+  color:var(--eo-text-muted);cursor:grab;border-radius:5px;
+  font-size:1rem;line-height:1;user-select:none;
+  transition:color .12s,background .12s;
+}
+.signer-drag:hover { color:var(--eo-accent);background:var(--eo-accent)10; }
+.signer-drag:active { cursor:grabbing; }
+.signer-move-btns {
+  position:absolute;left:8px;top:50%;transform:translateY(-50%);
+  display:none;flex-direction:column;gap:2px;
+}
+.signer-move-btns button {
+  width:22px;height:18px;background:#fff;
+  border:1px solid var(--eo-border);border-radius:4px;
+  color:var(--eo-text-muted);font-size:.62rem;cursor:pointer;line-height:1;padding:0;
+}
+.signer-move-btns button:hover:not(:disabled) { background:var(--eo-accent);color:#fff;border-color:var(--eo-accent); }
+.signer-move-btns button:disabled { opacity:.35;cursor:not-allowed; }
+@media (max-width:720px), (pointer:coarse) {
+  .signer-drag { display:none; }
+  .signer-move-btns { display:flex; }
+}
 .staff-chip { display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 6px;background:var(--eo-accent)10;border:1px solid var(--eo-accent)30;border-radius:20px;cursor:pointer;font-size:.78rem;transition:all .12s;white-space:nowrap; }
 .staff-chip:hover { background:var(--eo-accent);color:#fff; }
 .chip-init { width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--eo-accent);color:#fff;font-size:.5rem;font-weight:800; }
+
+/* ── Multi-document picker ── */
+.doc-list { display:flex;flex-direction:column;gap:8px;margin-bottom:10px; }
+.doc-empty {
+  padding:14px 16px;background:var(--eo-bg);
+  border:1.5px dashed var(--eo-border);border-radius:9px;
+  font-size:.82rem;color:var(--eo-text-muted);text-align:center;
+}
+.doc-card { display:flex;align-items:center;gap:10px;padding:11px 13px;background:var(--eo-bg);border-radius:9px;border:1.5px solid var(--eo-border);position:relative; }
+.doc-card.is-primary { border-color:var(--eo-accent); }
+.doc-card .doc-ico { font-size:1.4rem;flex-shrink:0; }
+.doc-card .doc-meta { flex:1;min-width:0; }
+.doc-card .doc-name { font-size:.84rem;font-weight:700;color:var(--eo-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.doc-card .doc-name .doc-primary-tag {
+  font-size:.6rem;color:var(--eo-accent);font-weight:800;
+  text-transform:uppercase;letter-spacing:.06em;margin-left:6px;
+}
+.doc-card .doc-sub { font-size:.72rem;color:var(--eo-text-muted); }
+.doc-card .doc-remove { background:none;border:none;color:var(--eo-text-muted);cursor:pointer;font-size:.95rem;padding:4px 6px;border-radius:5px;transition:all .12s;flex-shrink:0; }
+.doc-card .doc-remove:hover { color:var(--eo-danger);background:var(--eo-danger)10; }
+.doc-add-row { display:flex;gap:8px;align-items:flex-end; }
+.doc-add-row select { flex:1; }
+.doc-merge-note {
+  margin-top:6px;padding:8px 11px;background:#eff6ff;border:1px solid #bfdbfe;
+  border-radius:7px;font-size:.74rem;color:#1e3a8a;line-height:1.5;
+}
+.doc-error {
+  margin-top:8px;padding:10px 13px;background:#fee2e2;
+  border:1.5px solid #ef4444;border-radius:8px;
+  font-size:.82rem;color:#991b1b;display:flex;align-items:flex-start;gap:8px;
+}
 
 /* ── Annotation canvas ── */
 .anno-wrap { position:relative;width:100%;background:#525659;border-radius:8px;overflow:hidden;min-height:400px; }
@@ -70,9 +127,7 @@
 
 <form method="post" id="sigForm" enctype="multipart/form-data" novalidate>
   {% csrf_token %}
-  <!-- Hidden field to store JSON of placed fields -->
   <input type="hidden" name="fields_json" id="fieldsJson"/>
-  <input type="hidden" name="document_id" id="documentIdHidden" value="{% if document %}{{ document.id }}{% endif %}"/>
 
   <div class="row g-4">
 
@@ -83,54 +138,69 @@
         <div class="col-lg-5">
           <div class="eo-card">
             <div class="eo-card-header" style="margin-bottom:14px">
-              <h2 class="eo-card-title">Document</h2>
-            </div>
-            {% if document %}
-            <div style="display:flex;align-items:center;gap:12px;padding:13px;background:var(--eo-bg);border-radius:9px;border:1.5px solid var(--eo-accent)">
-              <i class="bi {{ document.icon_class }}" style="font-size:1.8rem;color:{{ document.icon_color }};flex-shrink:0"></i>
-              <div style="flex:1;min-width:0">
-                <div style="font-size:.9rem;font-weight:700;color:var(--eo-text)">{{ document.name }}</div>
-                <div style="font-size:.75rem;color:var(--eo-text-muted)">{{ document.size_display }} · {{ document.created_at|date:"N j, Y" }}</div>
+              <div>
+                <h2 class="eo-card-title">Documents</h2>
+                <p class="eo-card-subtitle">Add one or more documents to this signature request</p>
               </div>
-              <i class="bi bi-check-circle-fill" style="color:var(--eo-success);font-size:1.2rem"></i>
+              <span id="docCount" style="font-size:.78rem;font-weight:700;padding:3px 10px;border-radius:20px;background:var(--eo-accent)12;color:var(--eo-accent)">0 docs</span>
             </div>
-            {% else %}
-            <select class="eo-form-select" id="docSelect"
-                    onchange="onDocSelect(this)">
-              <option value="">— Select a document —</option>
-              {% for f in my_files %}
-              <option value="{{ f.id }}"
-                      data-is-pdf="{% if f.is_pdf %}1{% else %}0{% endif %}"
-                      data-convertible="{% if f.is_convertible %}1{% else %}0{% endif %}"
-                      data-ext="{{ f.extension }}"
-                      data-name="{{ f.name|escapejs }}">
-                {% if not f.is_pdf and f.is_convertible %}⇄ {% endif %}{{ f.name }} ({{ f.size_display }})
-              </option>
-              {% endfor %}
-            </select>
 
-            <!-- shown when a convertible non-PDF is chosen -->
+            <!-- Selected documents (one or more) -->
+            <div id="docList" class="doc-list"></div>
+
+            <!-- Hidden inputs serialise the selected document IDs.
+                 The first one stays as `document_id` for backward
+                 compatibility with the existing single-doc backend.
+                 Additional ones go through `document_ids[]`. -->
+            <input type="hidden" name="document_id" id="documentIdHidden"
+                   value="{% if document %}{{ document.id }}{% endif %}"/>
+            <div id="extraDocIds"></div>
+
+            <!-- Inline error placeholder for "no documents selected" etc. -->
+            <div id="docError" class="doc-error" style="display:none">
+              <i class="bi bi-exclamation-circle" style="font-size:1rem;flex-shrink:0;margin-top:1px"></i>
+              <div id="docErrorText">Please add at least one document.</div>
+            </div>
+
+            <!-- Add another document -->
+            <div class="doc-add-row">
+              <select class="eo-form-select" id="docSelect">
+                <option value="">— Pick a document to add —</option>
+                {% for f in my_files %}
+                <option value="{{ f.id }}"
+                        data-is-pdf="{% if f.is_pdf %}1{% else %}0{% endif %}"
+                        data-convertible="{% if f.is_convertible %}1{% else %}0{% endif %}"
+                        data-ext="{{ f.extension }}"
+                        data-name="{{ f.name|escape }}"
+                        data-size="{{ f.size_display }}"
+                        data-icon="{{ f.icon_class }}"
+                        data-color="{{ f.icon_color }}">
+                  {% if not f.is_pdf and f.is_convertible %}⇄ {% endif %}{{ f.name }} ({{ f.size_display }})
+                </option>
+                {% endfor %}
+              </select>
+              <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="addDocFromSelect()">
+                <i class="bi bi-plus-lg"></i> Add
+              </button>
+            </div>
+
             <div id="convertNotice" style="display:none;margin-top:8px;padding:10px 13px;
                  background:#fffbeb;border:1.5px solid #f59e0b;border-radius:8px;
-                 font-size:.8rem;color:#92400e;display:flex;align-items:flex-start;gap:8px">
+                 font-size:.8rem;color:#92400e;align-items:flex-start;gap:8px">
               <i class="bi bi-arrow-repeat" style="font-size:1rem;flex-shrink:0;margin-top:1px"></i>
               <div>
                 <strong>Auto-convert to PDF</strong><br/>
-                This file will be converted to PDF when you proceed to place fields.
-                Your original file is kept unchanged.
+                Non-PDF files will be converted to PDF when you proceed.
+                Originals are kept unchanged.
               </div>
             </div>
-            <!-- shown when file cannot be converted at all -->
-            <div id="cantConvertNotice" style="display:none;margin-top:8px;padding:10px 13px;
-                 background:#fee2e2;border:1.5px solid #ef4444;border-radius:8px;
-                 font-size:.8rem;color:#991b1b;display:flex;align-items:flex-start;gap:8px">
-              <i class="bi bi-exclamation-circle" style="font-size:1rem;flex-shrink:0;margin-top:1px"></i>
-              <div>
-                <strong>Cannot convert this file type.</strong><br/>
-                Please upload a Word, Excel, PowerPoint, or PDF file instead.
-              </div>
+
+            <div id="multiDocNote" class="doc-merge-note" style="display:none">
+              <i class="bi bi-info-circle"></i>
+              <strong>Multi-document request:</strong> All selected documents
+              will be merged into a single signing flow. Each can be annotated
+              with its own signature fields.
             </div>
-            {% endif %}
 
             <div class="row g-2 mt-3">
               <div class="col-12">
@@ -342,8 +412,14 @@ var selectedDocIsPdf = {% if document %}{% if document.is_pdf %}true{% else %}fa
 var selectedDocId    = '{% if document %}{{ document.id }}{% endif %}';
 
 function syncDocumentHidden(value) {
-  var hidden = document.getElementById('documentIdHidden');
-  if (hidden) hidden.value = value || '';
+  value = value || '';
+  selectedDocId = value;
+
+  // Defensive: keep every document_id input synced in case another
+  // hidden input is accidentally added later.
+  document.querySelectorAll('input[name="document_id"]').forEach(function(hidden) {
+    hidden.value = value;
+  });
 }
 
 function syncSignerStateFromInputs() {
@@ -383,67 +459,141 @@ function goStep(n) {
 
 // ─── Step 2 entry — auto-convert non-PDFs first ──────────
 function goStep2() {
-  if (!signers.length) { alert('Add at least one signer first.'); return; }
+  cleanEmptySigners();
 
-  var docId = selectedDocId || (document.getElementById('docSelect') && document.getElementById('docSelect').value);
-  if (!docId) { alert('Please select a document first.'); return; }
+  if (!signers.length) {
+    alert('Add at least one signer first.');
+    goStep(1);
+    addSigner();
+    return;
+  }
+
+  var invalid = signers.find(function(s) {
+    return !(s.name || '').trim() || !(s.email || '').trim();
+  });
+
+  if (invalid) {
+    alert('Please enter both name and email for every signer.');
+    renderSigners();
+    goStep(1);
+    return;
+  }
+
+  var primary = (typeof selectedDocs !== 'undefined' && selectedDocs.length) ? selectedDocs[0] : null;
+  var docId = (primary && primary.id) || selectedDocId
+              || (document.getElementById('docSelect') && document.getElementById('docSelect').value)
+              || '';
+
+  if (!docId) {
+    showDocError('Please add at least one document before placing fields.');
+    var card = document.getElementById('docList');
+    if (card && card.scrollIntoView) card.scrollIntoView({behavior:'smooth', block:'center'});
+    return;
+  }
+
   syncDocumentHidden(docId);
 
-  if (selectedDocIsPdf) {
+  var isPdf = primary ? primary.isPdf : selectedDocIsPdf;
+
+  if (isPdf) {
     goStep(2);
     return;
   }
 
-  // Non-PDF: convert via AJAX then proceed
+  if (primary && !primary.isPdf && !primary.isConvertible) {
+    showDocError('This file cannot be converted for signing. Please select a PDF, Word, Excel, PowerPoint, or image file.');
+    goStep(1);
+    return;
+  }
+
   var btn = document.getElementById('nextToFieldsBtn');
-  var origHtml = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px"></span>Converting to PDF…';
+  var origHtml = btn ? btn.innerHTML : '';
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px"></span>Converting to PDF…';
+  }
 
   var csrf = (document.cookie.match('(^|;)\\s*csrftoken=([^;]*)') || [])[2] || '';
+
   fetch('/files/' + docId + '/convert-for-signing/', {
     method: 'POST',
-    headers: { 'X-CSRFToken': csrf },
+    headers: {
+      'X-CSRFToken': csrf,
+      'X-Requested-With': 'XMLHttpRequest'
+    }
   })
-  .then(function(r) { return r.json(); })
+  .then(function(r) {
+    return r.json().then(function(data) {
+      if (!r.ok) {
+        data = data || {};
+        data.ok = false;
+      }
+      return data;
+    });
+  })
   .then(function(data) {
-    btn.disabled  = false;
-    btn.innerHTML = origHtml;
+    if (btn) {
+      btn.disabled  = false;
+      btn.innerHTML = origHtml;
+    }
 
-    if (data.status !== 'ok') {
-      alert('Could not convert file: ' + (data.message || 'Unknown error'));
+    if (!(data.ok || data.status === 'ok')) {
+      alert('Could not convert file: ' + (data.message || data.error || 'Unknown error'));
       return;
     }
 
-    // Update the form so the POST uses the new PDF's ID
+    var newDocId = data.file_id || data.document_id;
+    var newDocUrl = data.download_url || (newDocId ? ('/files/' + newDocId + '/download/') : '');
+
+    if (!newDocId) {
+      alert('Conversion succeeded but no document ID was returned.');
+      return;
+    }
+
     var sel = document.getElementById('docSelect');
     if (sel) {
-      // Insert a hidden option for the converted PDF and select it
       var opt = document.createElement('option');
-      opt.value = data.file_id;
+      opt.value = newDocId;
       opt.dataset.isPdf = '1';
       opt.dataset.convertible = '0';
-      opt.text = data.name;
+      opt.dataset.name = data.name || 'Converted document.pdf';
+      opt.dataset.size = data.size_display || '';
+      opt.dataset.icon = 'bi-file-earmark-pdf';
+      opt.dataset.color = '#ef4444';
+      opt.text = data.name || 'Converted document.pdf';
       opt.selected = true;
       sel.appendChild(opt);
     }
-    // Always submit the converted PDF ID through the dedicated hidden field.
-    syncDocumentHidden(data.file_id);
 
-    selectedDocId    = data.file_id;
+    if (primary) {
+      primary.id = newDocId;
+      primary.name = data.name || primary.name;
+      primary.isPdf = true;
+      primary.isConvertible = false;
+      primary.icon = 'bi-file-earmark-pdf';
+      primary.color = '#ef4444';
+      if (data.size_display) primary.sizeDisplay = data.size_display;
+    }
+
+    syncDocumentHidden(newDocId);
+
+    selectedDocId    = newDocId;
     selectedDocIsPdf = true;
-    docUrl           = data.download_url;
-    pdfDoc           = null;  // force PDF.js reload with new URL
+    docUrl           = newDocUrl;
+    pdfDoc           = null;
 
-    // Hide conversion notice
     var n1 = document.getElementById('convertNotice');
     if (n1) n1.style.display = 'none';
 
+    renderDocList();
     goStep(2);
   })
   .catch(function() {
-    btn.disabled  = false;
-    btn.innerHTML = origHtml;
+    if (btn) {
+      btn.disabled  = false;
+      btn.innerHTML = origHtml;
+    }
     alert('Conversion request failed. Please check your connection and try again.');
   });
 }
@@ -453,24 +603,166 @@ var _ss = document.createElement('style');
 _ss.textContent = '@keyframes spin{to{transform:rotate(360deg)}}';
 document.head.appendChild(_ss);
 
-// ─── Dropdown change handler ──────────────────────────────
-function onDocSelect(sel) {
-  var opt = sel.options[sel.selectedIndex];
-  selectedDocId    = opt.value;
-  selectedDocIsPdf = opt.dataset.isPdf === '1';
-  var isConvertible = opt.dataset.convertible === '1';
+// ─── Multi-document picker ───────────────────────────────
+//
+// We keep an in-memory `selectedDocs` array of the documents added to
+// this request. The first doc is the "primary" and its id is mirrored
+// into the legacy `document_id` hidden input so the existing creation
+// backend keeps working unchanged. Additional docs are sent as
+// `document_ids[]` for the new multi-doc handler.
+var selectedDocs = [];   // [{id, name, isPdf, isConvertible, sizeDisplay, icon, color}]
 
-  var n1 = document.getElementById('convertNotice');
-  var n2 = document.getElementById('cantConvertNotice');
-  if (n1) n1.style.display = (opt.value && !selectedDocIsPdf &&  isConvertible) ? 'flex' : 'none';
-  if (n2) n2.style.display = (opt.value && !selectedDocIsPdf && !isConvertible) ? 'flex'  : 'none';
+{% if document %}
+// Pre-seed the picker if the page was opened from a single-file flow
+selectedDocs.push({
+  id:    '{{ document.id }}',
+  name:  '{{ document.name|escapejs }}',
+  isPdf: {% if document.is_pdf %}true{% else %}false{% endif %},
+  isConvertible: {% if document.is_convertible %}true{% else %}false{% endif %},
+  sizeDisplay: '{{ document.size_display|escapejs }}',
+  icon:  '{{ document.icon_class|default:"bi-file-earmark" }}',
+  color: '{{ document.icon_color|default:"#64748b" }}'
+});
+{% endif %}
 
+function showDocError(msg){
+  var box = document.getElementById('docError');
+  var txt = document.getElementById('docErrorText');
+  if (!box) return;
+  if (msg){
+    if (txt) txt.textContent = msg;
+    box.style.display = 'flex';
+  } else {
+    box.style.display = 'none';
+  }
+}
+
+function renderDocList(){
+  var list = document.getElementById('docList');
+  if (!list) return;
+  list.innerHTML = '';
+
+  if (selectedDocs.length === 0){
+    var empty = document.createElement('div');
+    empty.className = 'doc-empty';
+    empty.innerHTML = '<i class="bi bi-file-earmark-plus" style="font-size:1.4rem;display:block;margin-bottom:6px;opacity:.6"></i>No documents yet — pick one below to get started.';
+    list.appendChild(empty);
+  }
+
+  selectedDocs.forEach(function(d, idx){
+    var card = document.createElement('div');
+    card.className = 'doc-card' + (idx === 0 ? ' is-primary' : '');
+    card.innerHTML =
+      '<i class="bi ' + (d.icon || 'bi-file-earmark') + ' doc-ico" style="color:' + (d.color || '#64748b') + '"></i>' +
+      '<div class="doc-meta">' +
+        '<div class="doc-name">' + escHtml(d.name) +
+          (idx === 0 ? '<span class="doc-primary-tag">· primary</span>' : '') +
+        '</div>' +
+        '<div class="doc-sub">' + escHtml(d.sizeDisplay || '') +
+            (!d.isPdf && d.isConvertible ? ' · will be converted to PDF' : '') +
+            (!d.isPdf && !d.isConvertible ? ' · ⚠ unsupported format' : '') +
+        '</div>' +
+      '</div>' +
+      '<button type="button" class="doc-remove" onclick="removeDoc(' + idx + ')" title="Remove document">' +
+        '<i class="bi bi-x-lg"></i>' +
+      '</button>';
+    list.appendChild(card);
+  });
+
+  // Keep the legacy hidden input in sync with the *primary* doc.
+  var primary = selectedDocs[0];
+  selectedDocId    = primary ? primary.id : '';
+  selectedDocIsPdf = primary ? primary.isPdf : true;
   syncDocumentHidden(selectedDocId);
 
-  // Reset PDF viewer when document changes. PDF files can be previewed immediately.
+  var extra = document.getElementById('extraDocIds');
+  if (extra){
+    extra.innerHTML = '';
+    selectedDocs.slice(1).forEach(function(d){
+      var inp = document.createElement('input');
+      inp.type = 'hidden';
+      inp.name = 'document_ids[]';
+      inp.value = d.id;
+      extra.appendChild(inp);
+    });
+  }
+
+  // Notices
+  var hasConvertible = selectedDocs.some(function(d){ return !d.isPdf && d.isConvertible; });
+  var hasUnsupported = selectedDocs.some(function(d){ return !d.isPdf && !d.isConvertible; });
+  var n1 = document.getElementById('convertNotice');
+  if (n1) n1.style.display = hasConvertible ? 'flex' : 'none';
+  var multi = document.getElementById('multiDocNote');
+  if (multi) multi.style.display = selectedDocs.length > 1 ? 'block' : 'none';
+
+  // Counter
+  var counter = document.getElementById('docCount');
+  if (counter) counter.textContent = selectedDocs.length + ' doc' + (selectedDocs.length !== 1 ? 's' : '');
+
+  // Auto-fill the title from the primary doc if title is still blank
+  var titleInput = document.querySelector('input[name="title"]');
+  if (titleInput && !titleInput.value.trim() && primary){
+    titleInput.value = primary.name + ' — Signature Request';
+  }
+
+  // Reset PDF viewer state — annotation step uses the primary doc as the
+  // canvas. Multi-doc bundles get merged on submit and re-loaded on the
+  // next step.
   pdfDoc = null;
-  docUrl = selectedDocIsPdf && selectedDocId ? ('/files/' + selectedDocId + '/download/') : '';
+  docUrl = (primary && primary.isPdf) ? ('/files/' + primary.id + '/download/') : '';
+
+  // Clear or surface inline error appropriately
+  if (selectedDocs.length === 0){
+    // Don't auto-show the error on initial page load — only after the
+    // user attempts to remove the last doc or proceed without one. The
+    // remove flow + Step 2 / submit handlers will call showDocError().
+  } else {
+    showDocError(null);
+    if (hasUnsupported){
+      showDocError('One or more selected files are not PDFs and cannot be converted. Please remove them or upload PDF / Word / Excel / PowerPoint files instead.');
+    }
+  }
 }
+
+window.addDocFromSelect = function(){
+  var sel = document.getElementById('docSelect');
+  if (!sel || !sel.value){
+    showDocError('Please choose a document from the list before clicking Add.');
+    return;
+  }
+  var opt = sel.options[sel.selectedIndex];
+  if (selectedDocs.find(function(d){ return d.id === opt.value; })){
+    showDocError('That document is already in the list.');
+    sel.value = '';
+    return;
+  }
+  selectedDocs.push({
+    id:    opt.value,
+    name:  opt.dataset.name,
+    isPdf: opt.dataset.isPdf === '1',
+    isConvertible: opt.dataset.convertible === '1',
+    sizeDisplay: opt.dataset.size || '',
+    icon:  opt.dataset.icon || 'bi-file-earmark',
+    color: opt.dataset.color || '#64748b'
+  });
+  sel.value = '';
+  renderDocList();
+};
+
+window.removeDoc = function(idx){
+  if (idx < 0 || idx >= selectedDocs.length) return;
+  if (selectedDocs.length === 1){
+    if (!confirm('Remove the last document? You will need to add another before sending.')) return;
+  }
+  selectedDocs.splice(idx, 1);
+  renderDocList();
+};
+
+// Initial render so the pre-seeded primary doc shows on page load
+renderDocList();
+
+// Backwards-compat: existing code paths still call onDocSelect.
+function onDocSelect(sel){ /* no-op — we use the Add button now */ }
 
 // ─── Signers ─────────────────────────────────────────────
 var signerIdx = 0;
@@ -511,7 +803,16 @@ function renderSigners() {
     var row = document.createElement('div');
     row.className = 'signer-row';
     row.id = 'sigrow-' + s.id;
+    row.draggable = true;
+    row.dataset.idx = idx;
+    var isFirst = idx === 0;
+    var isLast  = idx === signers.length - 1;
     row.innerHTML =
+      '<span class="signer-drag" title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>' +
+      '<div class="signer-move-btns">' +
+        '<button type="button" onclick="moveSigner('+idx+',-1)"' + (isFirst ? ' disabled' : '') + ' title="Move up">▲</button>' +
+        '<button type="button" onclick="moveSigner('+idx+',1)"'  + (isLast  ? ' disabled' : '') + ' title="Move down">▼</button>' +
+      '</div>' +
       '<div class="signer-order" style="background:'+s.color+'">'+s.order+'</div>' +
       '<div style="flex:1;display:flex;flex-direction:column;gap:7px">' +
         '<input type="text" name="signer_name" placeholder="Full name *" required class="eo-form-control" value="'+escHtml(s.name)+'" ' +
@@ -522,10 +823,72 @@ function renderSigners() {
       '<button type="button" class="signer-remove" onclick="removeSignerById(\''+s.id+'\')"><i class="bi bi-x-lg"></i></button>';
     container.appendChild(row);
   });
+  attachSignerDragHandlers();
   var countEl = document.getElementById('signerCount');
   countEl.textContent = signers.length + ' signer' + (signers.length!==1?'s':'');
   buildSignerButtons();
 }
+
+// ─── Drag-and-drop reordering ────────────────────────────
+// Native HTML5 DnD (no extra library). On touch devices the
+// .signer-drag handle is hidden and the up/down buttons are shown
+// instead — see the CSS media query.
+var dragSrcIdx = null;
+function attachSignerDragHandlers(){
+  var rows = document.querySelectorAll('#signersContainer .signer-row');
+  rows.forEach(function(row){
+    row.addEventListener('dragstart', function(e){
+      dragSrcIdx = parseInt(row.dataset.idx, 10);
+      row.classList.add('dragging');
+      try { e.dataTransfer.setData('text/plain', String(dragSrcIdx)); } catch(_){}
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    row.addEventListener('dragend', function(){
+      row.classList.remove('dragging');
+      document.querySelectorAll('#signersContainer .signer-row').forEach(function(r){
+        r.classList.remove('drag-over');
+      });
+      dragSrcIdx = null;
+    });
+    row.addEventListener('dragover', function(e){
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      row.classList.add('drag-over');
+    });
+    row.addEventListener('dragleave', function(){
+      row.classList.remove('drag-over');
+    });
+    row.addEventListener('drop', function(e){
+      e.preventDefault();
+      row.classList.remove('drag-over');
+      var dstIdx = parseInt(row.dataset.idx, 10);
+      if (dragSrcIdx === null || isNaN(dstIdx) || dragSrcIdx === dstIdx) return;
+      reorderSigners(dragSrcIdx, dstIdx);
+    });
+  });
+}
+
+function reorderSigners(from, to){
+  if (from < 0 || to < 0 || from >= signers.length || to >= signers.length) return;
+  var moved = signers.splice(from, 1)[0];
+  signers.splice(to, 0, moved);
+  signers.forEach(function(s, i){ s.order = i + 1; });
+  fields.forEach(function(f){
+    if (f.signer_idx === from) { f.signer_idx = to; }
+    else if (from < to && f.signer_idx > from && f.signer_idx <= to) { f.signer_idx -= 1; }
+    else if (from > to && f.signer_idx >= to && f.signer_idx < from) { f.signer_idx += 1; }
+  });
+  if (currentSigner === from) currentSigner = to;
+  else if (from < to && currentSigner > from && currentSigner <= to) currentSigner -= 1;
+  else if (from > to && currentSigner >= to && currentSigner < from) currentSigner += 1;
+  renderSigners();
+  if (typeof renderFieldOverlays === 'function') renderFieldOverlays();
+  if (typeof buildReview === 'function') buildReview();
+}
+
+window.moveSigner = function(idx, delta){
+  reorderSigners(idx, idx + delta);
+};
 
 function buildSignerButtons() {
   var wrap = document.getElementById('signerBtns');
@@ -788,13 +1151,19 @@ function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 document.getElementById('sigForm').addEventListener('submit', function(e) {
   cleanEmptySigners();
 
-  var docId = selectedDocId || (document.getElementById('docSelect') && document.getElementById('docSelect').value) || '';
+  // Source of truth is selectedDocs[0]; fall back to legacy globals.
+  var primary = (typeof selectedDocs !== 'undefined' && selectedDocs.length) ? selectedDocs[0] : null;
+  var docId = (primary && primary.id) || selectedDocId
+              || (document.getElementById('docSelect') && document.getElementById('docSelect').value)
+              || '';
   syncDocumentHidden(docId);
 
   if (!docId) {
     e.preventDefault();
-    alert('Please select a document first.');
+    showDocError('Please add at least one document before sending.');
     goStep(1);
+    var card = document.getElementById('docList');
+    if (card && card.scrollIntoView) card.scrollIntoView({behavior:'smooth', block:'center'});
     return;
   }
 

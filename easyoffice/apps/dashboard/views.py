@@ -46,6 +46,42 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         ctx['now'] = now
         ctx['is_admin_user'] = self._is_admin_user(user)
 
+        # ── Signature snapshot ───────────────────────────────────────────
+        # Counts are lifetime (matches the wording on the tiles). If you
+        # later want a "this month" cut, filter by created_at__gte=month_start
+        # using the same `month_start` we already compute for invoices.
+        try:
+            from apps.files.models import SignatureRequest
+            sig_qs = SignatureRequest.objects.all()
+            ctx['sig_signed_flow'] = sig_qs.filter(status='completed').count()
+            # Pending = anything currently in-flight: sent / partially signed / viewed.
+            # We treat any status that isn't a terminal one as pending.
+            ctx['sig_pending'] = sig_qs.exclude(
+                status__in=['completed', 'cancelled', 'expired', 'declined']
+            ).count()
+            ctx['sig_voided'] = sig_qs.filter(status__in=['cancelled', 'expired']).count()
+        except Exception:
+            ctx['sig_signed_flow'] = 0
+            ctx['sig_pending'] = 0
+            ctx['sig_voided'] = 0
+
+        # Quick-sign count — try a dedicated model first, fall back to
+        # AuditLog entries (most installations log quick-sign actions).
+        try:
+            # Preferred: a real QuickSignSession model
+            from apps.files.models import QuickSignSession
+            ctx['sig_quick_signed'] = QuickSignSession.objects.filter(
+                status='completed'
+            ).count()
+        except Exception:
+            try:
+                from apps.core.models import AuditLog
+                ctx['sig_quick_signed'] = AuditLog.objects.filter(
+                    action__in=['quick_sign', 'quick_signed', 'QuickSign']
+                ).count()
+            except Exception:
+                ctx['sig_quick_signed'] = 0
+
         profile = self._get_staff_profile(user)
         ctx['staff_profile'] = profile
         ctx['is_supervisor_user'] = bool(profile and profile.is_supervisor_role)

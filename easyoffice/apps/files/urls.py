@@ -32,12 +32,40 @@ urlpatterns = [
     path('signatures/<uuid:pk>/',               views.SignatureRequestDetailView.as_view(),     name='signature_request_detail'),
     path('signatures/<uuid:pk>/fields/',        views.SaveSignatureFieldsView.as_view(),        name='save_signature_fields'),
     path('signatures/<uuid:pk>/creator-sign/',  views.CreatorSignView.as_view(),                name='creator_sign'),
+    path(
+        'signatures/<uuid:pk>/duplicate/',
+        views.DuplicateSignatureRequestView.as_view(),
+        name='signature_request_duplicate',
+    ),
+    path(
+        'signatures/<uuid:pk>/signers/reorder/',
+        views.SignerReorderView.as_view(),
+        name='signature_request_signers_reorder',
+    ),
+    path(
+        'signatures/<uuid:pk>/documents/',
+        views.SignatureRequestDocumentManageView.as_view(),
+        name='signature_request_documents_manage',
+    ),
+
+    path(
+        '<uuid:pk>/convert-for-signing/',
+        views.SignatureConvertForSigningView.as_view(),
+        name='convert_for_signing'
+    ),
+
 
     path('sign/<uuid:token>/',                  views.SignDocumentView.as_view(),               name='sign_document'),
     path('sign/<uuid:token>/preview/',          views.SignDocumentPreviewView.as_view(),        name='sign_document_preview'),
     path('sign/<uuid:token>/download/',         views.SignDocumentDownloadView.as_view(),       name='sign_document_download'),
     path('sign/<uuid:token>/field/<uuid:field_id>/', views.FillSignatureFieldView.as_view(),   name='fill_signature_field'),
-    path('sign/<uuid:token>/complete/', views.SignatureCompleteView.as_view(), name='sign_document_complete'),
+
+    # Public no-login completion page after a signer signs or declines.
+    # NOTE: This used to have two routes registered under the same name —
+    # the first one pointed to SignatureCompleteView which renders a
+    # template (sign_complete.html) that does not exist, producing a blank
+    # page. We now use the SignDocumentCompleteView which renders the
+    # proper sign_document_complete.html template.
     path(
         'sign/<uuid:token>/complete/',
         views.SignDocumentCompleteView.as_view(),

@@ -6,6 +6,15 @@
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Sign Document — {{ sig_req.title }}</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css">
+
+  <!-- Signature script fonts. These are the SAME font names the server-side
+       PDF renderer uses, so what you see in the picker is what's burned into
+       the final PDF. Keep this list in sync with the SIG_FONTS list below
+       and with the server-side font lookup table. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Allura&family=Dancing+Script:wght@500;700&family=Great+Vibes&family=Mr+Dafoe&family=Pinyon+Script&family=Sacramento&display=swap" rel="stylesheet">
+
   <style>
     /* ─────────────────────────────────────────────
        Design tokens — restrained corporate palette
@@ -347,22 +356,74 @@
     .mode-tab:hover{color:var(--text)}
     .mode-tab.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow-sm)}
 
-    /* Typed signature preview */
+    /* Typed signature preview — large, fits-in-the-box, font-selectable.
+       The font-family is set dynamically by JS based on the picker. The
+       preview auto-shrinks if the typed text overflows so it always
+       stays inside the box (mirrors how the PDF renderer fits the box). */
     .typed-preview{
-      font-family:"Brush Script MT","Segoe Script",cursive;
-      font-size:2rem;color:var(--text);
+      font-family:"Dancing Script","Brush Script MT","Segoe Script",cursive;
+      font-size:3.2rem;
+      line-height:1.1;
+      color:#0f172a;
       border:1px solid var(--border);border-radius:var(--radius);
-      padding:18px 14px;text-align:center;background:#fff;
-      margin-top:10px;min-height:80px;
-      display:flex;align-items:center;justify-content:center;word-break:break-word;
+      padding:22px 18px;text-align:center;background:#fff;
+      margin-top:10px;min-height:140px;
+      display:flex;align-items:center;justify-content:center;
+      word-break:break-word;
+      overflow:hidden;
+      transition:font-size .12s ease;
     }
-    .typed-preview img{max-width:100%;max-height:90px;object-fit:contain}
+    .typed-preview img{max-width:100%;max-height:130px;object-fit:contain}
 
-    /* Draw canvas */
+    /* Font picker — pill row of font samples */
+    .font-picker{
+      display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;
+    }
+    .font-pill{
+      flex:1 1 calc(33.333% - 6px);min-width:120px;
+      border:1.5px solid var(--border);background:var(--surface);
+      border-radius:var(--radius);padding:8px 10px;
+      cursor:pointer;text-align:center;line-height:1;
+      font-size:1.4rem;color:var(--text);
+      transition:all .12s;
+    }
+    .font-pill .pill-label{
+      display:block;font-size:.62rem;font-weight:700;
+      color:var(--text-muted);text-transform:uppercase;
+      letter-spacing:.06em;margin-top:4px;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    }
+    .font-pill:hover{border-color:var(--accent);background:var(--accent-soft)}
+    .font-pill.active{
+      border-color:var(--accent);background:var(--accent-soft);
+      color:var(--accent);
+      box-shadow:0 0 0 3px rgba(29,78,216,.10);
+    }
+
+    /* Font-named utility classes — used both in the picker and in
+       .typed-preview when a font is chosen. Names MUST match what the
+       server-side PDF renderer recognises in the `font:NAME|text` tag. */
+    .ff-dancing-script   { font-family:"Dancing Script", cursive; }
+    .ff-great-vibes      { font-family:"Great Vibes", cursive; }
+    .ff-allura           { font-family:"Allura", cursive; }
+    .ff-sacramento       { font-family:"Sacramento", cursive; }
+    .ff-pinyon-script    { font-family:"Pinyon Script", cursive; }
+    .ff-mr-dafoe         { font-family:"Mr Dafoe", cursive; }
+
+    /* Draw canvas — DocuSign-style bigger pad, fits the modal width */
     #drawCanvas{
-      width:100%;height:160px;
+      width:100%;height:240px;
       border:1px solid var(--border);border-radius:var(--radius);
       background:#fff;touch-action:none;cursor:crosshair;display:block;
+    }
+
+    /* Bigger upload preview that actually shows the signature */
+    #uploadedSignaturePreview{
+      min-height:160px;
+      display:flex;align-items:center;justify-content:center;
+    }
+    #uploadedSignaturePreview img{
+      max-width:100%;max-height:200px;object-fit:contain;
     }
 
     /* Saved signatures */
@@ -651,7 +712,51 @@
             <div id="sigModeType">
               <label class="label">Type your signature</label>
               <input class="input" id="signatureTyped" value="{{ signer.name|escapejs }}" oninput="updateTypedPreview()">
-              <div class="typed-preview" id="typedPreview">{{ signer.name }}</div>
+
+              <label class="label" style="margin-top:12px;font-size:.74rem">Choose a style</label>
+              <div class="font-picker" id="fontPicker" role="radiogroup" aria-label="Signature font">
+                <button type="button" class="font-pill ff-dancing-script active"
+                        data-font="Dancing Script" data-class="ff-dancing-script"
+                        onclick="setSigFont('Dancing Script','ff-dancing-script')"
+                        aria-checked="true">
+                  Signature<span class="pill-label">Dancing</span>
+                </button>
+                <button type="button" class="font-pill ff-great-vibes"
+                        data-font="Great Vibes" data-class="ff-great-vibes"
+                        onclick="setSigFont('Great Vibes','ff-great-vibes')"
+                        aria-checked="false">
+                  Signature<span class="pill-label">Great Vibes</span>
+                </button>
+                <button type="button" class="font-pill ff-allura"
+                        data-font="Allura" data-class="ff-allura"
+                        onclick="setSigFont('Allura','ff-allura')"
+                        aria-checked="false">
+                  Signature<span class="pill-label">Allura</span>
+                </button>
+                <button type="button" class="font-pill ff-sacramento"
+                        data-font="Sacramento" data-class="ff-sacramento"
+                        onclick="setSigFont('Sacramento','ff-sacramento')"
+                        aria-checked="false">
+                  Signature<span class="pill-label">Sacramento</span>
+                </button>
+                <button type="button" class="font-pill ff-pinyon-script"
+                        data-font="Pinyon Script" data-class="ff-pinyon-script"
+                        onclick="setSigFont('Pinyon Script','ff-pinyon-script')"
+                        aria-checked="false">
+                  Signature<span class="pill-label">Pinyon</span>
+                </button>
+                <button type="button" class="font-pill ff-mr-dafoe"
+                        data-font="Mr Dafoe" data-class="ff-mr-dafoe"
+                        onclick="setSigFont('Mr Dafoe','ff-mr-dafoe')"
+                        aria-checked="false">
+                  Signature<span class="pill-label">Mr Dafoe</span>
+                </button>
+              </div>
+
+              <div class="typed-preview ff-dancing-script" id="typedPreview">{{ signer.name }}</div>
+              <div style="font-size:.72rem;color:var(--text-muted);margin-top:6px;text-align:center">
+                This is exactly how your signature will appear on the signed PDF.
+              </div>
             </div>
 
             <div id="sigModeDraw" style="display:none">
@@ -661,9 +766,9 @@
                   <i class="bi bi-arrow-counterclockwise"></i> Clear
                 </button>
               </div>
-              <canvas id="drawCanvas" width="800" height="240"></canvas>
+              <canvas id="drawCanvas" width="1100" height="320"></canvas>
               <div style="font-size:.74rem;color:var(--text-muted);margin-top:6px">
-                Use your mouse, trackpad, or finger to sign.
+                Use your mouse, trackpad, or finger to sign. The signature is rendered at high resolution and will fit cleanly into the signature box on the PDF.
               </div>
             </div>
 
@@ -929,11 +1034,25 @@
     document.getElementById('modalTitle').textContent = 'Fill ' + (currentField.label || currentField.type);
     if (currentField.type === 'signature'){
       document.getElementById('signatureTools').style.display = '';
-      var cleanValue = currentField.value || '';
-      if (cleanValue && !cleanValue.startsWith('data:image')) cleanValue = cleanValue.replace(/^font:[^|]+\|/, '');
-      else if (!cleanValue) cleanValue = signerName;
+      var rawValue = currentField.value || '';
+      var cleanValue = rawValue;
+      if (cleanValue && !cleanValue.startsWith('data:image')){
+        // Restore saved font (if any) into the picker
+        var fontMatch = cleanValue.match(/^font:([^|]+)\|/);
+        if (fontMatch){
+          var fname = fontMatch[1];
+          if (SIG_FONTS.indexOf(fname) !== -1){
+            setSigFont(fname, 'ff-' + fname.toLowerCase().replace(/\s+/g, '-'));
+          }
+        }
+        cleanValue = cleanValue.replace(/^font:[^|]+\|/, '');
+      } else if (!cleanValue){
+        cleanValue = signerName;
+      }
       document.getElementById('signatureTyped').value = cleanValue;
       setSigMode('type'); updateTypedPreview();
+      // Make sure the preview fits even after font/text changes
+      setTimeout(fitTypedPreview, 30);
     } else if (currentField.type === 'initials'){
       document.getElementById('initialTools').style.display = '';
       document.getElementById('initialValue').value = currentField.value || defaultInit;
@@ -963,10 +1082,56 @@
     if (mode === 'draw') setTimeout(initDrawCanvas, 50);
   };
 
+  // Currently chosen font for typed-mode signatures. Default matches
+  // the active pill in the picker.
+  var currentSigFont      = 'Dancing Script';
+  var currentSigFontClass = 'ff-dancing-script';
+
+  // Available fonts must mirror the CSS list above AND the server-side
+  // PDF renderer's font lookup.
+  var SIG_FONTS = ['Dancing Script','Great Vibes','Allura','Sacramento','Pinyon Script','Mr Dafoe'];
+
+  window.setSigFont = function(font, cssClass){
+    currentSigFont = font;
+    currentSigFontClass = cssClass;
+    document.querySelectorAll('#fontPicker .font-pill').forEach(function(p){
+      var on = p.getAttribute('data-font') === font;
+      p.classList.toggle('active', on);
+      p.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+    var prev = document.getElementById('typedPreview');
+    if (prev){
+      // Strip any old ff-* class, apply the new one.
+      prev.className = prev.className.replace(/\bff-[a-z-]+\b/g, '').trim();
+      prev.classList.add('typed-preview'); // safety
+      prev.classList.add(cssClass);
+    }
+    fitTypedPreview();
+  };
+
+  // Auto-shrink the typed preview so the rendered text always stays
+  // inside the 140px-tall preview box. This mirrors what the server-side
+  // PDF renderer does when it places the signature into a fixed-size
+  // signature field on the page.
+  function fitTypedPreview(){
+    var prev = document.getElementById('typedPreview');
+    if (!prev || prev.querySelector('img')) return;
+    // Reset to the default display size, then shrink only if needed.
+    var size = 3.2; // rem
+    prev.style.fontSize = size + 'rem';
+    var maxAttempts = 10;
+    while ((prev.scrollWidth > prev.clientWidth || prev.scrollHeight > prev.clientHeight)
+           && size > 1.0 && maxAttempts-- > 0){
+      size -= 0.25;
+      prev.style.fontSize = size + 'rem';
+    }
+  }
+
   window.updateTypedPreview = function(){
     var input = document.getElementById('signatureTyped');
     var prev  = document.getElementById('typedPreview');
     if (prev) prev.textContent = (input && input.value) || signerName;
+    fitTypedPreview();
   };
 
   window.useSavedSignature = function(type, data){
@@ -980,6 +1145,14 @@
       document.getElementById('finalSignatureData').value = data;
       return;
     }
+    // Typed signature with optional `font:NAME|text` prefix
+    var fontMatch = (data || '').match(/^font:([^|]+)\|/);
+    if (fontMatch){
+      var fname = fontMatch[1];
+      // Map the font name back to its CSS class
+      var cssClass = 'ff-' + fname.toLowerCase().replace(/\s+/g, '-');
+      if (SIG_FONTS.indexOf(fname) !== -1) setSigFont(fname, cssClass);
+    }
     document.getElementById('signatureTyped').value = (data || '').replace(/^font:[^|]+\|/, '');
     document.getElementById('finalSignatureType').value = type === 'draw' ? 'draw' : 'type';
     updateTypedPreview();
@@ -990,7 +1163,7 @@
     if (!c || c.dataset.ready) return;
     c.dataset.ready = '1';
     var ctx = c.getContext('2d');
-    ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#0f172a';
     function pos(e){
       var r = c.getBoundingClientRect();
       var t = e.touches ? e.touches[0] : e;
@@ -1026,13 +1199,13 @@
       } else if (currentSigMode === 'draw' && drawDirty){
         value = document.getElementById('drawCanvas').toDataURL('image/png'); finalType = 'draw';
       } else if (currentSigMode === 'type'){
-        value = 'font:Dancing Script|' + (document.getElementById('signatureTyped').value || signerName);
+        value = 'font:' + currentSigFont + '|' + (document.getElementById('signatureTyped').value || signerName);
         finalType = 'type';
       } else if (currentField.savedData){
         value = currentField.savedData;
         finalType = value.startsWith('data:image') ? 'upload' : 'type';
       } else {
-        value = 'font:Dancing Script|' + signerName; finalType = 'type';
+        value = 'font:' + currentSigFont + '|' + signerName; finalType = 'type';
       }
       document.getElementById('finalSignatureData').value = value;
       document.getElementById('finalSignatureType').value = finalType;

@@ -3,7 +3,7 @@ import json
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import TemplateView, View
 from django.shortcuts import render, redirect, get_object_or_404
-from django.http import FileResponse, Http404, JsonResponse, HttpResponse
+from django.http import FileResponse, Http404, JsonResponse, HttpResponse, HttpResponseForbidden
 from django.contrib import messages
 from django.utils import timezone
 from datetime import timedelta
@@ -38,7 +38,11 @@ from apps.files.models import (
     FilePinnedItem,
     SignatureCC,
     FilePublicToken,
-    FileNote, FileNoteShare, LivePreviewSession, FileAnnotation,
+    FileNote, FileNoteShare,
+    LivePreviewSession, FileAnnotation,
+    SignatureRequestDocument,
+    SignatureField,
+
 )
 
 
@@ -3408,15 +3412,59 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
         return render(request, self.template_name, ctx)
 
     def post(self, request, pk=None):
-        doc_id = request.POST.get('document_id') or (str(pk) if pk else None)
-        document = get_object_or_404(SharedFile, pk=doc_id)
+        # ── 1. Resolve the primary document ─────────────────────────────
+        # Source of truth: hidden `document_id` (our patched template
+        # mirrors the multi-doc list[0] into it). Falls back to the URL
+        # pk if the form was opened from /<uuid>/request-signature/.
+        doc_id = (request.POST.get('document_id') or '').strip() \
+                 or (str(pk) if pk else '')
+
+        if not doc_id:
+            messages.error(
+                request,
+                'Please add at least one document before sending the request.',
+            )
+            return redirect(request.path)
+
+        try:
+            document = SharedFile.objects.get(pk=doc_id)
+        except (SharedFile.DoesNotExist, ValueError):
+            messages.error(
+                request,
+                'The selected document could not be found. It may have been '
+                'deleted. Pick another document and try again.',
+            )
+            return redirect(request.path)
 
         if not _can_edit_file(request.user, document):
-            messages.error(request, 'You do not have permission to send this file for signature.')
+            messages.error(
+                request,
+                'You do not have permission to send this file for signature.',
+            )
             return redirect('file_manager')
 
-        # ── AUTO-CONVERT TO PDF ──────────────────────────────────────────────
-        # Signature requests always use a PDF so signers can view in-browser.
+        # Capture the *originals* the user attached so we can record
+        # them on SignatureRequestDocument later. We do this BEFORE the
+        # auto-convert step, because that step replaces `document` with
+        # a fresh PDF SharedFile and we want to remember the pre-convert
+        # original for the audit trail.
+        original_primary = document
+        extra_doc_ids = [
+            x.strip()
+            for x in request.POST.getlist('document_ids[]')
+            if x and x.strip()
+        ]
+        # De-duplicate, drop the primary if it accidentally appears in
+        # the extras list (defensive).
+        seen = {str(original_primary.pk)}
+        unique_extra_ids = []
+        for x in extra_doc_ids:
+            if x not in seen:
+                seen.add(x)
+                unique_extra_ids.append(x)
+        extra_doc_ids = unique_extra_ids
+
+        # ── 2. Auto-convert the PRIMARY to PDF (existing behaviour) ─────
         if not document.is_pdf and document.is_convertible:
             tmp_path = None
             pdf_path = None
@@ -3432,7 +3480,6 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
 
                 if document.extension.lower() in image_exts:
                     pdf_buffer = _convert_image_to_pdf(tmp_path)
-
                     document = SharedFile.objects.create(
                         name=pdf_name,
                         uploaded_by=request.user,
@@ -3444,10 +3491,8 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
                         file_type='application/pdf',
                     )
                     document.file.save(pdf_name, ContentFile(pdf_buffer.read()), save=True)
-
                 else:
                     pdf_path = _convert_to_pdf(tmp_path)
-
                     with open(pdf_path, 'rb') as pdf_f:
                         from django.core.files import File as DjangoFile
                         document = SharedFile.objects.create(
@@ -3461,33 +3506,184 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
                             file_size=os.path.getsize(pdf_path),
                             file_type='application/pdf',
                         )
-
                 messages.info(request, 'Document auto-converted to PDF for signing.')
-
             except RuntimeError as e:
-                messages.warning(request, f'Could not auto-convert to PDF ({e}). Proceeding with original file.')
+                messages.warning(
+                    request,
+                    f'Could not auto-convert to PDF ({e}). Proceeding with original file.',
+                )
             except Exception as e:
                 messages.warning(request, f'Auto-conversion skipped: {e}')
             finally:
                 try:
-                    if tmp_path:
-                        os.unlink(tmp_path)
+                    if tmp_path: os.unlink(tmp_path)
                 except Exception:
                     pass
                 try:
-                    if pdf_path:
-                        os.unlink(pdf_path)
+                    if pdf_path: os.unlink(pdf_path)
                 except Exception:
                     pass
-        # ────────────────────────────────────────────────────────────────────
 
-        # Build signer list from POST
-        signer_names  = request.POST.getlist('signer_name')
+        # ── 3. Resolve and convert EXTRA documents, then merge ──────────
+        # Each extra doc becomes a PDF (auto-converted if needed). We
+        # then concatenate them onto the primary PDF so the signer
+        # sees one combined document. The originals are tracked via
+        # SignatureRequestDocument rows for audit / future re-download.
+        extra_pdf_paths = []  # tempfile paths to delete at end
+        attached_originals = []  # (SharedFile, order, is_primary)
+        attached_originals.append((original_primary, 1, True))
+
+        for idx, extra_id in enumerate(extra_doc_ids, start=2):
+            try:
+                extra_doc = SharedFile.objects.get(pk=extra_id)
+            except (SharedFile.DoesNotExist, ValueError):
+                messages.warning(
+                    request,
+                    f'Skipped one document that no longer exists.',
+                )
+                continue
+            if not _can_edit_file(request.user, extra_doc):
+                messages.warning(
+                    request,
+                    f'Skipped "{extra_doc.name}" — you do not have permission '
+                    f'to attach it.',
+                )
+                continue
+
+            attached_originals.append((extra_doc, idx, False))
+
+            # Get a PDF on disk for the merge step
+            tmp_in = None
+            try:
+                ext = (extra_doc.extension or '').lower()
+                if extra_doc.is_pdf:
+                    # Stream the existing PDF to a temp file
+                    suffix = '.pdf'
+                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                        tmp_in = tmp.name
+                        for chunk in extra_doc.file.chunks():
+                            tmp.write(chunk)
+                    extra_pdf_paths.append(tmp_in)
+                elif extra_doc.is_convertible:
+                    suffix = '.' + (ext or 'tmp')
+                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                        tmp_in = tmp.name
+                        for chunk in extra_doc.file.chunks():
+                            tmp.write(chunk)
+                    if ext in {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff'}:
+                        # In-memory PDF buffer → write to a temp file
+                        buf = _convert_image_to_pdf(tmp_in)
+                        out = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+                        out.write(buf.read())
+                        out.close()
+                        extra_pdf_paths.append(out.name)
+                    else:
+                        out_path = _convert_to_pdf(tmp_in)
+                        extra_pdf_paths.append(out_path)
+                else:
+                    messages.warning(
+                        request,
+                        f'Skipped "{extra_doc.name}" — file type cannot be '
+                        f'merged into the signing PDF.',
+                    )
+                    continue
+            except Exception as e:
+                messages.warning(
+                    request,
+                    f'Skipped "{extra_doc.name}" during merge ({e}).',
+                )
+                continue
+            finally:
+                # Source temp file (pre-conversion) is no longer needed
+                # once we have the PDF version. The PDF temp itself is
+                # cleaned up at the very end of this method.
+                if tmp_in and tmp_in not in extra_pdf_paths:
+                    try:
+                        os.unlink(tmp_in)
+                    except Exception:
+                        pass
+
+        # Merge if we have any extras successfully converted to PDF
+        if extra_pdf_paths:
+            try:
+                primary_tmp = None
+                merged_tmp = None
+                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+                    primary_tmp = tmp.name
+                    for chunk in document.file.chunks():
+                        tmp.write(chunk)
+
+                writer = PdfWriter()
+                # Primary first
+                with open(primary_tmp, 'rb') as fh:
+                    reader = PdfReader(fh)
+                    for p in reader.pages:
+                        writer.add_page(p)
+                # Then extras in order
+                for ep in extra_pdf_paths:
+                    try:
+                        with open(ep, 'rb') as fh:
+                            r = PdfReader(fh)
+                            for p in r.pages:
+                                writer.add_page(p)
+                    except Exception as e:
+                        messages.warning(
+                            request,
+                            f'Skipped one document during PDF merge ({e}).',
+                        )
+
+                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+                    merged_tmp = tmp.name
+                    writer.write(tmp)
+
+                merged_name = os.path.splitext(document.name)[0] + ' (combined).pdf'
+                from django.core.files import File as DjangoFile
+                with open(merged_tmp, 'rb') as fh:
+                    merged_doc = SharedFile.objects.create(
+                        name=merged_name,
+                        file=DjangoFile(fh, name=merged_name),
+                        folder=document.folder,
+                        uploaded_by=request.user,
+                        visibility=document.visibility,
+                        description=f'Merged {len(extra_pdf_paths) + 1} documents for signature.',
+                        tags=document.tags,
+                        file_size=os.path.getsize(merged_tmp),
+                        file_type='application/pdf',
+                    )
+                document = merged_doc
+                messages.info(
+                    request,
+                    f'Merged {len(extra_pdf_paths) + 1} documents into one PDF for signing.',
+                )
+
+                # Clean up temp files
+                for p in (primary_tmp, merged_tmp):
+                    if p:
+                        try:
+                            os.unlink(p)
+                        except Exception:
+                            pass
+            except Exception as e:
+                messages.warning(
+                    request,
+                    f'Could not merge extra documents ({e}). Sending the '
+                    f'primary document only.',
+                )
+            finally:
+                for p in extra_pdf_paths:
+                    try:
+                        os.unlink(p)
+                    except Exception:
+                        pass
+
+        # ── 4. Build signer list from POST ──────────────────────────────
+        signer_names = request.POST.getlist('signer_name')
         signer_emails = request.POST.getlist('signer_email')
         if not signer_emails or not any(e.strip() for e in signer_emails):
             messages.error(request, 'At least one signer is required.')
             return redirect(request.path)
 
+        # ── 5. Create the SignatureRequest ──────────────────────────────
         sig_req = SignatureRequest.objects.create(
             title=request.POST.get('title', document.name),
             message=request.POST.get('message', ''),
@@ -3505,6 +3701,45 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
             except ValueError:
                 pass
 
+        # ── 6. Record SignatureRequestDocument rows ─────────────────────
+        # The primary row points at the FINAL document (which may be a
+        # merged PDF). Extras point at the originals so audit / future
+        # re-download knows what the user actually uploaded.
+        try:
+            from apps.files.models import SignatureRequestDocument
+            # Primary row → final (possibly merged) document
+            SignatureRequestDocument.objects.create(
+                request=sig_req,
+                document=document,
+                order=1,
+                is_primary=True,
+            )
+            # Originals (skip the primary's original since the primary
+            # row above already records the final version of it).
+            for orig, order, is_primary in attached_originals:
+                if is_primary:
+                    continue
+                # Skip if this original happens to be the same as the
+                # final merged document (edge case).
+                if orig.pk == document.pk:
+                    continue
+                try:
+                    SignatureRequestDocument.objects.create(
+                        request=sig_req,
+                        document=orig,
+                        order=order,
+                        is_primary=False,
+                    )
+                except Exception:
+                    # Unique constraint or similar — non-fatal
+                    pass
+        except Exception:
+            # SignatureRequestDocument table missing or import error —
+            # the request still sends successfully via the legacy single
+            # document FK.
+            pass
+
+        # ── 7. Create signers and notify ────────────────────────────────
         from apps.core.models import User as CoreUser
         base_url = request.build_absolute_uri('/')
 
@@ -3516,9 +3751,9 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
             signer = SignatureRequestSigner.objects.create(
                 request=sig_req, user=user_obj,
                 email=email, name=name or (user_obj.full_name if user_obj else email),
-                order=i+1,
+                order=i + 1,
             )
-            _notify_signer(signer, base_url)   # email (all signers)
+            _notify_signer(signer, base_url)
             if user_obj:
                 _notify(
                     user_obj,
@@ -3528,18 +3763,10 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
                     link=signer.signing_url,
                     sender=request.user,
                     actions=[
-                        {
-                            'label': 'Sign Now',
-                            'url': signer.signing_url,
-                            'style': 'primary',
-                            'icon': 'bi-pen-fill',
-                        },
-                        {
-                            'label': 'View Request',
-                            'url': reverse('signature_request_detail', kwargs={'pk': sig_req.pk}),
-                            'style': 'secondary',
-                            'icon': 'bi-eye',
-                        },
+                        {'label': 'Sign Now', 'url': signer.signing_url,
+                         'style': 'primary', 'icon': 'bi-pen-fill'},
+                        {'label': 'View Request', 'url': reverse('signature_request_detail', kwargs={'pk': sig_req.pk}),
+                         'style': 'secondary', 'icon': 'bi-eye'},
                     ],
                     extra_data={
                         'request_id': str(sig_req.pk),
@@ -3553,7 +3780,7 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
         _log_audit(sig_req, 'sent', request=request,
                    notes=f'{sig_req.signers.count()} signer(s) notified')
 
-        # Save field placements from the annotation canvas
+        # ── 8. Save field placements from the annotation canvas ─────────
         import json as _json
         fields_json = request.POST.get('fields_json', '').strip()
         if fields_json:
@@ -3577,18 +3804,21 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
             except Exception:
                 pass
 
-        messages.success(request, f'Signature request "{sig_req.title}" sent to {sig_req.signers.count()} signer(s).')
+        messages.success(
+            request,
+            f'Signature request "{sig_req.title}" sent to {sig_req.signers.count()} signer(s).',
+        )
 
-        # ── Save CC / viewer recipients ───────────────────────────────────────
-        cc_names  = request.POST.getlist('cc_name')
+        # ── 9. CC / viewer recipients (existing behaviour) ──────────────
+        cc_names = request.POST.getlist('cc_name')
         cc_emails = request.POST.getlist('cc_email')
-        cc_roles  = request.POST.getlist('cc_role')
+        cc_roles = request.POST.getlist('cc_role')
         for i, email in enumerate(cc_emails):
             email = email.strip()
             if not email:
                 continue
-            name  = (cc_names[i].strip()  if i < len(cc_names)  else '') or email
-            role  = (cc_roles[i].strip()  if i < len(cc_roles)  else '') or 'cc'
+            name = (cc_names[i].strip() if i < len(cc_names) else '') or email
+            role = (cc_roles[i].strip() if i < len(cc_roles) else '') or 'cc'
             from apps.core.models import User as CoreUser
             internal_user = CoreUser.objects.filter(email__iexact=email).first()
             cc_obj = SignatureCC.objects.create(
@@ -3612,27 +3842,99 @@ class SignatureRequestDetailView(LoginRequiredMixin, View):
             Q(created_by=request.user) | Q(signers__user=request.user),
             pk=pk,
         )
+
         return render(request, self.template_name, {
-            'sig_req':    sig_req,
-            'signers':    sig_req.signers.all(),
-            'audit':      sig_req.audit_trail.all(),
+            'sig_req': sig_req,
+            'signers': sig_req.signers.all(),
+            'audit': sig_req.audit_trail.all(),
             'is_creator': sig_req.created_by == request.user,
         })
 
     def post(self, request, pk):
         """Cancel or resend."""
-        sig_req = get_object_or_404(SignatureRequest, pk=pk, created_by=request.user)
+        sig_req = get_object_or_404(
+            SignatureRequest.objects.select_related('created_by').prefetch_related('signers'),
+            pk=pk,
+            created_by=request.user,
+        )
+
         action = request.POST.get('action')
+
         if action == 'cancel':
-            sig_req.status = SignatureRequest.Status.CANCELLED
-            sig_req.save(update_fields=['status'])
-            _log_audit(sig_req, 'cancelled', request=request)
-            messages.warning(request, 'Signature request cancelled.')
+            if sig_req.status in (
+                SignatureRequest.Status.COMPLETED,
+                SignatureRequest.Status.CANCELLED,
+                SignatureRequest.Status.EXPIRED,
+            ):
+                messages.warning(request, 'This signature request is already closed and cannot be cancelled again.')
+                return redirect('signature_request_detail', pk=sig_req.pk)
+
+            with transaction.atomic():
+                sig_req.status = SignatureRequest.Status.CANCELLED
+                sig_req.save(update_fields=['status', 'updated_at'])
+
+                # This is the important fix:
+                # Cancel all unsigned signer rows so they no longer show as pending/to-do.
+                sig_req.signers.filter(
+                    status__in=[
+                        SignatureRequestSigner.Status.PENDING,
+                        SignatureRequestSigner.Status.VIEWED,
+                    ]
+                ).update(
+                    status=SignatureRequestSigner.Status.CANCELLED
+                )
+
+                _log_audit(
+                    sig_req,
+                    'cancelled',
+                    request=request,
+                    notes=f'Cancelled by {request.user.full_name}'
+                )
+
+            # Optional: mark related in-app notifications as read if CoreNotification exists.
+            try:
+                from apps.core.models import CoreNotification
+
+                CoreNotification.objects.filter(
+                    recipient__in=[s.user for s in sig_req.signers.all() if s.user_id],
+                    data__request_id=str(sig_req.pk),
+                    is_read=False,
+                ).update(
+                    is_read=True,
+                    read_at=timezone.now(),
+                )
+            except Exception:
+                pass
+
+            messages.warning(request, 'Signature request cancelled. Pending signer tasks have been closed.')
+
         elif action == 'resend':
+            if sig_req.status in (
+                SignatureRequest.Status.CANCELLED,
+                SignatureRequest.Status.EXPIRED,
+                SignatureRequest.Status.COMPLETED,
+                SignatureRequest.Status.DECLINED,
+            ):
+                messages.error(request, 'This request is closed and cannot be resent.')
+                return redirect('signature_request_detail', pk=sig_req.pk)
+
             signer_id = request.POST.get('signer_id')
-            signer = get_object_or_404(SignatureRequestSigner, pk=signer_id, request=sig_req)
+            signer = get_object_or_404(
+                SignatureRequestSigner,
+                pk=signer_id,
+                request=sig_req,
+            )
+
+            if signer.status not in (
+                SignatureRequestSigner.Status.PENDING,
+                SignatureRequestSigner.Status.VIEWED,
+            ):
+                messages.error(request, 'Only pending signers can receive a reminder.')
+                return redirect('signature_request_detail', pk=sig_req.pk)
+
             base_url = request.build_absolute_uri('/')
-            _notify_signer(signer, base_url)   # email
+            _notify_signer(signer, base_url)
+
             if signer.user:
                 _notify(
                     signer.user,
@@ -3661,7 +3963,12 @@ class SignatureRequestDetailView(LoginRequiredMixin, View):
                         'signer_id': str(signer.pk),
                     },
                 )
+
             messages.success(request, f'Reminder sent to {signer.email}.')
+
+        else:
+            messages.error(request, 'Invalid action.')
+
         return redirect('signature_request_detail', pk=sig_req.pk)
 
 
@@ -4052,21 +4359,57 @@ class SignDocumentView(View):
 
 class SignDocumentCompleteView(View):
     """
-    Public no-login completion page after a signer signs or declines.
+    Smart completion page after a signer signs or declines.
+
+    - Logged-in EasyOffice users who are part of the request see the private
+      in-app completion page: files/sign_complete.html
+    - External/public signers see the public no-login page:
+      files/sign_document_complete.html
     """
-    template_name = 'files/sign_document_complete.html'
+
+    public_template_name = 'files/sign_document_complete.html'
+    private_template_name = 'files/sign_complete.html'
+
+    def _is_private_user(self, request, signer, sig_req):
+        """
+        A logged-in user should see the private EasyOffice completion page if:
+        - they are the request creator
+        - they are the signer linked to this token
+        - their email matches the signer email
+        - they are superuser
+        """
+        if not request.user.is_authenticated:
+            return False
+
+        if request.user.is_superuser:
+            return True
+
+        if sig_req.created_by_id == request.user.id:
+            return True
+
+        if getattr(signer, 'user_id', None) == request.user.id:
+            return True
+
+        user_email = (getattr(request.user, 'email', '') or '').strip().lower()
+        signer_email = (signer.email or '').strip().lower()
+
+        if user_email and signer_email and user_email == signer_email:
+            return True
+
+        return False
 
     def get(self, request, token):
         signer = get_object_or_404(
-            SignatureRequestSigner.objects.select_related('request', 'request__document'),
+            SignatureRequestSigner.objects.select_related(
+                'request',
+                'request__document',
+                'request__created_by',
+                'user',
+            ),
             token=token,
         )
         sig_req = signer.request
-
         document = sig_req.document
-
-        preview_url = None
-        download_url = None
 
         try:
             preview_url = reverse('sign_document_preview', kwargs={'token': signer.token})
@@ -4076,13 +4419,44 @@ class SignDocumentCompleteView(View):
         try:
             download_url = reverse('sign_document_download', kwargs={'token': signer.token})
         except Exception:
-            download_url = ''
+            download_url = f'/files/sign/{signer.token}/download/'
 
         signed_count = sig_req.signers.filter(status='signed').count()
         total_signers = sig_req.signers.count()
         is_fully_completed = not sig_req.signers.exclude(status='signed').exists()
 
-        return render(request, self.template_name, {
+        is_signed = signer.status == 'signed'
+        all_completed = is_fully_completed
+
+        audit_qs = sig_req.audit_trail.all() if hasattr(sig_req, 'audit_trail') else []
+
+        # Private in-app complete page for logged-in EasyOffice users.
+        if self._is_private_user(request, signer, sig_req):
+            try:
+                file_manager_url = reverse('file_manager')
+            except Exception:
+                file_manager_url = '/files/'
+
+            return render(request, self.private_template_name, {
+                'signer': signer,
+                'sig_req': sig_req,
+                'document': document,
+
+                # Required by files/sign_complete.html
+                'is_signed': is_signed,
+                'all_completed': all_completed,
+                'download_url': download_url,
+                'file_manager_url': file_manager_url,
+                'signers_total': total_signers,
+                'signers_done': signed_count,
+
+                # Extra useful context
+                'preview_url': preview_url,
+                'audit': audit_qs,
+            })
+
+        # Public no-login complete page for external signers.
+        return render(request, self.public_template_name, {
             'signer': signer,
             'sig_req': sig_req,
             'document': document,
@@ -4091,7 +4465,7 @@ class SignDocumentCompleteView(View):
             'signed_count': signed_count,
             'total_signers': total_signers,
             'is_fully_completed': is_fully_completed,
-            'audit': sig_req.audit_trail.all() if hasattr(sig_req, 'audit_trail') else [],
+            'audit': audit_qs,
         })
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4101,7 +4475,10 @@ class SignDocumentCompleteView(View):
 class MySignaturesView(LoginRequiredMixin, TemplateView):
     """
     Dedicated inbox showing all signature requests the current user
-    needs to action (pending) or has already handled.
+    needs to action or has already handled.
+
+    Cancelled, expired, declined, and completed requests must not appear
+    as pending signing tasks.
     """
     template_name = 'files/my_signatures.html'
 
@@ -4109,21 +4486,65 @@ class MySignaturesView(LoginRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         user = self.request.user
 
+        active_request_statuses = [
+            SignatureRequest.Status.SENT,
+            SignatureRequest.Status.PARTIAL,
+        ]
+
+        terminal_request_statuses = [
+            SignatureRequest.Status.COMPLETED,
+            SignatureRequest.Status.DECLINED,
+            SignatureRequest.Status.EXPIRED,
+            SignatureRequest.Status.CANCELLED,
+        ]
+
         my_signer_rows = SignatureRequestSigner.objects.filter(
             user=user
         ).select_related(
-            'request', 'request__document', 'request__created_by'
-        ).order_by('request__created_at')
+            'request',
+            'request__document',
+            'request__created_by',
+        ).order_by('-request__created_at')
+
+        pending_rows = my_signer_rows.filter(
+            request__status__in=active_request_statuses,
+            status=SignatureRequestSigner.Status.PENDING,
+        )
+
+        viewed_rows = my_signer_rows.filter(
+            request__status__in=active_request_statuses,
+            status=SignatureRequestSigner.Status.VIEWED,
+        )
+
+        signed_rows = my_signer_rows.filter(
+            status=SignatureRequestSigner.Status.SIGNED,
+        )
+
+        declined_rows = my_signer_rows.filter(
+            status=SignatureRequestSigner.Status.DECLINED,
+        )
+
+        cancelled_rows = my_signer_rows.filter(
+            Q(status=SignatureRequestSigner.Status.CANCELLED) |
+            Q(request__status=SignatureRequest.Status.CANCELLED)
+        ).distinct()
+
+        sent_by_me = SignatureRequest.objects.filter(
+            created_by=user,
+        ).prefetch_related(
+            'signers',
+        ).order_by('-created_at')[:30]
 
         ctx.update({
-            'pending':    [s for s in my_signer_rows if s.status == 'pending'],
-            'viewed':     [s for s in my_signer_rows if s.status == 'viewed'],
-            'signed':     [s for s in my_signer_rows if s.status == 'signed'],
-            'declined':   [s for s in my_signer_rows if s.status == 'declined'],
-            'sent_by_me': SignatureRequest.objects.filter(
-                created_by=user
-            ).prefetch_related('signers').order_by('-created_at')[:20],
+            'pending': pending_rows,
+            'viewed': viewed_rows,
+            'signed': signed_rows,
+            'declined': declined_rows,
+            'cancelled': cancelled_rows,
+            'sent_by_me': sent_by_me,
+            'terminal_request_statuses': terminal_request_statuses,
         })
+
         return ctx
 
 
@@ -7192,14 +7613,23 @@ class SignatureConvertForSigningView(LoginRequiredMixin, View):
     Converts a selected file to PDF for the signature workflow.
 
     Used by the Send for Signature page when the selected document is not already a PDF.
-    Returns JSON:
-        {
-            "ok": true,
-            "document_id": "...",
-            "preview_url": "...",
-            "name": "converted-file.pdf"
-        }
+    The response is intentionally backward-compatible with both the older JS
+    (`status`, `file_id`, `download_url`) and the newer JS (`ok`, `document_id`,
+    `preview_url`).
     """
+
+    def _success_response(self, file_obj, converted=False):
+        return JsonResponse({
+            'ok': True,
+            'status': 'ok',
+            'document_id': str(file_obj.pk),
+            'file_id': str(file_obj.pk),
+            'name': file_obj.name,
+            'preview_url': reverse('file_preview', kwargs={'pk': file_obj.pk}),
+            'download_url': reverse('file_download', kwargs={'pk': file_obj.pk}),
+            'size_display': getattr(file_obj, 'size_display', ''),
+            'converted': bool(converted),
+        })
 
     def post(self, request, pk):
         source_file = get_object_or_404(SharedFile, pk=pk)
@@ -7207,32 +7637,28 @@ class SignatureConvertForSigningView(LoginRequiredMixin, View):
         if not _can_edit_file(request.user, source_file):
             return JsonResponse({
                 'ok': False,
-                'error': 'You do not have permission to use this file for signing.'
+                'status': 'error',
+                'message': 'You do not have permission to use this file for signing.',
+                'error': 'You do not have permission to use this file for signing.',
             }, status=403)
 
         file_name = source_file.name or ''
         extension = os.path.splitext(file_name)[1].lower().replace('.', '')
 
-        # If already PDF, just return the same file.
         if extension == 'pdf' or source_file.file_type == 'application/pdf':
-            return JsonResponse({
-                'ok': True,
-                'document_id': str(source_file.pk),
-                'name': source_file.name,
-                'preview_url': reverse('file_preview', kwargs={'pk': source_file.pk}),
-                'converted': False,
-            })
+            return self._success_response(source_file, converted=False)
 
         if extension not in CONVERTIBLE_TYPES:
             return JsonResponse({
                 'ok': False,
-                'error': 'This file type cannot be converted for signing. Please select a PDF, Word, Excel, PowerPoint, or image file.'
+                'status': 'error',
+                'message': 'This file type cannot be converted for signing. Please select a PDF, Word, Excel, PowerPoint, or image file.',
+                'error': 'This file type cannot be converted for signing. Please select a PDF, Word, Excel, PowerPoint, or image file.',
             }, status=400)
 
         temp_input = None
 
         try:
-            # Save original file temporarily.
             source_file.file.open('rb')
             original_bytes = source_file.file.read()
             source_file.file.close()
@@ -7242,7 +7668,6 @@ class SignatureConvertForSigningView(LoginRequiredMixin, View):
                 tmp.write(original_bytes)
                 temp_input = tmp.name
 
-            # Convert image files with Pillow, office docs with LibreOffice.
             if extension in ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff', 'tif']:
                 pdf_buffer = _convert_image_to_pdf(temp_input)
                 pdf_bytes = pdf_buffer.getvalue()
@@ -7260,13 +7685,14 @@ class SignatureConvertForSigningView(LoginRequiredMixin, View):
                 uploaded_by=request.user,
                 folder=source_file.folder,
                 visibility=source_file.visibility,
+                description=f'Converted from {source_file.name} for signature workflow.',
+                tags=getattr(source_file, 'tags', ''),
                 file_size=len(pdf_bytes),
                 file_type='application/pdf',
                 file_hash=hashlib.sha256(pdf_bytes).hexdigest(),
                 is_latest=True,
             )
 
-            # Preserve sharing-related fields safely where they exist.
             try:
                 converted_file.shared_with.set(source_file.shared_with.all())
             except Exception:
@@ -7289,18 +7715,14 @@ class SignatureConvertForSigningView(LoginRequiredMixin, View):
             except Exception:
                 pass
 
-            return JsonResponse({
-                'ok': True,
-                'document_id': str(converted_file.pk),
-                'name': converted_file.name,
-                'preview_url': reverse('file_preview', kwargs={'pk': converted_file.pk}),
-                'converted': True,
-            })
+            return self._success_response(converted_file, converted=True)
 
         except Exception as exc:
             return JsonResponse({
                 'ok': False,
-                'error': f'Could not convert file for signing: {exc}'
+                'status': 'error',
+                'message': f'Could not convert file for signing: {exc}',
+                'error': f'Could not convert file for signing: {exc}',
             }, status=500)
 
         finally:
@@ -7311,10 +7733,6 @@ class SignatureConvertForSigningView(LoginRequiredMixin, View):
                     pass
 
     def get(self, request, pk):
-        """
-        Allow GET too, because some template JavaScript may call this endpoint
-        using fetch() without explicitly setting method: 'POST'.
-        """
         return self.post(request, pk)
 
 class SignatureCompleteView(View):
@@ -7366,3 +7784,287 @@ class SignatureCompleteView(View):
             'signers_total': signers_total,
             'signers_done': signers_done,
         })
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 1. Duplicate
+# ─────────────────────────────────────────────────────────────────────
+
+class DuplicateSignatureRequestView(LoginRequiredMixin, View):
+    """
+    POST /files/signatures/<pk>/duplicate/
+
+    Creates a new draft SignatureRequest from an existing completed,
+    expired, or cancelled request.
+
+    It copies:
+      - primary document
+      - extra attached documents
+      - signers, with fresh pending status and new tokens
+      - placed signature fields
+      - CC/viewer recipients
+      - title, message, metadata, and ordered signing setting
+
+    It does NOT copy:
+      - signed status
+      - signatures
+      - signature data
+      - IP/user-agent
+      - audit trail
+      - signed document output
+    """
+
+    def post(self, request, pk):
+        src = get_object_or_404(
+            SignatureRequest.objects.select_related(
+                'document',
+                'created_by',
+            ).prefetch_related(
+                'signers',
+                'fields',
+                'documents',
+                'cc_recipients',
+            ),
+            pk=pk,
+        )
+
+        if src.created_by_id != request.user.id and not request.user.is_superuser:
+            return HttpResponseForbidden(
+                'Only the original creator can duplicate this request.'
+            )
+
+        if src.status not in (
+            SignatureRequest.Status.CANCELLED,
+            SignatureRequest.Status.EXPIRED,
+            SignatureRequest.Status.COMPLETED,
+        ):
+            messages.error(
+                request,
+                'Active requests cannot be duplicated. Cancel the request first if you want to rework it.',
+            )
+            return redirect('signature_request_detail', pk=src.pk)
+
+        with transaction.atomic():
+            # 1. Clone the request itself.
+            new_req = SignatureRequest.objects.create(
+                document=src.document,
+                title=f'{src.title} (copy)',
+                message=src.message or '',
+                created_by=request.user,
+                status=SignatureRequest.Status.DRAFT,
+                metadata=dict(src.metadata or {}),
+                ordered_signing=getattr(src, 'ordered_signing', False),
+                expires_at=None,
+                completed_at=None,
+                audit_hash='',
+            )
+
+            # 2. Clone attached documents.
+            source_doc_rows = list(
+                src.documents.select_related('document').order_by('order', 'created_at')
+            )
+
+            if source_doc_rows:
+                for row in source_doc_rows:
+                    SignatureRequestDocument.objects.create(
+                        request=new_req,
+                        document=row.document,
+                        order=row.order,
+                        is_primary=bool(row.is_primary or row.document_id == src.document_id),
+                    )
+            else:
+                SignatureRequestDocument.objects.create(
+                    request=new_req,
+                    document=src.document,
+                    order=1,
+                    is_primary=True,
+                )
+
+            # 3. Clone signers and map old signer IDs to new signer objects.
+            signer_map = {}
+
+            for old_signer in src.signers.all().order_by('order', 'created_at'):
+                new_signer = SignatureRequestSigner.objects.create(
+                    request=new_req,
+                    user=old_signer.user,
+                    email=old_signer.email,
+                    name=old_signer.name,
+                    order=old_signer.order,
+                    status=SignatureRequestSigner.Status.PENDING,
+
+                    # Do not copy completed signing data.
+                    signature_data='',
+                    signature_type='',
+                    ip_address=None,
+                    user_agent='',
+                    signed_at=None,
+                    viewed_at=None,
+                    decline_reason='',
+                )
+                signer_map[old_signer.pk] = new_signer
+
+            # 4. Clone signature field placements.
+            for old_field in src.fields.all().order_by('page', 'y_pct', 'x_pct'):
+                SignatureField.objects.create(
+                    request=new_req,
+                    signer=signer_map.get(old_field.signer_id),
+                    field_type=old_field.field_type,
+                    page=old_field.page,
+                    x_pct=old_field.x_pct,
+                    y_pct=old_field.y_pct,
+                    width_pct=old_field.width_pct,
+                    height_pct=old_field.height_pct,
+                    label=old_field.label,
+                    required=old_field.required,
+
+                    # Do not copy filled values.
+                    value='',
+                    filled_at=None,
+                )
+
+            # 5. Clone CC/viewer recipients.
+            for old_cc in src.cc_recipients.all():
+                SignatureCC.objects.create(
+                    request=new_req,
+                    user=old_cc.user,
+                    email=old_cc.email,
+                    name=old_cc.name,
+                    role=old_cc.role,
+                )
+
+            # 6. Start fresh audit trail.
+            try:
+                _log_audit(
+                    new_req,
+                    'created',
+                    request=request,
+                    notes=f'Duplicated from signature request {src.pk}',
+                )
+            except Exception:
+                pass
+
+        messages.success(
+            request,
+            'Signature request duplicated as a new draft. You can now review, edit, and send it again.',
+        )
+        return redirect('signature_request_detail', pk=new_req.pk)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 2. Signer reorder
+# ─────────────────────────────────────────────────────────────────────
+
+class SignerReorderView(LoginRequiredMixin, View):
+    """
+    POST /files/signatures/<pk>/signers/reorder/
+    Body (JSON): {"signer_ids": ["<uuid>", "<uuid>", ...]}
+
+    Persists drag-drop signer ordering. Only the creator can reorder,
+    and only while the request is still in a non-terminal status.
+
+    Returns: {"status": "ok", "order": [{"id": ..., "order": 1}, ...]}
+    """
+
+    def post(self, request, pk):
+        sig_req = get_object_or_404(SignatureRequest, pk=pk)
+        if sig_req.created_by_id != request.user.id and not request.user.is_superuser:
+            return JsonResponse({'status': 'error', 'message': 'Forbidden'}, status=403)
+
+        if sig_req.status in ('completed', 'cancelled', 'expired'):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'This request can no longer be reordered.',
+            }, status=400)
+
+        try:
+            payload = json.loads(request.body or '{}')
+            ids = payload.get('signer_ids', [])
+        except Exception:
+            return JsonResponse({'status': 'error', 'message': 'Invalid payload'}, status=400)
+
+        signers = {str(s.pk): s for s in sig_req.signers.all()}
+        if set(ids) != set(signers.keys()):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Signer list does not match the request.',
+            }, status=400)
+
+        with transaction.atomic():
+            for new_order, sid in enumerate(ids, start=1):
+                s = signers[sid]
+                if s.order != new_order:
+                    s.order = new_order
+                    s.save(update_fields=['order'])
+
+        return JsonResponse({
+            'status': 'ok',
+            'order': [{'id': sid, 'order': i} for i, sid in enumerate(ids, start=1)],
+        })
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 3. Add / remove documents on a draft request
+# ─────────────────────────────────────────────────────────────────────
+
+class SignatureRequestDocumentManageView(LoginRequiredMixin, View):
+    """
+    POST /files/signatures/<pk>/documents/
+        action=add    & document_id=<uuid>
+        action=remove & document_id=<uuid>
+
+    Only works on drafts the current user owns. Returns JSON.
+    """
+
+    def post(self, request, pk):
+        sig_req = get_object_or_404(SignatureRequest, pk=pk)
+        if sig_req.created_by_id != request.user.id and not request.user.is_superuser:
+            return JsonResponse({'status': 'error', 'message': 'Forbidden'}, status=403)
+
+        # Only allow editing the document set while the request is still
+        # a draft (no signers have started yet).
+        if sig_req.status != 'draft':
+            return JsonResponse({
+                'status': 'error',
+                'message': 'You can only add or remove documents while the request is still a draft.',
+            }, status=400)
+
+        action = request.POST.get('action')
+        document_id = request.POST.get('document_id')
+        if not document_id:
+            return JsonResponse({'status': 'error', 'message': 'Missing document_id'}, status=400)
+
+        from apps.files.models import SharedFile
+        try:
+            doc = SharedFile.objects.get(pk=document_id)
+        except SharedFile.DoesNotExist:
+            return JsonResponse({'status': 'error', 'message': 'Document not found'}, status=404)
+
+        if action == 'add':
+            if SignatureRequestDocument.objects.filter(request=sig_req, document=doc).exists():
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'That document is already attached.',
+                }, status=400)
+            order = (sig_req.documents.aggregate_max_order() or 0) + 1 \
+                if hasattr(sig_req.documents, 'aggregate_max_order') \
+                else sig_req.documents.count() + 1
+            SignatureRequestDocument.objects.create(
+                request=sig_req, document=doc, order=order, is_primary=False,
+            )
+            return JsonResponse({'status': 'ok', 'document_id': str(doc.pk)})
+
+        if action == 'remove':
+            row = SignatureRequestDocument.objects.filter(
+                request=sig_req, document=doc,
+            ).first()
+            if not row:
+                return JsonResponse({'status': 'error', 'message': 'Not attached'}, status=404)
+            if row.is_primary:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Cannot remove the primary document. Replace it instead.',
+                }, status=400)
+            row.delete()
+            return JsonResponse({'status': 'ok'})
+
+        return JsonResponse({'status': 'error', 'message': 'Unknown action'}, status=400)

@@ -369,11 +369,30 @@ class SignatureRequest(models.Model):
         }.get(self.status, '#64748b')
 
     def update_status(self):
-        """Recompute top-level status from signers."""
+        """
+        Recompute top-level status from signers.
+
+        Important:
+        Do not reopen terminal requests. If a request is cancelled or expired,
+        it must stay cancelled/expired even if signer rows are still pending.
+        """
+        if self.status in {
+            self.Status.CANCELLED,
+            self.Status.EXPIRED,
+        }:
+            return
+
         signers = list(self.signers.all())
         if not signers:
             return
+
         statuses = {s.status for s in signers}
+
+        if 'cancelled' in statuses:
+            self.status = self.Status.CANCELLED
+            self.save(update_fields=['status', 'updated_at'])
+            return
+
         if 'declined' in statuses:
             self.status = self.Status.DECLINED
         elif all(s.status == 'signed' for s in signers):
@@ -383,6 +402,7 @@ class SignatureRequest(models.Model):
             self.status = self.Status.PARTIAL
         else:
             self.status = self.Status.SENT
+
         self.save(update_fields=['status', 'completed_at', 'updated_at'])
 
     def rebuild_audit_hash(self):
@@ -396,12 +416,29 @@ class SignatureRequest(models.Model):
         self.save(update_fields=['audit_hash'])
 
 
+    def get_all_documents(self):
+
+        """All attached documents in order, falling back to the primary FK."""
+        qs = self.documents.select_related('document').order_by('order')
+        if qs.exists():
+            return [r.document for r in qs]
+        return [self.document] if self.document_id else []
+
+    def can_be_duplicated_by(self, user):
+        """Only the original creator can duplicate, and only on a
+        non-active terminal status."""
+        if self.created_by_id != getattr(user, 'id', None):
+            return False
+        return self.status in ('cancelled', 'expired', 'completed')
+
+
 class SignatureRequestSigner(models.Model):
     class Status(models.TextChoices):
-        PENDING  = 'pending',  'Pending'
-        VIEWED   = 'viewed',   'Viewed'
-        SIGNED   = 'signed',   'Signed'
-        DECLINED = 'declined', 'Declined'
+        PENDING   = 'pending',   'Pending'
+        VIEWED    = 'viewed',    'Viewed'
+        SIGNED    = 'signed',    'Signed'
+        DECLINED  = 'declined',  'Declined'
+        CANCELLED = 'cancelled', 'Cancelled'
 
     id               = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     request          = models.ForeignKey(SignatureRequest, on_delete=models.CASCADE,
@@ -438,6 +475,44 @@ class SignatureRequestSigner(models.Model):
     def signing_url(self):
         from django.urls import reverse
         return reverse('sign_document', kwargs={'token': self.token})
+
+
+class SignatureRequestDocument(models.Model):
+    """
+    One row per document attached to a signature request.
+
+    A request always has at least one row (the primary, which mirrors
+    `SignatureRequest.document`). Additional rows track the originals
+    that were merged into the primary at request-creation time.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    request = models.ForeignKey(
+        'files.SignatureRequest', on_delete=models.CASCADE, related_name='documents',
+    )
+    document = models.ForeignKey(
+        'files.SharedFile', on_delete=models.CASCADE, related_name='signature_attachments',
+    )
+    order = models.PositiveSmallIntegerField(
+        default=1,
+        help_text='Display order — also the merge order in the combined PDF',
+    )
+    is_primary = models.BooleanField(
+        default=False,
+        help_text='True for the primary/merged document on the request',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order', 'created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['request', 'document'],
+                name='uniq_signature_request_document',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.request.title} — {self.document.name}'
 
 
 class SignatureAuditEvent(models.Model):

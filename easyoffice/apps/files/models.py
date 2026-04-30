@@ -325,6 +325,11 @@ class SignatureRequest(models.Model):
     created_by     = models.ForeignKey(User, on_delete=models.CASCADE,
                                         related_name='created_signature_requests')
     status         = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Extra context used by other apps, e.g. orders.order_id and orders.stage.'
+    )
     # The final signed PDF (generated once all sign)
     signed_document = models.FileField(upload_to='signed_docs/%Y/%m/', null=True, blank=True)
     # Signing order enforced?

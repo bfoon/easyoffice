@@ -9,18 +9,29 @@ ENV DJANGO_SETTINGS_MODULE=easyoffice.settings
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
+    build-essential \
     libpq-dev \
     postgresql-client \
     gettext \
+    curl \
+    ca-certificates \
     libmagic1 \
     libmagic-dev \
     libffi-dev \
-    curl \
+    shared-mime-info \
+    fontconfig \
+    fonts-dejavu-core \
+    fonts-dejavu-extra \
+    fonts-liberation \
+    fonts-freefont-ttf \
     libreoffice \
     libreoffice-writer \
     libreoffice-calc \
     libreoffice-impress \
-    fonts-dejavu-core \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

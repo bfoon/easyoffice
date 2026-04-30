@@ -38,6 +38,11 @@ urlpatterns = [
     path('sign/<uuid:token>/download/',         views.SignDocumentDownloadView.as_view(),       name='sign_document_download'),
     path('sign/<uuid:token>/field/<uuid:field_id>/', views.FillSignatureFieldView.as_view(),   name='fill_signature_field'),
     path('sign/<uuid:token>/complete/', views.SignatureCompleteView.as_view(), name='sign_document_complete'),
+    path(
+        'sign/<uuid:token>/complete/',
+        views.SignDocumentCompleteView.as_view(),
+        name='sign_document_complete'
+    ),
 
     path('pdf-tools/',                          views.PDFToolsPageView.as_view(),               name='pdf_tools_page'),
     path('pdf-tools/merge/',                    views.PDFMergeView.as_view(),                   name='pdf_merge'),
@@ -51,7 +56,7 @@ urlpatterns = [
 
     path('quick-sign/',                         views.QuickSignView.as_view(),                  name='quick_sign'),
     path('quick-sign/<uuid:pk>/',               views.QuickSignView.as_view(),                  name='quick_sign_file'),
-path('quick-sign/<uuid:pk>/preview/', views.QuickSignPreviewView.as_view(), name='quick_sign_preview'),
+    path('quick-sign/<uuid:pk>/preview/', views.QuickSignPreviewView.as_view(), name='quick_sign_preview'),
 
     path('tools/notes/',                        views.NotesToPDFView.as_view(),                 name='notes_to_pdf'),
     path('tools/pdf-to-word/',                  views.PDFToWordView.as_view(),                  name='pdf_to_word'),

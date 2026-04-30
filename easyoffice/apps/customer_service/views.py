@@ -353,7 +353,7 @@ class CustomerServiceDashboardView(LoginRequiredMixin, TemplateView):
     template_name = "customer_service/dashboard.html"
 
     def dispatch(self, request, *args, **kwargs):
-        if not _is_admin_like(request.user):
+        if not _is_sales_rep(request.user):
             return HttpResponseForbidden("You do not have permission to view this dashboard.")
         return super().dispatch(request, *args, **kwargs)
 
@@ -367,7 +367,10 @@ class CustomerServiceDashboardView(LoginRequiredMixin, TemplateView):
         ctx.update({
             "calls_today": calls.filter(started_at__date=today).count(),
             "open_tickets": tickets.exclude(status__in=["closed", "cancelled"]).count(),
-            "overdue_tickets": len([t for t in tickets.exclude(status__in=["resolved", "closed", "cancelled"]) if t.is_overdue]),
+            "overdue_tickets": len([
+                t for t in tickets.exclude(status__in=["resolved", "closed", "cancelled"])
+                if t.is_overdue
+            ]),
             "escalated_tickets": tickets.filter(status="escalated").count(),
             "resolved_today": tickets.filter(resolved_at__date=today).count(),
             "recent_calls": calls.order_by("-started_at")[:8],

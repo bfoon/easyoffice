@@ -1,186 +1,452 @@
 {% extends "base.html" %}
 {% block title %}New Order{% endblock %}
-{% block breadcrumb %}<a href="{% url 'orders:dashboard' %}">Orders</a><span>/</span><span>New</span>{% endblock %}
+{% block breadcrumb %}<a href="{% url 'orders:dashboard' %}">Orders</a><span>/</span><a href="{% url 'orders:order_list' %}">List</a><span>/</span><span>New</span>{% endblock %}
 
 {% block content %}
 <style>
-  .new-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
-  @media (max-width: 720px) { .new-grid { grid-template-columns: 1fr; } }
-  .new-card { background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); padding: 22px; margin-bottom: 18px; }
-  .new-card h3 { font-size: .9rem; font-weight: 700; margin: 0 0 16px; }
-  .field { margin-bottom: 12px; }
-  .field label { display: block; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--eo-text-muted); font-weight: 600; margin-bottom: 4px; }
-  .field input, .field textarea, .field select { width: 100%; padding: 9px 11px; border: 1px solid var(--eo-border); border-radius: 8px; font-size: .9rem; box-sizing: border-box; }
+  /* ── Page header ────────────────────────────────────────────────────── */
+  .nc-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+  .nc-title { font-size: 1.5rem; font-weight: 800; letter-spacing: -.01em; margin: 0; color: var(--eo-text); display: flex; align-items: center; gap: 10px; }
+  .nc-title i { color: #6366f1; }
+  .nc-subtitle { color: var(--eo-text-muted); font-size: .85rem; margin: 4px 0 0; max-width: 600px; line-height: 1.5; }
 
+  /* ── Two-column layout ──────────────────────────────────────────────── */
+  .nc-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; align-items: start; }
+  @media (max-width: 1080px) { .nc-layout { grid-template-columns: 1fr; } }
+
+  /* ── Cards ──────────────────────────────────────────────────────────── */
+  .nc-card { background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); margin-bottom: 18px; overflow: hidden; }
+  .nc-card-head { padding: 16px 22px; border-bottom: 1px solid var(--eo-border); display: flex; align-items: center; gap: 10px; background: linear-gradient(180deg, #fafbfc 0%, #f7f8fa 100%); }
+  .nc-card-head .num { width: 26px; height: 26px; border-radius: 50%; background: #6366f1; color: #fff; display: flex; align-items: center; justify-content: center; font-size: .78rem; font-weight: 700; flex-shrink: 0; }
+  .nc-card-head .title { font-size: .95rem; font-weight: 700; color: var(--eo-text); }
+  .nc-card-head .desc { font-size: .76rem; color: var(--eo-text-muted); margin-left: 4px; }
+  .nc-card-body { padding: 22px; }
+
+  /* ── Field grid ─────────────────────────────────────────────────────── */
+  .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+  .field-grid.three { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 720px) { .field-grid, .field-grid.three { grid-template-columns: 1fr; } }
+  .full { grid-column: 1 / -1; }
+
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: var(--eo-text-muted); font-weight: 700; }
+  .field label .req { color: #ef4444; margin-left: 2px; }
+  .field label .opt { color: var(--eo-text-muted); font-weight: 500; text-transform: none; letter-spacing: 0; margin-left: 6px; opacity: .7; font-size: .9em; }
+  .field .input-wrap { position: relative; }
+  .field .input-wrap > i.prefix { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--eo-text-muted); font-size: .9rem; pointer-events: none; z-index: 1; }
+  .field .input-wrap.has-prefix input,
+  .field .input-wrap.has-prefix select,
+  .field .input-wrap.has-prefix textarea { padding-left: 36px; }
+  .field input, .field textarea, .field select {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--eo-border);
+    border-radius: 8px; font-size: .9rem; box-sizing: border-box;
+    background: var(--eo-surface); color: var(--eo-text);
+    font-family: inherit; transition: border-color .15s, box-shadow .15s;
+  }
+  .field input:focus, .field textarea:focus, .field select:focus {
+    outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, .15);
+  }
+  .field select { appearance: none; cursor: pointer; padding-right: 32px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23999' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 12px center; }
+  .field .helper { font-size: .72rem; color: var(--eo-text-muted); line-height: 1.45; }
+  .field .helper i { font-size: .85em; opacity: .7; margin-right: 3px; }
+  .field textarea { resize: vertical; min-height: 64px; }
+
+  /* ── Source picker (radio cards) ────────────────────────────────────── */
+  .source-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+  .source-pick label {
+    position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 12px 8px; border: 1.5px solid var(--eo-border); border-radius: 10px;
+    cursor: pointer; transition: all .15s; background: var(--eo-surface);
+    text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--eo-text);
+  }
+  .source-pick label:hover { border-color: #a5b4fc; background: #f5f3ff; }
+  .source-pick label i { font-size: 1.3rem; color: var(--eo-text-muted); margin-bottom: 5px; transition: color .15s; }
+  .source-pick label .lbl { font-size: .8rem; font-weight: 600; }
+  .source-pick input[type=radio] { position: absolute; opacity: 0; pointer-events: none; }
+  .source-pick input[type=radio]:checked + .src-card {
+    border-color: #6366f1; background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, .12);
+  }
+  .source-pick input[type=radio]:checked + .src-card i { color: #6366f1; }
+  .src-card { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 12px 8px; border: 1.5px solid var(--eo-border); border-radius: 10px;
+    transition: all .15s; cursor: pointer; }
+  .src-card i { font-size: 1.3rem; color: var(--eo-text-muted); margin-bottom: 5px; transition: color .15s; }
+  .src-card .lbl { font-size: .8rem; font-weight: 600; color: var(--eo-text); }
+
+  /* ── Line items table ───────────────────────────────────────────────── */
+  .items-section { padding: 0; }
   .items-table { width: 100%; border-collapse: collapse; }
-  .items-table th { text-align: left; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--eo-text-muted); font-weight: 600; padding: 8px 6px; }
-  .items-table td { padding: 4px; }
-  .items-table input { width: 100%; padding: 8px 10px; border: 1px solid var(--eo-border); border-radius: 6px; font-size: .85rem; box-sizing: border-box; }
-  .items-table .col-desc { width: 50%; }
-  .items-table .col-qty, .items-table .col-price, .items-table .col-total { width: 14%; }
-  .items-table .col-actions { width: 8%; text-align: center; }
-  .row-total { padding: 8px; text-align: right; font-weight: 600; color: var(--eo-text-muted); font-variant-numeric: tabular-nums; }
-  .icon-btn { background: transparent; border: 1px solid var(--eo-border); border-radius: 6px; padding: 6px 10px; cursor: pointer; color: #ef4444; }
-  .icon-btn:hover { background: #fef2f2; }
-  .add-row-btn { margin-top: 10px; }
-  .totals { display: flex; justify-content: flex-end; gap: 30px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--eo-border); font-size: .9rem; }
-  .totals .grand { font-size: 1.2rem; font-weight: 800; color: var(--eo-text); }
+  .items-table thead th {
+    text-align: left; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--eo-text-muted); font-weight: 700; padding: 10px 14px;
+    border-bottom: 1px solid var(--eo-border); background: #fafbfc;
+  }
+  .items-table thead th.num { text-align: right; }
+  .items-table tbody td { padding: 10px 14px; border-bottom: 1px solid var(--eo-border); vertical-align: middle; }
+  .items-table tbody tr:last-child td { border-bottom: 0; }
+  .items-table input {
+    width: 100%; padding: 8px 10px; border: 1px solid transparent;
+    border-radius: 6px; font-size: .88rem; box-sizing: border-box;
+    background: transparent; color: var(--eo-text); font-family: inherit;
+    transition: all .12s;
+  }
+  .items-table input:hover { background: #f9fafb; }
+  .items-table input:focus { outline: none; border-color: #6366f1; background: var(--eo-surface); box-shadow: 0 0 0 3px rgba(99, 102, 241, .12); }
+  .items-table input[type=number] { text-align: right; font-variant-numeric: tabular-nums; }
+  .items-table .col-pos { width: 32px; color: var(--eo-text-muted); font-size: .78rem; text-align: center; }
+  .items-table .col-desc { min-width: 200px; }
+  .items-table .col-qty, .items-table .col-price { width: 110px; }
+  .items-table .col-total { width: 110px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--eo-text); padding-right: 14px; }
+  .items-table .col-actions { width: 50px; text-align: center; }
+  .items-table tbody tr.empty-row td { color: var(--eo-text-muted); font-style: italic; padding: 24px 14px; text-align: center; font-size: .85rem; }
+  .icon-btn { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 6px 9px; cursor: pointer; color: #ef4444; transition: all .12s; display: inline-flex; align-items: center; justify-content: center; }
+  .icon-btn:hover { background: #fef2f2; border-color: #fecaca; }
+  .icon-btn:disabled { color: #d1d5db; cursor: not-allowed; }
+  .icon-btn:disabled:hover { background: transparent; border-color: transparent; }
 
-  .actions-bar { display: flex; gap: 10px; justify-content: flex-end; }
+  .add-row-bar { padding: 12px 14px; border-top: 1px solid var(--eo-border); background: #fafbfc; display: flex; justify-content: space-between; align-items: center; }
+  .add-row-bar .hint { font-size: .76rem; color: var(--eo-text-muted); }
+  .add-row-bar .hint kbd { display: inline-block; padding: 1px 6px; background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: 4px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: .72rem; }
+
+  /* ── Sticky summary ─────────────────────────────────────────────────── */
+  .summary-card { position: sticky; top: 80px; background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); overflow: hidden; }
+  .summary-head { padding: 16px 20px; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: #fff; }
+  .summary-head .label { font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; opacity: .85; font-weight: 700; }
+  .summary-head .total { font-size: 2rem; font-weight: 800; line-height: 1.1; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .summary-head .ccy { font-size: 1rem; opacity: .8; margin-right: 4px; }
+
+  .summary-rows { padding: 16px 20px; }
+  .sum-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: .85rem; }
+  .sum-row .lbl { color: var(--eo-text-muted); }
+  .sum-row .val { font-weight: 600; color: var(--eo-text); font-variant-numeric: tabular-nums; }
+  .sum-row.discount .val { color: #dc2626; }
+  .summary-footer { padding: 14px 20px; border-top: 1px solid var(--eo-border); background: #fafbfc; }
+  .summary-footer .stat { display: flex; justify-content: space-between; font-size: .78rem; color: var(--eo-text-muted); margin-bottom: 4px; }
+  .summary-footer .stat:last-child { margin-bottom: 0; }
+  .summary-footer .stat strong { color: var(--eo-text); }
+
+  /* ── Action bar ─────────────────────────────────────────────────────── */
+  .actions-bar {
+    display: flex; gap: 10px; justify-content: flex-end; align-items: center;
+    padding: 14px 18px; background: var(--eo-surface); border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius); margin-top: 6px;
+    position: sticky; bottom: 0; z-index: 10;
+    box-shadow: 0 -2px 8px rgba(0,0,0,.04);
+  }
+  .actions-bar .info { flex: 1; font-size: .8rem; color: var(--eo-text-muted); }
+  .actions-bar .info i { margin-right: 4px; }
+
+  /* ── Workflow info banner ───────────────────────────────────────────── */
+  .workflow-banner {
+    padding: 12px 16px; background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
+    border: 1px solid #bfdbfe; border-radius: 10px; margin-bottom: 18px;
+    display: flex; gap: 12px; align-items: flex-start; font-size: .82rem; color: #1e40af; line-height: 1.5;
+  }
+  .workflow-banner i { font-size: 1.2rem; flex-shrink: 0; padding-top: 1px; }
+  .workflow-banner strong { font-weight: 700; }
 </style>
 
-<div class="eo-page-header">
-  <h1 class="eo-page-title"><i class="bi bi-cart-plus"></i> New Order</h1>
+<div class="nc-header">
+  <div>
+    <h1 class="nc-title"><i class="bi bi-cart-plus"></i> New Order</h1>
+    <p class="nc-subtitle">Capture a new sales order. Once submitted, it will need to be confirmed by a sales supervisor before documents can be generated.</p>
+  </div>
+</div>
+
+<div class="workflow-banner">
+  <i class="bi bi-info-circle-fill"></i>
+  <div>
+    <strong>What happens after you submit:</strong>
+    The order enters the <em>New</em> queue and a sales supervisor will confirm it.
+    Once confirmed, a team member generates the proforma — which is sent to the CEO for signature
+    before being emailed to the buyer. Same flow for invoice and delivery note.
+  </div>
 </div>
 
 <form method="post" id="orderForm">
   {% csrf_token %}
 
-  <div class="new-card">
-    <h3>Order Source</h3>
-    <div class="field">
-      <label for="source">Source</label>
-      <select name="source" id="source">
-        {% for v, l in source_choices %}
-          <option value="{{ v }}" {% if v == 'phone' %}selected{% endif %}>{{ l }}</option>
-        {% endfor %}
-      </select>
+  <div class="nc-layout">
+
+    {# ── LEFT COLUMN ─────────────────────────────────────────────────── #}
+    <div>
+
+      {# 1. Source #}
+      <div class="nc-card">
+        <div class="nc-card-head">
+          <span class="num">1</span>
+          <span class="title">Order Source</span>
+          <span class="desc">— how did this order come in?</span>
+        </div>
+        <div class="nc-card-body">
+          <div class="source-pick">
+            {% for v, l in source_choices %}
+              <label>
+                <input type="radio" name="source" value="{{ v }}" {% if v == 'phone' %}checked{% endif %}>
+                <span class="src-card">
+                  <i class="bi bi-{% if v == 'phone' %}telephone{% elif v == 'walk_in' %}person-walking{% elif v == 'website' %}globe{% elif v == 'api' %}plug{% elif v == 'email' %}envelope{% else %}three-dots{% endif %}"></i>
+                  <span class="lbl">{{ l }}</span>
+                </span>
+              </label>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      {# 2. Customer #}
+      <div class="nc-card">
+        <div class="nc-card-head">
+          <span class="num">2</span>
+          <span class="title">Customer</span>
+          <span class="desc">— who is buying?</span>
+        </div>
+        <div class="nc-card-body">
+          <div class="field full" style="margin-bottom:14px">
+            <label for="{{ header_form.customer.id_for_label }}">Existing customer <span class="opt">(optional)</span></label>
+            <div class="input-wrap has-prefix">
+              <i class="bi bi-search prefix"></i>
+              {{ header_form.customer }}
+            </div>
+            <div class="helper"><i class="bi bi-info-circle"></i> Leave blank for a new customer — the contact details below will be saved as a snapshot.</div>
+          </div>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="{{ header_form.contact_name.id_for_label }}">Contact name</label>
+              <div class="input-wrap has-prefix">
+                <i class="bi bi-person prefix"></i>
+                {{ header_form.contact_name }}
+              </div>
+            </div>
+            <div class="field">
+              <label for="{{ header_form.contact_phone.id_for_label }}">Phone</label>
+              <div class="input-wrap has-prefix">
+                <i class="bi bi-telephone prefix"></i>
+                {{ header_form.contact_phone }}
+              </div>
+            </div>
+            <div class="field full">
+              <label for="{{ header_form.contact_email.id_for_label }}">Email <span class="opt">(needed for confirmation emails)</span></label>
+              <div class="input-wrap has-prefix">
+                <i class="bi bi-envelope prefix"></i>
+                {{ header_form.contact_email }}
+              </div>
+            </div>
+            <div class="field full">
+              <label for="{{ header_form.delivery_address.id_for_label }}">Delivery address</label>
+              {{ header_form.delivery_address }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# 3. Line items #}
+      <div class="nc-card">
+        <div class="nc-card-head">
+          <span class="num">3</span>
+          <span class="title">Line Items</span>
+          <span class="desc">— what are they ordering?</span>
+        </div>
+        <div class="items-section">
+          <table class="items-table" id="itemsTable">
+            <thead>
+              <tr>
+                <th class="col-pos">#</th>
+                <th class="col-desc">Description</th>
+                <th class="col-qty num">Qty</th>
+                <th class="col-price num">Unit price</th>
+                <th class="col-total num">Total</th>
+                <th class="col-actions"></th>
+              </tr>
+            </thead>
+            <tbody id="itemsBody">
+              <!-- rows injected by JS -->
+            </tbody>
+          </table>
+          <div class="add-row-bar">
+            <button type="button" class="eo-btn" id="addRowBtn">
+              <i class="bi bi-plus-lg"></i> Add line item
+            </button>
+            <span class="hint">Tip: press <kbd>Tab</kbd> from the last cell to add another row</span>
+          </div>
+        </div>
+      </div>
+
+      {# 4. Money & Notes #}
+      <div class="nc-card">
+        <div class="nc-card-head">
+          <span class="num">4</span>
+          <span class="title">Money &amp; Notes</span>
+          <span class="desc">— totals and internal notes</span>
+        </div>
+        <div class="nc-card-body">
+          <div class="field-grid three">
+            <div class="field">
+              <label for="{{ header_form.currency.id_for_label }}">Currency</label>
+              {{ header_form.currency }}
+            </div>
+            <div class="field">
+              <label for="{{ header_form.tax_rate.id_for_label }}">Tax rate (%)</label>
+              <div class="input-wrap has-prefix">
+                <i class="bi bi-percent prefix"></i>
+                {{ header_form.tax_rate }}
+              </div>
+            </div>
+            <div class="field">
+              <label for="{{ header_form.discount_amount.id_for_label }}">Discount</label>
+              <div class="input-wrap has-prefix">
+                <i class="bi bi-tag prefix"></i>
+                {{ header_form.discount_amount }}
+              </div>
+            </div>
+            <div class="field full">
+              <label for="{{ header_form.notes.id_for_label }}">Internal notes <span class="opt">(not shown to customer)</span></label>
+              {{ header_form.notes }}
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
+
+    {# ── RIGHT COLUMN — sticky summary ─────────────────────────────────── #}
+    <div>
+      <div class="summary-card">
+        <div class="summary-head">
+          <div class="label">Order total</div>
+          <div class="total"><span class="ccy" id="sumCcy">GMD</span><span id="grandTotal">0.00</span></div>
+        </div>
+        <div class="summary-rows">
+          <div class="sum-row"><span class="lbl">Subtotal</span><span class="val" id="rawSubtotal">0.00</span></div>
+          <div class="sum-row discount" id="discountRow" style="display:none"><span class="lbl">Discount</span><span class="val" id="discountAmt">−0.00</span></div>
+          <div class="sum-row"><span class="lbl">Net</span><span class="val" id="subtotal">0.00</span></div>
+          <div class="sum-row"><span class="lbl">Tax (<span id="taxRateLbl">0</span>%)</span><span class="val" id="taxAmt">0.00</span></div>
+        </div>
+        <div class="summary-footer">
+          <div class="stat"><span>Line items</span><strong id="itemCount">0</strong></div>
+          <div class="stat"><span>Total quantity</span><strong id="qtyCount">0</strong></div>
+        </div>
+      </div>
+    </div>
+
   </div>
 
-  <div class="new-card">
-    <h3>Customer</h3>
-    <div class="new-grid">
-      <div class="field">
-        <label for="{{ header_form.customer.id_for_label }}">Existing customer</label>
-        {{ header_form.customer }}
-        <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:4px">Leave blank if it's a new customer — fill in contact info below.</div>
-      </div>
-      <div></div>
-      <div class="field">
-        <label for="{{ header_form.contact_name.id_for_label }}">Contact name</label>
-        {{ header_form.contact_name }}
-      </div>
-      <div class="field">
-        <label for="{{ header_form.contact_phone.id_for_label }}">Phone</label>
-        {{ header_form.contact_phone }}
-      </div>
-      <div class="field">
-        <label for="{{ header_form.contact_email.id_for_label }}">Email</label>
-        {{ header_form.contact_email }}
-      </div>
-      <div class="field">
-        <label for="{{ header_form.delivery_address.id_for_label }}">Delivery address</label>
-        {{ header_form.delivery_address }}
-      </div>
-    </div>
-  </div>
-
-  <div class="new-card">
-    <h3>Line Items</h3>
-    <table class="items-table" id="itemsTable">
-      <thead>
-        <tr>
-          <th class="col-desc">Description</th>
-          <th class="col-qty">Qty</th>
-          <th class="col-price">Unit Price</th>
-          <th class="col-total">Total</th>
-          <th class="col-actions"></th>
-        </tr>
-      </thead>
-      <tbody id="itemsBody">
-        <!-- rows injected by JS -->
-      </tbody>
-    </table>
-    <button type="button" class="eo-btn add-row-btn" id="addRowBtn"><i class="bi bi-plus-lg"></i> Add row</button>
-
-    <div class="totals">
-      <div>Subtotal: <strong id="subtotal">0.00</strong></div>
-      <div>Tax: <strong id="taxAmt">0.00</strong></div>
-      <div class="grand">Total: <span id="grandTotal">0.00</span></div>
-    </div>
-  </div>
-
-  <div class="new-card">
-    <h3>Money &amp; Notes</h3>
-    <div class="new-grid">
-      <div class="field">
-        <label for="{{ header_form.currency.id_for_label }}">Currency</label>
-        {{ header_form.currency }}
-      </div>
-      <div class="field">
-        <label for="{{ header_form.tax_rate.id_for_label }}">Tax rate (%)</label>
-        {{ header_form.tax_rate }}
-      </div>
-      <div class="field">
-        <label for="{{ header_form.discount_amount.id_for_label }}">Discount</label>
-        {{ header_form.discount_amount }}
-      </div>
-      <div></div>
-      <div class="field" style="grid-column: 1 / -1">
-        <label for="{{ header_form.notes.id_for_label }}">Notes</label>
-        {{ header_form.notes }}
-      </div>
-    </div>
-  </div>
-
+  {# ── Action bar ────────────────────────────────────────────────────── #}
   <div class="actions-bar">
+    <div class="info"><i class="bi bi-shield-check"></i> Order will be created as <strong>New</strong> and queued for supervisor confirmation.</div>
     <a href="{% url 'orders:dashboard' %}" class="eo-btn">Cancel</a>
-    <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-save"></i> Create order</button>
+    <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-check2"></i> Create order</button>
   </div>
+
 </form>
 
 <script>
 (function () {
-  const tbody = document.getElementById('itemsBody');
-  const addBtn = document.getElementById('addRowBtn');
+  const tbody     = document.getElementById('itemsBody');
+  const addBtn    = document.getElementById('addRowBtn');
+  const ccyInput  = document.getElementById('id_currency');
+  const ccyLabel  = document.getElementById('sumCcy');
   let rowIdx = 0;
 
   function buildRow(idx) {
     const tr = document.createElement('tr');
     tr.dataset.idx = idx;
     tr.innerHTML = `
-      <td class="col-desc"><input type="text" name="items-${idx}-description" placeholder="Description"></td>
+      <td class="col-pos" data-role="rownum">·</td>
+      <td class="col-desc"><input type="text" name="items-${idx}-description" placeholder="What are they buying?"></td>
       <td class="col-qty"><input type="number" name="items-${idx}-quantity" value="1" step="0.01" min="0"></td>
       <td class="col-price"><input type="number" name="items-${idx}-unit_price" value="0" step="0.01" min="0"></td>
-      <td class="row-total" data-role="rowtotal">0.00</td>
-      <td class="col-actions"><button type="button" class="icon-btn" data-role="del"><i class="bi bi-trash"></i></button></td>
+      <td class="col-total" data-role="rowtotal">0.00</td>
+      <td class="col-actions"><button type="button" class="icon-btn" data-role="del" title="Remove"><i class="bi bi-trash"></i></button></td>
     `;
     return tr;
   }
 
-  function recalc() {
-    let subtotal = 0;
-    tbody.querySelectorAll('tr').forEach(tr => {
-      const qty = parseFloat(tr.querySelector('input[name$="-quantity"]').value || '0');
-      const up  = parseFloat(tr.querySelector('input[name$="-unit_price"]').value || '0');
-      const lt = qty * up;
-      tr.querySelector('[data-role=rowtotal]').textContent = lt.toFixed(2);
-      subtotal += lt;
+  function renumber() {
+    const rows = tbody.querySelectorAll('tr');
+    rows.forEach((tr, i) => {
+      const cell = tr.querySelector('[data-role=rownum]');
+      if (cell) cell.textContent = i + 1;
     });
-    const taxRateInput = document.getElementById('id_tax_rate');
-    const discountInput = document.getElementById('id_discount_amount');
-    const taxRate = parseFloat((taxRateInput && taxRateInput.value) || '0');
-    const discount = parseFloat((discountInput && discountInput.value) || '0');
-    const sub = Math.max(0, subtotal - discount);
-    const tax = sub * (taxRate / 100);
-    document.getElementById('subtotal').textContent = sub.toFixed(2);
-    document.getElementById('taxAmt').textContent = tax.toFixed(2);
-    document.getElementById('grandTotal').textContent = (sub + tax).toFixed(2);
+    // Disable trash on the only row if just one exists (avoid empty form)
+    const delBtns = tbody.querySelectorAll('[data-role=del]');
+    delBtns.forEach(b => b.disabled = (rows.length <= 1));
   }
 
-  function addRow() {
+  function recalc() {
+    let subtotal = 0;
+    let qtyTotal = 0;
+    let itemCount = 0;
+    tbody.querySelectorAll('tr').forEach(tr => {
+      const descInput = tr.querySelector('input[name$="-description"]');
+      const qtyInput  = tr.querySelector('input[name$="-quantity"]');
+      const upInput   = tr.querySelector('input[name$="-unit_price"]');
+      const qty = parseFloat(qtyInput.value || '0');
+      const up  = parseFloat(upInput.value || '0');
+      const lt  = qty * up;
+      tr.querySelector('[data-role=rowtotal]').textContent = lt.toFixed(2);
+      subtotal += lt;
+      qtyTotal += qty;
+      if ((descInput.value || '').trim()) itemCount++;
+    });
+
+    const taxRate  = parseFloat((document.getElementById('id_tax_rate') || {}).value || '0');
+    const discount = parseFloat((document.getElementById('id_discount_amount') || {}).value || '0');
+    const net      = Math.max(0, subtotal - discount);
+    const tax      = net * (taxRate / 100);
+    const grand    = net + tax;
+
+    document.getElementById('rawSubtotal').textContent = subtotal.toFixed(2);
+    document.getElementById('subtotal').textContent    = net.toFixed(2);
+    document.getElementById('taxAmt').textContent      = tax.toFixed(2);
+    document.getElementById('taxRateLbl').textContent  = taxRate.toFixed(taxRate % 1 ? 2 : 0);
+    document.getElementById('grandTotal').textContent  = grand.toFixed(2);
+    document.getElementById('itemCount').textContent   = itemCount;
+    document.getElementById('qtyCount').textContent    = qtyTotal.toFixed(qtyTotal % 1 ? 2 : 0);
+
+    const discountRow = document.getElementById('discountRow');
+    if (discount > 0) {
+      discountRow.style.display = 'flex';
+      document.getElementById('discountAmt').textContent = '−' + discount.toFixed(2);
+    } else {
+      discountRow.style.display = 'none';
+    }
+
+    if (ccyInput && ccyLabel) ccyLabel.textContent = (ccyInput.value || 'GMD').toUpperCase();
+  }
+
+  function addRow(opts) {
+    opts = opts || {};
     const tr = buildRow(rowIdx++);
     tbody.appendChild(tr);
     tr.querySelectorAll('input').forEach(i => i.addEventListener('input', recalc));
     tr.querySelector('[data-role=del]').addEventListener('click', () => {
+      if (tbody.querySelectorAll('tr').length <= 1) return;
       tr.remove();
+      renumber();
       recalc();
     });
+    // Tab from the last cell of the last row → add a new row
+    const upInput = tr.querySelector('input[name$="-unit_price"]');
+    upInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab' && !e.shiftKey && tr === tbody.lastElementChild) {
+        e.preventDefault();
+        addRow({ focus: true });
+      }
+    });
+    renumber();
+    recalc();
+    if (opts.focus) {
+      tr.querySelector('input[name$="-description"]').focus();
+    }
   }
 
-  addBtn.addEventListener('click', addRow);
-  ['id_tax_rate', 'id_discount_amount'].forEach(id => {
+  addBtn.addEventListener('click', () => addRow({ focus: true }));
+
+  ['id_tax_rate', 'id_discount_amount', 'id_currency'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', recalc);
   });
@@ -188,6 +454,16 @@
   // Seed two rows so the form isn't empty
   addRow();
   addRow();
+
+  // Prevent submitting empty orders (basic client-side guard — server still validates)
+  document.getElementById('orderForm').addEventListener('submit', (e) => {
+    const hasItem = Array.from(tbody.querySelectorAll('input[name$="-description"]'))
+      .some(i => (i.value || '').trim().length > 0);
+    if (!hasItem) {
+      e.preventDefault();
+      alert('Please add at least one line item with a description.');
+    }
+  });
 })();
 </script>
 {% endblock %}

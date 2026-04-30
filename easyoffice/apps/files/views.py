@@ -921,62 +921,129 @@ def _get_sig_font_path(font_name='Dancing Script'):
     return None
 
 
-def _typed_sig_to_image(text, width_pt, height_pt, font_name='Dancing Script', dpi=150):
+def _typed_sig_to_image(text, width_pt, height_pt, font_name='Dancing Script', dpi=220):
     """
-    Renders a typed signature as a transparent-background PNG using PIL.
-    Returns BytesIO of PNG or None on failure.
-    font_name is a hint only — we always use the best available font.
+    Render typed signature as a transparent PNG with a tight crop.
+    This keeps the signature visible, DocuSign-style, and inside the box.
     """
     from PIL import ImageFont, ImageDraw
-    w_px = max(10, int(width_pt  * dpi / 72))
-    h_px = max(10, int(height_pt * dpi / 72))
 
-    font_path  = _get_sig_font_path(font_name)
-    font_size  = max(12, int(h_px * 0.60))
-    pil_font   = None
+    text = re.sub(r'\s+', ' ', str(text or '').strip())
+    if not text:
+        return None
 
-    if font_path:
-        for attempt in range(3):
-            try:
-                pil_font = ImageFont.truetype(font_path, font_size)
-                break
-            except Exception:
-                font_size = max(8, font_size - 4)
+    font_path = _get_sig_font_path(font_name)
 
-    if pil_font is None:
-        return None   # caller will fall back to reportlab text
+    # IMPORTANT:
+    # Never use ImageFont.load_default() here.
+    # It is a tiny bitmap font and causes the very small text issue.
+    if not font_path:
+        return None
 
-    img  = Image.new('RGBA', (w_px, h_px), (255, 255, 255, 0))
-    draw = ImageDraw.Draw(img)
-    ink  = (16, 69, 197, 240)   # dark DocuSign blue, slight transparency
+    target_w_px = max(80, int(width_pt * dpi / 72))
+    target_h_px = max(32, int(height_pt * dpi / 72))
 
-    # Centre the text
-    try:
-        bbox = draw.textbbox((0, 0), text, font=pil_font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    except AttributeError:
-        tw, th = draw.textsize(text, font=pil_font)   # PIL < 9.2
+    temp_img = Image.new('RGBA', (target_w_px * 2, target_h_px * 2), (255, 255, 255, 0))
+    temp_draw = ImageDraw.Draw(temp_img)
 
-    # Scale down if text wider than image
-    if tw > w_px - 8:
-        scale = (w_px - 8) / tw
-        new_size = max(8, int(font_size * scale))
+    max_font_size = max(18, int(target_h_px * 1.25))
+    min_font_size = 8
+
+    chosen_font = None
+    chosen_bbox = None
+
+    for size in range(max_font_size, min_font_size - 1, -1):
         try:
-            pil_font = ImageFont.truetype(font_path, new_size)
-            bbox = draw.textbbox((0, 0), text, font=pil_font)
-            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        except Exception:
-            pass
+            font = ImageFont.truetype(font_path, size)
+            bbox = temp_draw.textbbox((0, 0), text, font=font)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
 
-    x = max(4, (w_px - tw) // 2)
-    y = max(0, (h_px - th) // 2 - int(h_px * 0.05))  # slight upward nudge
-    draw.text((x, y), text, fill=ink, font=pil_font)
+            if tw <= target_w_px * 0.98 and th <= target_h_px * 0.95:
+                chosen_font = font
+                chosen_bbox = bbox
+                break
+        except Exception:
+            continue
+
+    if chosen_font is None:
+        try:
+            chosen_font = ImageFont.truetype(font_path, min_font_size)
+            chosen_bbox = temp_draw.textbbox((0, 0), text, font=chosen_font)
+        except Exception:
+            return None
+
+    tw = chosen_bbox[2] - chosen_bbox[0]
+    th = chosen_bbox[3] - chosen_bbox[1]
+
+    pad_x = max(8, int(tw * 0.05))
+    pad_y = max(4, int(th * 0.20))
+
+    img_w = max(20, tw + (pad_x * 2))
+    img_h = max(16, th + (pad_y * 2))
+
+    img = Image.new('RGBA', (img_w, img_h), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+
+    ink = (16, 69, 197, 245)
+
+    draw.text(
+        (pad_x - chosen_bbox[0], pad_y - chosen_bbox[1]),
+        text,
+        fill=ink,
+        font=chosen_font,
+    )
 
     buf = BytesIO()
     img.save(buf, format='PNG')
     buf.seek(0)
     return buf
 
+def _draw_fitted_reportlab_text(
+    c,
+    text,
+    x,
+    y,
+    w,
+    h,
+    font_name='Helvetica-BoldOblique',
+    color=(0.063, 0.271, 0.773),
+):
+    """
+    Emergency fallback for typed signatures.
+    Fits and clips text inside the signature box without making it tiny.
+    """
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    text = re.sub(r'\s+', ' ', str(text or '').strip())
+    if not text:
+        return
+
+    max_size = max(9.0, min(h * 0.82, 26.0))
+    min_size = 6.5
+    font_size = max_size
+
+    while font_size > min_size and stringWidth(text, font_name, font_size) > (w - 8):
+        font_size -= 0.5
+
+    c.saveState()
+
+    clip = c.beginPath()
+    clip.rect(x, y, w, h)
+    c.clipPath(clip, stroke=0, fill=0)
+
+    c.setFont(font_name, font_size)
+    c.setFillColorRGB(*color)
+
+    text_y = y + ((h - font_size) / 2.0) + (font_size * 0.25)
+
+    c.drawCentredString(
+        x + (w / 2.0),
+        text_y,
+        text,
+    )
+
+    c.restoreState()
 
 def _embed_signatures_in_pdf(sig_req):
     """
@@ -1731,14 +1798,21 @@ def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, doc
     c.drawRightString(fx + fw - 7, label_y + 1, mark)
 
     # Signature rendering area
-    sig_area_x = fx + 6
-    sig_area_y = fy + (fh * 0.23)
-    sig_area_w = fw - 12
-    sig_area_h = fh * 0.56
+    # Leave space for the top label and bottom verification hash,
+    # but give the typed signature more height so it remains visible.
+    top_reserved = max(10, fh * 0.20)
+    bottom_reserved = max(10, fh * 0.18)
+
+    sig_area_x = fx + 7
+    sig_area_y = fy + bottom_reserved + 2
+    sig_area_w = fw - 14
+    sig_area_h = max(14, fh - top_reserved - bottom_reserved - 4)
 
     if is_initial:
-        sig_area_y = fy + (fh * 0.26)
-        sig_area_h = fh * 0.50
+        sig_area_x = fx + 9
+        sig_area_y = fy + bottom_reserved + 2
+        sig_area_w = fw - 18
+        sig_area_h = max(13, fh - top_reserved - bottom_reserved - 4)
 
     # Drawn/uploaded image signature
     if value.startswith('data:image'):
@@ -1747,7 +1821,6 @@ def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, doc
             raw = base64.b64decode(b64)
             img = Image.open(BytesIO(raw)).convert('RGBA')
 
-            # Keep transparent signature background
             img_buf = BytesIO()
             img.save(img_buf, format='PNG')
             img_buf.seek(0)
@@ -1774,8 +1847,10 @@ def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, doc
             font_part, display_text = value.split('|', 1)
             font_hint = font_part[5:] or 'Dancing Script'
 
+        display_text = re.sub(r'\s+', ' ', str(display_text or '').strip())
+
         if is_initial:
-            display_text = display_text.replace('font:', '').split('|')[-1].upper()
+            display_text = ''.join([p[0] for p in display_text.split()[:2]]).upper() or signer_initials
 
         img_buf = None
         try:
@@ -1800,14 +1875,17 @@ def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, doc
                 mask='auto',
             )
         else:
-            font_size = max(10, min(sig_area_h * 0.60, 28))
-            c.setFont('Helvetica-BoldOblique', font_size)
-            c.setFillColorRGB(*EO_INK)
-            c.drawCentredString(
-                fx + fw / 2,
-                sig_area_y + (sig_area_h - font_size) / 2,
+            _draw_fitted_reportlab_text(
+                c,
                 display_text,
+                sig_area_x,
+                sig_area_y,
+                sig_area_w,
+                sig_area_h,
+                font_name='Helvetica-BoldOblique',
+                color=EO_INK,
             )
+
 
     # Verification line / hash
     c.setFont('Courier', max(4.8, min(6.2, fh * 0.08)))
@@ -3611,11 +3689,11 @@ class CreatorSignView(LoginRequiredMixin, View):
             return redirect('signature_request_detail', pk=sig_req.pk)
 
         if signer.status == 'signed':
-            return redirect('sign_document_complete', token=token)
+            return redirect('sign_document_complete', token=signer.token)
 
         if signer.status == 'declined':
             messages.info(request, 'You have already declined this request.')
-            return redirect('sign_document', token=token)
+            return redirect('sign_document', token=signer.token)
 
         # Redirect to the standard token-based signing page
         return redirect('sign_document', token=signer.token)
@@ -3861,18 +3939,55 @@ class SignDocumentView(View):
                 except Exception:
                     pass
 
+            # Check completion BEFORE saving SignatureRequest as completed.
+            # This lets us burn the signed PDF first, so the orders signal will email
+            # the correct signed document, not the unsigned original.
+            all_signers_signed = not sig_req.signers.exclude(status='signed').exists()
+
+            if all_signers_signed:
+                try:
+                    signed_file = _embed_signatures_in_pdf(sig_req)
+                    if signed_file:
+                        sig_req.refresh_from_db(fields=['document', 'status', 'completed_at', 'updated_at'])
+                except Exception:
+                    # PDF stamping should not block completion, but log it properly.
+                    try:
+                        import logging
+                        logging.getLogger(__name__).exception(
+                            'Could not embed signatures for signature request %s',
+                            sig_req.pk,
+                        )
+                    except Exception:
+                        pass
+
+            # Now update the SignatureRequest status.
+            # This save triggers apps/orders/signals.py, and at this point sig_req.document
+            # already points to the signed PDF if stamping succeeded.
             if hasattr(sig_req, 'update_status'):
                 sig_req.update_status()
 
             if getattr(sig_req, 'status', None) == 'completed':
                 _log_audit(sig_req, 'completed', request=request)
 
-                # ── Burn all signatures into the PDF ──────────────────────
-                try:
-                    _embed_signatures_in_pdf(sig_req)
-                except Exception:
-                    pass  # PDF stamping failure must never block a completed signing
+                # ── Notify creator: all done (WS + email) ─────────────────
+                _notify(
+                    sig_req.created_by,
+                    'sign_completed',
+                    title=f'All signatures collected: {sig_req.title}',
+                    body=f'{sig_req.signers.count()} signer(s) have all signed.',
+                    link=f'/files/signatures/{sig_req.pk}/',
+                )
 
+                try:
+                    _send_completion_email(sig_req, request.build_absolute_uri('/'))
+                except Exception:
+                    pass
+
+                try:
+                    for cc in sig_req.cc_recipients.all():
+                        _notify_cc_recipient(cc, request.build_absolute_uri('/'), event='completed')
+                except Exception:
+                    pass
                 # ── Notify creator: all done (WS + email) ─────────────────
                 _notify(
                     sig_req.created_by, 'sign_completed',
@@ -3934,6 +4049,50 @@ class SignDocumentView(View):
         messages.error(request, 'Invalid action.')
         return redirect('sign_document_complete', token=token)
 
+
+class SignDocumentCompleteView(View):
+    """
+    Public no-login completion page after a signer signs or declines.
+    """
+    template_name = 'files/sign_document_complete.html'
+
+    def get(self, request, token):
+        signer = get_object_or_404(
+            SignatureRequestSigner.objects.select_related('request', 'request__document'),
+            token=token,
+        )
+        sig_req = signer.request
+
+        document = sig_req.document
+
+        preview_url = None
+        download_url = None
+
+        try:
+            preview_url = reverse('sign_document_preview', kwargs={'token': signer.token})
+        except Exception:
+            preview_url = ''
+
+        try:
+            download_url = reverse('sign_document_download', kwargs={'token': signer.token})
+        except Exception:
+            download_url = ''
+
+        signed_count = sig_req.signers.filter(status='signed').count()
+        total_signers = sig_req.signers.count()
+        is_fully_completed = not sig_req.signers.exclude(status='signed').exists()
+
+        return render(request, self.template_name, {
+            'signer': signer,
+            'sig_req': sig_req,
+            'document': document,
+            'preview_url': preview_url,
+            'download_url': download_url,
+            'signed_count': signed_count,
+            'total_signers': total_signers,
+            'is_fully_completed': is_fully_completed,
+            'audit': sig_req.audit_trail.all() if hasattr(sig_req, 'audit_trail') else [],
+        })
 
 # ─────────────────────────────────────────────────────────────────────────────
 # My Signatures — in-app inbox for pending signing requests
@@ -4224,14 +4383,15 @@ class SavedSignaturesView(LoginRequiredMixin, View):
                     return redirect('saved_signatures')
 
             elif sig_type == 'type':
-                sig.data = (request.POST.get('data') or '').strip()
+                typed_text = (request.POST.get('typed_text') or '').strip()
+                font_name = (request.POST.get('font_name') or 'Dancing Script').strip()
 
-                if not sig.data:
-                    typed_text = (request.POST.get('typed_text') or '').strip()
-                    font_name = (request.POST.get('font_name') or 'Dancing Script').strip()
-
-                    if typed_text:
-                        sig.data = f'font:{font_name}|{typed_text}'
+                # For typed signatures, always save the real text format.
+                # Do NOT prefer the preview canvas/data:image value.
+                if typed_text:
+                    sig.data = f'font:{font_name}|{typed_text}'
+                else:
+                    sig.data = (request.POST.get('data') or '').strip()
 
                 if not sig.data:
                     if wants_json:
@@ -4998,10 +5158,16 @@ class QuickSignView(LoginRequiredMixin, View):
                                 mask='auto'
                             )
                         else:
-                            fs = max(8.0, min(sig_h_area * 0.62, 30.0))
-                            c.setFont('Helvetica-BoldOblique', fs)
-                            c.setFillColorRGB(*DS_INK)
-                            c.drawString(fx + 6, sig_y_area + (sig_h_area - fs) * 0.4, display_text)
+                            _draw_fitted_reportlab_text(
+                                c,
+                                display_text,
+                                fx + 2,
+                                sig_y_area + 2,
+                                max(10, fw - 4),
+                                max(10, sig_h_area - 4),
+                                font_name='Helvetica-BoldOblique',
+                                color=DS_INK,
+                            )
 
                     # Optional label text only, without background box
                     # if label_h:

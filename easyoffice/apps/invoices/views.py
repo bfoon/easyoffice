@@ -168,12 +168,12 @@ class NewInvoiceView(InvoiceAccessMixin, TemplateView):
         letterhead_id = request.POST.get('letterhead_id')
         if doc_type not in DocType.values or not letterhead_id:
             messages.error(request, 'Please choose a document type and letterhead.')
-            return redirect('invoice_new')
+            return redirect('invoices:invoice_new')
         try:
             letterhead = _user_accessible_pdfs(request.user).get(pk=letterhead_id)
         except SharedFile.DoesNotExist:
             messages.error(request, 'Selected letterhead is not available.')
-            return redirect('invoice_new')
+            return redirect('invoices:invoice_new')
 
         invoice = InvoiceDocument.objects.create(
             doc_type=doc_type,
@@ -186,7 +186,7 @@ class NewInvoiceView(InvoiceAccessMixin, TemplateView):
             invoice=invoice, position=0,
             description='', quantity=Decimal('1.00'), unit_price=Decimal('0.00'),
         )
-        return redirect('invoice_edit', pk=invoice.pk)
+        return redirect('invoices:invoice_edit', pk=invoice.pk)
 
 
 # ── Builder ──────────────────────────────────────────────────────────────────
@@ -200,7 +200,7 @@ class InvoiceBuilderView(InvoiceAccessMixin, TemplateView):
         if invoice.is_finalized:
             # Redirect to detail — can't edit finalized
             from django.shortcuts import redirect as _r
-            ctx['_redirect'] = reverse('invoice_detail', kwargs={'pk': invoice.pk})
+            ctx['_redirect'] = reverse('invoices:invoice_detail', kwargs={'pk': invoice.pk})
         ctx['invoice'] = invoice
         ctx['form'] = InvoiceMetadataForm(instance=invoice)
         ctx['items'] = invoice.items.all().order_by('position', 'id')
@@ -395,7 +395,7 @@ class InvoiceFinalizeView(InvoiceAccessMixin, View):
     def post(self, request, pk):
         invoice = get_object_or_404(InvoiceDocument, pk=pk)
         if invoice.is_finalized:
-            return JsonResponse({'ok': True, 'redirect': reverse('invoice_detail', kwargs={'pk': invoice.pk})})
+            return JsonResponse({'ok': True, 'redirect': reverse('invoices:invoice_detail', kwargs={'pk': invoice.pk})})
         try:
             invoice = finalize_invoice(invoice, request.user)
         except ValueError as e:
@@ -403,7 +403,7 @@ class InvoiceFinalizeView(InvoiceAccessMixin, View):
         return JsonResponse({
             'ok': True,
             'number': invoice.number,
-            'redirect': reverse('invoice_detail', kwargs={'pk': invoice.pk}),
+            'redirect': reverse('invoices:invoice_detail', kwargs={'pk': invoice.pk}),
         })
 
 
@@ -439,13 +439,13 @@ class InvoiceDeleteView(InvoiceAccessMixin, View):
         invoice = get_object_or_404(InvoiceDocument, pk=pk)
         if invoice.is_finalized:
             messages.error(request, 'Finalized invoices cannot be deleted — use Void instead.')
-            return redirect('invoice_detail', pk=invoice.pk)
+            return redirect('invoices:invoice_detail', pk=invoice.pk)
         if invoice.is_locked_by_conversion:
             messages.error(request, 'This document has been converted and is read-only.')
-            return redirect('invoice_detail', pk=invoice.pk)
+            return redirect('invoices:invoice_detail', pk=invoice.pk)
         invoice.delete()
         messages.success(request, 'Draft deleted.')
-        return redirect('invoice_dashboard')
+        return redirect('invoices:invoice_dashboard')
 
 
 # ── Void finalized ───────────────────────────────────────────────────────────
@@ -456,14 +456,14 @@ class InvoiceVoidView(InvoiceAccessMixin, View):
         invoice = get_object_or_404(InvoiceDocument, pk=pk)
         if invoice.is_locked_by_conversion:
             messages.error(request, 'This document has been converted to a newer document and cannot be voided.')
-            return redirect('invoice_detail', pk=invoice.pk)
+            return redirect('invoices:invoice_detail', pk=invoice.pk)
         reason = request.POST.get('reason', '')
         try:
             void_invoice(invoice, request.user, reason)
             messages.success(request, f'{invoice.number} voided.')
         except ValueError as e:
             messages.error(request, str(e))
-        return redirect('invoice_detail', pk=invoice.pk)
+        return redirect('invoices:invoice_detail', pk=invoice.pk)
 
 
 # ── Duplicate (finalized → new draft) ────────────────────────────────────────
@@ -502,7 +502,7 @@ class InvoiceDuplicateView(InvoiceAccessMixin, View):
             )
         dup.recalculate_totals(save=True)
         messages.success(request, 'Draft created from existing invoice.')
-        return redirect('invoice_edit', pk=dup.pk)
+        return redirect('invoices:invoice_edit', pk=dup.pk)
 
 
 # ── Templates ────────────────────────────────────────────────────────────────
@@ -563,9 +563,9 @@ class TemplateUseView(InvoiceAccessMixin, View):
         tmpl = get_object_or_404(InvoiceTemplate, pk=pk)
         if not tmpl.user_can_view(request.user):
             messages.error(request, 'You do not have access to that template.')
-            return redirect('invoice_new')
+            return redirect('invoices:invoice_new')
         invoice = create_invoice_from_template(tmpl, request.user)
-        return redirect('invoice_edit', pk=invoice.pk)
+        return redirect('invoices:invoice_edit', pk=invoice.pk)
 
 
 class TemplateEditView(InvoiceAccessMixin, View):
@@ -580,7 +580,7 @@ class TemplateEditView(InvoiceAccessMixin, View):
         tmpl = get_object_or_404(InvoiceTemplate, pk=pk)
         if not tmpl.user_can_edit(request.user):
             messages.error(request, 'You cannot edit this template.')
-            return redirect('template_list')
+            return redirect('invoices:template_list')
         form = TemplateForm(instance=tmpl)
         return render(request, self.template_name, {
             'form': form,
@@ -595,7 +595,7 @@ class TemplateEditView(InvoiceAccessMixin, View):
         tmpl = get_object_or_404(InvoiceTemplate, pk=pk)
         if not tmpl.user_can_edit(request.user):
             messages.error(request, 'You cannot edit this template.')
-            return redirect('template_list')
+            return redirect('invoices:template_list')
         form = TemplateForm(request.POST, instance=tmpl)
         if not form.is_valid():
             return render(request, self.template_name, {
@@ -610,7 +610,7 @@ class TemplateEditView(InvoiceAccessMixin, View):
                 messages.info(request, f'Applied update to {count} draft invoice(s).')
 
         messages.success(request, f'Template "{tmpl.name}" updated.')
-        return redirect('template_list')
+        return redirect('invoices:template_list')
 
 
 @method_decorator(require_POST, name='dispatch')
@@ -619,11 +619,11 @@ class TemplateDeleteView(InvoiceAccessMixin, View):
         tmpl = get_object_or_404(InvoiceTemplate, pk=pk)
         if not tmpl.user_can_edit(request.user):
             messages.error(request, 'You cannot delete this template.')
-            return redirect('template_list')
+            return redirect('invoices:template_list')
         name = tmpl.name
         tmpl.delete()
         messages.success(request, f'Template "{name}" deleted. Existing invoices keep their data.')
-        return redirect('template_list')
+        return redirect('invoices:template_list')
 
 
 # ── Conversion (Proforma → Invoice → Delivery Note) ──────────────────────────
@@ -640,7 +640,7 @@ class InvoiceConvertView(InvoiceAccessMixin, View):
         source = get_object_or_404(InvoiceDocument, pk=pk)
         if not source.can_convert:
             messages.error(request, 'This document cannot be converted.')
-            return redirect('invoice_detail', pk=source.pk)
+            return redirect('invoices:invoice_detail', pk=source.pk)
 
         pdfs = _user_accessible_pdfs(request.user).order_by('-created_at')[:80]
         return render(request, self.template_name, {
@@ -659,18 +659,18 @@ class InvoiceConvertView(InvoiceAccessMixin, View):
                 new_letterhead = _user_accessible_pdfs(request.user).get(pk=letterhead_id)
             except SharedFile.DoesNotExist:
                 messages.error(request, 'Selected letterhead is not accessible.')
-                return redirect('invoice_convert', pk=source.pk)
+                return redirect('invoices:invoice_convert', pk=source.pk)
 
         try:
             child = convert_invoice(source, request.user, new_letterhead=new_letterhead)
         except ValueError as e:
             messages.error(request, str(e))
-            return redirect('invoice_detail', pk=source.pk)
+            return redirect('invoices:invoice_detail', pk=source.pk)
 
         messages.success(request,
             f'Draft {child.get_doc_type_display()} created from {source.number}. '
             f'Review and edit before finalizing.')
-        return redirect('invoice_edit', pk=child.pk)
+        return redirect('invoices:invoice_edit', pk=child.pk)
 
 
 class ConvertibleSourcesListView(InvoiceAccessMixin, View):

@@ -51,7 +51,10 @@ urlpatterns = [
     # API
     path('api/v1/', include('apps.core.urls.api')),
     path('letterhead/', include('apps.letterhead.urls')),
-    path('invoices/', include('apps.invoices.urls')),
+    path(
+        'invoices/',
+        include(('apps.invoices.urls', 'invoices'), namespace='invoices')
+    ),
     path('opportunities/', include('apps.opportunities.urls')),
     path('customer-service/', include('apps.customer_service.urls')),
     path('users/', include('apps.user_admin.urls', namespace='user_admin')),

@@ -1,159 +1,384 @@
 {% extends "base.html" %}
 {% load humanize %}
-{% block title %}Order {{ order.order_no }}{% endblock %}
+{% block title %}{{ order.order_no }} — Order{% endblock %}
 {% block breadcrumb %}
   <a href="{% url 'orders:dashboard' %}">Orders</a><span>/</span>
   <a href="{% url 'orders:order_list' %}">List</a><span>/</span>
-  <span>{{ order.order_no }}</span>
+  <span style="font-family:monospace">{{ order.order_no }}</span>
 {% endblock %}
 
 {% block content %}
 <style>
-  .od-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
-  @media (max-width: 900px) { .od-grid { grid-template-columns: 1fr; } }
-  .od-card { background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); padding: 22px; margin-bottom: 18px; }
-  .od-card h3 { font-size: .85rem; font-weight: 700; margin: 0 0 14px; }
+  /* ── Layout ─────────────────────────────────────────────────────────── */
+  .od-grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 18px; align-items: start; }
+  @media (max-width: 1080px) { .od-grid { grid-template-columns: 1fr; } }
 
-  .od-status-banner { padding: 14px 18px; border-radius: var(--eo-radius); margin-bottom: 18px; font-size: .9rem; display: flex; align-items: center; gap: 12px; border-left: 4px solid; }
-  .b-new { background: #e0e7ff; color: #3730a3; border-color: #6366f1; }
-  .b-confirmed { background: #cffafe; color: #155e75; border-color: #06b6d4; }
-  .b-in_fulfillment { background: #fef3c7; color: #92400e; border-color: #f59e0b; }
-  .b-fulfilled { background: #dcfce7; color: #166534; border-color: #10b981; }
-  .b-cancelled { background: #f3f4f6; color: #374151; border-color: #94a3b8; }
+  .od-card { background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); padding: 20px 22px; margin-bottom: 16px; }
+  .od-card h3 { font-size: .82rem; font-weight: 700; margin: 0 0 14px; display: flex; align-items: center; gap: 8px; color: var(--eo-text); }
+  .od-card h3 .muted { color: var(--eo-text-muted); font-weight: 500; font-size: .78rem; margin-left: auto; }
 
-  .od-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
-  .od-table th { text-align: left; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--eo-text-muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--eo-border); }
-  .od-table td { padding: 10px; border-bottom: 1px solid var(--eo-border); }
-  .od-table tr:last-child td { border-bottom: 0; }
-  .od-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* ── Hero header strip ──────────────────────────────────────────────── */
+  .od-hero { display: flex; gap: 22px; align-items: flex-start; padding: 22px 24px; background: linear-gradient(135deg, var(--eo-surface) 0%, #fafbff 100%); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); margin-bottom: 18px; position: relative; overflow: hidden; }
+  .od-hero::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, var(--accent-color, #6366f1) 0%, transparent 100%); }
+  .od-hero.s-new            { --accent-color: #6366f1; }
+  .od-hero.s-confirmed      { --accent-color: #06b6d4; }
+  .od-hero.s-proforma_pending_signature,
+  .od-hero.s-invoice_pending_signature,
+  .od-hero.s-dn_pending_signature       { --accent-color: #f59e0b; }
+  .od-hero.s-proforma_signed,
+  .od-hero.s-invoice_signed             { --accent-color: #8b5cf6; }
+  .od-hero.s-fulfilled      { --accent-color: #10b981; }
+  .od-hero.s-cancelled      { --accent-color: #94a3b8; }
 
-  .totals-box { margin-top: 14px; }
-  .totals-box div { display: flex; justify-content: space-between; padding: 4px 0; font-size: .9rem; }
-  .totals-box .grand { font-size: 1.15rem; font-weight: 800; padding-top: 10px; margin-top: 6px; border-top: 1px solid var(--eo-border); }
+  .od-hero-id { flex: 1; min-width: 0; }
+  .od-hero-id .label { font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; color: var(--eo-text-muted); font-weight: 600; }
+  .od-hero-id .num { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 1.6rem; font-weight: 700; letter-spacing: -.01em; margin-top: 2px; word-break: break-all; }
+  .od-hero-id .meta { font-size: .8rem; color: var(--eo-text-muted); margin-top: 6px; display: flex; flex-wrap: wrap; gap: 14px; }
+  .od-hero-id .meta i { margin-right: 4px; opacity: .7; }
 
-  .meta-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: .85rem; border-bottom: 1px solid var(--eo-border); }
-  .meta-row:last-child { border-bottom: 0; }
-  .meta-row .lbl { color: var(--eo-text-muted); font-weight: 600; }
+  .od-hero-money { text-align: right; min-width: 180px; }
+  .od-hero-money .label { font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; color: var(--eo-text-muted); font-weight: 600; }
+  .od-hero-money .amt { font-size: 1.8rem; font-weight: 800; color: var(--eo-text); line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .od-hero-money .ccy { font-size: .9rem; color: var(--eo-text-muted); margin-right: 4px; }
 
-  .doc-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--eo-border); }
-  .doc-row:last-child { border-bottom: 0; }
-  .doc-row .icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1rem; color: #fff; flex-shrink: 0; }
-  .doc-row .num { font-family: monospace; font-weight: 600; font-size: .9rem; }
-  .doc-row .label { font-size: .75rem; color: var(--eo-text-muted); text-transform: uppercase; letter-spacing: .04em; }
-  .doc-row .pending { color: var(--eo-text-muted); font-style: italic; font-size: .85rem; }
-  .doc-actions { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
-  .doc-locked { display:inline-flex;align-items:center;gap:6px;font-size:.75rem;color:var(--eo-text-muted);padding:6px 9px;border-radius:999px;background:#f8fafc;border:1px dashed var(--eo-border); }
+  /* ── Status pill ────────────────────────────────────────────────────── */
+  .od-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; font-size: .75rem; font-weight: 700; letter-spacing: .02em; margin-top: 8px; }
+  .od-pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .od-pill.s-new            { background: #e0e7ff; color: #3730a3; }
+  .od-pill.s-confirmed      { background: #cffafe; color: #155e75; }
+  .od-pill.s-proforma_pending_signature,
+  .od-pill.s-invoice_pending_signature,
+  .od-pill.s-dn_pending_signature       { background: #fef3c7; color: #92400e; }
+  .od-pill.s-proforma_signed,
+  .od-pill.s-invoice_signed             { background: #ede9fe; color: #5b21b6; }
+  .od-pill.s-fulfilled      { background: #dcfce7; color: #166534; }
+  .od-pill.s-cancelled      { background: #e5e7eb; color: #374151; }
 
-  .events { font-size: .82rem; }
-  .events li { list-style: none; padding: 8px 0; border-bottom: 1px solid var(--eo-border); }
-  .events li:last-child { border-bottom: 0; }
-  .events .when { color: var(--eo-text-muted); font-size: .7rem; }
+  /* ── Document chain (right rail) ────────────────────────────────────── */
+  .chain { position: relative; padding-left: 4px; }
+  .chain-step { display: grid; grid-template-columns: 32px 1fr; gap: 12px; align-items: start; padding-bottom: 16px; position: relative; }
+  .chain-step:last-child { padding-bottom: 0; }
+  .chain-step::before {
+    content: ''; position: absolute; left: 15px; top: 32px; bottom: 0; width: 2px;
+    background: var(--eo-border);
+  }
+  .chain-step:last-child::before { display: none; }
+  .chain-step.done::before { background: #10b981; }
+  .chain-step.pending::before { background: linear-gradient(to bottom, #f59e0b 0%, #f59e0b 50%, var(--eo-border) 50%); }
 
-  .actions-bar { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chain-dot {
+    width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--eo-bg, #f3f4f6); color: var(--eo-text-muted);
+    border: 2px solid var(--eo-border); font-size: .9rem; flex-shrink: 0;
+    transition: all .25s ease;
+  }
+  .chain-step.done .chain-dot { background: #10b981; color: #fff; border-color: #10b981; }
+  .chain-step.active .chain-dot { background: var(--eo-surface); color: #f59e0b; border-color: #f59e0b; box-shadow: 0 0 0 4px rgba(245, 158, 11, .15); }
+  .chain-step.pending .chain-dot {
+    background: #fef3c7; color: #92400e; border-color: #f59e0b;
+    animation: pulseAmber 2s ease-in-out infinite;
+  }
+  @keyframes pulseAmber {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, .35); }
+    50%      { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0); }
+  }
 
-  .inline-form { display: flex; gap: 8px; align-items: end; }
-  .inline-form select { padding: 8px 10px; border: 1px solid var(--eo-border); border-radius: 6px; font-size: .85rem; min-width: 220px; }
+  .chain-body .name { font-size: .82rem; font-weight: 700; color: var(--eo-text); }
+  .chain-body .name.sig { display: flex; align-items: center; gap: 6px; }
+  .chain-body .name.sig i { font-size: .85em; }
+  .chain-body .doc { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: .78rem; color: #10b981; margin-top: 2px; }
+  .chain-body .doc a { color: inherit; text-decoration: none; border-bottom: 1px dashed currentColor; }
+  .chain-body .hint { font-size: .72rem; color: var(--eo-text-muted); margin-top: 2px; }
+  .chain-body .hint.amber { color: #b45309; font-weight: 600; }
+  .chain-body .hint.green { color: #047857; font-weight: 600; }
+
+  /* ── Items, customer, totals ───────────────────────────────────────── */
+  .items { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  .items th { text-align: left; font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: var(--eo-text-muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--eo-border); }
+  .items td { padding: 11px 10px; border-bottom: 1px solid var(--eo-border); vertical-align: top; }
+  .items tr:last-child td { border-bottom: 0; }
+  .items .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .items .pos { color: var(--eo-text-muted); width: 30px; font-size: .78rem; }
+
+  .totals-box { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--eo-border); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-size: .88rem; }
+  .totals-box .row { display: flex; gap: 30px; min-width: 240px; justify-content: space-between; }
+  .totals-box .row.grand { font-size: 1.05rem; font-weight: 800; padding-top: 6px; margin-top: 4px; border-top: 2px solid var(--eo-text); }
+  .totals-box .label { color: var(--eo-text-muted); }
+
+  .cust-link { display: flex; gap: 14px; align-items: center; padding: 12px 14px; background: var(--eo-bg, #fafafa); border-radius: 10px; margin-bottom: 12px; }
+  .cust-avatar { width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.05rem; }
+  .cust-name { font-weight: 700; }
+  .cust-name a { color: inherit; text-decoration: none; }
+  .cust-name a:hover { text-decoration: underline; }
+  .cust-meta { font-size: .78rem; color: var(--eo-text-muted); margin-top: 2px; }
+
+  .kv-grid { display: grid; grid-template-columns: 100px 1fr; gap: 8px 14px; font-size: .85rem; }
+  .kv-grid .k { color: var(--eo-text-muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; padding-top: 2px; }
+  .kv-grid .v { color: var(--eo-text); word-break: break-word; }
+  .kv-grid .v.empty { color: var(--eo-text-muted); font-style: italic; }
+
+  /* ── Action panel ───────────────────────────────────────────────────── */
+  .action-stack { display: flex; flex-direction: column; gap: 8px; }
+  .action-stack form { margin: 0; }
+  .action-stack .eo-btn { width: 100%; justify-content: flex-start; }
+  .action-stack .eo-btn i { margin-right: 8px; }
+  .action-divider { height: 1px; background: var(--eo-border); margin: 4px 0; }
+  .gate-note { font-size: .72rem; color: var(--eo-text-muted); padding: 6px 10px; background: #f9fafb; border-radius: 6px; line-height: 1.4; }
+
+  /* ── Timeline ───────────────────────────────────────────────────────── */
+  .timeline { position: relative; padding-left: 24px; }
+  .timeline::before { content: ''; position: absolute; left: 7px; top: 6px; bottom: 6px; width: 2px; background: var(--eo-border); }
+  .tl-item { position: relative; padding: 0 0 18px; }
+  .tl-item:last-child { padding-bottom: 0; }
+  .tl-item::before {
+    content: ''; position: absolute; left: -24px; top: 6px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--eo-surface); border: 3px solid var(--eo-text-muted);
+  }
+  .tl-item.k-created::before        { border-color: #6366f1; }
+  .tl-item.k-confirmed::before      { border-color: #06b6d4; }
+  .tl-item.k-fulfilled::before      { border-color: #10b981; }
+  .tl-item.k-cancelled::before      { border-color: #ef4444; }
+  .tl-item.k-doc_generated::before  { border-color: #f59e0b; }
+  .tl-item.k-doc_signed::before     { border-color: #8b5cf6; }
+  .tl-item.k-customer_link::before  { border-color: #8b5cf6; }
+  .tl-item .tl-when { font-size: .72rem; color: var(--eo-text-muted); }
+  .tl-item .tl-msg { font-size: .85rem; margin-top: 2px; }
+  .tl-item .tl-actor { font-size: .75rem; color: var(--eo-text-muted); margin-top: 2px; }
+
+  /* ── Banners ────────────────────────────────────────────────────────── */
+  .banner { padding: 12px 14px; border-radius: 10px; font-size: .85rem; display: flex; gap: 10px; align-items: flex-start; margin-bottom: 14px; }
+  .banner.warn   { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+  .banner.info   { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+  .banner.danger { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+  .banner.signing { background: linear-gradient(135deg, #fffbeb 0%, #fef9c3 100%); border: 1px solid #fde68a; color: #92400e; }
+  .banner i { font-size: 1.1rem; padding-top: 1px; }
+
+  /* ── Sign CTA (in pending banner) ──────────────────────────────────── */
+  .sign-cta {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 16px; margin-top: 10px;
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    color: #fff; font-weight: 700; font-size: .85rem;
+    border-radius: 8px; text-decoration: none;
+    box-shadow: 0 1px 3px rgba(217, 119, 6, .3);
+    transition: all .15s ease;
+  }
+  .sign-cta:hover {
+    background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+    box-shadow: 0 2px 6px rgba(217, 119, 6, .4);
+    color: #fff; text-decoration: none;
+  }
+  .sign-cta i { font-size: 1em; }
+  .sign-meta { font-size: .76rem; color: #b45309; margin-top: 6px; }
+
+  /* Secondary CTA — open the signing flow (pad-based) */
+  .sign-cta-secondary {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 9px 14px; margin-top: 10px;
+    background: #fff; color: #b45309; font-weight: 600; font-size: .82rem;
+    border: 1px solid #fde68a; border-radius: 8px; text-decoration: none;
+    transition: all .15s ease;
+  }
+  .sign-cta-secondary:hover { background: #fffbeb; color: #92400e; text-decoration: none; }
+  .sign-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+  .sign-form-inline { display: inline-block; margin: 0; }
+  .sign-form-inline button { all: unset; cursor: pointer; }
+
+  .source-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: #f3f4f6; border-radius: 6px; font-size: .72rem; font-weight: 600; color: #4b5563; }
+
+  details.cancel-toggle { margin-top: 4px; }
+  details.cancel-toggle > summary { cursor: pointer; padding: 8px 12px; border-radius: 8px; font-size: .82rem; color: #b91c1c; list-style: none; }
+  details.cancel-toggle > summary::-webkit-details-marker { display: none; }
+  details.cancel-toggle > summary::before { content: '⚠ '; }
+  details.cancel-toggle[open] > summary { background: #fef2f2; }
+  details.cancel-toggle textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--eo-border); border-radius: 8px; font-size: .85rem; box-sizing: border-box; margin-top: 8px; font-family: inherit; }
+  details.cancel-toggle .danger-btn { background: #ef4444; color: #fff; border: 0; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: .82rem; margin-top: 8px; width: 100%; }
+  details.cancel-toggle .danger-btn:hover { background: #dc2626; }
 </style>
 
-<!-- Status banner -->
-<div class="od-status-banner b-{{ order.status }}">
-  <i class="bi bi-info-circle-fill"></i>
-  <div style="flex:1">
-    <strong>{{ order.get_status_display }}</strong>
-    {% if order.status == 'new' %}— Awaiting confirmation. Review and confirm before fulfilling.
-    {% elif order.status == 'confirmed' %}— Ready to fulfill.
-    {% elif order.status == 'in_fulfillment' %}
-      {% if order.proforma and not order.invoice %}— Proforma generated. Invoice generation is now active.
-      {% elif order.invoice and not order.delivery_note %}— Invoice generated. Delivery Note generation is now active.
-      {% else %}— Document generation is in progress.
-      {% endif %}
-    {% elif order.status == 'fulfilled' %}— Proforma, Invoice and Delivery Note generated. Order complete.
-    {% elif order.status == 'cancelled' %}— {{ order.cancelled_reason|default:"No reason given" }}
+{# ──────────────────────────────────────────────────────────────────────── #}
+{# HERO STRIP                                                              #}
+{# ──────────────────────────────────────────────────────────────────────── #}
+<div class="od-hero s-{{ order.status }}">
+  <div class="od-hero-id">
+    <div class="label">Order</div>
+    <div class="num">{{ order.order_no }}</div>
+    <div>
+      <span class="od-pill s-{{ order.status }}">{{ order.get_status_display }}</span>
+      <span class="source-badge"><i class="bi bi-{% if order.source == 'phone' %}telephone{% elif order.source == 'walk_in' %}person-walking{% elif order.source == 'website' %}globe{% elif order.source == 'api' %}plug{% elif order.source == 'email' %}envelope{% else %}three-dots{% endif %}"></i> {{ order.get_source_display }}</span>
+    </div>
+    <div class="meta">
+      <span><i class="bi bi-calendar3"></i>{{ order.created_at|date:"M d, Y · H:i" }}</span>
+      {% if order.created_by %}<span><i class="bi bi-person"></i>{{ order.created_by.get_full_name|default:order.created_by.username }}</span>{% endif %}
+      {% if order.external_ref %}<span><i class="bi bi-link-45deg"></i>{{ order.external_ref }}</span>{% endif %}
+      {% if order.ticket_id %}<span><i class="bi bi-ticket"></i><a href="#" style="color:inherit">Ticket linked</a></span>{% endif %}
+    </div>
+  </div>
+  <div class="od-hero-money">
+    <div class="label">Order Total</div>
+    <div class="amt"><span class="ccy">{{ order.currency }}</span>{{ order.total|floatformat:2|intcomma }}</div>
+    {% if order.subtotal != order.total %}
+      <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:4px">
+        Sub {{ order.subtotal|floatformat:2|intcomma }} + Tax {{ order.tax_amount|floatformat:2|intcomma }}
+      </div>
     {% endif %}
   </div>
 </div>
 
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title" style="font-family:monospace">{{ order.order_no }}</h1>
-    <p style="color:var(--eo-text-muted);font-size:.85rem;margin:4px 0 0">
-      {{ order.get_source_display }} · created {{ order.created_at|date:"M d, Y H:i" }}
-      {% if order.created_by %} by {{ order.created_by.email }}{% endif %}
-    </p>
+{# ── Status banners ─────────────────────────────────────────────────── #}
+
+{% if order.status == 'cancelled' and order.cancelled_reason %}
+  <div class="banner danger">
+    <i class="bi bi-x-octagon-fill"></i>
+    <div><strong>Cancelled.</strong> {{ order.cancelled_reason }}</div>
   </div>
-  <div class="actions-bar">
-    {% if order.status == 'new' %}
-      <form method="post" action="{% url 'orders:order_confirm' pk=order.pk %}" style="display:inline">{% csrf_token %}
-        <button type="submit" class="eo-btn"><i class="bi bi-check-circle"></i> Confirm</button>
-      </form>
-    {% endif %}
-    {% if can_generate_proforma %}
-      <form method="post" action="{% url 'orders:order_fulfill' pk=order.pk %}" style="display:inline"
-            onsubmit="return confirm('This will generate only the Proforma. Invoice and Delivery Note will be generated later. Continue?');">
-        {% csrf_token %}
-        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-file-earmark-plus"></i> Generate Proforma</button>
-      </form>
-    {% endif %}
-    {% if can_generate_invoice %}
-      <form method="post" action="{% url 'orders:order_generate_invoice' pk=order.pk %}" style="display:inline"
-            onsubmit="return confirm('Generate the Invoice from this Proforma now?');">
-        {% csrf_token %}
-        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-receipt"></i> Generate Invoice</button>
-      </form>
-    {% endif %}
-    {% if can_generate_delivery_note %}
-      <form method="post" action="{% url 'orders:order_generate_delivery_note' pk=order.pk %}" style="display:inline"
-            onsubmit="return confirm('Generate the Delivery Note from this Invoice now?');">
-        {% csrf_token %}
-        <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-truck"></i> Generate DN</button>
-      </form>
-    {% endif %}
-    {% if can_cancel and order.status != 'cancelled' and order.status != 'fulfilled' %}
-      <button type="button" class="eo-btn" onclick="document.getElementById('cancelModal').style.display='block'">
-        <i class="bi bi-x-circle"></i> Cancel
-      </button>
-    {% endif %}
+{% endif %}
+
+{% if pending_signature_doc %}
+  <div class="banner signing">
+    <i class="bi bi-pen-fill"></i>
+    <div style="flex:1">
+      <strong>{{ pending_signature_doc }} awaiting CEO signature.</strong>
+      No further documents can be generated for this order until the CEO signs.
+      The buyer will be emailed automatically once signing is complete.
+
+      {% if can_sign and active_signature %}
+        <div class="sign-actions">
+          {% if active_signature.has_default_saved_sig %}
+            {# One-click sign with saved signature — primary button #}
+            <form method="post" action="{% url 'orders:order_sign_with_saved' pk=order.pk %}" class="sign-form-inline">
+              {% csrf_token %}
+              <button type="submit" class="sign-cta">
+                <i class="bi bi-pen-fill"></i> Sign with my saved signature
+              </button>
+            </form>
+            {# Fallback to the regular pad-based signing flow #}
+            {% if active_signature.sign_url %}
+              <a href="{{ active_signature.sign_url }}" class="sign-cta-secondary">
+                <i class="bi bi-vector-pen"></i> Or use the signing pad
+              </a>
+            {% endif %}
+          {% elif active_signature.sign_url %}
+            {# CEO has no saved signature yet — push them to set one up,
+               and offer the pad-based flow as the immediate option #}
+            <a href="{{ active_signature.sign_url }}" class="sign-cta">
+              <i class="bi bi-pen-fill"></i> Review &amp; Sign Now
+            </a>
+            {% if saved_signatures_url %}
+              <a href="{{ saved_signatures_url }}" class="sign-cta-secondary">
+                <i class="bi bi-bookmark-plus"></i> Save a signature for one-click signing
+              </a>
+            {% endif %}
+          {% endif %}
+        </div>
+        <div class="sign-meta">
+          {% if active_signature.has_default_saved_sig %}
+            One-click sign places your saved signature in the bottom-left of the document.
+          {% else %}
+            Tip — save a default signature once and you'll be able to one-click sign every order document afterwards.
+          {% endif %}
+          {% if active_signature.request.created_at %}
+            · sent {{ active_signature.request.created_at|naturaltime }}
+          {% endif %}
+        </div>
+      {% elif active_signature.request %}
+        <div class="sign-meta">
+          Sent on {{ active_signature.request.created_at|date:"M d, H:i" }}.
+          Awaiting CEO action.
+        </div>
+      {% endif %}
+    </div>
   </div>
-</div>
+{% endif %}
+
+{% if not ceo_user %}
+  <div class="banner danger">
+    <i class="bi bi-shield-exclamation"></i>
+    <div>
+      <strong>No CEO user configured.</strong>
+      Document signature requests cannot be sent until a user is assigned to the
+      <em>CEO</em> group. Ask an administrator to set this up.
+    </div>
+  </div>
+{% endif %}
+
+{% if not order.customer_id %}
+  <div class="banner warn">
+    <i class="bi bi-person-exclamation"></i>
+    <div>
+      <strong>No customer attached.</strong>
+      This order arrived without a linked customer record — attach one before fulfillment so the document chain pulls the right billing details.
+    </div>
+  </div>
+{% endif %}
 
 <div class="od-grid">
-  <!-- LEFT: items + customer -->
+
+  {# ────────────────────────────────────────────────────────────────────── #}
+  {# LEFT COLUMN — items, customer, notes, timeline                        #}
+  {# ────────────────────────────────────────────────────────────────────── #}
   <div>
-    <!-- Customer / contact -->
+
+    {# ── Customer ────────────────────────────────────────────────────── #}
     <div class="od-card">
-      <h3><i class="bi bi-person-circle"></i> Customer &amp; Contact</h3>
+      <h3><i class="bi bi-person-badge"></i> Customer</h3>
+
       {% if order.customer %}
-        <div class="meta-row"><span class="lbl">Customer</span><span><a href="#">{{ order.customer.display_name }}</a></span></div>
-        {% if order.customer.email %}<div class="meta-row"><span class="lbl">Customer email</span><span>{{ order.customer.email }}</span></div>{% endif %}
-        {% if order.customer.address %}<div class="meta-row"><span class="lbl">Customer address</span><span>{{ order.customer.address|truncatechars:60 }}</span></div>{% endif %}
-      {% else %}
-        <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:12px;margin-bottom:14px;font-size:.85rem">
-          <i class="bi bi-exclamation-triangle-fill" style="color:#d97706"></i>
-          <strong>No customer attached.</strong> This order needs a customer before it can be fulfilled.
+        <div class="cust-link">
+          <div class="cust-avatar">
+            {{ order.customer.display_name|default:order.customer.full_name|default:"?"|first|upper }}
+          </div>
+          <div style="flex:1;min-width:0">
+            <div class="cust-name">
+              <a href="#">{{ order.customer.display_name|default:order.customer.full_name }}</a>
+            </div>
+            <div class="cust-meta">
+              {% if order.customer.phone %}<i class="bi bi-telephone"></i> {{ order.customer.phone }}{% endif %}
+              {% if order.customer.email %} · <i class="bi bi-envelope"></i> {{ order.customer.email }}{% endif %}
+            </div>
+          </div>
         </div>
-        <form method="post" action="{% url 'orders:order_attach_customer' pk=order.pk %}" class="inline-form">
+      {% else %}
+        <form method="post" action="{% url 'orders:order_attach_customer' pk=order.pk %}" style="margin-bottom:14px">
           {% csrf_token %}
-          {{ attach_customer_form.customer }}
-          <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-link-45deg"></i> Attach</button>
+          <label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;color:var(--eo-text-muted);font-weight:600;display:block;margin-bottom:6px">
+            Attach existing customer
+          </label>
+          <div style="display:flex;gap:8px">
+            {{ attach_customer_form.customer }}
+            <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-link-45deg"></i> Attach</button>
+          </div>
         </form>
       {% endif %}
 
-      <div style="margin-top:14px">
-        {% if order.contact_name %}<div class="meta-row"><span class="lbl">Contact name</span><span>{{ order.contact_name }}</span></div>{% endif %}
-        {% if order.contact_phone %}<div class="meta-row"><span class="lbl">Phone</span><span>{{ order.contact_phone }}</span></div>{% endif %}
-        {% if order.contact_email %}<div class="meta-row"><span class="lbl">Email</span><span>{{ order.contact_email }}</span></div>{% endif %}
-        {% if order.delivery_address %}<div class="meta-row"><span class="lbl">Delivery address</span><span>{{ order.delivery_address }}</span></div>{% endif %}
-        {% if order.notes %}<div class="meta-row"><span class="lbl">Notes</span><span>{{ order.notes }}</span></div>{% endif %}
+      <div class="kv-grid">
+        <div class="k">Contact</div>
+        <div class="v {% if not order.contact_name %}empty{% endif %}">{{ order.contact_name|default:"—" }}</div>
+        <div class="k">Phone</div>
+        <div class="v {% if not order.contact_phone %}empty{% endif %}">
+          {% if order.contact_phone %}<a href="tel:{{ order.contact_phone }}" style="color:inherit">{{ order.contact_phone }}</a>{% else %}—{% endif %}
+        </div>
+        <div class="k">Email</div>
+        <div class="v {% if not order.contact_email %}empty{% endif %}">
+          {% if order.contact_email %}<a href="mailto:{{ order.contact_email }}" style="color:inherit">{{ order.contact_email }}</a>{% else %}—{% endif %}
+        </div>
+        <div class="k">Delivery</div>
+        <div class="v {% if not order.delivery_address %}empty{% endif %}" style="white-space:pre-line">{{ order.delivery_address|default:"—" }}</div>
       </div>
     </div>
 
-    <!-- Line items -->
+    {# ── Line items ──────────────────────────────────────────────────── #}
     <div class="od-card">
-      <h3><i class="bi bi-list-ul"></i> Line Items</h3>
+      <h3><i class="bi bi-list-ul"></i> Line Items <span class="muted">{{ order.items.count }} {{ order.items.count|pluralize:"item,items" }}</span></h3>
+
       {% if order.items.all %}
-      <table class="od-table">
+      <table class="items">
         <thead>
           <tr>
+            <th class="pos">#</th>
             <th>Description</th>
             <th class="num">Qty</th>
             <th class="num">Unit Price</th>
@@ -163,150 +388,338 @@
         <tbody>
           {% for li in order.items.all %}
           <tr>
+            <td class="pos">{{ forloop.counter }}</td>
             <td>{{ li.description }}</td>
-            <td class="num">{{ li.quantity }}</td>
+            <td class="num">{{ li.quantity|floatformat:2 }}</td>
             <td class="num">{{ li.unit_price|floatformat:2|intcomma }}</td>
-            <td class="num">{{ li.line_total|floatformat:2|intcomma }}</td>
+            <td class="num"><strong>{{ li.line_total|floatformat:2|intcomma }}</strong></td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
+
       <div class="totals-box">
-        <div><span>Subtotal</span><span>{{ order.subtotal|floatformat:2|intcomma }}</span></div>
-        {% if order.discount_amount %}<div><span>Discount</span><span>-{{ order.discount_amount|floatformat:2|intcomma }}</span></div>{% endif %}
-        <div><span>Tax ({{ order.tax_rate }}%)</span><span>{{ order.tax_amount|floatformat:2|intcomma }}</span></div>
-        <div class="grand"><span>Total ({{ order.currency }})</span><span>{{ order.total|floatformat:2|intcomma }}</span></div>
+        {% if order.discount_amount %}
+        <div class="row"><span class="label">Discount</span><span>− {{ order.discount_amount|floatformat:2|intcomma }}</span></div>
+        {% endif %}
+        <div class="row"><span class="label">Subtotal</span><span>{{ order.subtotal|floatformat:2|intcomma }}</span></div>
+        <div class="row"><span class="label">Tax ({{ order.tax_rate|floatformat:2 }}%)</span><span>{{ order.tax_amount|floatformat:2|intcomma }}</span></div>
+        <div class="row grand"><span>Total</span><span>{{ order.currency }} {{ order.total|floatformat:2|intcomma }}</span></div>
       </div>
       {% else %}
-        <div style="color:var(--eo-text-muted);text-align:center;padding:24px">No line items.</div>
-      {% endif %}
-    </div>
-  </div>
-
-  <!-- RIGHT: documents + audit -->
-  <div>
-    <div class="od-card">
-      <h3><i class="bi bi-file-earmark-text"></i> Documents</h3>
-
-      <div class="doc-row">
-        <div class="icon" style="background:#f59e0b"><i class="bi bi-file-earmark"></i></div>
-        <div style="flex:1">
-          <div class="label">Proforma</div>
-          {% if order.proforma %}
-            <div class="num"><a href="{% url 'invoice_detail' pk=order.proforma.pk %}">{{ order.proforma.number }}</a></div>
-          {% else %}
-            <div class="pending">Not generated yet</div>
-            {% if can_generate_proforma %}
-              <div class="doc-actions">
-                <form method="post" action="{% url 'orders:order_fulfill' pk=order.pk %}" onsubmit="return confirm('Generate Proforma for this order?');">
-                  {% csrf_token %}
-                  <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm"><i class="bi bi-file-earmark-plus"></i> Generate</button>
-                </form>
-              </div>
-            {% endif %}
-          {% endif %}
-        </div>
-      </div>
-
-      <div class="doc-row">
-        <div class="icon" style="background:#6366f1"><i class="bi bi-receipt"></i></div>
-        <div style="flex:1">
-          <div class="label">Invoice</div>
-          {% if order.invoice %}
-            <div class="num"><a href="{% url 'invoice_detail' pk=order.invoice.pk %}">{{ order.invoice.number }}</a></div>
-          {% else %}
-            <div class="pending">Not generated yet</div>
-            {% if can_generate_invoice %}
-              <div class="doc-actions">
-                <form method="post" action="{% url 'orders:order_generate_invoice' pk=order.pk %}" onsubmit="return confirm('Generate Invoice from the Proforma?');">
-                  {% csrf_token %}
-                  <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm"><i class="bi bi-receipt"></i> Generate</button>
-                </form>
-              </div>
-            {% elif not order.proforma %}
-              <div class="doc-actions"><span class="doc-locked"><i class="bi bi-lock"></i> Generate Proforma first</span></div>
-            {% endif %}
-          {% endif %}
-        </div>
-      </div>
-
-      <div class="doc-row">
-        <div class="icon" style="background:#10b981"><i class="bi bi-truck"></i></div>
-        <div style="flex:1">
-          <div class="label">Delivery Note</div>
-          {% if order.delivery_note %}
-            <div class="num"><a href="{% url 'invoice_detail' pk=order.delivery_note.pk %}">{{ order.delivery_note.number }}</a></div>
-          {% else %}
-            <div class="pending">Not generated yet</div>
-            {% if can_generate_delivery_note %}
-              <div class="doc-actions">
-                <form method="post" action="{% url 'orders:order_generate_delivery_note' pk=order.pk %}" onsubmit="return confirm('Generate Delivery Note from the Invoice?');">
-                  {% csrf_token %}
-                  <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm"><i class="bi bi-truck"></i> Generate DN</button>
-                </form>
-              </div>
-            {% elif not order.invoice %}
-              <div class="doc-actions"><span class="doc-locked"><i class="bi bi-lock"></i> Generate Invoice first</span></div>
-            {% endif %}
-          {% endif %}
-        </div>
-      </div>
-    </div>
-
-    <div class="od-card">
-      <h3><i class="bi bi-info-circle"></i> Order Info</h3>
-      <div class="meta-row"><span class="lbl">Source</span><span>{{ order.get_source_display }}</span></div>
-      {% if order.external_ref %}<div class="meta-row"><span class="lbl">External ref</span><span style="font-family:monospace">{{ order.external_ref }}</span></div>{% endif %}
-      <div class="meta-row"><span class="lbl">Items</span><span>{{ order.items.count }}</span></div>
-      <div class="meta-row"><span class="lbl">Currency</span><span>{{ order.currency }}</span></div>
-      {% if order.fulfilled_at %}
-        <div class="meta-row"><span class="lbl">Fulfilled</span><span>{{ order.fulfilled_at|date:"M d, Y H:i" }}</span></div>
-        <div class="meta-row"><span class="lbl">Fulfilled by</span><span>{{ order.fulfilled_by.email|default:"—" }}</span></div>
+        <div style="color:var(--eo-text-muted);padding:18px 0;text-align:center">No line items.</div>
       {% endif %}
     </div>
 
+    {# ── Notes ───────────────────────────────────────────────────────── #}
+    {% if order.notes %}
     <div class="od-card">
-      <h3><i class="bi bi-clock-history"></i> Activity</h3>
-      <ul class="events" style="padding:0;margin:0">
-        {% for ev in order.events.all|slice:":15" %}
-        <li>
-          <div><strong>{{ ev.get_kind_display }}</strong> — {{ ev.message }}</div>
-          <div class="when">
-            {{ ev.created_at|naturaltime }}
-            {% if ev.actor %}· {{ ev.actor.email }}{% endif %}
+      <h3><i class="bi bi-sticky"></i> Notes</h3>
+      <div style="white-space:pre-line;font-size:.88rem;line-height:1.55;color:var(--eo-text)">{{ order.notes }}</div>
+    </div>
+    {% endif %}
+
+    {# ── Activity timeline ───────────────────────────────────────────── #}
+    <div class="od-card">
+      <h3><i class="bi bi-clock-history"></i> Activity <span class="muted">{{ order.events.count }} event{{ order.events.count|pluralize }}</span></h3>
+      {% if order.events.all %}
+      <div class="timeline">
+        {% for e in order.events.all %}
+        <div class="tl-item k-{{ e.kind }}">
+          <div class="tl-when">{{ e.created_at|date:"M d, Y · H:i" }} · {{ e.created_at|naturaltime }}</div>
+          <div class="tl-msg">
+            <strong>{{ e.get_kind_display }}</strong>
+            {% if e.message %} — {{ e.message }}{% endif %}
           </div>
-        </li>
-        {% empty %}
-          <li style="color:var(--eo-text-muted);text-align:center">No activity yet.</li>
+          {% if e.actor %}<div class="tl-actor"><i class="bi bi-person"></i> {{ e.actor.get_full_name|default:e.actor.username }}</div>{% endif %}
+        </div>
         {% endfor %}
-      </ul>
+      </div>
+      {% else %}
+        <div style="color:var(--eo-text-muted);padding:14px 0;text-align:center;font-size:.85rem">No events recorded yet.</div>
+      {% endif %}
     </div>
-  </div>
-</div>
 
-<!-- Cancel modal -->
-<div id="cancelModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center">
-  <div style="background:#fff;border-radius:12px;padding:24px;max-width:480px;width:90%;margin:auto;margin-top:15vh">
-    <h3 style="margin-top:0">Cancel order?</h3>
-    <form method="post" action="{% url 'orders:order_cancel' pk=order.pk %}">
-      {% csrf_token %}
-      <div class="field" style="margin:12px 0">
-        <label>Reason (optional)</label>
-        {{ cancel_form.reason }}
+  </div>
+
+  {# ────────────────────────────────────────────────────────────────────── #}
+  {# RIGHT RAIL — chain visualization + actions                            #}
+  {# ────────────────────────────────────────────────────────────────────── #}
+  <div>
+
+    {# ── Document chain ─────────────────────────────────────────────── #}
+    <div class="od-card">
+      <h3><i class="bi bi-diagram-3"></i> Document Chain</h3>
+
+      <div class="chain">
+
+        {# 1. Order placed — always done #}
+        <div class="chain-step done">
+          <div class="chain-dot"><i class="bi bi-check-lg"></i></div>
+          <div class="chain-body">
+            <div class="name">Order placed</div>
+            <div class="doc">{{ order.order_no }}</div>
+            <div class="hint">{{ order.created_at|date:"M d, H:i" }}</div>
+          </div>
+        </div>
+
+        {# 2. Confirmed #}
+        <div class="chain-step {% if order.status == 'new' %}{% if can_confirm %}active{% endif %}{% else %}{% if order.status == 'cancelled' %}{% else %}done{% endif %}{% endif %}">
+          <div class="chain-dot">
+            {% if order.status != 'new' and order.status != 'cancelled' %}<i class="bi bi-check-lg"></i>
+            {% else %}<i class="bi bi-check2-circle"></i>{% endif %}
+          </div>
+          <div class="chain-body">
+            <div class="name">Confirmed</div>
+            {% if order.confirmed_at %}
+              <div class="hint green">Confirmed {{ order.confirmed_at|date:"M d, H:i" }}</div>
+            {% elif order.status == 'new' %}
+              <div class="hint">Awaiting Sales Supervisor / Manager confirmation</div>
+            {% endif %}
+          </div>
+        </div>
+
+        {# 3. Proforma generated #}
+        <div class="chain-step {% if order.proforma %}done{% elif can_generate_proforma %}active{% endif %}">
+          <div class="chain-dot">
+            {% if order.proforma %}<i class="bi bi-check-lg"></i>
+            {% else %}<i class="bi bi-file-earmark"></i>{% endif %}
+          </div>
+          <div class="chain-body">
+            <div class="name">Proforma generated</div>
+            {% if order.proforma %}
+              <div class="doc"><a href="{% url 'invoices:invoice_detail' pk=order.proforma_id %}">{{ order.proforma.number }}</a></div>
+              <div class="hint">{{ order.proforma.created_at|date:"M d, H:i" }}</div>
+            {% else %}
+              <div class="hint">{% if order.status == 'confirmed' %}Ready to generate{% else %}Confirm order first{% endif %}</div>
+            {% endif %}
+          </div>
+        </div>
+
+        {# 4. Proforma signed by CEO #}
+        <div class="chain-step
+          {% if order.status == 'proforma_pending_signature' %}pending
+          {% elif order.proforma and order.status != 'proforma_pending_signature' and order.status != 'cancelled' and order.status != 'confirmed' %}done
+          {% endif %}">
+          <div class="chain-dot">
+            {% if order.status == 'proforma_pending_signature' %}<i class="bi bi-pen"></i>
+            {% elif order.proforma and order.status != 'confirmed' and order.status != 'cancelled' %}<i class="bi bi-check-lg"></i>
+            {% else %}<i class="bi bi-pen"></i>{% endif %}
+          </div>
+          <div class="chain-body">
+            <div class="name sig"><i class="bi bi-shield-check"></i> CEO signature</div>
+            {% if order.status == 'proforma_pending_signature' %}
+              <div class="hint amber">Awaiting CEO signature…</div>
+            {% elif order.proforma and order.status != 'confirmed' %}
+              <div class="hint green">Signed · sent to buyer</div>
+            {% else %}
+              <div class="hint">Pending</div>
+            {% endif %}
+          </div>
+        </div>
+
+        {# 5. Invoice generated #}
+        <div class="chain-step {% if order.invoice %}done{% elif can_generate_invoice %}active{% endif %}">
+          <div class="chain-dot">
+            {% if order.invoice %}<i class="bi bi-check-lg"></i>
+            {% else %}<i class="bi bi-receipt-cutoff"></i>{% endif %}
+          </div>
+          <div class="chain-body">
+            <div class="name">Invoice generated</div>
+            {% if order.invoice %}
+              <div class="doc"><a href="{% url 'invoices:invoice_detail' pk=order.invoice_id %}">{{ order.invoice.number }}</a></div>
+              <div class="hint">{{ order.invoice.created_at|date:"M d, H:i" }}</div>
+            {% else %}
+              <div class="hint">{% if order.status == 'proforma_signed' %}Ready to generate{% else %}Awaiting proforma signature{% endif %}</div>
+            {% endif %}
+          </div>
+        </div>
+
+        {# 6. Invoice signed by CEO #}
+        <div class="chain-step
+          {% if order.status == 'invoice_pending_signature' %}pending
+          {% elif order.invoice and order.status != 'invoice_pending_signature' and order.status != 'proforma_signed' and order.status != 'cancelled' %}done
+          {% endif %}">
+          <div class="chain-dot">
+            {% if order.status == 'invoice_pending_signature' %}<i class="bi bi-pen"></i>
+            {% elif order.invoice and order.status != 'proforma_signed' and order.status != 'cancelled' %}<i class="bi bi-check-lg"></i>
+            {% else %}<i class="bi bi-pen"></i>{% endif %}
+          </div>
+          <div class="chain-body">
+            <div class="name sig"><i class="bi bi-shield-check"></i> CEO signature</div>
+            {% if order.status == 'invoice_pending_signature' %}
+              <div class="hint amber">Awaiting CEO signature…</div>
+            {% elif order.invoice and order.status != 'proforma_signed' %}
+              <div class="hint green">Signed · sent to buyer</div>
+            {% else %}
+              <div class="hint">Pending</div>
+            {% endif %}
+          </div>
+        </div>
+
+        {# 7. Delivery Note generated #}
+        <div class="chain-step {% if order.delivery_note %}done{% elif can_generate_delivery_note %}active{% endif %}">
+          <div class="chain-dot">
+            {% if order.delivery_note %}<i class="bi bi-check-lg"></i>
+            {% else %}<i class="bi bi-truck"></i>{% endif %}
+          </div>
+          <div class="chain-body">
+            <div class="name">Delivery Note generated</div>
+            {% if order.delivery_note %}
+              <div class="doc"><a href="{% url 'invoices:invoice_detail' pk=order.delivery_note_id %}">{{ order.delivery_note.number }}</a></div>
+              <div class="hint">{{ order.delivery_note.created_at|date:"M d, H:i" }}</div>
+            {% else %}
+              <div class="hint">{% if order.status == 'invoice_signed' %}Ready to generate{% else %}Awaiting invoice signature{% endif %}</div>
+            {% endif %}
+          </div>
+        </div>
+
+        {# 8. Delivery Note signed → fulfilled #}
+        <div class="chain-step {% if order.status == 'dn_pending_signature' %}pending{% elif order.status == 'fulfilled' %}done{% endif %}">
+          <div class="chain-dot">
+            {% if order.status == 'fulfilled' %}<i class="bi bi-check-lg"></i>
+            {% elif order.status == 'dn_pending_signature' %}<i class="bi bi-pen"></i>
+            {% else %}<i class="bi bi-flag"></i>{% endif %}
+          </div>
+          <div class="chain-body">
+            <div class="name sig"><i class="bi bi-shield-check"></i> CEO signature · Fulfilled</div>
+            {% if order.status == 'dn_pending_signature' %}
+              <div class="hint amber">Awaiting CEO signature…</div>
+            {% elif order.status == 'fulfilled' %}
+              <div class="hint green">Order fulfilled · {{ order.fulfilled_at|date:"M d, H:i" }}</div>
+            {% else %}
+              <div class="hint">Final step</div>
+            {% endif %}
+          </div>
+        </div>
+
       </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
-        <button type="button" class="eo-btn" onclick="document.getElementById('cancelModal').style.display='none'">Keep order</button>
-        <button type="submit" class="eo-btn" style="background:#ef4444;color:#fff;border-color:#ef4444">Cancel order</button>
+    </div>
+
+    {# ── Actions ─────────────────────────────────────────────────────── #}
+    {% if order.status != 'cancelled' and order.status != 'fulfilled' %}
+    <div class="od-card">
+      <h3><i class="bi bi-lightning-charge"></i> Actions</h3>
+
+      <div class="action-stack">
+
+        {# Confirm — supervisors only #}
+        {% if order.status == 'new' %}
+          {% if can_confirm %}
+            <form method="post" action="{% url 'orders:order_confirm' pk=order.pk %}">
+              {% csrf_token %}
+              <button type="submit" class="eo-btn eo-btn-primary">
+                <i class="bi bi-check2-circle"></i> Confirm Order
+              </button>
+            </form>
+            <div class="gate-note">
+              On confirmation, the buyer will be emailed an order confirmation.
+            </div>
+          {% else %}
+            <button class="eo-btn" disabled style="opacity:.55;cursor:not-allowed">
+              <i class="bi bi-check2-circle"></i> Confirm Order
+            </button>
+            <div class="gate-note">
+              Only a Sales Supervisor, Manager, Admin or CEO can confirm orders.
+            </div>
+          {% endif %}
+        {% endif %}
+
+        {# Generate Proforma #}
+        {% if can_generate_proforma %}
+          <form method="post" action="{% url 'orders:order_generate_proforma' pk=order.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="eo-btn eo-btn-primary">
+              <i class="bi bi-file-earmark-plus"></i> Generate Proforma
+            </button>
+          </form>
+          <div class="gate-note">
+            <i class="bi bi-info-circle"></i> The Proforma will be sent to the CEO for
+            signature. The buyer is emailed once it is signed.
+          </div>
+        {% elif order.status == 'confirmed' and not order.proforma %}
+          <button class="eo-btn" disabled style="opacity:.55;cursor:not-allowed">
+            <i class="bi bi-file-earmark-plus"></i> Generate Proforma
+          </button>
+          <div class="gate-note">Attach a customer and ensure items exist.</div>
+        {% endif %}
+
+        {# Generate Invoice — only after proforma signed #}
+        {% if can_generate_invoice %}
+          <form method="post" action="{% url 'orders:order_generate_invoice' pk=order.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="eo-btn eo-btn-primary">
+              <i class="bi bi-receipt"></i> Generate Invoice
+            </button>
+          </form>
+          <div class="gate-note">
+            <i class="bi bi-info-circle"></i> The Invoice will be sent to the CEO for
+            signature.
+          </div>
+        {% elif order.proforma and not order.invoice %}
+          <button class="eo-btn" disabled style="opacity:.55;cursor:not-allowed">
+            <i class="bi bi-receipt"></i> Generate Invoice
+          </button>
+          {% if order.status == 'proforma_pending_signature' %}
+            <div class="gate-note"><i class="bi bi-pen"></i> Waiting on CEO to sign the Proforma.</div>
+          {% endif %}
+        {% endif %}
+
+        {# Generate Delivery Note — only after invoice signed #}
+        {% if can_generate_delivery_note %}
+          <form method="post" action="{% url 'orders:order_generate_delivery_note' pk=order.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="eo-btn eo-btn-primary">
+              <i class="bi bi-truck"></i> Generate Delivery Note
+            </button>
+          </form>
+          <div class="gate-note">
+            <i class="bi bi-info-circle"></i> The Delivery Note will be sent to the CEO
+            for signature. Once signed, the order is marked Fulfilled.
+          </div>
+        {% elif order.invoice and not order.delivery_note %}
+          <button class="eo-btn" disabled style="opacity:.55;cursor:not-allowed">
+            <i class="bi bi-truck"></i> Generate Delivery Note
+          </button>
+          {% if order.status == 'invoice_pending_signature' %}
+            <div class="gate-note"><i class="bi bi-pen"></i> Waiting on CEO to sign the Invoice.</div>
+          {% endif %}
+        {% endif %}
+
+        {# Cancel #}
+        {% if can_cancel %}
+          <div class="action-divider"></div>
+          <details class="cancel-toggle">
+            <summary>Cancel this order</summary>
+            <form method="post" action="{% url 'orders:order_cancel' pk=order.pk %}">
+              {% csrf_token %}
+              {{ cancel_form.reason }}
+              <button type="submit" class="danger-btn"
+                      onclick="return confirm('Cancel order {{ order.order_no }}? This cannot be undone.');">
+                Confirm cancellation
+              </button>
+            </form>
+          </details>
+        {% endif %}
+
       </div>
-    </form>
+    </div>
+    {% endif %}
+
+    {# ── Money snapshot ─────────────────────────────────────────────── #}
+    <div class="od-card">
+      <h3><i class="bi bi-cash-coin"></i> Money</h3>
+      <div class="kv-grid">
+        <div class="k">Currency</div><div class="v">{{ order.currency }}</div>
+        <div class="k">Subtotal</div><div class="v">{{ order.subtotal|floatformat:2|intcomma }}</div>
+        <div class="k">Discount</div><div class="v">{{ order.discount_amount|floatformat:2|intcomma }}</div>
+        <div class="k">Tax rate</div><div class="v">{{ order.tax_rate|floatformat:2 }}%</div>
+        <div class="k">Tax</div><div class="v">{{ order.tax_amount|floatformat:2|intcomma }}</div>
+        <div class="k" style="font-weight:700;color:var(--eo-text)">Total</div>
+        <div class="v" style="font-weight:800">{{ order.currency }} {{ order.total|floatformat:2|intcomma }}</div>
+      </div>
+    </div>
+
   </div>
 </div>
-<script>
-  // Show the cancel modal as flex when triggered
-  const cm = document.getElementById('cancelModal');
-  if (cm) {
-    const observer = new MutationObserver(() => { if (cm.style.display === 'block') cm.style.display = 'flex'; });
-    observer.observe(cm, { attributes: true, attributeFilter: ['style'] });
-  }
-</script>
 {% endblock %}

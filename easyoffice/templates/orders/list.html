@@ -5,93 +5,300 @@
 
 {% block content %}
 <style>
-  .ord-filter-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; align-items: end; }
-  .ord-filter-bar label { display: block; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--eo-text-muted); font-weight: 600; margin-bottom: 4px; }
-  .ord-filter-bar select, .ord-filter-bar input { padding: 8px 10px; border: 1px solid var(--eo-border); border-radius: 8px; font-size: .85rem; min-width: 140px; }
-  .ord-table { width: 100%; border-collapse: collapse; font-size: .85rem; background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); overflow: hidden; }
-  .ord-table th { text-align: left; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--eo-text-muted); font-weight: 600; padding: 12px 14px; border-bottom: 1px solid var(--eo-border); background: var(--eo-bg, #fafafa); }
-  .ord-table td { padding: 12px 14px; border-bottom: 1px solid var(--eo-border); }
-  .ord-table tr:last-child td { border-bottom: 0; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .68rem; font-weight: 600; }
+  /* ── Page header ────────────────────────────────────────────────────── */
+  .ol-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  .ol-title { font-size: 1.5rem; font-weight: 800; letter-spacing: -.01em; margin: 0; color: var(--eo-text); display: flex; align-items: center; gap: 10px; }
+  .ol-title i { color: #6366f1; }
+  .ol-subtitle { color: var(--eo-text-muted); font-size: .85rem; margin: 4px 0 0; }
+  .ol-actions { display: flex; gap: 8px; align-items: center; }
+
+  /* ── Toolbar (search + filters) ─────────────────────────────────────── */
+  .ol-toolbar { background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); padding: 14px 16px; margin-bottom: 16px; }
+  .ol-toolbar form { display: grid; grid-template-columns: minmax(200px, 1fr) 180px 180px auto; gap: 10px; align-items: end; }
+  @media (max-width: 880px) { .ol-toolbar form { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 540px) { .ol-toolbar form { grid-template-columns: 1fr; } }
+
+  .tb-field { display: flex; flex-direction: column; gap: 4px; }
+  .tb-field label { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--eo-text-muted); font-weight: 700; }
+  .tb-field .input-wrap { position: relative; display: flex; align-items: center; }
+  .tb-field .input-wrap > i { position: absolute; left: 11px; color: var(--eo-text-muted); font-size: .9rem; pointer-events: none; }
+  .tb-field input, .tb-field select {
+    width: 100%; padding: 9px 12px 9px 34px; border: 1px solid var(--eo-border);
+    border-radius: 8px; font-size: .88rem; box-sizing: border-box; background: var(--eo-surface);
+    color: var(--eo-text); transition: border-color .15s, box-shadow .15s;
+  }
+  .tb-field select { padding-left: 34px; appearance: none; cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23999' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 12px center; padding-right: 30px; }
+  .tb-field input:focus, .tb-field select:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, .15); }
+  .tb-buttons { display: flex; gap: 6px; }
+  .tb-buttons .eo-btn { white-space: nowrap; }
+
+  /* ── Active filter chips ────────────────────────────────────────────── */
+  .ol-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; border-radius: 999px; font-size: .75rem; font-weight: 600; }
+  .chip a { color: inherit; text-decoration: none; opacity: .6; margin-left: 2px; }
+  .chip a:hover { opacity: 1; }
+
+  /* ── Result summary ─────────────────────────────────────────────────── */
+  .ol-summary { font-size: .8rem; color: var(--eo-text-muted); margin-bottom: 10px; }
+  .ol-summary strong { color: var(--eo-text); font-weight: 700; }
+
+  /* ── Table ──────────────────────────────────────────────────────────── */
+  .ol-table-wrap { background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); overflow: hidden; }
+  .ol-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  .ol-table thead th {
+    text-align: left; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--eo-text-muted); font-weight: 700; padding: 12px 16px;
+    border-bottom: 1px solid var(--eo-border); background: linear-gradient(180deg, #fafbfc 0%, #f5f6f8 100%);
+    position: sticky; top: 0;
+  }
+  .ol-table tbody tr { transition: background-color .12s; }
+  .ol-table tbody tr:hover { background: #f9fafb; }
+  .ol-table td { padding: 14px 16px; border-bottom: 1px solid var(--eo-border); vertical-align: middle; }
+  .ol-table tbody tr:last-child td { border-bottom: 0; }
+
+  .o-num { font-family: 'JetBrains Mono', ui-monospace, monospace; font-weight: 700; color: var(--eo-text); text-decoration: none; font-size: .85rem; }
+  .o-num:hover { color: #6366f1; }
+  .o-num .ext-ref { display: block; font-family: inherit; font-size: .68rem; font-weight: 500; color: var(--eo-text-muted); margin-top: 2px; }
+
+  .o-customer { display: flex; align-items: center; gap: 10px; }
+  .o-avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: .78rem; flex-shrink: 0; }
+  .o-avatar.muted { background: #e5e7eb; color: #6b7280; }
+  .o-customer-name { font-weight: 600; color: var(--eo-text); }
+  .o-customer-meta { font-size: .72rem; color: var(--eo-text-muted); margin-top: 1px; }
+
+  .o-source { display: inline-flex; align-items: center; gap: 5px; font-size: .8rem; color: var(--eo-text-muted); }
+  .o-source i { font-size: .9em; opacity: .7; }
+
+  .o-docs { display: flex; gap: 4px; }
+  .o-doc-pill {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 6px; font-size: .85rem;
+    background: #f3f4f6; color: #9ca3af; border: 1px solid transparent;
+  }
+  .o-doc-pill.has { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
+  .o-doc-pill.pending { background: #fef3c7; color: #b45309; border-color: #fde68a; animation: docPulse 2s ease-in-out infinite; }
+  @keyframes docPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, .35); }
+    50%      { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0); }
+  }
+
+  .o-time { white-space: nowrap; color: var(--eo-text-muted); font-size: .8rem; }
+  .o-time .abs { display: block; font-size: .7rem; opacity: .8; }
+
+  .o-total { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .o-total .ccy { font-size: .7rem; color: var(--eo-text-muted); font-weight: 500; margin-right: 3px; }
+
+  /* ── Status pills ───────────────────────────────────────────────────── */
+  .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font-size: .7rem; font-weight: 700; white-space: nowrap; }
+  .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
   .b-new { background: #e0e7ff; color: #3730a3; }
   .b-confirmed { background: #cffafe; color: #155e75; }
-  .b-in_fulfillment { background: #fef3c7; color: #92400e; }
+  .b-proforma_pending_signature, .b-invoice_pending_signature, .b-dn_pending_signature { background: #fef3c7; color: #92400e; }
+  .b-proforma_pending_signature::before, .b-invoice_pending_signature::before, .b-dn_pending_signature::before { animation: dotPulse 1.6s ease-in-out infinite; }
+  @keyframes dotPulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  .b-proforma_signed, .b-invoice_signed { background: #ede9fe; color: #5b21b6; }
   .b-fulfilled { background: #dcfce7; color: #166534; }
   .b-cancelled { background: #e5e7eb; color: #374151; }
-  .pager { display: flex; gap: 6px; justify-content: center; margin-top: 18px; }
-  .pager a, .pager span { padding: 6px 12px; border: 1px solid var(--eo-border); border-radius: 6px; text-decoration: none; font-size: .82rem; color: var(--eo-text); }
-  .pager .current { background: var(--eo-accent, #6366f1); color: #fff; border-color: transparent; }
+
+  /* ── Empty state ────────────────────────────────────────────────────── */
+  .ol-empty { padding: 60px 20px; text-align: center; color: var(--eo-text-muted); }
+  .ol-empty .icon { font-size: 2.5rem; opacity: .35; margin-bottom: 8px; }
+  .ol-empty .ttl { font-size: 1rem; font-weight: 700; color: var(--eo-text); margin-bottom: 4px; }
+  .ol-empty .desc { font-size: .85rem; max-width: 320px; margin: 0 auto 14px; line-height: 1.5; }
+
+  /* ── Pager ──────────────────────────────────────────────────────────── */
+  .pager { display: flex; gap: 6px; justify-content: center; align-items: center; margin-top: 18px; flex-wrap: wrap; }
+  .pager a, .pager span {
+    padding: 7px 13px; border: 1px solid var(--eo-border); border-radius: 8px;
+    text-decoration: none; font-size: .82rem; color: var(--eo-text);
+    background: var(--eo-surface); transition: all .12s;
+  }
+  .pager a:hover { border-color: #6366f1; color: #6366f1; }
+  .pager .current { background: #6366f1; color: #fff; border-color: #6366f1; font-weight: 700; }
+  .pager .pageinfo { background: transparent; border: 0; color: var(--eo-text-muted); font-size: .78rem; }
 </style>
 
-<div class="eo-page-header">
+<div class="ol-header">
   <div>
-    <h1 class="eo-page-title">Orders</h1>
+    <h1 class="ol-title"><i class="bi bi-cart-check"></i> Orders</h1>
+    <p class="ol-subtitle">Browse, filter and act on every sales order in the pipeline.</p>
   </div>
-  <div>
+  <div class="ol-actions">
+    <a href="{% url 'orders:dashboard' %}" class="eo-btn"><i class="bi bi-grid-1x2"></i> Dashboard</a>
     <a href="{% url 'orders:order_create' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus-lg"></i> New order</a>
   </div>
 </div>
 
-<form method="get" class="ord-filter-bar">
-  <div>
-    <label for="q">Search</label>
-    <input id="q" type="text" name="q" value="{{ q }}" placeholder="Order#, customer, phone…">
-  </div>
-  <div>
-    <label for="status">Status</label>
-    <select id="status" name="status">
-      <option value="">All</option>
-      {% for v, l in status_choices %}
-        <option value="{{ v }}" {% if v == current_status %}selected{% endif %}>{{ l }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div>
-    <label for="source">Source</label>
-    <select id="source" name="source">
-      <option value="">All</option>
-      {% for v, l in source_choices %}
-        <option value="{{ v }}" {% if v == current_source %}selected{% endif %}>{{ l }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <button type="submit" class="eo-btn">Filter</button>
-  {% if q or current_status or current_source %}
-    <a href="{% url 'orders:order_list' %}" class="eo-btn">Clear</a>
+{# ── Toolbar ──────────────────────────────────────────────────────────── #}
+<div class="ol-toolbar">
+  <form method="get">
+    <div class="tb-field">
+      <label for="q">Search</label>
+      <div class="input-wrap">
+        <i class="bi bi-search"></i>
+        <input id="q" type="text" name="q" value="{{ q }}" placeholder="Order #, customer, phone, email…" autocomplete="off">
+      </div>
+    </div>
+    <div class="tb-field">
+      <label for="status">Status</label>
+      <div class="input-wrap">
+        <i class="bi bi-flag"></i>
+        <select id="status" name="status">
+          <option value="">All statuses</option>
+          <option value="awaiting_signature" {% if current_status == 'awaiting_signature' %}selected{% endif %}>⏳ Awaiting signature (any)</option>
+          {% for v, l in status_choices %}
+            <option value="{{ v }}" {% if v == current_status %}selected{% endif %}>{{ l }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="tb-field">
+      <label for="source">Source</label>
+      <div class="input-wrap">
+        <i class="bi bi-funnel"></i>
+        <select id="source" name="source">
+          <option value="">All sources</option>
+          {% for v, l in source_choices %}
+            <option value="{{ v }}" {% if v == current_source %}selected{% endif %}>{{ l }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="tb-buttons">
+      <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-search"></i> Filter</button>
+      {% if q or current_status or current_source %}
+        <a href="{% url 'orders:order_list' %}" class="eo-btn" title="Clear all filters"><i class="bi bi-x-lg"></i></a>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+{# ── Active filter chips ──────────────────────────────────────────────── #}
+{% if q or current_status or current_source %}
+<div class="ol-chips">
+  {% if q %}
+    <span class="chip"><i class="bi bi-search" style="font-size:.7em"></i> "{{ q }}"
+      <a href="?{% if current_status %}status={{ current_status }}{% endif %}{% if current_source %}{% if current_status %}&{% endif %}source={{ current_source }}{% endif %}" title="Remove">×</a>
+    </span>
   {% endif %}
-</form>
+  {% if current_status %}
+    <span class="chip">Status: {{ current_status|title }}
+      <a href="?{% if q %}q={{ q }}{% endif %}{% if current_source %}{% if q %}&{% endif %}source={{ current_source }}{% endif %}" title="Remove">×</a>
+    </span>
+  {% endif %}
+  {% if current_source %}
+    <span class="chip">Source: {{ current_source|title }}
+      <a href="?{% if q %}q={{ q }}{% endif %}{% if current_status %}{% if q %}&{% endif %}status={{ current_status }}{% endif %}" title="Remove">×</a>
+    </span>
+  {% endif %}
+</div>
+{% endif %}
 
-<table class="ord-table">
-  <thead>
-    <tr>
-      <th>Order #</th><th>Source</th><th>Customer</th><th>Status</th>
-      <th>Documents</th><th>Created</th><th style="text-align:right">Total</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for o in orders %}
-    <tr>
-      <td><a href="{% url 'orders:order_detail' pk=o.pk %}" style="font-family:monospace;font-weight:600">{{ o.order_no }}</a></td>
-      <td>{{ o.get_source_display }}</td>
-      <td>{{ o.customer.display_name|default:o.contact_name|default:"—" }}</td>
-      <td><span class="badge b-{{ o.status }}">{{ o.get_status_display }}</span></td>
-      <td style="font-size:.78rem;color:var(--eo-text-muted)">
-        {% if o.invoice %}<i class="bi bi-receipt-cutoff"></i> {{ o.invoice.number }}{% else %}—{% endif %}
-      </td>
-      <td style="color:var(--eo-text-muted);white-space:nowrap">{{ o.created_at|date:"M d, H:i" }}</td>
-      <td style="text-align:right;font-weight:700">{{ o.currency }} {{ o.total|floatformat:2|intcomma }}</td>
-    </tr>
-    {% empty %}
-    <tr><td colspan="7" style="text-align:center;color:var(--eo-text-muted);padding:32px">No orders match these filters.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+{# ── Result summary ───────────────────────────────────────────────────── #}
+{% if paginator %}
+<div class="ol-summary">
+  Showing <strong>{{ page_obj.start_index }}–{{ page_obj.end_index }}</strong>
+  of <strong>{{ paginator.count }}</strong> {{ paginator.count|pluralize:"order,orders" }}
+</div>
+{% endif %}
 
+{# ── Table ────────────────────────────────────────────────────────────── #}
+<div class="ol-table-wrap">
+  <table class="ol-table">
+    <thead>
+      <tr>
+        <th style="width:160px">Order #</th>
+        <th style="width:110px">Source</th>
+        <th>Customer</th>
+        <th style="width:200px">Status</th>
+        <th style="width:130px">Documents</th>
+        <th style="width:130px">Created</th>
+        <th style="width:130px;text-align:right">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for o in orders %}
+      <tr>
+        <td>
+          <a href="{% url 'orders:order_detail' pk=o.pk %}" class="o-num">{{ o.order_no }}</a>
+          {% if o.external_ref %}<span class="ext-ref"><i class="bi bi-link-45deg"></i> {{ o.external_ref }}</span>{% endif %}
+        </td>
+        <td>
+          <span class="o-source">
+            <i class="bi bi-{% if o.source == 'phone' %}telephone{% elif o.source == 'walk_in' %}person-walking{% elif o.source == 'website' %}globe{% elif o.source == 'api' %}plug{% elif o.source == 'email' %}envelope{% else %}three-dots{% endif %}"></i>
+            {{ o.get_source_display }}
+          </span>
+        </td>
+        <td>
+          {% with display_name=o.customer.display_name|default:o.contact_name %}
+          {% if display_name %}
+            <div class="o-customer">
+              <div class="o-avatar{% if not o.customer_id %} muted{% endif %}">{{ display_name|first|upper }}</div>
+              <div>
+                <div class="o-customer-name">{{ display_name }}</div>
+                {% if not o.customer_id %}
+                  <div class="o-customer-meta"><i class="bi bi-exclamation-circle"></i> Not linked</div>
+                {% elif o.contact_phone %}
+                  <div class="o-customer-meta">{{ o.contact_phone }}</div>
+                {% endif %}
+              </div>
+            </div>
+          {% else %}
+            <span style="color:var(--eo-text-muted);font-style:italic">— no customer —</span>
+          {% endif %}
+          {% endwith %}
+        </td>
+        <td><span class="badge b-{{ o.status }}">{{ o.get_status_display }}</span></td>
+        <td>
+          <div class="o-docs" title="Proforma · Invoice · Delivery Note">
+            <span class="o-doc-pill {% if o.proforma_id %}has{% endif %} {% if o.status == 'proforma_pending_signature' %}pending{% endif %}" title="Proforma">P</span>
+            <span class="o-doc-pill {% if o.invoice_id %}has{% endif %} {% if o.status == 'invoice_pending_signature' %}pending{% endif %}" title="Invoice">I</span>
+            <span class="o-doc-pill {% if o.delivery_note_id %}has{% endif %} {% if o.status == 'dn_pending_signature' %}pending{% endif %}" title="Delivery Note">D</span>
+          </div>
+        </td>
+        <td>
+          <span class="o-time">
+            {{ o.created_at|naturaltime }}
+            <span class="abs">{{ o.created_at|date:"M d, H:i" }}</span>
+          </span>
+        </td>
+        <td class="o-total"><span class="ccy">{{ o.currency }}</span>{{ o.total|floatformat:2|intcomma }}</td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="7">
+          <div class="ol-empty">
+            <div class="icon"><i class="bi bi-inbox"></i></div>
+            <div class="ttl">No orders match these filters</div>
+            <div class="desc">Try adjusting your search or clearing the filters to see more orders.</div>
+            {% if q or current_status or current_source %}
+              <a href="{% url 'orders:order_list' %}" class="eo-btn">Clear filters</a>
+            {% else %}
+              <a href="{% url 'orders:order_create' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus-lg"></i> Create your first order</a>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{# ── Pager ────────────────────────────────────────────────────────────── #}
 {% if is_paginated %}
 <div class="pager">
-  {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}{% if q %}&q={{ q }}{% endif %}{% if current_status %}&status={{ current_status }}{% endif %}{% if current_source %}&source={{ current_source }}{% endif %}">‹ Prev</a>{% endif %}
-  <span class="current">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
-  {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}{% if q %}&q={{ q }}{% endif %}{% if current_status %}&status={{ current_status }}{% endif %}{% if current_source %}&source={{ current_source }}{% endif %}">Next ›</a>{% endif %}
+  {% if page_obj.has_previous %}
+    <a href="?page=1{% if q %}&q={{ q }}{% endif %}{% if current_status %}&status={{ current_status }}{% endif %}{% if current_source %}&source={{ current_source }}{% endif %}" title="First page"><i class="bi bi-chevron-double-left"></i></a>
+    <a href="?page={{ page_obj.previous_page_number }}{% if q %}&q={{ q }}{% endif %}{% if current_status %}&status={{ current_status }}{% endif %}{% if current_source %}&source={{ current_source }}{% endif %}"><i class="bi bi-chevron-left"></i> Prev</a>
+  {% endif %}
+  <span class="current">{{ page_obj.number }}</span>
+  <span class="pageinfo">of {{ page_obj.paginator.num_pages }}</span>
+  {% if page_obj.has_next %}
+    <a href="?page={{ page_obj.next_page_number }}{% if q %}&q={{ q }}{% endif %}{% if current_status %}&status={{ current_status }}{% endif %}{% if current_source %}&source={{ current_source }}{% endif %}">Next <i class="bi bi-chevron-right"></i></a>
+    <a href="?page={{ page_obj.paginator.num_pages }}{% if q %}&q={{ q }}{% endif %}{% if current_status %}&status={{ current_status }}{% endif %}{% if current_source %}&source={{ current_source }}{% endif %}" title="Last page"><i class="bi bi-chevron-double-right"></i></a>
+  {% endif %}
 </div>
 {% endif %}
 {% endblock %}

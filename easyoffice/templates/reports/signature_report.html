@@ -1,0 +1,1022 @@
+{% extends "base.html" %}
+{% load humanize static %}
+
+{% block title %}Signature Report{% endblock %}
+{% block breadcrumb %}<a href="{% url 'reports_dashboard' %}">Reports</a> / Signature Report{% endblock %}
+
+{% block content %}
+<style>
+  /* ── Page-scoped tokens ─────────────────────────────────── */
+  .sig-rpt {
+    --sig-purple: #7c3aed;
+    --sig-cyan:   #0ea5e9;
+    --sig-green:  #059669;
+    --sig-amber:  #d97706;
+    --sig-rose:   #e11d48;
+    --sig-slate:  #64748b;
+  }
+
+  /* ── KPI strip ──────────────────────────────────────────── */
+  .sig-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+
+  .sig-kpi {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .sig-kpi .ico {
+    width: 42px;
+    height: 42px;
+    border-radius: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    flex-shrink: 0;
+  }
+
+  .sig-kpi .val {
+    font-size: 1.55rem;
+    font-weight: 800;
+    color: var(--eo-text);
+    line-height: 1;
+    letter-spacing: -.02em;
+  }
+
+  .sig-kpi .lbl {
+    font-size: .72rem;
+    color: var(--eo-text-muted);
+    font-weight: 500;
+    margin-top: 4px;
+    line-height: 1.4;
+  }
+
+  .sig-kpi .delta {
+    font-size: .68rem;
+    font-weight: 700;
+    margin-top: 3px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  /* ── Card wrapper used for chart and table panels ───────── */
+  .sig-card {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    padding: 20px 22px;
+  }
+
+  .sig-card-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .sig-card-title {
+    font-size: .82rem;
+    font-weight: 800;
+    color: var(--eo-text);
+    letter-spacing: -.005em;
+  }
+
+  .sig-card-sub {
+    font-size: .72rem;
+    color: var(--eo-text-muted);
+    font-weight: 500;
+  }
+
+  /* ── Two-column / three-column responsive grids ─────────── */
+  .sig-grid-2 {
+    display: grid;
+    gap: 16px;
+    margin-bottom: 16px;
+    grid-template-columns: 1fr;
+  }
+
+  .sig-grid-3 {
+    display: grid;
+    gap: 16px;
+    margin-bottom: 16px;
+    grid-template-columns: 1fr;
+  }
+
+  @media (min-width: 900px) {
+    .sig-grid-2 {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .sig-grid-3 {
+      grid-template-columns: 1.4fr 1fr 1fr;
+    }
+  }
+
+  .sig-chart-wrap {
+    position: relative;
+    height: 260px;
+    min-height: 180px;
+  }
+
+  .sig-chart-empty-message {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--eo-text-muted);
+    font-size: .82rem;
+    padding: 18px;
+    border: 1px dashed var(--eo-border);
+    border-radius: 14px;
+    background: rgba(248, 250, 252, .55);
+  }
+
+  /* ── Status / method legend list under the donuts ───────── */
+  .sig-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: .8rem;
+  }
+
+  .sig-legend .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sig-legend .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  .sig-legend .name {
+    flex: 1;
+    color: var(--eo-text);
+    font-weight: 600;
+  }
+
+  .sig-legend .count {
+    color: var(--eo-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Tables ─────────────────────────────────────────────── */
+  .sig-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .85rem;
+  }
+
+  .sig-table th {
+    text-align: left;
+    font-size: .68rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--eo-text-muted);
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--eo-border);
+  }
+
+  .sig-table td {
+    padding: 10px;
+    border-bottom: 1px solid var(--eo-border);
+    color: var(--eo-text);
+  }
+
+  .sig-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .sig-table .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+
+  .sig-table .muted {
+    color: var(--eo-text-muted);
+  }
+
+  .sig-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: .68rem;
+    font-weight: 700;
+    text-transform: capitalize;
+    letter-spacing: -.005em;
+  }
+
+  .sp-completed {
+    background: #ecfdf5;
+    color: #047857;
+  }
+
+  .sp-sent {
+    background: #eff6ff;
+    color: #1d4ed8;
+  }
+
+  .sp-partial {
+    background: #fffbeb;
+    color: #92400e;
+  }
+
+  .sp-draft {
+    background: #f1f5f9;
+    color: #475569;
+  }
+
+  .sp-cancelled,
+  .sp-expired {
+    background: #f1f5f9;
+    color: #64748b;
+  }
+
+  .sp-declined {
+    background: #fef2f2;
+    color: #b91c1c;
+  }
+
+  .sig-empty {
+    text-align: center;
+    padding: 28px 12px;
+    color: var(--eo-text-muted);
+    font-size: .85rem;
+  }
+
+  .sig-empty i {
+    font-size: 1.6rem;
+    display: block;
+    margin-bottom: 6px;
+    opacity: .5;
+  }
+</style>
+
+<div class="sig-rpt">
+
+  <div class="eo-page-header">
+    <div>
+      <h1 class="eo-page-title">Signature Report</h1>
+      <p style="color:var(--eo-text-muted);font-size:.85rem;margin:4px 0 0">
+        E-signature usage across the organisation — completion rate, signing methods, top users and operational health.
+      </p>
+    </div>
+  </div>
+
+  <!-- KPI strip -->
+  <div class="sig-kpi-grid">
+    <div class="sig-kpi">
+      <div class="ico" style="background:#7c3aed15;color:#7c3aed">
+        <i class="bi bi-send-fill"></i>
+      </div>
+      <div>
+        <div class="val">{{ total_requests|default:0|intcomma }}</div>
+        <div class="lbl">Total Requests Sent</div>
+        <div class="delta" style="color:var(--sig-purple)">
+          <i class="bi bi-clock-history"></i> {{ requests_30d|default:0 }} in last 30d
+        </div>
+      </div>
+    </div>
+
+    <div class="sig-kpi">
+      <div class="ico" style="background:#05966915;color:#059669">
+        <i class="bi bi-check-circle-fill"></i>
+      </div>
+      <div>
+        <div class="val" style="color:#059669">{{ total_completed|default:0|intcomma }}</div>
+        <div class="lbl">Signed via Flow</div>
+        <div class="delta" style="color:var(--sig-green)">
+          <i class="bi bi-graph-up-arrow"></i> {{ completion_rate|default:0 }}% completion rate
+        </div>
+      </div>
+    </div>
+
+    <div class="sig-kpi">
+      <div class="ico" style="background:#0ea5e915;color:#0ea5e9">
+        <i class="bi bi-lightning-charge-fill"></i>
+      </div>
+      <div>
+        <div class="val" style="color:#0ea5e9">{{ total_quick_signed|default:0|intcomma }}</div>
+        <div class="lbl">Quick-Signed Documents</div>
+        <div class="delta" style="color:var(--sig-cyan)">
+          <i class="bi bi-clock-history"></i> {{ quick_signed_30d|default:0 }} in last 30d
+        </div>
+      </div>
+    </div>
+
+    <div class="sig-kpi">
+      <div class="ico" style="background:#d9770615;color:#d97706">
+        <i class="bi bi-hourglass-split"></i>
+      </div>
+      <div>
+        <div class="val" style="color:#d97706">{{ total_pending|default:0|intcomma }}</div>
+        <div class="lbl">Awaiting Signature</div>
+        <div class="delta" style="color:var(--sig-amber)">
+          <i class="bi bi-stopwatch"></i> Median sign time: {{ median_time_to_sign_human|default:"—" }}
+        </div>
+      </div>
+    </div>
+
+    <div class="sig-kpi">
+      <div class="ico" style="background:#e11d4815;color:#e11d48">
+        <i class="bi bi-x-octagon-fill"></i>
+      </div>
+      <div>
+        <div class="val" style="color:#e11d48">{{ total_voided|default:0|intcomma }}</div>
+        <div class="lbl">Voided / Cancelled</div>
+        <div class="delta" style="color:var(--sig-rose)">
+          <i class="bi bi-x-circle"></i> {{ total_declined|default:0 }} declined
+        </div>
+      </div>
+    </div>
+
+    <div class="sig-kpi">
+      <div class="ico" style="background:#64748b15;color:#64748b">
+        <i class="bi bi-calendar-day"></i>
+      </div>
+      <div>
+        <div class="val">{{ requests_today|default:0|intcomma }}</div>
+        <div class="lbl">Requests Today</div>
+        <div class="delta" style="color:var(--sig-slate)">
+          <i class="bi bi-pen"></i> {{ signed_today|default:0 }} signed today
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Daily activity chart -->
+  <div class="sig-card" style="margin-bottom:16px">
+    <div class="sig-card-head">
+      <div>
+        <div class="sig-card-title">Daily Signature Activity</div>
+        <div class="sig-card-sub">Requests sent vs. signatures completed — last 30 days</div>
+      </div>
+    </div>
+    <div class="sig-chart-wrap" style="height:280px">
+      <canvas id="dailyChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Status mix / Method mix / Monthly trend -->
+  <div class="sig-grid-3">
+
+    <div class="sig-card">
+      <div class="sig-card-head">
+        <div>
+          <div class="sig-card-title">Request Status Mix</div>
+          <div class="sig-card-sub">All-time breakdown</div>
+        </div>
+      </div>
+
+      {% if status_mix %}
+        <div class="sig-chart-wrap" style="height:200px">
+          <canvas id="statusChart"></canvas>
+        </div>
+
+        <div class="sig-legend" style="margin-top:14px">
+          {% for r in status_mix %}
+            <div class="row">
+              <span class="swatch" data-status-swatch="{{ r.status }}"></span>
+              <span class="name">{{ r.label }}</span>
+              <span class="count">{{ r.count|intcomma }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="sig-empty">
+          <i class="bi bi-pie-chart"></i>
+          No signature requests yet.
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="sig-card">
+      <div class="sig-card-head">
+        <div>
+          <div class="sig-card-title">Signing Method</div>
+          <div class="sig-card-sub">Among signed signers</div>
+        </div>
+      </div>
+
+      {% if method_mix %}
+        <div class="sig-chart-wrap" style="height:200px">
+          <canvas id="methodChart"></canvas>
+        </div>
+
+        <div class="sig-legend" style="margin-top:14px">
+          {% for r in method_mix %}
+            <div class="row">
+              <span class="swatch" data-method-swatch="{{ r.signature_type }}"></span>
+              <span class="name">{{ r.label }}</span>
+              <span class="count">{{ r.count|intcomma }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="sig-empty">
+          <i class="bi bi-pen"></i>
+          No completed signatures yet.
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="sig-card">
+      <div class="sig-card-head">
+        <div>
+          <div class="sig-card-title">Monthly Trend</div>
+          <div class="sig-card-sub">Last 12 months</div>
+        </div>
+      </div>
+      <div class="sig-chart-wrap">
+        <canvas id="monthlyChart"></canvas>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Top requesters / Top signers -->
+  <div class="sig-grid-2">
+
+    <div class="sig-card">
+      <div class="sig-card-head">
+        <div>
+          <div class="sig-card-title">Top Requesters</div>
+          <div class="sig-card-sub">Last 30 days</div>
+        </div>
+      </div>
+
+      {% if top_requesters %}
+        <table class="sig-table">
+          <thead>
+            <tr>
+              <th>User</th>
+              <th class="num">Sent</th>
+              <th class="num">Completed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in top_requesters %}
+              <tr>
+                <td>
+                  {% if r.created_by__first_name or r.created_by__last_name %}
+                    {{ r.created_by__first_name }} {{ r.created_by__last_name }}
+                  {% else %}
+                    {{ r.created_by__email|default:"—" }}
+                  {% endif %}
+                  <div class="muted" style="font-size:.72rem">{{ r.created_by__email }}</div>
+                </td>
+                <td class="num">{{ r.count|intcomma }}</td>
+                <td class="num" style="color:var(--sig-green)">{{ r.completed|intcomma }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="sig-empty">
+          <i class="bi bi-person"></i>
+          No signature requests in the last 30 days.
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="sig-card">
+      <div class="sig-card-head">
+        <div>
+          <div class="sig-card-title">Top Signers</div>
+          <div class="sig-card-sub">Last 30 days</div>
+        </div>
+      </div>
+
+      {% if top_signers %}
+        <table class="sig-table">
+          <thead>
+            <tr>
+              <th>Signer</th>
+              <th class="num">Signed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in top_signers %}
+              <tr>
+                <td>
+                  {{ r.name|default:r.email }}
+                  <div class="muted" style="font-size:.72rem">{{ r.email }}</div>
+                </td>
+                <td class="num">{{ r.count|intcomma }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="sig-empty">
+          <i class="bi bi-pen"></i>
+          No signatures completed in the last 30 days.
+        </div>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <!-- Decline feedback / Recent requests -->
+  <div class="sig-grid-2">
+
+    <div class="sig-card">
+      <div class="sig-card-head">
+        <div>
+          <div class="sig-card-title">Recent Decline Feedback</div>
+          <div class="sig-card-sub">What signers are pushing back on</div>
+        </div>
+      </div>
+
+      {% if recent_declines %}
+        <table class="sig-table">
+          <thead>
+            <tr>
+              <th>Document</th>
+              <th>Signer</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in recent_declines %}
+              <tr>
+                <td>
+                  <div style="font-weight:700">{{ s.request.title|truncatechars:34 }}</div>
+                  <div class="muted" style="font-size:.72rem">
+                    {{ s.request.created_by.full_name|default:s.request.created_by.email }}
+                  </div>
+                </td>
+                <td>{{ s.name|default:s.email }}</td>
+                <td style="max-width:280px">
+                  <div style="white-space:normal;line-height:1.45">{{ s.decline_reason|truncatechars:160 }}</div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="sig-empty">
+          <i class="bi bi-emoji-smile"></i>
+          No declines on file — every signer has either signed or is still pending.
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="sig-card">
+      <div class="sig-card-head">
+        <div>
+          <div class="sig-card-title">Recent Signature Requests</div>
+          <div class="sig-card-sub">Latest 20</div>
+        </div>
+      </div>
+
+      {% if recent_requests %}
+        <table class="sig-table">
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Requester</th>
+              <th>Status</th>
+              <th class="num">Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in recent_requests %}
+              <tr>
+                <td>
+                  <div style="font-weight:700">{{ r.title|truncatechars:32 }}</div>
+                  <div class="muted" style="font-size:.72rem">{{ r.document.name|default:"—"|truncatechars:32 }}</div>
+                </td>
+                <td>{{ r.created_by.full_name|default:r.created_by.email }}</td>
+                <td>
+                  <span class="sig-pill sp-{{ r.status }}">{{ r.get_status_display }}</span>
+                </td>
+                <td class="num muted" style="font-size:.78rem">{{ r.created_at|naturaltime }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="sig-empty">
+          <i class="bi bi-inbox"></i>
+          No signature requests on record.
+        </div>
+      {% endif %}
+    </div>
+
+  </div>
+
+</div>
+
+<!-- Chart JSON data -->
+{% if daily_series_json %}
+  {{ daily_series_json|json_script:"daily-data" }}
+{% else %}
+  {{ daily_series|default:"[]"|json_script:"daily-data" }}
+{% endif %}
+
+{% if status_mix_json %}
+  {{ status_mix_json|json_script:"status-data" }}
+{% else %}
+  {{ status_mix_data|default:"[]"|json_script:"status-data" }}
+{% endif %}
+
+{% if method_mix_json %}
+  {{ method_mix_json|json_script:"method-data" }}
+{% else %}
+  {{ method_mix_data|default:"[]"|json_script:"method-data" }}
+{% endif %}
+
+{% if monthly_series_json %}
+  {{ monthly_series_json|json_script:"monthly-data" }}
+{% else %}
+  {{ monthly_series|default:"[]"|json_script:"monthly-data" }}
+{% endif %}
+
+<!-- Prefer local Chart.js. If missing, fallback to CDN. -->
+<script src="{% static 'vendor/chartjs/chart.umd.min.js' %}"></script>
+<script>
+(function () {
+  function loadChartFallback(callback) {
+    if (typeof Chart !== 'undefined') {
+      callback();
+      return;
+    }
+
+    var script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
+    script.onload = callback;
+    script.onerror = function () {
+      console.error('Chart.js could not be loaded from local static or CDN.');
+      showNoData('dailyChart', 'Chart library could not be loaded.');
+      showNoData('monthlyChart', 'Chart library could not be loaded.');
+    };
+    document.head.appendChild(script);
+  }
+
+  function readJSON(id) {
+    var el = document.getElementById(id);
+    if (!el) return [];
+
+    try {
+      var data = JSON.parse(el.textContent || '[]');
+
+      /*
+        Handles both cases:
+        1. Correct: view sends Python list/dict and json_script returns real JSON.
+        2. Existing: view sends json.dumps(...) string and json_script double-encodes it.
+      */
+      if (typeof data === 'string') {
+        data = JSON.parse(data || '[]');
+      }
+
+      return Array.isArray(data) ? data : [];
+    } catch (e) {
+      console.error('Chart JSON error for #' + id, e);
+      return [];
+    }
+  }
+
+  function num(value) {
+    var n = Number(value);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function getCanvas(id) {
+    var canvas = document.getElementById(id);
+    if (!canvas) return null;
+    return canvas;
+  }
+
+  function showNoData(canvasId, message) {
+    var canvas = document.getElementById(canvasId);
+    if (!canvas || !canvas.parentElement) return;
+
+    canvas.style.display = 'none';
+
+    var existing = canvas.parentElement.querySelector('.sig-chart-empty-message');
+    if (existing) {
+      existing.textContent = message;
+      return;
+    }
+
+    var div = document.createElement('div');
+    div.className = 'sig-chart-empty-message';
+    div.textContent = message || 'No chart data available yet.';
+    canvas.parentElement.appendChild(div);
+  }
+
+  function initSignatureCharts() {
+    if (typeof Chart === 'undefined') {
+      console.error('Chart.js is not loaded.');
+      return;
+    }
+
+    var STATUS_COLORS = {
+      completed: '#059669',
+      sent: '#1d4ed8',
+      partial: '#d97706',
+      draft: '#94a3b8',
+      cancelled: '#64748b',
+      expired: '#64748b',
+      declined: '#e11d48'
+    };
+
+    var METHOD_COLORS = {
+      draw: '#7c3aed',
+      type: '#0ea5e9',
+      upload: '#10b981'
+    };
+
+    document.querySelectorAll('[data-status-swatch]').forEach(function (el) {
+      var key = el.getAttribute('data-status-swatch') || '';
+      el.style.background = STATUS_COLORS[key] || '#cbd5e1';
+    });
+
+    document.querySelectorAll('[data-method-swatch]').forEach(function (el) {
+      var key = el.getAttribute('data-method-swatch') || '';
+      el.style.background = METHOD_COLORS[key] || '#cbd5e1';
+    });
+
+    Chart.defaults.font.family = "'Segoe UI', Arial, sans-serif";
+    Chart.defaults.color = '#64748b';
+
+    // Daily activity chart
+    var daily = readJSON('daily-data');
+    var dailyCanvas = getCanvas('dailyChart');
+
+    if (dailyCanvas && daily.length) {
+      new Chart(dailyCanvas, {
+        type: 'line',
+        data: {
+          labels: daily.map(function (r) {
+            return r.date || r.day || '';
+          }),
+          datasets: [
+            {
+              label: 'Requests sent',
+              data: daily.map(function (r) {
+                return num(r.requests);
+              }),
+              borderColor: '#7c3aed',
+              backgroundColor: 'rgba(124,58,237,.15)',
+              fill: true,
+              tension: 0.35,
+              pointRadius: 0,
+              borderWidth: 2
+            },
+            {
+              label: 'Signatures completed',
+              data: daily.map(function (r) {
+                return num(r.signed);
+              }),
+              borderColor: '#059669',
+              backgroundColor: 'rgba(5,150,105,.15)',
+              fill: true,
+              tension: 0.35,
+              pointRadius: 0,
+              borderWidth: 2
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: {
+                boxWidth: 10,
+                usePointStyle: true,
+                font: { size: 11 }
+              }
+            },
+            tooltip: {
+              callbacks: {
+                label: function (context) {
+                  return context.dataset.label + ': ' + context.parsed.y;
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                precision: 0,
+                font: { size: 11 }
+              },
+              grid: {
+                color: 'rgba(148,163,184,.18)'
+              }
+            },
+            x: {
+              ticks: {
+                maxRotation: 0,
+                autoSkip: true,
+                font: { size: 10 }
+              },
+              grid: {
+                display: false
+              }
+            }
+          }
+        }
+      });
+    } else {
+      showNoData('dailyChart', 'No daily signature activity yet.');
+    }
+
+    // Status mix chart
+    var status = readJSON('status-data');
+    var statusCanvas = getCanvas('statusChart');
+
+    if (statusCanvas && status.length) {
+      new Chart(statusCanvas, {
+        type: 'doughnut',
+        data: {
+          labels: status.map(function (r) {
+            return r.label || r.status || 'Unknown';
+          }),
+          datasets: [
+            {
+              data: status.map(function (r) {
+                return num(r.count);
+              }),
+              backgroundColor: status.map(function (r) {
+                return STATUS_COLORS[r.status] || '#cbd5e1';
+              }),
+              borderWidth: 0
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: '62%',
+          plugins: {
+            legend: {
+              display: false
+            }
+          }
+        }
+      });
+    } else if (statusCanvas) {
+      showNoData('statusChart', 'No request status data yet.');
+    }
+
+    // Method mix chart
+    var method = readJSON('method-data');
+    var methodCanvas = getCanvas('methodChart');
+
+    if (methodCanvas && method.length) {
+      new Chart(methodCanvas, {
+        type: 'doughnut',
+        data: {
+          labels: method.map(function (r) {
+            return r.label || r.signature_type || 'Unknown';
+          }),
+          datasets: [
+            {
+              data: method.map(function (r) {
+                return num(r.count);
+              }),
+              backgroundColor: method.map(function (r) {
+                return METHOD_COLORS[r.signature_type] || '#cbd5e1';
+              }),
+              borderWidth: 0
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: '62%',
+          plugins: {
+            legend: {
+              display: false
+            }
+          }
+        }
+      });
+    } else if (methodCanvas) {
+      showNoData('methodChart', 'No signing method data yet.');
+    }
+
+    // Monthly trend chart
+    var monthly = readJSON('monthly-data');
+    var monthlyCanvas = getCanvas('monthlyChart');
+
+    if (monthlyCanvas && monthly.length) {
+      new Chart(monthlyCanvas, {
+        type: 'line',
+        data: {
+          labels: monthly.map(function (r) {
+            return r.month || '';
+          }),
+          datasets: [
+            {
+              label: 'Sent',
+              data: monthly.map(function (r) {
+                return num(r.count || r.requests);
+              }),
+              borderColor: '#7c3aed',
+              backgroundColor: 'rgba(124,58,237,.10)',
+              fill: false,
+              tension: 0.35,
+              pointRadius: 2,
+              borderWidth: 2
+            },
+            {
+              label: 'Completed',
+              data: monthly.map(function (r) {
+                return num(r.completed || r.signed);
+              }),
+              borderColor: '#059669',
+              backgroundColor: 'rgba(5,150,105,.10)',
+              fill: false,
+              tension: 0.35,
+              pointRadius: 2,
+              borderWidth: 2
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: {
+                boxWidth: 10,
+                usePointStyle: true,
+                font: { size: 10 }
+              }
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                precision: 0,
+                font: { size: 10 }
+              },
+              grid: {
+                color: 'rgba(148,163,184,.18)'
+              }
+            },
+            x: {
+              ticks: {
+                font: { size: 9 }
+              },
+              grid: {
+                display: false
+              }
+            }
+          }
+        }
+      });
+    } else {
+      showNoData('monthlyChart', 'No monthly trend data yet.');
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () {
+      loadChartFallback(initSignatureCharts);
+    });
+  } else {
+    loadChartFallback(initSignatureCharts);
+  }
+})();
+</script>
+{% endblock %}

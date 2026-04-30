@@ -259,6 +259,46 @@ class ReportsDashboardView(_ReportsAccessMixin, TemplateView):
             ctx['invoices_this_month_count'] = 0
             ctx['invoices_this_month_total'] = 0
 
+        # ── Signature snapshot (lifetime) ────────────────────────────────
+        # Powers the four signature KPI tiles on the dashboard. Wrapped in
+        # try/excepts so a missing model never breaks the page.
+        try:
+            from apps.files.models import SignatureRequest
+            sig_qs = SignatureRequest.objects.all()
+            # "Signed via flow" = a full SignatureRequest reached terminal
+            # 'completed' status (every signer signed via the email flow).
+            ctx['sig_signed_flow'] = sig_qs.filter(status='completed').count()
+            # "Pending" = anything in-flight: draft / sent / partial / viewed.
+            # Anything that's NOT a terminal state counts as pending.
+            ctx['sig_pending'] = sig_qs.exclude(
+                status__in=['completed', 'cancelled', 'expired', 'declined']
+            ).count()
+            # "Voided / Cancelled" — DocuSign-ish terminology covering both
+            # creator-cancelled requests and ones that aged out.
+            ctx['sig_voided'] = sig_qs.filter(
+                status__in=['cancelled', 'expired']
+            ).count()
+        except Exception:
+            ctx['sig_signed_flow'] = 0
+            ctx['sig_pending']     = 0
+            ctx['sig_voided']      = 0
+
+        # Quick-sign count — try a dedicated model first, fall back to
+        # AuditLog records (most installs log a 'quick_sign' action).
+        try:
+            from apps.files.models import QuickSignSession
+            ctx['sig_quick_signed'] = QuickSignSession.objects.filter(
+                status='completed'
+            ).count()
+        except Exception:
+            try:
+                from apps.core.models import AuditLog
+                ctx['sig_quick_signed'] = AuditLog.objects.filter(
+                    action__in=['quick_sign', 'quick_signed', 'QuickSign']
+                ).count()
+            except Exception:
+                ctx['sig_quick_signed'] = 0
+
         return ctx
 
 
@@ -619,6 +659,26 @@ def _humanise_bytes(n: int) -> str:
     return f'{n:.1f} TB'
 
 
+def _humanise_duration(seconds: float) -> str:
+    """
+    7245.0 -> '2h 0m'.  Used for "median time-to-sign" and similar
+    operational KPIs. Keeps the unit count to two so the value reads
+    cleanly inside a tile (e.g. '3d 4h', '5m 12s', '<1s').
+    """
+    s = int(seconds or 0)
+    if s < 1:
+        return '<1s'
+    if s < 60:
+        return f'{s}s'
+    if s < 3600:
+        return f'{s // 60}m {s % 60}s'
+    if s < 86400:
+        h = s // 3600
+        return f'{h}h {(s % 3600) // 60}m'
+    d = s // 86400
+    return f'{d}d {(s % 86400) // 3600}h'
+
+
 # ---------------------------------------------------------------------------
 # NEW: File Storage Report (Supervisor / Admin)
 # ---------------------------------------------------------------------------
@@ -906,6 +966,267 @@ class InvoicingReportView(_SupervisorReportsAccessMixin, TemplateView):
         )
 
         ctx['currency'] = 'GMD'  # default currency on the model
+        return ctx
+
+
+# ---------------------------------------------------------------------------
+# NEW: Signature Report (Supervisor / Admin)
+#   E-signature usage analytics derived from apps.files.SignatureRequest,
+#   SignatureRequestSigner, and (optionally) QuickSignSession.
+#
+# Charts:
+#   • KPI strip (lifetime + last 30d + today)
+#   • Status mix (donut)        — sent / partial / completed / cancelled / …
+#   • Signature method (donut)  — drawn vs typed vs uploaded
+#   • Daily activity (line)     — requests sent vs signatures completed
+#   • Monthly trend (line)      — last 12 months
+#   • Top requesters (bar)      — who's sending the most for signing
+#   • Top signers (table)       — who signs the most
+#   • Decline reasons (table)   — what's getting rejected and why
+#   • Median time-to-sign       — operational signal
+#   • Recent signature requests (table)
+# ---------------------------------------------------------------------------
+
+class SignatureReportView(_SupervisorReportsAccessMixin, TemplateView):
+    template_name = 'reports/signature_report.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        from apps.files.models import SignatureRequest, SignatureRequestSigner
+
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        since_30d   = now - timedelta(days=30)
+        twelve_months_ago = (now.replace(day=1) - timedelta(days=365)).replace(day=1)
+
+        sig_qs = SignatureRequest.objects.all()
+
+        # ── Top-line KPIs ────────────────────────────────────────────────
+        # Lifetime totals
+        ctx['total_requests']  = sig_qs.count()
+        ctx['total_completed'] = sig_qs.filter(status='completed').count()
+        ctx['total_pending']   = sig_qs.exclude(
+            status__in=['completed', 'cancelled', 'expired', 'declined']
+        ).count()
+        ctx['total_voided']    = sig_qs.filter(
+            status__in=['cancelled', 'expired']
+        ).count()
+        ctx['total_declined']  = sig_qs.filter(status='declined').count()
+
+        # Quick-signed (one-click signing, no email flow)
+        try:
+            from apps.files.models import QuickSignSession
+            ctx['total_quick_signed'] = QuickSignSession.objects.filter(
+                status='completed'
+            ).count()
+            ctx['quick_signed_30d'] = QuickSignSession.objects.filter(
+                status='completed', created_at__gte=since_30d,
+            ).count()
+        except Exception:
+            try:
+                from apps.core.models import AuditLog
+                quick_actions = ['quick_sign', 'quick_signed', 'QuickSign']
+                ctx['total_quick_signed'] = AuditLog.objects.filter(
+                    action__in=quick_actions
+                ).count()
+                ctx['quick_signed_30d'] = AuditLog.objects.filter(
+                    action__in=quick_actions, timestamp__gte=since_30d,
+                ).count()
+            except Exception:
+                ctx['total_quick_signed'] = 0
+                ctx['quick_signed_30d']   = 0
+
+        # Last 30 days
+        ctx['requests_30d']  = sig_qs.filter(created_at__gte=since_30d).count()
+        ctx['completed_30d'] = sig_qs.filter(
+            status='completed', completed_at__gte=since_30d,
+        ).count()
+
+        # Today
+        ctx['requests_today'] = sig_qs.filter(created_at__gte=today_start).count()
+        ctx['signed_today']   = SignatureRequestSigner.objects.filter(
+            status='signed', signed_at__gte=today_start,
+        ).count()
+
+        # Completion rate (lifetime, % of requests that reached 'completed'
+        # vs ones that finished any way — completed/cancelled/expired/declined)
+        finished = (
+            ctx['total_completed'] + ctx['total_voided'] + ctx['total_declined']
+        )
+        ctx['completion_rate'] = (
+            round(ctx['total_completed'] / finished * 100, 1) if finished else 0
+        )
+
+        # ── Median time-to-sign (last 30d) ───────────────────────────────
+        # How long, on average, does it take a signer to act once a request
+        # is sent? Computed from SignatureRequestSigner.signed_at minus the
+        # request's created_at. Median is more robust than mean here because
+        # one stale request from 6 months ago skews the mean wildly.
+        try:
+            recent_signed = list(
+                SignatureRequestSigner.objects.filter(
+                    status='signed',
+                    signed_at__gte=since_30d,
+                    signed_at__isnull=False,
+                ).select_related('request').values_list(
+                    'request__created_at', 'signed_at',
+                )
+            )
+            durations_sec = [
+                (sa - ca).total_seconds()
+                for ca, sa in recent_signed if ca and sa
+            ]
+            durations_sec.sort()
+            if durations_sec:
+                mid = len(durations_sec) // 2
+                median_sec = (
+                    durations_sec[mid] if len(durations_sec) % 2
+                    else (durations_sec[mid - 1] + durations_sec[mid]) / 2
+                )
+                ctx['median_time_to_sign_human'] = _humanise_duration(median_sec)
+                ctx['median_time_to_sign_sec']   = int(median_sec)
+            else:
+                ctx['median_time_to_sign_human'] = '—'
+                ctx['median_time_to_sign_sec']   = 0
+        except Exception:
+            ctx['median_time_to_sign_human'] = '—'
+            ctx['median_time_to_sign_sec']   = 0
+
+        # ── Status mix (donut) ───────────────────────────────────────────
+        # All-time status breakdown of every SignatureRequest. Casts label
+        # via str() to flush Django lazy proxies before json.dumps.
+        try:
+            status_choices = {k: str(v) for k, v in SignatureRequest.Status.choices}
+        except Exception:
+            status_choices = {}
+        status_rows = list(
+            sig_qs.values('status')
+            .annotate(count=Count('id'))
+            .order_by('-count')
+        )
+        for r in status_rows:
+            r['label'] = status_choices.get(r['status'], (r['status'] or 'unknown').title())
+        ctx['status_mix']      = status_rows
+        ctx['status_mix_json'] = json.dumps(status_rows)
+
+        # ── Signature method mix (donut) ─────────────────────────────────
+        # Drawn vs typed vs uploaded — only counts SIGNED signers (the
+        # signature_type is only set once they actually sign).
+        method_rows = list(
+            SignatureRequestSigner.objects
+            .filter(status='signed')
+            .exclude(signature_type='')
+            .values('signature_type')
+            .annotate(count=Count('id'))
+            .order_by('-count')
+        )
+        method_label_map = {
+            'draw':   'Drawn',
+            'type':   'Typed',
+            'upload': 'Uploaded',
+        }
+        for r in method_rows:
+            r['label'] = method_label_map.get(
+                r['signature_type'], (r['signature_type'] or 'unknown').title()
+            )
+        ctx['method_mix']      = method_rows
+        ctx['method_mix_json'] = json.dumps(method_rows)
+
+        # ── Daily activity (last 30d): requests sent vs signatures done ──
+        # Two parallel series the chart can plot together.
+        daily_requests = {
+            r['d'].isoformat(): r['count']
+            for r in sig_qs.filter(created_at__gte=since_30d)
+                          .annotate(d=TruncDate('created_at'))
+                          .values('d')
+                          .annotate(count=Count('id'))
+            if r['d']
+        }
+        daily_signed = {
+            r['d'].isoformat(): r['count']
+            for r in SignatureRequestSigner.objects
+                          .filter(status='signed', signed_at__gte=since_30d)
+                          .annotate(d=TruncDate('signed_at'))
+                          .values('d')
+                          .annotate(count=Count('id'))
+            if r['d']
+        }
+        all_days = sorted(set(daily_requests) | set(daily_signed))
+        ctx['daily_series_json'] = json.dumps([
+            {
+                'date':     d,
+                'requests': daily_requests.get(d, 0),
+                'signed':   daily_signed.get(d, 0),
+            }
+            for d in all_days
+        ])
+
+        # ── Monthly trend (last 12 months) ───────────────────────────────
+        monthly = list(
+            sig_qs.filter(created_at__gte=twelve_months_ago)
+            .annotate(m=TruncMonth('created_at'))
+            .values('m')
+            .annotate(
+                count=Count('id'),
+                completed=Count('id', filter=Q(status='completed')),
+            )
+            .order_by('m')
+        )
+        ctx['monthly_series_json'] = json.dumps([
+            {
+                'month': r['m'].strftime('%Y-%m') if r['m'] else '',
+                'count':     r['count'],
+                'completed': r['completed'],
+            }
+            for r in monthly
+        ])
+
+        # ── Top requesters (last 30d) ────────────────────────────────────
+        # Who's sending the most documents for signing? Useful for spotting
+        # power users + departments that should be onboarded onto templates.
+        top_requesters = list(
+            sig_qs.filter(created_at__gte=since_30d)
+            .values(
+                'created_by__email',
+                'created_by__first_name',
+                'created_by__last_name',
+            )
+            .annotate(
+                count=Count('id'),
+                completed=Count('id', filter=Q(status='completed')),
+            )
+            .order_by('-count')[:10]
+        )
+        ctx['top_requesters'] = top_requesters
+
+        # ── Top signers (last 30d) ───────────────────────────────────────
+        top_signers = list(
+            SignatureRequestSigner.objects
+            .filter(status='signed', signed_at__gte=since_30d)
+            .values('email', 'name')
+            .annotate(count=Count('id'))
+            .order_by('-count')[:10]
+        )
+        ctx['top_signers'] = top_signers
+
+        # ── Decline reasons (last 30d) ───────────────────────────────────
+        # When something's getting rejected, the reason is the most useful
+        # thing on the page. Empty reasons are excluded so the list reads
+        # like an actual feedback queue, not a wall of blanks.
+        ctx['recent_declines'] = list(
+            SignatureRequestSigner.objects
+            .filter(status='declined')
+            .exclude(decline_reason='')
+            .select_related('request', 'request__created_by')
+            .order_by('-id')[:10]
+        )
+
+        # ── Recent requests (table, last 20 across all statuses) ─────────
+        ctx['recent_requests'] = (
+            sig_qs.select_related('created_by', 'document')
+            .order_by('-created_at')[:20]
+        )
+
         return ctx
 
 

@@ -384,6 +384,37 @@ def _convert_image_to_pdf(source_path):
         buffer.seek(0)
         return buffer
 
+def _spawn(fn, *args, **kwargs):
+    """
+    Run a side-effect (typically email/notification dispatch) in a
+    daemon thread so HTTP responses don't block on SMTP.
+
+    Exceptions inside the thread are swallowed and logged — a missed
+    notification should never 500 the user-facing request.
+
+    Usage:
+        _spawn(_notify_signer, signer, base_url)
+    """
+    import threading
+    import logging
+
+    def _runner():
+        try:
+            fn(*args, **kwargs)
+        except Exception:
+            try:
+                logging.getLogger(__name__).exception(
+                    'Background notification task failed: %s',
+                    getattr(fn, '__name__', repr(fn)),
+                )
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    return t
+
+
 def _notify_signer(signer, base_url):
     """Send a professional HTML signing invitation email to a signer."""
     from django.core.mail import EmailMessage
@@ -476,6 +507,74 @@ def _notify_signer(signer, base_url):
         msg.send()
     except Exception:
         pass
+
+
+def _notify_next_pending_signer(sig_req, base_url):
+    """
+    For an ORDERED signature request, find the next signer who hasn't
+    signed yet and email them their invitation. Idempotent — safe to
+    call multiple times; only the first matching pending signer is
+    emailed, and only if they haven't already been invited.
+
+    Does nothing for non-ordered requests (everyone was already
+    notified at request creation time).
+
+    All notification work happens in a daemon thread.
+    """
+    if not getattr(sig_req, 'ordered_signing', False):
+        return None
+
+    # Lowest-order signer who isn't done yet (any status except
+    # 'signed' or 'declined' counts as "still pending").
+    next_signer = (
+        sig_req.signers
+        .exclude(status__in=['signed', 'declined'])
+        .order_by('order')
+        .first()
+    )
+    if not next_signer:
+        return None
+
+    # Idempotency: if we've already emailed this signer their "your
+    # turn" invite, don't email them again. Uses a model field if
+    # present, otherwise no-op.
+    if getattr(next_signer, 'invited_at', None):
+        return next_signer
+
+    _spawn(_notify_signer, next_signer, base_url)
+
+    if next_signer.user:
+        _spawn(
+            _notify,
+            next_signer.user,
+            'sign_request',
+            title=f'Your turn to sign: {sig_req.title}',
+            body='A previous signer has just signed.',
+            link=next_signer.signing_url,
+            sender=sig_req.created_by,
+            actions=[
+                {'label': 'Sign Now', 'url': next_signer.signing_url,
+                 'style': 'primary', 'icon': 'bi-pen-fill'},
+                {'label': 'View Request',
+                 'url': f'/files/signatures/{sig_req.pk}/',
+                 'style': 'secondary', 'icon': 'bi-eye'},
+            ],
+            extra_data={
+                'request_id':  str(sig_req.pk),
+                'document_id': str(sig_req.document_id),
+                'signer_id':   str(next_signer.pk),
+            },
+        )
+
+    # Stamp invited_at so we don't re-email on the next call.
+    try:
+        if hasattr(next_signer, 'invited_at'):
+            next_signer.invited_at = timezone.now()
+            next_signer.save(update_fields=['invited_at'])
+    except Exception:
+        pass
+
+    return next_signer
 
 
 def _notify_cc_recipient(cc, base_url, event='sent'):
@@ -880,12 +979,40 @@ def _get_sig_font_path(font_name='Dancing Script'):
     """
     import urllib.request
 
-    # Map UI font names → (cache filename, GitHub raw URL)
+    # Map UI font names → (cache filename, GitHub raw URL).
+    # The keys here MUST match exactly the font names sent by the
+    # signing modal's font picker (see sign_document.html). When a
+    # signer types their signature and picks a font, we save the choice
+    # as `font:NAME|text` in the SignatureField value; this registry is
+    # what turns NAME into the actual TTF that gets burned into the PDF.
     _REGISTRY = {
+        # Currently surfaced in the signing modal
         'Dancing Script': (
             '_eo_DancingScript_Bold.ttf',
             'https://github.com/googlefonts/dancing-script/raw/main/fonts/ttf/DancingScript-Bold.ttf',
         ),
+        'Great Vibes': (
+            '_eo_GreatVibes_Regular.ttf',
+            'https://github.com/google/fonts/raw/main/ofl/greatvibes/GreatVibes-Regular.ttf',
+        ),
+        'Allura': (
+            '_eo_Allura_Regular.ttf',
+            'https://github.com/google/fonts/raw/main/ofl/allura/Allura-Regular.ttf',
+        ),
+        'Sacramento': (
+            '_eo_Sacramento_Regular.ttf',
+            'https://github.com/google/fonts/raw/main/ofl/sacramento/Sacramento-Regular.ttf',
+        ),
+        'Pinyon Script': (
+            '_eo_PinyonScript_Regular.ttf',
+            'https://github.com/google/fonts/raw/main/ofl/pinyonscript/PinyonScript-Regular.ttf',
+        ),
+        'Mr Dafoe': (
+            '_eo_MrDafoe_Regular.ttf',
+            'https://github.com/google/fonts/raw/main/ofl/mrdafoe/MrDafoe-Regular.ttf',
+        ),
+        # Kept for backwards compatibility with any signatures already
+        # saved using these older font names.
         'Caveat': (
             '_eo_Caveat_Bold.ttf',
             'https://github.com/googlefonts/caveat/raw/main/fonts/ttf/Caveat-Bold.ttf',
@@ -893,10 +1020,6 @@ def _get_sig_font_path(font_name='Dancing Script'):
         'Pacifico': (
             '_eo_Pacifico_Regular.ttf',
             'https://github.com/google/fonts/raw/main/ofl/pacifico/Pacifico-Regular.ttf',
-        ),
-        'Great Vibes': (
-            '_eo_GreatVibes_Regular.ttf',
-            'https://github.com/google/fonts/raw/main/ofl/greatvibes/GreatVibes-Regular.ttf',
         ),
     }
 
@@ -3680,8 +3803,34 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
         signer_names = request.POST.getlist('signer_name')
         signer_emails = request.POST.getlist('signer_email')
         if not signer_emails or not any(e.strip() for e in signer_emails):
-            messages.error(request, 'At least one signer is required.')
-            return redirect(request.path)
+            # Log the actual POST keys so we can diagnose if this fires
+            # again — typically this means visible signer inputs didn't
+            # reach the server because of display:none / HTML5 quirks.
+            # The patched template now writes hidden authoritative
+            # signer_name / signer_email inputs at submit time, but we
+            # keep this defensive log + re-render in place.
+            try:
+                import logging
+                logging.getLogger(__name__).warning(
+                    'SignatureRequestCreateView.post received no signer_email. '
+                    'POST keys: %s',
+                    list(request.POST.keys()),
+                )
+            except Exception:
+                pass
+
+            messages.error(
+                request,
+                'At least one signer is required. Please add a signer and try again.',
+            )
+            ctx = {
+                'document': document,
+                'my_files': _editable_files_qs(request.user).order_by('-created_at')[:50],
+                'all_staff': __import__('apps.core.models', fromlist=['User']).User.objects.filter(
+                    is_active=True, status='active'
+                ).exclude(id=request.user.id).order_by('first_name'),
+            }
+            return render(request, self.template_name, ctx)
 
         # ── 5. Create the SignatureRequest ──────────────────────────────
         sig_req = SignatureRequest.objects.create(
@@ -3739,10 +3888,22 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
             # document FK.
             pass
 
-        # ── 7. Create signers and notify ────────────────────────────────
+        # ── 7. Create signers ───────────────────────────────────────────
+        # Notification is split:
+        #   • ORDERED mode → only signer #1 gets emailed now; the next
+        #     signer is emailed when the previous one completes (see
+        #     _notify_next_pending_signer, called from
+        #     FillSignatureFieldView.post).
+        #   • NON-ORDERED  → everyone is notified in parallel.
+        #
+        # All emailing / WS notifications go through _spawn() so the
+        # HTTP response returns in milliseconds even with 5+ signers
+        # and large attachments.
         from apps.core.models import User as CoreUser
-        base_url = request.build_absolute_uri('/')
+        base_url   = request.build_absolute_uri('/')
+        is_ordered = bool(getattr(sig_req, 'ordered_signing', False))
 
+        created_signers = []
         for i, (name, email) in enumerate(zip(signer_names, signer_emails)):
             name, email = name.strip(), email.strip()
             if not email:
@@ -3753,9 +3914,28 @@ class SignatureRequestCreateView(LoginRequiredMixin, View):
                 email=email, name=name or (user_obj.full_name if user_obj else email),
                 order=i + 1,
             )
-            _notify_signer(signer, base_url)
+            created_signers.append((signer, user_obj))
+
+        # Decide who gets notified RIGHT NOW.
+        to_notify_now = created_signers[:1] if is_ordered else created_signers
+
+        for signer, user_obj in to_notify_now:
+            # Mark as invited so the ordered-flow handler doesn't email
+            # them a second time when the *previous* signer completes
+            # (which can't happen for signer #1 anyway, but keeps the
+            # invited_at semantics consistent).
+            try:
+                if hasattr(signer, 'invited_at'):
+                    signer.invited_at = timezone.now()
+                    signer.save(update_fields=['invited_at'])
+            except Exception:
+                pass
+
+            _spawn(_notify_signer, signer, base_url)
+
             if user_obj:
-                _notify(
+                _spawn(
+                    _notify,
                     user_obj,
                     'sign_request',
                     title=f'Please sign: {sig_req.title}',
@@ -4245,6 +4425,19 @@ class SignDocumentView(View):
                     )
                 except Exception:
                     pass
+
+            # ── If this is an ORDERED request and there's still a
+            # ── signer waiting for their turn, kick off their invite
+            # ── now (in a background thread). Idempotent — won't
+            # ── re-email anyone already invited.
+            try:
+                if getattr(sig_req, 'ordered_signing', False):
+                    _notify_next_pending_signer(
+                        sig_req, request.build_absolute_uri('/')
+                    )
+            except Exception:
+                # Notification failures must not block the signing flow.
+                pass
 
             # Check completion BEFORE saving SignatureRequest as completed.
             # This lets us burn the signed PDF first, so the orders signal will email

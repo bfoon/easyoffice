@@ -462,6 +462,12 @@ class SignatureRequestSigner(models.Model):
     user_agent       = models.CharField(max_length=500, blank=True)
     signed_at        = models.DateTimeField(null=True, blank=True)
     viewed_at        = models.DateTimeField(null=True, blank=True)
+    invited_at       = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When this signer was emailed their "your turn to sign" '
+                  'invitation. Used in ordered mode so the next-signer '
+                  'notification is idempotent across multiple completions.',
+    )
     decline_reason   = models.TextField(blank=True)
     created_at       = models.DateTimeField(auto_now_add=True)
 

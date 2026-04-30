@@ -41,30 +41,190 @@
 .chip-init { width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--eo-accent);color:#fff;font-size:.5rem;font-weight:800; }
 
 /* ── Multi-document picker ── */
-.doc-list { display:flex;flex-direction:column;gap:8px;margin-bottom:10px; }
+.doc-list { display:flex;flex-direction:column;gap:10px;margin-bottom:12px; }
 .doc-empty {
-  padding:14px 16px;background:var(--eo-bg);
-  border:1.5px dashed var(--eo-border);border-radius:9px;
-  font-size:.82rem;color:var(--eo-text-muted);text-align:center;
+  padding:24px 16px;background:var(--eo-bg);
+  border:1.5px dashed var(--eo-border);border-radius:11px;
+  font-size:.84rem;color:var(--eo-text-muted);text-align:center;
+  transition:border-color .14s,background .14s;
 }
-.doc-card { display:flex;align-items:center;gap:10px;padding:11px 13px;background:var(--eo-bg);border-radius:9px;border:1.5px solid var(--eo-border);position:relative; }
-.doc-card.is-primary { border-color:var(--eo-accent); }
-.doc-card .doc-ico { font-size:1.4rem;flex-shrink:0; }
-.doc-card .doc-meta { flex:1;min-width:0; }
-.doc-card .doc-name { font-size:.84rem;font-weight:700;color:var(--eo-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
-.doc-card .doc-name .doc-primary-tag {
-  font-size:.6rem;color:var(--eo-accent);font-weight:800;
-  text-transform:uppercase;letter-spacing:.06em;margin-left:6px;
+.doc-empty.drop-target {
+  border-color:var(--eo-accent);background:var(--eo-accent)08;
 }
-.doc-card .doc-sub { font-size:.72rem;color:var(--eo-text-muted); }
-.doc-card .doc-remove { background:none;border:none;color:var(--eo-text-muted);cursor:pointer;font-size:.95rem;padding:4px 6px;border-radius:5px;transition:all .12s;flex-shrink:0; }
+
+/* ── DocuSign-style envelope cards ─────────────────────────────────── */
+.doc-card {
+  display:flex;align-items:stretch;gap:0;
+  padding:0;
+  background:#fff;
+  border-radius:11px;
+  border:1.5px solid var(--eo-border);
+  position:relative;
+  overflow:hidden;
+  transition:border-color .14s, box-shadow .14s, transform .14s, opacity .14s;
+  cursor:default;
+}
+.doc-card:hover { border-color:var(--eo-border-strong, #cbd5e1); box-shadow:0 1px 3px rgba(15,23,42,.06); }
+.doc-card.is-primary {
+  border-color:var(--eo-accent);
+  box-shadow:0 0 0 1px var(--eo-accent), 0 1px 3px rgba(29,78,216,.10);
+}
+
+/* Drag states — match the existing signer-row pattern */
+.doc-card.dragging { opacity:.45;transform:scale(.98); }
+.doc-card.drag-over-top {
+  box-shadow:0 -3px 0 0 var(--eo-accent), 0 1px 3px rgba(15,23,42,.06);
+}
+.doc-card.drag-over-bottom {
+  box-shadow:0 3px 0 0 var(--eo-accent), 0 1px 3px rgba(15,23,42,.06);
+}
+
+/* Drag handle on the LEFT (desktop) */
+.doc-card .doc-drag {
+  flex:0 0 auto;
+  width:28px;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--eo-bg);
+  color:var(--eo-text-light, #94a3b8);
+  cursor:grab;user-select:none;
+  border-right:1px solid var(--eo-border);
+  font-size:1rem;line-height:1;
+  transition:color .12s, background .12s;
+}
+.doc-card .doc-drag:hover { color:var(--eo-accent);background:var(--eo-accent)08; }
+.doc-card .doc-drag:active { cursor:grabbing; }
+
+/* Numbered order chip — same look-and-feel as signer-order */
+.doc-card .doc-pos {
+  flex:0 0 auto;
+  align-self:center;
+  margin-left:14px;
+  width:30px;height:30px;
+  border-radius:8px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:.78rem;font-weight:800;color:#fff;
+  background:linear-gradient(135deg,#64748b,#475569);
+  letter-spacing:-.02em;
+  box-shadow:inset 0 -1px 0 rgba(0,0,0,.12);
+}
+.doc-card.is-primary .doc-pos {
+  background:linear-gradient(135deg, var(--eo-accent), #1e40af);
+}
+
+/* Up/Down buttons — only shown on touch devices */
+.doc-card .doc-move-btns {
+  display:none;
+  flex-direction:column;gap:2px;
+  align-self:center;margin-left:8px;
+}
+.doc-card .doc-move-btns button {
+  width:24px;height:18px;background:#fff;
+  border:1px solid var(--eo-border);border-radius:5px;
+  color:var(--eo-text-muted);font-size:.65rem;cursor:pointer;
+  line-height:1;padding:0;
+}
+.doc-card .doc-move-btns button:hover:not(:disabled){
+  background:var(--eo-accent);color:#fff;border-color:var(--eo-accent);
+}
+.doc-card .doc-move-btns button:disabled { opacity:.35;cursor:not-allowed; }
+
+/* File icon — bigger, type-coloured, in a soft pad */
+.doc-card .doc-ico-wrap {
+  flex:0 0 auto;
+  align-self:center;
+  margin-left:12px;
+  width:42px;height:42px;
+  border-radius:10px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:1.25rem;
+  background:var(--doc-tint, #f1f5f9);
+  color:var(--doc-color, #64748b);
+}
+
+/* Body — name, meta, badges */
+.doc-card .doc-body {
+  flex:1;min-width:0;
+  display:flex;flex-direction:column;gap:3px;
+  padding:14px 14px 14px 12px;
+  align-self:center;
+}
+.doc-card .doc-name {
+  font-size:.9rem;font-weight:700;color:var(--eo-text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  letter-spacing:-.005em;
+}
+.doc-card .doc-name-row {
+  display:flex;align-items:center;gap:6px;
+}
+.doc-card .doc-name-row .doc-name { flex:1;min-width:0; }
+.doc-card .doc-meta-row {
+  display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+  font-size:.74rem;color:var(--eo-text-muted);
+}
+.doc-card .doc-meta-row > * { display:inline-flex;align-items:center;gap:4px; }
+.doc-card .doc-meta-row .sep {
+  width:3px;height:3px;border-radius:50%;background:#cbd5e1;display:inline-block;flex-shrink:0;
+}
+
+/* Type badges */
+.doc-badge {
+  font-size:.62rem;font-weight:800;
+  text-transform:uppercase;letter-spacing:.06em;
+  padding:2px 7px;border-radius:11px;
+  line-height:1.4;display:inline-flex;align-items:center;gap:3px;
+}
+.doc-badge.primary { background:var(--eo-accent)15;color:var(--eo-accent); }
+.doc-badge.convert { background:#fffbeb;color:#92400e;border:1px solid #fde68a; }
+.doc-badge.warn    { background:#fee2e2;color:#991b1b;border:1px solid #fecaca; }
+.doc-badge.pdf     { background:#fef2f2;color:#dc2626; }
+
+/* Remove button */
+.doc-card .doc-remove {
+  flex:0 0 auto;align-self:flex-start;
+  background:none;border:none;cursor:pointer;
+  color:var(--eo-text-light, #94a3b8);
+  font-size:.95rem;padding:10px 12px;
+  border-radius:7px;transition:all .12s;
+  margin-top:4px;margin-right:4px;
+}
 .doc-card .doc-remove:hover { color:var(--eo-danger);background:var(--eo-danger)10; }
+
+/* Touch / mobile fallback — show buttons, hide drag handle */
+@media (max-width:720px), (pointer:coarse) {
+  .doc-card .doc-drag { display:none; }
+  .doc-card .doc-move-btns { display:flex; }
+  .doc-card .doc-pos { margin-left:10px; }
+}
+
+/* Add-a-document row */
 .doc-add-row { display:flex;gap:8px;align-items:flex-end; }
 .doc-add-row select { flex:1; }
+
+/* "Multi-doc → single PDF" merge banner */
 .doc-merge-note {
-  margin-top:6px;padding:8px 11px;background:#eff6ff;border:1px solid #bfdbfe;
-  border-radius:7px;font-size:.74rem;color:#1e3a8a;line-height:1.5;
+  margin-top:8px;padding:11px 13px;
+  background:linear-gradient(135deg,#eff6ff,#f0f9ff);
+  border:1px solid #bfdbfe;border-radius:9px;
+  font-size:.78rem;color:#1e3a8a;line-height:1.5;
+  display:flex;align-items:center;gap:10px;
 }
+.doc-merge-note .merge-stack {
+  flex-shrink:0;position:relative;width:26px;height:24px;
+}
+.doc-merge-note .merge-stack span {
+  position:absolute;width:18px;height:22px;border-radius:3px;
+  background:#fff;border:1.5px solid #1e3a8a;
+}
+.doc-merge-note .merge-stack span:nth-child(1){left:0;top:2px;opacity:.55;transform:rotate(-6deg);}
+.doc-merge-note .merge-stack span:nth-child(2){left:4px;top:1px;opacity:.78;transform:rotate(-2deg);}
+.doc-merge-note .merge-stack span:nth-child(3){left:8px;top:0;}
+.doc-merge-note .merge-stack span:nth-child(3)::after{
+  content:'PDF';position:absolute;top:9px;left:0;right:0;
+  text-align:center;font-size:.46rem;font-weight:800;
+  color:#1e3a8a;letter-spacing:-.02em;
+}
+.doc-merge-note strong { font-weight:800; }
+
 .doc-error {
   margin-top:8px;padding:10px 13px;background:#fee2e2;
   border:1.5px solid #ef4444;border-radius:8px;
@@ -196,10 +356,14 @@
             </div>
 
             <div id="multiDocNote" class="doc-merge-note" style="display:none">
-              <i class="bi bi-info-circle"></i>
-              <strong>Multi-document request:</strong> All selected documents
-              will be merged into a single signing flow. Each can be annotated
-              with its own signature fields.
+              <span class="merge-stack" aria-hidden="true">
+                <span></span><span></span><span></span>
+              </span>
+              <div>
+                <strong>Drag to reorder.</strong> All documents will be
+                merged in this order into a single signing PDF. Position
+                #1 is the primary cover page.
+              </div>
             </div>
 
             <div class="row g-2 mt-3">
@@ -637,6 +801,30 @@ function showDocError(msg){
   }
 }
 
+// ─── File-type colour map ──────────────────────────────────
+// Tints the icon padding behind each doc card. Falls back to a neutral
+// slate for unknown types.
+function getDocStyle(d){
+  var ext = (d.name || '').split('.').pop().toLowerCase();
+  var byExt = {
+    pdf:  ['#fef2f2', '#dc2626'],
+    doc:  ['#eff6ff', '#1d4ed8'],
+    docx: ['#eff6ff', '#1d4ed8'],
+    xls:  ['#ecfdf5', '#047857'],
+    xlsx: ['#ecfdf5', '#047857'],
+    csv:  ['#ecfdf5', '#047857'],
+    ppt:  ['#fff7ed', '#c2410c'],
+    pptx: ['#fff7ed', '#c2410c'],
+    txt:  ['#f8fafc', '#475569'],
+    png:  ['#f5f3ff', '#7c3aed'],
+    jpg:  ['#f5f3ff', '#7c3aed'],
+    jpeg: ['#f5f3ff', '#7c3aed'],
+    webp: ['#f5f3ff', '#7c3aed'],
+  };
+  var pair = byExt[ext] || ['#f1f5f9', '#64748b'];
+  return { tint: pair[0], color: pair[1], ext: ext };
+}
+
 function renderDocList(){
   var list = document.getElementById('docList');
   if (!list) return;
@@ -645,31 +833,79 @@ function renderDocList(){
   if (selectedDocs.length === 0){
     var empty = document.createElement('div');
     empty.className = 'doc-empty';
-    empty.innerHTML = '<i class="bi bi-file-earmark-plus" style="font-size:1.4rem;display:block;margin-bottom:6px;opacity:.6"></i>No documents yet — pick one below to get started.';
+    empty.id = 'docEmptyState';
+    empty.innerHTML =
+      '<i class="bi bi-file-earmark-plus" style="font-size:1.6rem;display:block;margin-bottom:8px;opacity:.55"></i>' +
+      '<div style="font-weight:600;color:var(--eo-text);margin-bottom:2px">No documents yet</div>' +
+      '<div>Pick one or more files below — they\'ll be combined into a single signing flow.</div>';
     list.appendChild(empty);
   }
 
   selectedDocs.forEach(function(d, idx){
+    var st = getDocStyle(d);
     var card = document.createElement('div');
     card.className = 'doc-card' + (idx === 0 ? ' is-primary' : '');
+    card.draggable = true;
+    card.dataset.idx = idx;
+    card.style.setProperty('--doc-tint',  st.tint);
+    card.style.setProperty('--doc-color', st.color);
+
+    var isFirst = idx === 0;
+    var isLast  = idx === selectedDocs.length - 1;
+
+    // Convert / unsupported / pdf badge — exclusive
+    var badgeHtml = '';
+    if (!d.isPdf && d.isConvertible) {
+      badgeHtml = '<span class="doc-badge convert" title="Will be auto-converted to PDF">' +
+                  '<i class="bi bi-arrow-repeat" style="font-size:.6rem"></i> ' + (st.ext || 'file').toUpperCase() + ' → PDF</span>';
+    } else if (!d.isPdf && !d.isConvertible) {
+      badgeHtml = '<span class="doc-badge warn" title="This file format is not supported">' +
+                  '<i class="bi bi-exclamation-triangle" style="font-size:.6rem"></i> Unsupported</span>';
+    } else {
+      badgeHtml = '<span class="doc-badge pdf">PDF</span>';
+    }
+
+    // Use Bootstrap Icon for file types — type-coloured via CSS vars
+    var iconHtml = '<i class="bi ' + (d.icon || 'bi-file-earmark') + '"></i>';
+
     card.innerHTML =
-      '<i class="bi ' + (d.icon || 'bi-file-earmark') + ' doc-ico" style="color:' + (d.color || '#64748b') + '"></i>' +
-      '<div class="doc-meta">' +
-        '<div class="doc-name">' + escHtml(d.name) +
-          (idx === 0 ? '<span class="doc-primary-tag">· primary</span>' : '') +
+      // Drag handle (desktop)
+      '<span class="doc-drag" title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>' +
+      // Position chip (always visible)
+      '<div class="doc-pos">' + (idx + 1) + '</div>' +
+      // Touch fallback up/down buttons
+      '<div class="doc-move-btns">' +
+        '<button type="button" onclick="moveDoc(' + idx + ',-1)"' + (isFirst ? ' disabled' : '') + ' title="Move up">▲</button>' +
+        '<button type="button" onclick="moveDoc(' + idx + ',1)"'  + (isLast  ? ' disabled' : '') + ' title="Move down">▼</button>' +
+      '</div>' +
+      // Type-coloured icon pad
+      '<div class="doc-ico-wrap">' + iconHtml + '</div>' +
+      // Body
+      '<div class="doc-body">' +
+        '<div class="doc-name-row">' +
+          '<span class="doc-name" title="' + escHtml(d.name) + '">' + escHtml(d.name) + '</span>' +
+          (idx === 0 ? '<span class="doc-badge primary">Primary</span>' : '') +
         '</div>' +
-        '<div class="doc-sub">' + escHtml(d.sizeDisplay || '') +
-            (!d.isPdf && d.isConvertible ? ' · will be converted to PDF' : '') +
-            (!d.isPdf && !d.isConvertible ? ' · ⚠ unsupported format' : '') +
+        '<div class="doc-meta-row">' +
+          badgeHtml +
+          (d.sizeDisplay ? '<span class="sep"></span><span><i class="bi bi-hdd" style="font-size:.7rem"></i> ' + escHtml(d.sizeDisplay) + '</span>' : '') +
+          '<span class="sep"></span><span><i class="bi bi-list-ol" style="font-size:.7rem"></i> Position ' + (idx + 1) + ' of ' + selectedDocs.length + '</span>' +
         '</div>' +
       '</div>' +
+      // Remove
       '<button type="button" class="doc-remove" onclick="removeDoc(' + idx + ')" title="Remove document">' +
         '<i class="bi bi-x-lg"></i>' +
       '</button>';
+
     list.appendChild(card);
   });
 
+  // Wire up native HTML5 drag-and-drop on the cards we just rendered.
+  attachDocDragHandlers();
+
   // Keep the legacy hidden input in sync with the *primary* doc.
+  // After a reorder, selectedDocs[0] is whatever the user dragged to
+  // position #1, so the form's `document_id` automatically follows.
   var primary = selectedDocs[0];
   selectedDocId    = primary ? primary.id : '';
   selectedDocIsPdf = primary ? primary.isPdf : true;
@@ -693,7 +929,7 @@ function renderDocList(){
   var n1 = document.getElementById('convertNotice');
   if (n1) n1.style.display = hasConvertible ? 'flex' : 'none';
   var multi = document.getElementById('multiDocNote');
-  if (multi) multi.style.display = selectedDocs.length > 1 ? 'block' : 'none';
+  if (multi) multi.style.display = selectedDocs.length > 1 ? 'flex' : 'none';
 
   // Counter
   var counter = document.getElementById('docCount');
@@ -705,17 +941,13 @@ function renderDocList(){
     titleInput.value = primary.name + ' — Signature Request';
   }
 
-  // Reset PDF viewer state — annotation step uses the primary doc as the
-  // canvas. Multi-doc bundles get merged on submit and re-loaded on the
-  // next step.
+  // Reset PDF viewer state
   pdfDoc = null;
   docUrl = (primary && primary.isPdf) ? ('/files/' + primary.id + '/download/') : '';
 
-  // Clear or surface inline error appropriately
+  // Inline error
   if (selectedDocs.length === 0){
-    // Don't auto-show the error on initial page load — only after the
-    // user attempts to remove the last doc or proceed without one. The
-    // remove flow + Step 2 / submit handlers will call showDocError().
+    // Don't auto-show — submit / Step 2 handlers do that.
   } else {
     showDocError(null);
     if (hasUnsupported){
@@ -723,6 +955,72 @@ function renderDocList(){
     }
   }
 }
+
+// ─── Document drag-and-drop reordering ─────────────────────
+// Mirrors the signer-row drag pattern. Native HTML5 DnD; touch
+// devices use the up/down buttons (CSS media query swaps them in).
+var dragDocSrcIdx = null;
+function attachDocDragHandlers(){
+  var cards = document.querySelectorAll('#docList .doc-card');
+  cards.forEach(function(card){
+    card.addEventListener('dragstart', function(e){
+      dragDocSrcIdx = parseInt(card.dataset.idx, 10);
+      card.classList.add('dragging');
+      try { e.dataTransfer.setData('text/plain', String(dragDocSrcIdx)); } catch(_){}
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    card.addEventListener('dragend', function(){
+      card.classList.remove('dragging');
+      document.querySelectorAll('#docList .doc-card').forEach(function(c){
+        c.classList.remove('drag-over-top','drag-over-bottom');
+      });
+      dragDocSrcIdx = null;
+    });
+    card.addEventListener('dragover', function(e){
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      // Indicator: highlight top half (insert before) or bottom half
+      // (insert after) so the user sees exactly where the drop lands.
+      var rect = card.getBoundingClientRect();
+      var midY = rect.top + rect.height / 2;
+      var before = e.clientY < midY;
+      card.classList.toggle('drag-over-top', before);
+      card.classList.toggle('drag-over-bottom', !before);
+    });
+    card.addEventListener('dragleave', function(){
+      card.classList.remove('drag-over-top','drag-over-bottom');
+    });
+    card.addEventListener('drop', function(e){
+      e.preventDefault();
+      var insertBefore = card.classList.contains('drag-over-top');
+      card.classList.remove('drag-over-top','drag-over-bottom');
+      var dstIdx = parseInt(card.dataset.idx, 10);
+      if (dragDocSrcIdx === null || isNaN(dstIdx) || dragDocSrcIdx === dstIdx) return;
+      reorderDocs(dragDocSrcIdx, dstIdx, insertBefore);
+    });
+  });
+}
+
+function reorderDocs(from, to, insertBefore){
+  if (from < 0 || to < 0 || from >= selectedDocs.length || to >= selectedDocs.length) return;
+  var moved = selectedDocs.splice(from, 1)[0];
+  // After splice, indices to the right of `from` shift by 1.
+  var insertAt = to;
+  if (from < to) insertAt = insertBefore ? to - 1 : to;
+  else           insertAt = insertBefore ? to     : to + 1;
+  insertAt = Math.max(0, Math.min(selectedDocs.length, insertAt));
+  selectedDocs.splice(insertAt, 0, moved);
+  renderDocList();
+}
+
+window.moveDoc = function(idx, delta){
+  var from = idx;
+  var to   = idx + delta;
+  if (to < 0 || to >= selectedDocs.length) return;
+  // moveDoc semantics: simple swap-by-one. Use insertBefore=(delta<0)
+  // so up-button inserts before the target, down-button inserts after.
+  reorderDocs(from, to, delta < 0);
+};
 
 window.addDocFromSelect = function(){
   var sel = document.getElementById('docSelect');
@@ -1148,6 +1446,13 @@ function fieldIcon(type) {
 function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 // Form submit — serialize fields then submit
+//
+// IMPORTANT: We can't trust the visible signer inputs in step1 to make
+// it through every browser quirk (esp. when step1 is display:none at
+// the moment of submit). To guarantee `signer_name` / `signer_email`
+// reach the server, we write *fresh* hidden inputs from the in-memory
+// `signers[]` array right before the form submits. This is the
+// authoritative source of truth.
 document.getElementById('sigForm').addEventListener('submit', function(e) {
   cleanEmptySigners();
 
@@ -1186,9 +1491,51 @@ document.getElementById('sigForm').addEventListener('submit', function(e) {
     return;
   }
 
-  // Re-render after removing empty signer rows so hidden/required fields do not block submission.
-  renderSigners();
+  // ── Authoritative signer payload ──
+  // Strip out any existing visible signer inputs so they don't double
+  // up with our hidden authoritative copy, then write a fresh hidden
+  // input for every signer in order.
+  var form = e.currentTarget;
+
+  // Remove anything we previously injected on a prior (cancelled) submit.
+  form.querySelectorAll('input.signer-authoritative').forEach(function(n){ n.remove(); });
+
+  // Empty the visible signer container so the only `signer_name` /
+  // `signer_email` inputs in the form are the hidden ones we're about
+  // to write. (The form is being submitted right now, so re-rendering
+  // empty UI has no visual effect.)
+  var container = document.getElementById('signersContainer');
+  if (container) container.innerHTML = '';
+
+  signers.forEach(function(s) {
+    var nameInput = document.createElement('input');
+    nameInput.type = 'hidden';
+    nameInput.name = 'signer_name';
+    nameInput.className = 'signer-authoritative';
+    nameInput.value = (s.name || '').trim();
+    form.appendChild(nameInput);
+
+    var emailInput = document.createElement('input');
+    emailInput.type = 'hidden';
+    emailInput.name = 'signer_email';
+    emailInput.className = 'signer-authoritative';
+    emailInput.value = (s.email || '').trim();
+    form.appendChild(emailInput);
+  });
+
+  // Field placements (signature/initials boxes on the PDF)
   serializeFields();
+
+  // Last-mile sanity log so we can confirm what's hitting the server
+  // when something goes wrong. Visible in browser DevTools console.
+  try {
+    console.log('[sigForm] submitting', {
+      docId: docId,
+      extras: form.querySelectorAll('input[name="document_ids[]"]').length,
+      signers: signers.length,
+      fields: (document.getElementById('fieldsJson') || {}).value || ''
+    });
+  } catch (_) {}
 });
 
 // Init: add first signer row for manual entry.

@@ -1,54 +1,77 @@
-{% extends "base.html" %}
+{% extends "inventory/inventory_base.html" %}
 {% block title %}Scan QR — Inventory{% endblock %}
 {% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / Scan{% endblock %}
 
-{% block content %}
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title"><i class="bi bi-qr-code-scan"></i> Scan a Code</h1>
-    <p class="eo-page-subtitle">Point your camera at any inventory QR — products, assets, locations, bins</p>
-  </div>
-</div>
+{% block inv_content %}
 
-<div class="row g-4">
-  <div class="col-lg-7">
-    <div class="eo-card">
-      <video id="vid" style="width:100%;border-radius:10px;background:#000" autoplay muted playsinline></video>
-      <canvas id="cv" hidden></canvas>
-      <div id="status" style="margin-top:12px;font-size:.86rem;color:var(--eo-text-muted)">Initialising camera…</div>
-      <div style="margin-top:8px;display:flex;gap:8px">
-        <button id="startBtn" class="eo-btn eo-btn-primary"><i class="bi bi-camera-video"></i> Start camera</button>
-        <button id="stopBtn" class="eo-btn eo-btn-secondary" disabled><i class="bi bi-stop-circle"></i> Stop</button>
-      </div>
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Quick lookup</div>
+      <h1 class="inv-page-title"><i class="bi bi-qr-code-scan" style="color:#1d4ed8"></i> Scan a code</h1>
+      <p class="inv-page-subtitle">Point your camera at any inventory QR — products, assets, locations, or bins</p>
     </div>
   </div>
 
-  <div class="col-lg-5">
-    <div class="eo-card">
-      <h3 class="eo-card-title" style="margin-bottom:10px">Or enter the code manually</h3>
-      <form method="get" action="" id="manual">
-        <div style="display:flex;gap:6px">
-          <input type="text" id="tokenInput" class="eo-form-control" placeholder="eo-..." autocomplete="off">
-          <button class="eo-btn eo-btn-primary">Go</button>
+  <div class="row g-3">
+    <div class="col-lg-7">
+      <div class="inv-card">
+        <div style="position:relative;border-radius:12px;overflow:hidden;background:#000;aspect-ratio:4/3">
+          <video id="vid" style="width:100%;height:100%;object-fit:cover;display:block" autoplay muted playsinline></video>
+          <canvas id="cv" hidden></canvas>
+          <div style="position:absolute;inset:0;pointer-events:none;display:flex;align-items:center;justify-content:center">
+            <div style="width:60%;aspect-ratio:1;border:3px solid rgba(255,255,255,.5);border-radius:16px;box-shadow:0 0 0 2000px rgba(0,0,0,.25)"></div>
+          </div>
         </div>
-        <small style="color:var(--eo-text-muted)">All inventory tokens start with <code>eo-</code></small>
-      </form>
 
-      <div style="margin-top:18px;font-size:.84rem;color:var(--eo-text-muted)">
-        <strong style="color:var(--eo-text)">Tip.</strong>
-        Print labels from any product, asset, or location detail page. They render
-        as offline-friendly QR codes that always resolve back here.
+        <div id="status" style="margin-top:14px;font-size:.86rem;color:#64748b;display:flex;align-items:center;gap:8px">
+          <i class="bi bi-circle-fill" style="font-size:.5rem;color:#94a3b8"></i>
+          Initialising camera…
+        </div>
+
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <button id="startBtn" class="inv-btn inv-btn-primary"><i class="bi bi-camera-video"></i> Start camera</button>
+          <button id="stopBtn" class="inv-btn" disabled><i class="bi bi-stop-circle"></i> Stop</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-5" style="display:flex;flex-direction:column;gap:18px">
+
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:14px">Manual entry</h3>
+        <form method="get" action="" id="manual">
+          <label class="inv-form-label">Token or URL</label>
+          <div style="display:flex;gap:6px">
+            <input type="text" id="tokenInput" class="inv-input" placeholder="eo-..." autocomplete="off">
+            <button class="inv-btn inv-btn-primary">Go</button>
+          </div>
+          <small style="color:#64748b;font-size:.7rem;display:block;margin-top:6px">All inventory tokens start with <code style="font-size:.74rem">eo-</code></small>
+        </form>
+      </div>
+
+      <div class="inv-card" style="background:linear-gradient(135deg,#dbeafe,#bfdbfe);border:0">
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <div style="width:36px;height:36px;border-radius:10px;background:#1d4ed8;color:#fff;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">
+            <i class="bi bi-lightbulb"></i>
+          </div>
+          <div>
+            <div style="font-weight:700;color:#0f172a;margin-bottom:6px">How it works</div>
+            <p style="font-size:.84rem;color:#1e40af;margin:0;line-height:1.5">
+              Print labels from any product, asset, or location detail page. They render as offline-friendly QR codes
+              that always resolve back here — even if the page changes.
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   </div>
-</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
 <script>
 (function(){
-  const video   = document.getElementById('vid');
-  const canvas  = document.getElementById('cv');
-  const ctx     = canvas.getContext('2d', { willReadFrequently: true });
+  const video = document.getElementById('vid');
+  const canvas = document.getElementById('cv');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const statusEl = document.getElementById('status');
   const startBtn = document.getElementById('startBtn');
   const stopBtn  = document.getElementById('stopBtn');
@@ -57,7 +80,10 @@
   let running = false;
   let lastSeen = '';
 
-  function setStatus(msg, color){ statusEl.textContent = msg; statusEl.style.color = color || 'var(--eo-text-muted)'; }
+  function setStatus(msg, color, dot){
+    statusEl.innerHTML = '<i class="bi bi-circle-fill" style="font-size:.5rem;color:' + (dot || '#94a3b8') + '"></i> ' + msg;
+    statusEl.style.color = color || '#64748b';
+  }
 
   async function start(){
     try {
@@ -66,10 +92,10 @@
       await video.play();
       running = true;
       startBtn.disabled = true; stopBtn.disabled = false;
-      setStatus('Looking for a code…');
+      setStatus('Looking for a code…', '#0f172a', '#10b981');
       requestAnimationFrame(tick);
     } catch (e) {
-      setStatus('Camera unavailable: ' + e.message + '. Use manual entry.', '#dc2626');
+      setStatus('Camera unavailable: ' + e.message + '. Use manual entry.', '#dc2626', '#dc2626');
     }
   }
 
@@ -77,7 +103,7 @@
     running = false;
     if (stream) stream.getTracks().forEach(t => t.stop());
     startBtn.disabled = false; stopBtn.disabled = true;
-    setStatus('Camera stopped.');
+    setStatus('Camera stopped.', '#64748b', '#94a3b8');
   }
 
   function tick(){
@@ -92,11 +118,11 @@
         lastSeen = code.data;
         const token = extractToken(code.data);
         if (token){
-          setStatus('Found: ' + token, '#16a34a');
+          setStatus('Found: ' + token, '#047857', '#10b981');
           window.location.href = "{% url 'inventory:qr_resolve' 'TOKEN' %}".replace('TOKEN', encodeURIComponent(token));
           return;
         } else {
-          setStatus('Not an inventory code: ' + code.data.slice(0, 40), '#a16207');
+          setStatus('Not an inventory code: ' + code.data.slice(0, 40), '#c2410c', '#f59e0b');
         }
       }
     }
@@ -104,7 +130,6 @@
   }
 
   function extractToken(raw){
-    // Accept either a bare "eo-..." token or a full URL ending with /q/<token>/
     const t = raw.trim();
     if (t.startsWith('eo-')) return t;
     const m = t.match(/\/q\/(eo-[A-Za-z0-9_-]+)\/?/);
@@ -119,7 +144,6 @@
     if (t) window.location.href = "{% url 'inventory:qr_resolve' 'TOKEN' %}".replace('TOKEN', encodeURIComponent(t));
   });
 
-  // auto-start on load
   start();
 })();
 </script>

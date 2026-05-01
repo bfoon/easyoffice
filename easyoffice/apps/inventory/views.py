@@ -42,10 +42,29 @@ User = get_user_model()
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# Shared context mixin
+# ════════════════════════════════════════════════════════════════════════════
+
+class _InventoryContextMixin:
+    """
+    Adds permission flags to every inventory view's template context so the
+    new shell (sub-nav, quick-add menu) and templates can show or hide
+    actions consistently.
+    """
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        u = self.request.user
+        ctx.setdefault('can_manage',  can_manage_stock(u))
+        ctx.setdefault('can_approve', can_approve_inventory(u))
+        ctx.setdefault('can_dispose', can_dispose_assets(u))
+        return ctx
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # Dashboard
 # ════════════════════════════════════════════════════════════════════════════
 
-class InventoryDashboardView(InventoryAccessMixin, TemplateView):
+class InventoryDashboardView(_InventoryContextMixin, InventoryAccessMixin, TemplateView):
     template_name = 'inventory/dashboard.html'
 
     def get_context_data(self, **kwargs):
@@ -113,7 +132,7 @@ class InventoryDashboardView(InventoryAccessMixin, TemplateView):
 # Products
 # ════════════════════════════════════════════════════════════════════════════
 
-class ProductListView(InventoryAccessMixin, ListView):
+class ProductListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
     template_name = 'inventory/product_list.html'
     context_object_name = 'products'
     paginate_by = 30
@@ -153,7 +172,7 @@ class ProductListView(InventoryAccessMixin, ListView):
         return ctx
 
 
-class ProductDetailView(InventoryAccessMixin, DetailView):
+class ProductDetailView(_InventoryContextMixin, InventoryAccessMixin, DetailView):
     model = Product
     template_name = 'inventory/product_detail.html'
     context_object_name = 'product'
@@ -178,7 +197,7 @@ class ProductDetailView(InventoryAccessMixin, DetailView):
         return ctx
 
 
-class ProductCreateView(InventoryManagerMixin, CreateView):
+class ProductCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateView):
     model = Product
     form_class = ProductForm
     template_name = 'inventory/product_form.html'
@@ -189,7 +208,7 @@ class ProductCreateView(InventoryManagerMixin, CreateView):
         return super().form_valid(form)
 
 
-class ProductUpdateView(InventoryManagerMixin, UpdateView):
+class ProductUpdateView(_InventoryContextMixin, InventoryManagerMixin, UpdateView):
     model = Product
     form_class = ProductForm
     template_name = 'inventory/product_form.html'
@@ -203,7 +222,7 @@ class ProductUpdateView(InventoryManagerMixin, UpdateView):
 # Stock movements
 # ════════════════════════════════════════════════════════════════════════════
 
-class ReceiveStockView(InventoryManagerMixin, View):
+class ReceiveStockView(_InventoryContextMixin, InventoryManagerMixin, View):
     template_name = 'inventory/receive_stock.html'
 
     def get(self, request):
@@ -233,7 +252,7 @@ class ReceiveStockView(InventoryManagerMixin, View):
         return redirect('inventory:product_detail', pk=cd['product'].pk)
 
 
-class IssueStockView(InventoryManagerMixin, View):
+class IssueStockView(_InventoryContextMixin, InventoryManagerMixin, View):
     template_name = 'inventory/issue_stock.html'
 
     def get(self, request):
@@ -262,7 +281,7 @@ class IssueStockView(InventoryManagerMixin, View):
         return redirect('inventory:product_detail', pk=cd['product'].pk)
 
 
-class TransferStockView(InventoryManagerMixin, View):
+class TransferStockView(_InventoryContextMixin, InventoryManagerMixin, View):
     template_name = 'inventory/transfer_stock.html'
 
     def get(self, request):
@@ -293,7 +312,7 @@ class TransferStockView(InventoryManagerMixin, View):
         return redirect('inventory:product_detail', pk=cd['product'].pk)
 
 
-class MovementListView(InventoryAccessMixin, ListView):
+class MovementListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
     template_name = 'inventory/movement_list.html'
     context_object_name = 'movements'
     paginate_by = 50
@@ -325,7 +344,7 @@ class MovementListView(InventoryAccessMixin, ListView):
 # Locations / Categories / Suppliers (small CRUD)
 # ════════════════════════════════════════════════════════════════════════════
 
-class LocationListView(InventoryAccessMixin, ListView):
+class LocationListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
     template_name = 'inventory/location_list.html'
     context_object_name = 'locations'
 
@@ -337,7 +356,7 @@ class LocationListView(InventoryAccessMixin, ListView):
                 .order_by('kind', 'name'))
 
 
-class LocationDetailView(InventoryAccessMixin, DetailView):
+class LocationDetailView(_InventoryContextMixin, InventoryAccessMixin, DetailView):
     model = Location
     template_name = 'inventory/location_detail.html'
     context_object_name = 'location'
@@ -352,21 +371,21 @@ class LocationDetailView(InventoryAccessMixin, DetailView):
         return ctx
 
 
-class LocationCreateView(InventoryManagerMixin, CreateView):
+class LocationCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateView):
     model = Location
     form_class = LocationForm
     template_name = 'inventory/location_form.html'
     success_url = reverse_lazy('inventory:location_list')
 
 
-class LocationUpdateView(InventoryManagerMixin, UpdateView):
+class LocationUpdateView(_InventoryContextMixin, InventoryManagerMixin, UpdateView):
     model = Location
     form_class = LocationForm
     template_name = 'inventory/location_form.html'
     success_url = reverse_lazy('inventory:location_list')
 
 
-class SupplierListView(InventoryAccessMixin, ListView):
+class SupplierListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
     template_name = 'inventory/supplier_list.html'
     context_object_name = 'suppliers'
 
@@ -374,21 +393,21 @@ class SupplierListView(InventoryAccessMixin, ListView):
         return Supplier.objects.filter(is_active=True).order_by('name')
 
 
-class SupplierCreateView(InventoryManagerMixin, CreateView):
+class SupplierCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateView):
     model = Supplier
     form_class = SupplierForm
     template_name = 'inventory/supplier_form.html'
     success_url = reverse_lazy('inventory:supplier_list')
 
 
-class SupplierUpdateView(InventoryManagerMixin, UpdateView):
+class SupplierUpdateView(_InventoryContextMixin, InventoryManagerMixin, UpdateView):
     model = Supplier
     form_class = SupplierForm
     template_name = 'inventory/supplier_form.html'
     success_url = reverse_lazy('inventory:supplier_list')
 
 
-class CategoryListView(InventoryAccessMixin, ListView):
+class CategoryListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
     template_name = 'inventory/category_list.html'
     context_object_name = 'categories'
 
@@ -396,7 +415,7 @@ class CategoryListView(InventoryAccessMixin, ListView):
         return Category.objects.filter(is_active=True).order_by('parent__name', 'name')
 
 
-class CategoryCreateView(InventoryManagerMixin, CreateView):
+class CategoryCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateView):
     model = Category
     form_class = CategoryForm
     template_name = 'inventory/category_form.html'
@@ -407,7 +426,7 @@ class CategoryCreateView(InventoryManagerMixin, CreateView):
 # Assets
 # ════════════════════════════════════════════════════════════════════════════
 
-class AssetListView(InventoryAccessMixin, ListView):
+class AssetListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
     template_name = 'inventory/asset_list.html'
     context_object_name = 'assets'
     paginate_by = 30
@@ -439,7 +458,7 @@ class AssetListView(InventoryAccessMixin, ListView):
         return ctx
 
 
-class AssetDetailView(InventoryAccessMixin, DetailView):
+class AssetDetailView(_InventoryContextMixin, InventoryAccessMixin, DetailView):
     model = Asset
     template_name = 'inventory/asset_detail.html'
     context_object_name = 'asset'
@@ -464,7 +483,7 @@ class AssetDetailView(InventoryAccessMixin, DetailView):
         return ctx
 
 
-class AssetCreateView(InventoryManagerMixin, CreateView):
+class AssetCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateView):
     model = Asset
     form_class = AssetForm
     template_name = 'inventory/asset_form.html'
@@ -480,7 +499,7 @@ class AssetCreateView(InventoryManagerMixin, CreateView):
         return resp
 
 
-class AssetUpdateView(InventoryManagerMixin, UpdateView):
+class AssetUpdateView(_InventoryContextMixin, InventoryManagerMixin, UpdateView):
     model = Asset
     form_class = AssetForm
     template_name = 'inventory/asset_form.html'
@@ -493,7 +512,7 @@ class AssetUpdateView(InventoryManagerMixin, UpdateView):
         return super().form_valid(form)
 
 
-class AssetAssignView(InventoryManagerMixin, View):
+class AssetAssignView(_InventoryContextMixin, InventoryManagerMixin, View):
     def post(self, request, pk):
         asset = get_object_or_404(Asset, pk=pk)
         form = AssetAssignForm(request.POST)
@@ -511,7 +530,7 @@ class AssetAssignView(InventoryManagerMixin, View):
         return redirect('inventory:asset_detail', pk=pk)
 
 
-class AssetReturnView(InventoryManagerMixin, View):
+class AssetReturnView(_InventoryContextMixin, InventoryManagerMixin, View):
     def post(self, request, pk):
         asset = get_object_or_404(Asset, pk=pk)
         form = AssetReturnForm(request.POST)
@@ -533,7 +552,7 @@ class AssetReturnView(InventoryManagerMixin, View):
         return redirect('inventory:asset_detail', pk=pk)
 
 
-class AssetMaintenanceView(InventoryManagerMixin, View):
+class AssetMaintenanceView(_InventoryContextMixin, InventoryManagerMixin, View):
     def post(self, request, pk):
         asset = get_object_or_404(Asset, pk=pk)
         form = AssetMaintenanceForm(request.POST, request.FILES)
@@ -551,7 +570,7 @@ class AssetMaintenanceView(InventoryManagerMixin, View):
         return redirect('inventory:asset_detail', pk=pk)
 
 
-class AssetScrapView(InventoryAccessMixin, View):
+class AssetScrapView(_InventoryContextMixin, InventoryAccessMixin, View):
     def post(self, request, pk):
         if not can_dispose_assets(request.user):
             messages.error(request, 'Only the CEO/Admin can dispose of assets.')
@@ -570,7 +589,7 @@ class AssetScrapView(InventoryAccessMixin, View):
 # Stock requests
 # ════════════════════════════════════════════════════════════════════════════
 
-class StockRequestListView(InventoryAccessMixin, ListView):
+class StockRequestListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
     template_name = 'inventory/stock_request_list.html'
     context_object_name = 'requests'
     paginate_by = 30
@@ -594,7 +613,7 @@ class StockRequestListView(InventoryAccessMixin, ListView):
         return ctx
 
 
-class StockRequestCreateView(InventoryAccessMixin, View):
+class StockRequestCreateView(_InventoryContextMixin, InventoryAccessMixin, View):
     template_name = 'inventory/stock_request_form.html'
 
     def get(self, request):
@@ -647,7 +666,7 @@ class StockRequestCreateView(InventoryAccessMixin, View):
             })
 
 
-class StockRequestDetailView(InventoryAccessMixin, DetailView):
+class StockRequestDetailView(_InventoryContextMixin, InventoryAccessMixin, DetailView):
     model = StockRequest
     template_name = 'inventory/stock_request_detail.html'
     context_object_name = 'sr'
@@ -665,7 +684,7 @@ class StockRequestDetailView(InventoryAccessMixin, DetailView):
         return ctx
 
 
-class StockRequestIssueView(InventoryManagerMixin, View):
+class StockRequestIssueView(_InventoryContextMixin, InventoryManagerMixin, View):
     def post(self, request, pk):
         sr = get_object_or_404(StockRequest, pk=pk)
         location_id = request.POST.get('location') or None
@@ -683,7 +702,7 @@ class StockRequestIssueView(InventoryManagerMixin, View):
         return redirect('inventory:stock_request_detail', pk=pk)
 
 
-class StockRequestRerouteView(InventoryManagerMixin, View):
+class StockRequestRerouteView(_InventoryContextMixin, InventoryManagerMixin, View):
     def post(self, request, pk):
         sr = get_object_or_404(StockRequest, pk=pk)
         try:
@@ -730,7 +749,7 @@ class QRResolveView(LoginRequiredMixin, View):
         return redirect('inventory:dashboard')
 
 
-class QRScanPageView(InventoryAccessMixin, TemplateView):
+class QRScanPageView(_InventoryContextMixin, InventoryAccessMixin, TemplateView):
     """Render the camera-based scanner UI (HTML5 + jsQR)."""
     template_name = 'inventory/scan.html'
 
@@ -739,7 +758,7 @@ class QRScanPageView(InventoryAccessMixin, TemplateView):
 # QR label printable
 # ════════════════════════════════════════════════════════════════════════════
 
-class QRLabelView(InventoryAccessMixin, View):
+class QRLabelView(_InventoryContextMixin, InventoryAccessMixin, View):
     """
     Render a printable QR label (SVG) for a product / asset / location.
     Uses qrcode + Pillow if installed; falls back to an HTML page that
@@ -789,7 +808,7 @@ class QRLabelView(InventoryAccessMixin, View):
 # Stock-take
 # ════════════════════════════════════════════════════════════════════════════
 
-class StockTakeListView(InventoryManagerMixin, ListView):
+class StockTakeListView(_InventoryContextMixin, InventoryManagerMixin, ListView):
     template_name = 'inventory/stocktake_list.html'
     context_object_name = 'takes'
     paginate_by = 20
@@ -798,7 +817,7 @@ class StockTakeListView(InventoryManagerMixin, ListView):
         return StockTake.objects.select_related('location', 'started_by').order_by('-started_at')
 
 
-class StockTakeCreateView(InventoryManagerMixin, View):
+class StockTakeCreateView(_InventoryContextMixin, InventoryManagerMixin, View):
     template_name = 'inventory/stocktake_form.html'
 
     def get(self, request):
@@ -824,7 +843,7 @@ class StockTakeCreateView(InventoryManagerMixin, View):
         return redirect('inventory:stocktake_detail', pk=st.pk)
 
 
-class StockTakeDetailView(InventoryManagerMixin, DetailView):
+class StockTakeDetailView(_InventoryContextMixin, InventoryManagerMixin, DetailView):
     model = StockTake
     template_name = 'inventory/stocktake_detail.html'
     context_object_name = 'st'
@@ -860,7 +879,7 @@ class StockTakeDetailView(InventoryManagerMixin, DetailView):
 # Reports
 # ════════════════════════════════════════════════════════════════════════════
 
-class StockReportView(InventoryManagerMixin, TemplateView):
+class StockReportView(_InventoryContextMixin, InventoryManagerMixin, TemplateView):
     template_name = 'inventory/report_stock.html'
 
     def get_context_data(self, **kwargs):
@@ -880,7 +899,7 @@ class StockReportView(InventoryManagerMixin, TemplateView):
         return ctx
 
 
-class AssetReportView(InventoryManagerMixin, TemplateView):
+class AssetReportView(_InventoryContextMixin, InventoryManagerMixin, TemplateView):
     template_name = 'inventory/report_assets.html'
 
     def get_context_data(self, **kwargs):

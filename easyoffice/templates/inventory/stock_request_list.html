@@ -1,54 +1,63 @@
-{% extends "base.html" %}
+{% extends "inventory/inventory_base.html" %}
 {% load humanize %}
 {% block title %}Stock Requests — Inventory{% endblock %}
 {% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / Requests{% endblock %}
 
-{% block content %}
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title">Stock Requests</h1>
-    <p class="eo-page-subtitle">Internal requests for stock items or supplies</p>
-  </div>
-  <a href="{% url 'inventory:stock_request_create' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus-lg"></i> New request</a>
-</div>
+{% block inv_content %}
 
-<div class="eo-card">
-  {% if requests %}
-  <table class="table align-middle">
-    <thead><tr style="font-size:.74rem;text-transform:uppercase;color:var(--eo-text-muted)">
-      <th>Reference</th><th>Title</th><th>Requester</th><th>Department</th><th>Created</th><th>Status</th>
-    </tr></thead>
-    <tbody>
-      {% for r in requests %}
-      <tr>
-        <td><a href="{% url 'inventory:stock_request_detail' r.pk %}" style="text-decoration:none;font-weight:700">{{ r.reference }}</a></td>
-        <td>{{ r.title|default:"(no title)"|truncatechars:50 }}</td>
-        <td><small>{{ r.requested_by.get_full_name|default:r.requested_by.username }}</small></td>
-        <td><small>{{ r.department.name|default:"—" }}</small></td>
-        <td><small>{{ r.created_at|naturaltime }}</small></td>
-        <td>
-          {% with s=r.status %}
-          <span style="font-size:.66rem;padding:2px 8px;border-radius:5px;font-weight:700;
-            {% if s == 'pending' %}background:#fef3c7;color:#a16207
-            {% elif s == 'approved' %}background:#dbeafe;color:#1d4ed8
-            {% elif s == 'issued' %}background:#dcfce7;color:#15803d
-            {% elif s == 'partial' %}background:#fed7aa;color:#c2410c
-            {% elif s == 'rerouted' %}background:#ede9fe;color:#6d28d9
-            {% elif s == 'rejected' or s == 'cancelled' %}background:#fee2e2;color:#dc2626
-            {% else %}background:var(--eo-bg);color:var(--eo-text-muted){% endif %}">
-            {{ r.get_status_display }}
-          </span>
-          {% endwith %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <div style="text-align:center;padding:36px;color:var(--eo-text-muted)">
-    <i class="bi bi-clipboard2" style="font-size:2.4rem;display:block;margin-bottom:8px"></i>
-    No stock requests yet.
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Workflow</div>
+      <h1 class="inv-page-title">Stock requests</h1>
+      <p class="inv-page-subtitle">Internal requests for stock items, supplies, or assets</p>
+    </div>
+    <div class="inv-page-actions">
+      <a href="{% url 'inventory:stock_request_create' %}" class="inv-btn inv-btn-primary">
+        <i class="bi bi-plus-lg"></i> New request
+      </a>
+    </div>
   </div>
-  {% endif %}
-</div>
+
+  <div class="inv-card inv-card-pad-0">
+    {% if requests %}
+    <div style="overflow-x:auto">
+      <table class="inv-table">
+        <thead><tr><th>Reference</th><th>Title</th><th>Requester</th><th>Department</th><th>Status</th><th class="inv-table-actions">Created</th></tr></thead>
+        <tbody>
+          {% for r in requests %}
+          <tr style="cursor:pointer" onclick="window.location='{% url 'inventory:stock_request_detail' r.pk %}'">
+            <td><span class="inv-table-mono">{{ r.reference }}</span></td>
+            <td><strong>{{ r.title|default:"—"|truncatechars:42 }}</strong></td>
+            <td><small>{{ r.requested_by.get_full_name|default:r.requested_by.username }}</small></td>
+            <td><small style="color:#64748b">{{ r.department.name|default:"—" }}</small></td>
+            <td>
+              {% with s=r.status %}
+              <span class="inv-chip
+                {% if s == 'pending' %}inv-chip-amber
+                {% elif s == 'approved' %}inv-chip-blue
+                {% elif s == 'issued' %}inv-chip-green
+                {% elif s == 'partial' %}inv-chip-orange
+                {% elif s == 'rerouted' %}inv-chip-violet
+                {% elif s == 'rejected' or s == 'cancelled' %}inv-chip-rose
+                {% else %}inv-chip-slate{% endif %}">
+                {{ r.get_status_display }}
+              </span>
+              {% endwith %}
+            </td>
+            <td class="inv-table-actions"><small style="color:#64748b">{{ r.created_at|naturaltime }}</small></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="inv-empty">
+      <div class="inv-empty-icon"><i class="bi bi-clipboard2-check"></i></div>
+      <div class="inv-empty-title">No stock requests yet</div>
+      <div class="inv-empty-msg">Submit a stock request when your team needs items from the warehouse.</div>
+      <a href="{% url 'inventory:stock_request_create' %}" class="inv-btn inv-btn-primary"><i class="bi bi-plus-lg"></i> Create your first request</a>
+    </div>
+    {% endif %}
+  </div>
+
 {% endblock %}

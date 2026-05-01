@@ -1,0 +1,515 @@
+{% extends "base.html" %}
+{% load static humanize %}
+
+{% block extra_css %}
+{{ block.super }}
+<style>
+  /* ─── Inventory module shell ────────────────────────────────────────── */
+  .inv-shell { display: flex; flex-direction: column; gap: 18px; }
+
+  /* Sub-nav ribbon — always visible while in inventory */
+  .inv-subnav {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px;
+    background: #fff;
+    border: 1px solid var(--eo-border, #e5e7eb);
+    border-radius: 12px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+    /* IMPORTANT: don't use overflow:auto here — it clips the dropdown.
+       The scrollable region is its own child below. */
+    position: relative;
+    z-index: 50;
+  }
+  .inv-subnav-scroll {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    min-width: 0;
+  }
+  .inv-subnav-scroll::-webkit-scrollbar { display: none; }
+  .inv-subnav-link {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 13px;
+    font-size: .82rem; font-weight: 600;
+    color: #64748b;
+    border-radius: 8px;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: all .12s ease;
+  }
+  .inv-subnav-link:hover { color: #0f172a; background: #f1f5f9; }
+  .inv-subnav-link.active {
+    color: #fff;
+    background: linear-gradient(135deg, #1e293b, #0f172a);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .12);
+  }
+  .inv-subnav-link i { font-size: .92rem; }
+
+  /* Quick-add dropdown trigger */
+  .inv-add-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 14px;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    color: #fff !important;
+    border: 0;
+    border-radius: 8px;
+    font-size: .82rem;
+    font-weight: 700;
+    text-decoration: none;
+    box-shadow: 0 1px 2px rgba(29, 78, 216, .25);
+    transition: all .12s ease;
+    white-space: nowrap;
+  }
+  .inv-add-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(29, 78, 216, .25); color: #fff; }
+  .inv-add-btn .caret { font-size: .68rem; opacity: .85; }
+
+  .inv-add-menu {
+    border: 1px solid var(--eo-border, #e5e7eb);
+    box-shadow: 0 12px 32px rgba(15, 23, 42, .12);
+    border-radius: 12px;
+    padding: 6px;
+    min-width: 240px;
+    z-index: 1080;  /* above sticky table headers (10) and modals' default (1050) */
+  }
+  .inv-add-menu .dropdown-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: .84rem;
+    font-weight: 500;
+  }
+  .inv-add-menu .dropdown-item i {
+    width: 28px; height: 28px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: .96rem;
+    border-radius: 7px;
+  }
+  .inv-add-menu .dropdown-item:hover { background: #f1f5f9; }
+  .inv-add-menu .dropdown-divider { margin: 4px 2px; }
+  .inv-add-menu .dropdown-header {
+    text-transform: uppercase; letter-spacing: .08em;
+    font-size: .65rem; font-weight: 700;
+    color: #94a3b8;
+    padding: 8px 10px 4px;
+  }
+
+  /* Page header style ─ richer than default */
+  .inv-page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .inv-page-title-block { min-width: 0; }
+  .inv-page-eyebrow {
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    font-size: .68rem;
+    color: #64748b;
+    font-weight: 700;
+    margin-bottom: 2px;
+  }
+  .inv-page-title {
+    font-size: 1.55rem;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    color: #0f172a;
+    margin: 0;
+    line-height: 1.15;
+  }
+  .inv-page-subtitle {
+    color: #64748b;
+    font-size: .88rem;
+    margin: 4px 0 0;
+  }
+  .inv-page-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  /* Card refinements scoped to inventory */
+  .inv-card {
+    background: #fff;
+    border: 1px solid var(--eo-border, #e5e7eb);
+    border-radius: 14px;
+    padding: 18px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .03);
+  }
+  .inv-card-pad-0 { padding: 0; }
+  .inv-card-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 16px 18px;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .inv-card-title {
+    font-size: 1rem; font-weight: 700; color: #0f172a; margin: 0;
+    letter-spacing: -.01em;
+  }
+  .inv-card-subtitle { font-size: .76rem; color: #64748b; margin-top: 1px; }
+
+  /* Stat tiles */
+  .inv-stat {
+    background: #fff;
+    border: 1px solid var(--eo-border, #e5e7eb);
+    border-radius: 14px;
+    padding: 16px 18px;
+    display: flex; gap: 14px; align-items: center;
+    text-decoration: none;
+    color: inherit;
+    transition: all .15s ease;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .03);
+  }
+  .inv-stat:hover {
+    color: inherit;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(15, 23, 42, .06);
+    border-color: #cbd5e1;
+  }
+  .inv-stat-icon {
+    width: 48px; height: 48px;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.5rem;
+    flex-shrink: 0;
+  }
+  .inv-stat-icon.blue   { background: linear-gradient(135deg, #dbeafe, #bfdbfe); color: #1d4ed8; }
+  .inv-stat-icon.amber  { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #b45309; }
+  .inv-stat-icon.green  { background: linear-gradient(135deg, #d1fae5, #a7f3d0); color: #047857; }
+  .inv-stat-icon.purple { background: linear-gradient(135deg, #ede9fe, #ddd6fe); color: #6d28d9; }
+  .inv-stat-icon.rose   { background: linear-gradient(135deg, #ffe4e6, #fecdd3); color: #be123c; }
+  .inv-stat-icon.slate  { background: linear-gradient(135deg, #f1f5f9, #e2e8f0); color: #334155; }
+  .inv-stat-value { font-size: 1.55rem; font-weight: 800; color: #0f172a; line-height: 1; letter-spacing: -.02em; }
+  .inv-stat-label { font-size: .74rem; color: #64748b; margin-top: 4px; font-weight: 600; }
+  .inv-stat-hint  { font-size: .68rem; color: #94a3b8; margin-top: 2px; }
+
+  /* Pills / chips */
+  .inv-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 9px; border-radius: 999px;
+    font-size: .68rem; font-weight: 700; line-height: 1.4;
+    letter-spacing: .01em;
+    background: #f1f5f9; color: #334155;
+    border: 1px solid transparent;
+  }
+  .inv-chip i { font-size: .68rem; }
+  .inv-chip-blue   { background: #dbeafe; color: #1d4ed8; }
+  .inv-chip-amber  { background: #fef3c7; color: #92400e; }
+  .inv-chip-green  { background: #d1fae5; color: #047857; }
+  .inv-chip-rose   { background: #ffe4e6; color: #be123c; }
+  .inv-chip-violet { background: #ede9fe; color: #6d28d9; }
+  .inv-chip-slate  { background: #f1f5f9; color: #475569; }
+  .inv-chip-orange { background: #ffedd5; color: #c2410c; }
+
+  /* Tables */
+  .inv-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: .86rem; }
+  .inv-table thead th {
+    text-align: left;
+    font-size: .7rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: #64748b;
+    font-weight: 700;
+    padding: 10px 14px;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+    position: sticky;
+    top: 0;
+  }
+  .inv-table thead th:first-child { border-top-left-radius: 10px; }
+  .inv-table thead th:last-child  { border-top-right-radius: 10px; }
+  .inv-table tbody td {
+    padding: 12px 14px;
+    border-bottom: 1px solid #f1f5f9;
+    color: #0f172a;
+    vertical-align: middle;
+  }
+  .inv-table tbody tr:last-child td { border-bottom: 0; }
+  .inv-table tbody tr:hover { background: #f8fafc; }
+  .inv-table-num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .inv-table-actions { text-align: right; white-space: nowrap; }
+  .inv-table-mono { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; font-size: .78rem; }
+
+  /* Buttons */
+  .inv-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 13px;
+    background: #fff; color: #0f172a;
+    border: 1px solid var(--eo-border, #e2e8f0);
+    border-radius: 8px;
+    font-size: .82rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all .12s ease;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .inv-btn:hover { background: #f8fafc; color: #0f172a; border-color: #cbd5e1; }
+  .inv-btn-primary {
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    color: #fff !important;
+    border-color: #1d4ed8;
+  }
+  .inv-btn-primary:hover { filter: brightness(1.05); color: #fff; }
+  .inv-btn-success {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: #fff !important;
+    border-color: #059669;
+  }
+  .inv-btn-success:hover { filter: brightness(1.05); color: #fff; }
+  .inv-btn-danger {
+    background: #fff;
+    color: #be123c !important;
+    border-color: #fda4af;
+  }
+  .inv-btn-danger:hover { background: #fff1f2; color: #9f1239; }
+  .inv-btn-sm { padding: 4px 9px; font-size: .74rem; gap: 4px; }
+  .inv-btn-icon { padding: 6px 8px; }
+
+  /* Empty state */
+  .inv-empty {
+    text-align: center;
+    padding: 60px 24px;
+    color: #64748b;
+  }
+  .inv-empty-icon {
+    width: 64px; height: 64px;
+    margin: 0 auto 14px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #f1f5f9, #e2e8f0);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.6rem;
+    color: #64748b;
+  }
+  .inv-empty-title { font-size: 1rem; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
+  .inv-empty-msg { font-size: .86rem; max-width: 360px; margin: 0 auto 16px; }
+
+  /* Filter row */
+  .inv-filter-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    align-items: end;
+  }
+  @media (min-width: 768px) {
+    .inv-filter-row { grid-template-columns: 2fr 1fr 1fr 1fr auto; }
+  }
+  .inv-form-label {
+    font-size: .7rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #64748b;
+    font-weight: 700;
+    margin-bottom: 3px;
+    display: block;
+  }
+  .inv-input, .inv-select, .inv-textarea,
+  .inv-card .eo-input, .inv-card .eo-textarea,
+  .inv-card input[type="text"], .inv-card input[type="number"],
+  .inv-card input[type="email"], .inv-card input[type="password"],
+  .inv-card input[type="url"], .inv-card input[type="tel"],
+  .inv-card input[type="date"], .inv-card input[type="datetime-local"],
+  .inv-card input[type="time"], .inv-card input[type="search"],
+  .inv-card select, .inv-card textarea {
+    width: 100%;
+    padding: 7px 11px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: .84rem;
+    color: #0f172a;
+    background: #fff;
+    transition: all .12s ease;
+    font-family: inherit;
+  }
+  .inv-input:focus, .inv-select:focus, .inv-textarea:focus,
+  .inv-card .eo-input:focus, .inv-card .eo-textarea:focus,
+  .inv-card input:focus, .inv-card select:focus, .inv-card textarea:focus {
+    outline: 0;
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+  }
+  .inv-textarea, .inv-card textarea { resize: vertical; min-height: 80px; }
+
+  /* Detail tile */
+  .inv-detail-row {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 9px 0;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: .86rem;
+  }
+  .inv-detail-row:last-child { border-bottom: 0; }
+  .inv-detail-label { color: #64748b; flex-shrink: 0; }
+  .inv-detail-value { color: #0f172a; font-weight: 600; text-align: right; }
+
+  /* Status banner inside hero */
+  .inv-hero {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    color: #fff;
+    border-radius: 14px;
+    padding: 22px 24px;
+    display: flex; align-items: center; gap: 18px;
+    flex-wrap: wrap;
+    overflow: hidden;
+    position: relative;
+  }
+  .inv-hero::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 100% 0%, rgba(37, 99, 235, .35), transparent 50%);
+    pointer-events: none;
+  }
+  .inv-hero > * { position: relative; z-index: 1; }
+  .inv-hero-eyebrow { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.6); font-weight: 700; }
+  .inv-hero-title { font-size: 1.6rem; font-weight: 800; letter-spacing: -.02em; margin: 4px 0 0; }
+  .inv-hero-meta { font-size: .85rem; color: rgba(255,255,255,.75); margin-top: 6px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="inv-shell">
+
+  {# ── Persistent inventory sub-nav ────────────────────────────────── #}
+  <div class="inv-subnav">
+    <div class="inv-subnav-scroll">
+      <a href="{% url 'inventory:dashboard' %}"
+         class="inv-subnav-link {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
+        <i class="bi bi-speedometer2"></i><span>Overview</span>
+      </a>
+      <a href="{% url 'inventory:product_list' %}"
+         class="inv-subnav-link {% if 'product' in request.resolver_match.url_name %}active{% endif %}">
+        <i class="bi bi-box-seam"></i><span>Products</span>
+      </a>
+      <a href="{% url 'inventory:asset_list' %}"
+         class="inv-subnav-link {% if 'asset' in request.resolver_match.url_name %}active{% endif %}">
+        <i class="bi bi-laptop"></i><span>Assets</span>
+      </a>
+      <a href="{% url 'inventory:location_list' %}"
+         class="inv-subnav-link {% if 'location' in request.resolver_match.url_name %}active{% endif %}">
+        <i class="bi bi-geo-alt"></i><span>Locations</span>
+      </a>
+      <a href="{% url 'inventory:supplier_list' %}"
+         class="inv-subnav-link {% if 'supplier' in request.resolver_match.url_name %}active{% endif %}">
+        <i class="bi bi-truck"></i><span>Suppliers</span>
+      </a>
+      <a href="{% url 'inventory:category_list' %}"
+         class="inv-subnav-link {% if 'category' in request.resolver_match.url_name %}active{% endif %}">
+        <i class="bi bi-tags"></i><span>Categories</span>
+      </a>
+      <a href="{% url 'inventory:movement_list' %}"
+         class="inv-subnav-link {% if 'movement' in request.resolver_match.url_name %}active{% endif %}">
+        <i class="bi bi-arrow-left-right"></i><span>Movements</span>
+      </a>
+      <a href="{% url 'inventory:stock_request_list' %}"
+         class="inv-subnav-link {% if 'request' in request.resolver_match.url_name %}active{% endif %}">
+        <i class="bi bi-clipboard2-check"></i><span>Requests</span>
+      </a>
+      <a href="{% url 'inventory:stocktake_list' %}"
+         class="inv-subnav-link {% if 'stocktake' in request.resolver_match.url_name %}active{% endif %}">
+        <i class="bi bi-ui-checks"></i><span>Cycle Counts</span>
+      </a>
+    </div>
+
+    <a href="{% url 'inventory:scan' %}" class="inv-subnav-link" title="Scan a QR code" style="flex-shrink:0">
+      <i class="bi bi-qr-code-scan"></i>
+    </a>
+
+    <div class="dropdown" style="flex-shrink:0">
+      <button class="inv-add-btn" type="button" data-bs-toggle="dropdown" aria-expanded="false" data-bs-display="static">
+        <i class="bi bi-plus-lg"></i>
+        <span>New</span>
+        <i class="bi bi-chevron-down caret"></i>
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end inv-add-menu">
+        <li class="dropdown-header">Catalog</li>
+        <li><a class="dropdown-item" href="{% url 'inventory:product_create' %}">
+          <i class="bi bi-box-seam" style="background:#dbeafe;color:#1d4ed8"></i>
+          <div>
+            <div>New product</div>
+            <small style="color:#64748b;font-weight:400">Add an item to the catalog</small>
+          </div>
+        </a></li>
+        <li><a class="dropdown-item" href="{% url 'inventory:asset_create' %}">
+          <i class="bi bi-laptop" style="background:#fef3c7;color:#b45309"></i>
+          <div>
+            <div>New asset</div>
+            <small style="color:#64748b;font-weight:400">Register a trackable unit</small>
+          </div>
+        </a></li>
+        <li><a class="dropdown-item" href="{% url 'inventory:category_create' %}">
+          <i class="bi bi-tags" style="background:#ede9fe;color:#6d28d9"></i>
+          <div>
+            <div>New category</div>
+            <small style="color:#64748b;font-weight:400">Group products and assets</small>
+          </div>
+        </a></li>
+
+        <li><hr class="dropdown-divider"></li>
+        <li class="dropdown-header">Network</li>
+        <li><a class="dropdown-item" href="{% url 'inventory:location_create' %}">
+          <i class="bi bi-geo-alt" style="background:#d1fae5;color:#047857"></i>
+          <div>
+            <div>New location</div>
+            <small style="color:#64748b;font-weight:400">Shop, warehouse, or office</small>
+          </div>
+        </a></li>
+        <li><a class="dropdown-item" href="{% url 'inventory:supplier_create' %}">
+          <i class="bi bi-truck" style="background:#ffedd5;color:#c2410c"></i>
+          <div>
+            <div>New supplier</div>
+            <small style="color:#64748b;font-weight:400">A vendor you buy from</small>
+          </div>
+        </a></li>
+
+        <li><hr class="dropdown-divider"></li>
+        <li class="dropdown-header">Stock movements</li>
+        <li><a class="dropdown-item" href="{% url 'inventory:stock_receive' %}">
+          <i class="bi bi-box-arrow-in-down" style="background:#d1fae5;color:#047857"></i>
+          <div>
+            <div>Receive stock</div>
+            <small style="color:#64748b;font-weight:400">Record incoming goods</small>
+          </div>
+        </a></li>
+        <li><a class="dropdown-item" href="{% url 'inventory:stock_issue' %}">
+          <i class="bi bi-box-arrow-up" style="background:#ffe4e6;color:#be123c"></i>
+          <div>
+            <div>Issue stock</div>
+            <small style="color:#64748b;font-weight:400">Sales, internal use, returns</small>
+          </div>
+        </a></li>
+        <li><a class="dropdown-item" href="{% url 'inventory:stock_transfer' %}">
+          <i class="bi bi-arrow-left-right" style="background:#dbeafe;color:#1d4ed8"></i>
+          <div>
+            <div>Transfer stock</div>
+            <small style="color:#64748b;font-weight:400">Between locations</small>
+          </div>
+        </a></li>
+
+        <li><hr class="dropdown-divider"></li>
+        <li class="dropdown-header">Workflows</li>
+        <li><a class="dropdown-item" href="{% url 'inventory:stock_request_create' %}">
+          <i class="bi bi-clipboard2-plus" style="background:#fef3c7;color:#b45309"></i>
+          <div>
+            <div>New stock request</div>
+            <small style="color:#64748b;font-weight:400">Internal request for items</small>
+          </div>
+        </a></li>
+        <li><a class="dropdown-item" href="{% url 'inventory:stocktake_create' %}">
+          <i class="bi bi-ui-checks" style="background:#ede9fe;color:#6d28d9"></i>
+          <div>
+            <div>New cycle count</div>
+            <small style="color:#64748b;font-weight:400">Reconcile a location</small>
+          </div>
+        </a></li>
+      </ul>
+    </div>
+  </div>
+
+  {# ── Page body ─────────────────────────────────────────────────────── #}
+  {% block inv_content %}{% endblock %}
+
+</div>
+{% endblock %}

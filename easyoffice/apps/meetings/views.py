@@ -1074,10 +1074,42 @@ class MeetingDetailView(LoginRequiredMixin, View):
         my_invite = meeting.attendees.filter(user=request.user).first()
         minutes   = getattr(meeting, 'minutes', None)
 
+        # Attendance is only open on the day of the meeting (local time),
+        # and only if the meeting hasn't been completed/cancelled.
+        now_local = timezone.localtime()
+        meeting_local = timezone.localtime(meeting.start_datetime)
+        is_meeting_day = now_local.date() == meeting_local.date()
+        is_after_day = now_local.date() > meeting_local.date()
+        attendance_open = (
+            is_meeting_day
+            and not _meeting_is_locked(meeting)
+        )
+
+        # Quick attendance / RSVP rollups for the sidebar.
+        all_int = list(meeting.attendees.select_related('user').all())
+        all_ext = list(meeting.external_attendees.all())
+        rsvp_counts = {
+            'accepted':  sum(1 for a in all_int if a.rsvp == 'accepted')
+                       + sum(1 for a in all_ext if a.rsvp == 'accepted'),
+            'tentative': sum(1 for a in all_int if a.rsvp == 'tentative')
+                       + sum(1 for a in all_ext if a.rsvp == 'tentative'),
+            'declined':  sum(1 for a in all_int if a.rsvp == 'declined')
+                       + sum(1 for a in all_ext if a.rsvp == 'declined'),
+            'no_response': sum(1 for a in all_int if a.rsvp == 'no_response')
+                         + sum(1 for a in all_ext if a.rsvp == 'no_response'),
+        }
+        attendance_counts = {
+            'attended': sum(1 for a in all_int if a.rsvp == 'attended')
+                      + sum(1 for a in all_ext if a.rsvp == 'attended'),
+            'no_show':  sum(1 for a in all_int if a.rsvp == 'no_show')
+                      + sum(1 for a in all_ext if a.rsvp == 'no_show'),
+        }
+        invited_total = len(all_int) + len(all_ext)
+
         ctx = {
             'meeting': meeting,
-            'attendees': meeting.attendees.select_related('user').all(),
-            'external_attendees': meeting.external_attendees.all(),
+            'attendees': all_int,
+            'external_attendees': all_ext,
             'my_invite': my_invite,
             'minutes': minutes,
             'action_items': minutes.action_items.select_related('assigned_to').all() if minutes else [],
@@ -1087,8 +1119,13 @@ class MeetingDetailView(LoginRequiredMixin, View):
                 meeting.organizer_id == request.user.id or
                 meeting.attendees.filter(user=request.user).exists()
             ),
-            'attendance_open': not _meeting_is_locked(meeting),
+            'attendance_open':    attendance_open,
+            'attendance_is_today': is_meeting_day,
+            'attendance_after':    is_after_day,
             'meeting_locked': _meeting_is_locked(meeting),
+            'rsvp_counts': rsvp_counts,
+            'attendance_counts': attendance_counts,
+            'invited_total': invited_total,
             'linked_tasks': meeting.linked_tasks.select_related('assigned_to').all(),
             'rsvp_choices': MeetingAttendee.RSVP.choices,
             # Recurrence context
@@ -1190,6 +1227,23 @@ class MeetingAttendanceUpdateView(LoginRequiredMixin, View):
             return HttpResponseForbidden('Only the organiser can manage attendance.')
         if _meeting_is_locked(meeting):
             messages.error(request, 'Attendance is closed.')
+            return redirect('meeting_detail', pk=pk)
+
+        # Attendance can only be marked on the day of the meeting (local time).
+        now_local = timezone.localtime()
+        meeting_local = timezone.localtime(meeting.start_datetime)
+        if now_local.date() != meeting_local.date():
+            if now_local.date() < meeting_local.date():
+                messages.error(
+                    request,
+                    f'Attendance can only be marked on the day of the meeting '
+                    f'({meeting_local.strftime("%A, %d %b %Y")}).'
+                )
+            else:
+                messages.error(
+                    request,
+                    'Attendance for this meeting closed at the end of the meeting day.'
+                )
             return redirect('meeting_detail', pk=pk)
 
         attendee_type = request.POST.get('attendee_type', 'internal')

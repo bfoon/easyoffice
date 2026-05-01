@@ -1,175 +1,172 @@
-{% extends "base.html" %}
+{% extends "inventory/inventory_base.html" %}
 {% load humanize %}
 {% block title %}{{ asset.tag }} {{ asset.name }} — Inventory{% endblock %}
 {% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / <a href="{% url 'inventory:asset_list' %}">Assets</a> / {{ asset.tag }}{% endblock %}
 
-{% block content %}
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title">{{ asset.name }}</h1>
-    <p class="eo-page-subtitle">
-      <code>{{ asset.tag }}</code>
-      · {{ asset.get_condition_display }}
-      {% if asset.serial_no %} · SN {{ asset.serial_no }}{% endif %}
-    </p>
-  </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:start">
-    <span style="font-size:.78rem;padding:6px 12px;border-radius:8px;background:{{ asset.status_color }}18;color:{{ asset.status_color }};font-weight:700">{{ asset.get_status_display }}</span>
-    <a href="{% url 'inventory:qr_label' 'asset' asset.pk %}" target="_blank" class="eo-btn eo-btn-secondary"><i class="bi bi-qr-code"></i> Print label</a>
-    {% if can_manage %}<a href="{% url 'inventory:asset_update' asset.pk %}" class="eo-btn eo-btn-secondary">Edit</a>{% endif %}
-  </div>
-</div>
+{% block inv_content %}
 
-<div class="row g-4">
-  <div class="col-lg-4">
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">
+        Asset · {{ asset.get_condition_display }}
+        {% if asset.serial_number %} · SN <span class="inv-table-mono">{{ asset.serial_number }}</span>{% endif %}
+      </div>
+      <h1 class="inv-page-title">{{ asset.name }}</h1>
+      <p class="inv-page-subtitle"><span class="inv-table-mono">{{ asset.tag }}</span></p>
+    </div>
+    <div class="inv-page-actions" style="align-items:center">
+      <span class="inv-chip" style="background:{{ asset.status_color }}18;color:{{ asset.status_color }};font-size:.78rem;padding:5px 12px">
+        {{ asset.get_status_display }}
+      </span>
+      <a href="{% url 'inventory:qr_label' 'asset' asset.pk %}" target="_blank" class="inv-btn"><i class="bi bi-qr-code"></i> Label</a>
+      {% if can_manage %}<a href="{% url 'inventory:asset_update' asset.pk %}" class="inv-btn"><i class="bi bi-pencil"></i> Edit</a>{% endif %}
+    </div>
+  </div>
 
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title" style="margin-bottom:14px">Particulars</h3>
-      <div style="font-size:.86rem">
-        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--eo-border)">
-          <span style="color:var(--eo-text-muted)">Category</span><span>{{ asset.category.name|default:"—" }}</span>
+  <div class="row g-3">
+    <div class="col-lg-4" style="display:flex;flex-direction:column;gap:18px">
+
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:14px">Particulars</h3>
+        <div class="inv-detail-row"><span class="inv-detail-label">Category</span><span class="inv-detail-value">{{ asset.category.name|default:"—" }}</span></div>
+        <div class="inv-detail-row"><span class="inv-detail-label">Location</span>
+          <span class="inv-detail-value">{% if asset.location %}<a href="{% url 'inventory:location_detail' asset.location.pk %}" style="text-decoration:none;color:#1d4ed8">{{ asset.location.code }}</a>{% else %}—{% endif %}</span>
         </div>
-        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--eo-border)">
-          <span style="color:var(--eo-text-muted)">Location</span>
-          <span>{% if asset.location %}<a href="{% url 'inventory:location_detail' asset.location.pk %}" style="text-decoration:none">{{ asset.location.code }}</a>{% else %}—{% endif %}</span>
+        <div class="inv-detail-row"><span class="inv-detail-label">Assignee</span>
+          <span class="inv-detail-value">{% if asset.assigned_to %}{{ asset.assigned_to.get_full_name|default:asset.assigned_to.username }}{% else %}<span style="color:#94a3b8;font-weight:500">Unassigned</span>{% endif %}</span>
         </div>
-        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--eo-border)">
-          <span style="color:var(--eo-text-muted)">Assigned to</span>
-          <span>{% if asset.assigned_to %}<strong>{{ asset.assigned_to.get_full_name|default:asset.assigned_to.username }}</strong>{% else %}<span style="color:var(--eo-text-muted)">Nobody</span>{% endif %}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--eo-border)">
-          <span style="color:var(--eo-text-muted)">Supplier</span><span>{{ asset.supplier.name|default:"—" }}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--eo-border)">
-          <span style="color:var(--eo-text-muted)">Purchase date</span><span>{% if asset.purchase_date %}{{ asset.purchase_date|date:"d M Y" }}{% else %}—{% endif %}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--eo-border)">
-          <span style="color:var(--eo-text-muted)">Purchase cost</span><span>{% if asset.purchase_cost %}{{ asset.currency }} {{ asset.purchase_cost|floatformat:2|intcomma }}{% else %}—{% endif %}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--eo-border)">
-          <span style="color:var(--eo-text-muted)">Book value</span><span><strong>{% if asset.book_value %}{{ asset.currency }} {{ asset.book_value|floatformat:2|intcomma }}{% else %}—{% endif %}</strong></span>
-        </div>
-        <div style="display:flex;justify-content:space-between;padding:6px 0">
-          <span style="color:var(--eo-text-muted)">Warranty until</span><span>{% if asset.warranty_until %}{{ asset.warranty_until|date:"d M Y" }}{% else %}—{% endif %}</span>
+        <div class="inv-detail-row"><span class="inv-detail-label">Supplier</span><span class="inv-detail-value">{{ asset.supplier.name|default:"—" }}</span></div>
+        <div class="inv-detail-row"><span class="inv-detail-label">Purchased</span><span class="inv-detail-value">{% if asset.purchase_date %}{{ asset.purchase_date|date:"d M Y" }}{% else %}—{% endif %}</span></div>
+        <div class="inv-detail-row"><span class="inv-detail-label">Cost</span><span class="inv-detail-value">{% if asset.purchase_cost %}{{ asset.currency }} {{ asset.purchase_cost|floatformat:2|intcomma }}{% else %}—{% endif %}</span></div>
+        <div class="inv-detail-row"><span class="inv-detail-label">Book value</span><span class="inv-detail-value">{% if asset.book_value %}<strong style="color:#047857">{{ asset.currency }} {{ asset.book_value|floatformat:2|intcomma }}</strong>{% else %}—{% endif %}</span></div>
+        <div class="inv-detail-row"><span class="inv-detail-label">Warranty</span><span class="inv-detail-value">{% if asset.warranty_until %}{{ asset.warranty_until|date:"d M Y" }}{% else %}—{% endif %}</span></div>
+      </div>
+
+      {% if can_manage and asset.status != 'disposed' and asset.status != 'scrapped' %}
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:14px">Quick actions</h3>
+        <div style="display:flex;flex-direction:column;gap:8px">
+
+          {% if asset.status != 'assigned' %}
+          <details>
+            <summary style="cursor:pointer;font-weight:600;font-size:.86rem;padding:10px 12px;border-radius:8px;background:#f8fafc;list-style:none">
+              <i class="bi bi-person-plus"></i> Assign to a user
+            </summary>
+            <form method="post" action="{% url 'inventory:asset_assign' asset.pk %}" style="margin-top:10px;padding:0 4px">
+              {% csrf_token %}
+              <div class="mb-2"><label class="inv-form-label">{{ assign_form.assignee.label }}</label>{{ assign_form.assignee }}</div>
+              <div class="mb-2"><label class="inv-form-label">{{ assign_form.purpose.label }}</label>{{ assign_form.purpose }}</div>
+              <button class="inv-btn inv-btn-primary inv-btn-sm">Assign</button>
+            </form>
+          </details>
+          {% else %}
+          <details>
+            <summary style="cursor:pointer;font-weight:600;font-size:.86rem;padding:10px 12px;border-radius:8px;background:#f8fafc;list-style:none">
+              <i class="bi bi-arrow-return-left"></i> Return from {{ asset.assigned_to.first_name|default:asset.assigned_to.username }}
+            </summary>
+            <form method="post" action="{% url 'inventory:asset_return' asset.pk %}" style="margin-top:10px;padding:0 4px">
+              {% csrf_token %}
+              <div class="mb-2"><label class="inv-form-label">{{ return_form.condition.label }}</label>{{ return_form.condition }}</div>
+              <div class="mb-2"><label class="inv-form-label">{{ return_form.note.label }}</label>{{ return_form.note }}</div>
+              <button class="inv-btn inv-btn-primary inv-btn-sm">Return</button>
+            </form>
+          </details>
+          {% endif %}
+
+          <details>
+            <summary style="cursor:pointer;font-weight:600;font-size:.86rem;padding:10px 12px;border-radius:8px;background:#f8fafc;list-style:none">
+              <i class="bi bi-tools"></i> Log maintenance
+            </summary>
+            <form method="post" action="{% url 'inventory:asset_maintenance' asset.pk %}" style="margin-top:10px;padding:0 4px">
+              {% csrf_token %}
+              <div class="mb-2"><label class="inv-form-label">{{ maint_form.kind.label }}</label>{{ maint_form.kind }}</div>
+              <div class="mb-2"><label class="inv-form-label">{{ maint_form.cost.label }}</label>{{ maint_form.cost }}</div>
+              <div class="mb-2"><label class="inv-form-label">{{ maint_form.description.label }}</label>{{ maint_form.description }}</div>
+              <div class="mb-2"><label class="inv-form-label">{{ maint_form.next_due.label }}</label>{{ maint_form.next_due }}</div>
+              <button class="inv-btn inv-btn-primary inv-btn-sm">Log</button>
+            </form>
+          </details>
+
+          {% if can_dispose %}
+          <details>
+            <summary style="cursor:pointer;font-weight:600;font-size:.86rem;padding:10px 12px;border-radius:8px;background:#fef2f2;color:#991b1b;list-style:none">
+              <i class="bi bi-x-octagon"></i> Scrap or dispose
+            </summary>
+            <form method="post" action="{% url 'inventory:asset_scrap' asset.pk %}" style="margin-top:10px;padding:0 4px"
+                  onsubmit="return confirm('Scrap this asset? This cannot be undone.');">
+              {% csrf_token %}
+              <div class="mb-2"><label class="inv-form-label">Reason</label><textarea name="reason" class="inv-textarea" rows="2" required></textarea></div>
+              <button class="inv-btn inv-btn-danger inv-btn-sm">Scrap asset</button>
+            </form>
+          </details>
+          {% endif %}
         </div>
       </div>
+      {% endif %}
     </div>
 
-    {% if can_manage and asset.status != 'disposed' and asset.status != 'scrapped' %}
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title" style="margin-bottom:10px">Quick actions</h3>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        {% if asset.status != 'assigned' %}
-        <details>
-          <summary style="cursor:pointer;font-weight:700;font-size:.86rem">→ Assign to a user</summary>
-          <form method="post" action="{% url 'inventory:asset_assign' asset.pk %}" style="margin-top:10px">
-            {% csrf_token %}
-            <div class="mb-2">{{ assign_form.assignee.label_tag }}{{ assign_form.assignee }}</div>
-            <div class="mb-2">{{ assign_form.purpose.label_tag }}{{ assign_form.purpose }}</div>
-            <button class="eo-btn eo-btn-primary eo-btn-sm">Assign</button>
-          </form>
-        </details>
+    <div class="col-lg-8" style="display:flex;flex-direction:column;gap:18px">
+
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header"><h3 class="inv-card-title">Assignment history</h3></div>
+        {% if assignments %}
+        <table class="inv-table">
+          <thead><tr><th>Assignee</th><th>From</th><th>To</th><th>Purpose</th><th>Returned in</th></tr></thead>
+          <tbody>
+            {% for ass in assignments %}
+            <tr>
+              <td><strong>{{ ass.assignee.get_full_name|default:ass.assignee.username }}</strong></td>
+              <td><small>{{ ass.assigned_at|date:"d M Y" }}</small></td>
+              <td><small>{% if ass.returned_at %}{{ ass.returned_at|date:"d M Y" }}{% else %}<span class="inv-chip inv-chip-green">Active</span>{% endif %}</small></td>
+              <td><small style="color:#64748b">{{ ass.purpose|truncatechars:32 }}</small></td>
+              <td><small>{{ ass.return_condition|default:"—" }}</small></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
         {% else %}
-        <details>
-          <summary style="cursor:pointer;font-weight:700;font-size:.86rem">← Return from {{ asset.assigned_to.get_full_name|default:asset.assigned_to.username }}</summary>
-          <form method="post" action="{% url 'inventory:asset_return' asset.pk %}" style="margin-top:10px">
-            {% csrf_token %}
-            <div class="mb-2">{{ return_form.condition.label_tag }}{{ return_form.condition }}</div>
-            <div class="mb-2">{{ return_form.note.label_tag }}{{ return_form.note }}</div>
-            <button class="eo-btn eo-btn-primary eo-btn-sm">Return</button>
-          </form>
-        </details>
-        {% endif %}
-
-        <details>
-          <summary style="cursor:pointer;font-weight:700;font-size:.86rem">⚒ Log maintenance</summary>
-          <form method="post" action="{% url 'inventory:asset_maintenance' asset.pk %}" style="margin-top:10px">
-            {% csrf_token %}
-            <div class="mb-2">{{ maint_form.kind.label_tag }}{{ maint_form.kind }}</div>
-            <div class="mb-2">{{ maint_form.cost.label_tag }}{{ maint_form.cost }}</div>
-            <div class="mb-2">{{ maint_form.description.label_tag }}{{ maint_form.description }}</div>
-            <div class="mb-2">{{ maint_form.next_due.label_tag }}{{ maint_form.next_due }}</div>
-            <button class="eo-btn eo-btn-primary eo-btn-sm">Log</button>
-          </form>
-        </details>
-
-        {% if can_dispose %}
-        <details>
-          <summary style="cursor:pointer;font-weight:700;font-size:.86rem;color:#dc2626">✗ Scrap / dispose</summary>
-          <form method="post" action="{% url 'inventory:asset_scrap' asset.pk %}" style="margin-top:10px"
-                onsubmit="return confirm('Scrap this asset? This cannot be undone.');">
-            {% csrf_token %}
-            <div class="mb-2"><label class="eo-form-label">Reason</label><textarea name="reason" class="eo-form-control" rows="2" required></textarea></div>
-            <button class="eo-btn eo-btn-danger eo-btn-sm">Scrap asset</button>
-          </form>
-        </details>
+        <div class="inv-empty" style="padding:30px"><div class="inv-empty-msg">No assignment history yet.</div></div>
         {% endif %}
       </div>
-    </div>
-    {% endif %}
-  </div>
 
-  <div class="col-lg-8">
-
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title" style="margin-bottom:12px">Assignment history</h3>
-      {% if assignments %}
-      <table class="table table-sm">
-        <thead><tr><th>Assignee</th><th>From</th><th>To</th><th>Purpose</th><th>Returned</th></tr></thead>
-        <tbody>
-          {% for ass in assignments %}
-          <tr>
-            <td><strong>{{ ass.assignee.get_full_name|default:ass.assignee.username }}</strong></td>
-            <td><small>{{ ass.assigned_at|date:"d M Y" }}</small></td>
-            <td><small>{% if ass.returned_at %}{{ ass.returned_at|date:"d M Y" }}{% else %}<span style="color:#16a34a">Active</span>{% endif %}</small></td>
-            <td><small>{{ ass.purpose|truncatechars:40 }}</small></td>
-            <td><small>{{ ass.return_condition|default:"—" }}</small></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <div style="color:var(--eo-text-muted);text-align:center;padding:14px">No assignment history yet.</div>
+      {% if maintenance %}
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header"><h3 class="inv-card-title">Maintenance log</h3></div>
+        <table class="inv-table">
+          <thead><tr><th>Date</th><th>Type</th><th>Description</th><th class="inv-table-num">Cost</th><th>Next due</th></tr></thead>
+          <tbody>
+            {% for m in maintenance %}
+            <tr>
+              <td><small>{{ m.performed_on|date:"d M Y" }}</small></td>
+              <td><span class="inv-chip inv-chip-slate">{{ m.get_kind_display }}</span></td>
+              <td><small>{{ m.description|truncatechars:48 }}</small></td>
+              <td class="inv-table-num"><small>{% if m.cost %}{{ m.cost|floatformat:2|intcomma }}{% else %}—{% endif %}</small></td>
+              <td><small>{% if m.next_due %}{{ m.next_due|date:"d M Y" }}{% else %}—{% endif %}</small></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
       {% endif %}
-    </div>
 
-    {% if maintenance %}
-    <div class="eo-card mb-3">
-      <h3 class="eo-card-title" style="margin-bottom:12px">Maintenance log</h3>
-      <table class="table table-sm">
-        <thead><tr><th>Date</th><th>Type</th><th>Description</th><th class="text-end">Cost</th><th>Next due</th></tr></thead>
-        <tbody>
-          {% for m in maintenance %}
-          <tr>
-            <td><small>{{ m.performed_on|date:"d M Y" }}</small></td>
-            <td>{{ m.get_kind_display }}</td>
-            <td><small>{{ m.description|truncatechars:60 }}</small></td>
-            <td class="text-end"><small>{% if m.cost %}{{ m.cost|floatformat:2|intcomma }}{% else %}—{% endif %}</small></td>
-            <td><small>{% if m.next_due %}{{ m.next_due|date:"d M Y" }}{% else %}—{% endif %}</small></td>
-          </tr>
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header"><h3 class="inv-card-title">Event log</h3></div>
+        {% if events %}
+        <div style="padding:6px 14px">
+          {% for e in events %}
+          <div style="display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #f1f5f9;font-size:.84rem">
+            <div style="min-width:120px;color:#94a3b8;font-size:.74rem;flex-shrink:0">{{ e.created_at|date:"d M H:i" }}</div>
+            <span class="inv-chip inv-chip-slate" style="flex-shrink:0">{{ e.get_kind_display }}</span>
+            <div style="flex:1;min-width:0;color:#0f172a">{{ e.message }}</div>
+            {% if e.actor %}<small style="color:#94a3b8;flex-shrink:0">{{ e.actor.username }}</small>{% endif %}
+          </div>
           {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
-
-    <div class="eo-card">
-      <h3 class="eo-card-title" style="margin-bottom:12px">Event log</h3>
-      {% if events %}
-      <div style="display:flex;flex-direction:column;gap:6px">
-        {% for e in events %}
-        <div style="display:flex;gap:10px;padding:6px 10px;border-bottom:1px solid var(--eo-border);font-size:.82rem">
-          <small style="color:var(--eo-text-muted);min-width:120px">{{ e.created_at|date:"d M Y H:i" }}</small>
-          <strong style="min-width:80px">{{ e.get_kind_display }}</strong>
-          <span style="flex:1">{{ e.message }}</span>
-          {% if e.actor %}<small style="color:var(--eo-text-muted)">{{ e.actor.username }}</small>{% endif %}
         </div>
-        {% endfor %}
+        {% else %}
+        <div class="inv-empty" style="padding:30px"><div class="inv-empty-msg">No events yet.</div></div>
+        {% endif %}
       </div>
-      {% else %}
-      <div style="color:var(--eo-text-muted);text-align:center;padding:14px">No events yet.</div>
-      {% endif %}
     </div>
   </div>
-</div>
+
 {% endblock %}

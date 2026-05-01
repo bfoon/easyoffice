@@ -16,6 +16,7 @@ from django.contrib import messages
 from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Q, Count
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
 from django.views.generic import ListView, DetailView, View, TemplateView
@@ -223,10 +224,11 @@ class OrderCreateView(OrdersAccessMixin, TemplateView):
         items = []
         i = 0
         while True:
-            desc = request.POST.get(f'items-{i}-description', '').strip()
-            qty  = request.POST.get(f'items-{i}-quantity', '').strip()
-            up   = request.POST.get(f'items-{i}-unit_price', '').strip()
-            if not (desc or qty or up):
+            desc    = request.POST.get(f'items-{i}-description', '').strip()
+            qty     = request.POST.get(f'items-{i}-quantity', '').strip()
+            up      = request.POST.get(f'items-{i}-unit_price', '').strip()
+            prod_id = request.POST.get(f'items-{i}-product_id', '').strip()
+            if not (desc or qty or up or prod_id):
                 if i > 25:
                     break
                 i += 1
@@ -239,6 +241,7 @@ class OrderCreateView(OrdersAccessMixin, TemplateView):
                     'description': desc,
                     'quantity':    Decimal(qty or '1'),
                     'unit_price':  Decimal(up or '0'),
+                    'product_id':  prod_id or None,
                 })
             except Exception:
                 messages.error(request, f'Invalid number on row {i + 1}.')
@@ -730,3 +733,60 @@ def saved_sig_type_for(image_bytes, data_uri):
     if (data_uri or '').startswith('data:image'):
         return 'draw'
     return 'type'
+
+# ════════════════════════════════════════════════════════════════════════
+# Inventory typeahead — feeds the line-item searchable dropdown
+# ════════════════════════════════════════════════════════════════════════
+
+class SellableProductsAPIView(OrdersAccessMixin, View):
+    """
+    GET /orders/api/sellable-products/?q=<search>
+
+    Returns up to 20 inventory.Product rows that are:
+        • flagged sellable + active
+        • have available stock > 0   (on_hand minus reservations)
+
+    Used by the line-item picker on the order create page. Search matches
+    SKU, name, or barcode (case-insensitive). Inventory app must be
+    installed; if it isn't, returns an empty list rather than 500.
+    """
+
+    def get(self, request):
+        q = (request.GET.get('q') or '').strip()
+
+        try:
+            from apps.inventory.models import Product
+        except Exception:
+            return JsonResponse({'results': []})
+
+        qs = (Product.objects
+              .filter(is_sellable=True, is_active=True,
+                      kind=Product.Kind.STOCKED)
+              .select_related('preferred_supplier')
+              .prefetch_related('stock_items'))
+
+        if q:
+            qs = qs.filter(Q(sku__icontains=q) |
+                           Q(name__icontains=q) |
+                           Q(barcode__icontains=q))
+
+        results = []
+        # We over-fetch slightly because we filter by computed availability
+        # in Python, then trim to 20.
+        for p in qs[:60]:
+            available = p.total_available
+            if available <= 0:
+                continue
+            results.append({
+                'id':         str(p.pk),
+                'sku':        p.sku,
+                'name':       p.name,
+                'unit':       p.unit,
+                'currency':   p.currency,
+                'sell_price': str(p.sell_price or '0'),
+                'available':  str(available),
+                'category':   p.category.name if p.category_id else '',
+            })
+            if len(results) >= 20:
+                break
+        return JsonResponse({'results': results})

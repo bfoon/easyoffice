@@ -1,62 +1,68 @@
-{% extends "base.html" %}
+{% extends "inventory/inventory_base.html" %}
 {% block title %}New Stock Request — Inventory{% endblock %}
 {% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / <a href="{% url 'inventory:stock_request_list' %}">Requests</a> / New{% endblock %}
 
-{% block content %}
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title">New Stock Request</h1>
-    <p class="eo-page-subtitle">Request items from inventory for your team</p>
+{% block inv_content %}
+
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Workflow</div>
+      <h1 class="inv-page-title">New stock request</h1>
+      <p class="inv-page-subtitle">Request items from inventory for your team</p>
+    </div>
   </div>
-</div>
 
-<form method="post" novalidate>
-  {% csrf_token %}
+  <form method="post" novalidate>
+    {% csrf_token %}
 
-  <div class="eo-card mb-3" style="max-width:760px">
-    <h3 class="eo-card-title" style="margin-bottom:14px">Request details</h3>
-    {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
-    <div class="row g-3">
-      {% for field in form %}
-      <div class="col-md-{% if field.name == 'reason' %}12{% else %}6{% endif %}">
-        <label class="eo-form-label">{{ field.label }}{% if field.field.required %} <span style="color:#dc2626">*</span>{% endif %}</label>
-        {{ field }}
-        {% if field.help_text %}<small style="color:var(--eo-text-muted);font-size:.7rem">{{ field.help_text }}</small>{% endif %}
-        {% if field.errors %}<div style="color:#dc2626;font-size:.74rem;margin-top:3px">{{ field.errors|join:", " }}</div>{% endif %}
+    <div class="inv-card" style="max-width:920px;margin-bottom:18px">
+      <h3 class="inv-card-title" style="margin-bottom:14px">Request details</h3>
+      {% if form.non_field_errors %}<div style="padding:10px;background:#fee2e2;color:#991b1b;border-radius:8px;margin-bottom:12px">{{ form.non_field_errors }}</div>{% endif %}
+      <div class="row g-3">
+        {% for field in form %}
+        <div class="col-md-{% if field.name == 'reason' %}12{% else %}6{% endif %}">
+          <label class="inv-form-label">{{ field.label }}{% if field.field.required %} <span style="color:#dc2626">*</span>{% endif %}</label>
+          {{ field }}
+          {% if field.help_text %}<small style="color:#64748b;font-size:.7rem;display:block;margin-top:3px">{{ field.help_text }}</small>{% endif %}
+          {% if field.errors %}<div style="color:#dc2626;font-size:.74rem;margin-top:3px">{{ field.errors|join:", " }}</div>{% endif %}
+        </div>
+        {% endfor %}
       </div>
-      {% endfor %}
     </div>
-  </div>
 
-  <div class="eo-card mb-3" style="max-width:920px">
-    <div class="eo-card-header" style="margin-bottom:12px">
-      <h3 class="eo-card-title">Items requested</h3>
-      <button type="button" id="addLine" class="eo-btn eo-btn-secondary eo-btn-sm">+ Add line</button>
+    <div class="inv-card inv-card-pad-0" style="max-width:1080px;margin-bottom:18px">
+      <div class="inv-card-header">
+        <div>
+          <h3 class="inv-card-title">Items requested</h3>
+          <div class="inv-card-subtitle">Add one row per product</div>
+        </div>
+        <button type="button" id="addLine" class="inv-btn inv-btn-sm"><i class="bi bi-plus-lg"></i> Add line</button>
+      </div>
+      <div style="padding:6px 14px 14px">
+        <table class="inv-table" id="linesTable">
+          <thead><tr><th style="width:50%">Product</th><th style="width:18%">Quantity</th><th style="width:25%">Note</th><th style="width:7%"></th></tr></thead>
+          <tbody id="linesBody">
+            <tr>
+              <td>
+                <select name="line_product[]" class="inv-select" required>
+                  <option value="">— select product —</option>
+                  {% for p in products %}<option value="{{ p.pk }}">{{ p.name }} ({{ p.sku }})</option>{% endfor %}
+                </select>
+              </td>
+              <td><input type="number" name="line_qty[]" min="0.01" step="0.01" class="inv-input" placeholder="Qty" required></td>
+              <td><input type="text" name="line_note[]" class="inv-input" placeholder="Optional"></td>
+              <td><button type="button" class="inv-btn inv-btn-sm inv-btn-danger rmLine" title="Remove">×</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
-    <table class="table table-sm" id="linesTable">
-      <thead><tr><th style="width:55%">Product</th><th style="width:20%">Quantity</th><th style="width:20%">Note</th><th></th></tr></thead>
-      <tbody id="linesBody">
-        <!-- one initial line -->
-        <tr>
-          <td>
-            <select name="line_product[]" class="eo-form-select" required>
-              <option value="">— select product —</option>
-              {% for p in products %}<option value="{{ p.pk }}">{{ p.name }} ({{ p.sku }})</option>{% endfor %}
-            </select>
-          </td>
-          <td><input type="number" name="line_qty[]" min="0.01" step="0.01" class="eo-form-control" placeholder="Qty" required></td>
-          <td><input type="text" name="line_note[]" class="eo-form-control" placeholder="Optional"></td>
-          <td><button type="button" class="eo-btn eo-btn-danger eo-btn-sm rmLine">×</button></td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
 
-  <div style="display:flex;gap:8px;max-width:920px">
-    <button class="eo-btn eo-btn-primary"><i class="bi bi-check-lg"></i> Submit request</button>
-    <a href="{% url 'inventory:stock_request_list' %}" class="eo-btn eo-btn-secondary">Cancel</a>
-  </div>
-</form>
+    <div style="display:flex;gap:8px;max-width:1080px">
+      <button class="inv-btn inv-btn-primary"><i class="bi bi-check-lg"></i> Submit request</button>
+      <a href="{% url 'inventory:stock_request_list' %}" class="inv-btn">Cancel</a>
+    </div>
+  </form>
 
 <script>
 (function(){

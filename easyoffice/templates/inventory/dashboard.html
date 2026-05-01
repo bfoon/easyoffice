@@ -1,262 +1,241 @@
-{% extends "base.html" %}
+{% extends "inventory/inventory_base.html" %}
 {% load humanize %}
 {% block title %}Inventory{% endblock %}
 {% block breadcrumb %}Inventory{% endblock %}
 
-{% block content %}
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title">Inventory</h1>
-    <p class="eo-page-subtitle">
-      Stock, assets, locations, and movements — everything tracked, everything labelled.
-    </p>
-  </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap">
-    <a href="{% url 'inventory:scan' %}" class="eo-btn eo-btn-primary">
-      <i class="bi bi-qr-code-scan"></i> Scan QR
-    </a>
-    {% if can_manage %}
-    <a href="{% url 'inventory:stock_receive' %}" class="eo-btn eo-btn-success">
-      <i class="bi bi-box-arrow-in-down"></i> Receive
-    </a>
-    <a href="{% url 'inventory:stock_issue' %}" class="eo-btn eo-btn-secondary">
-      <i class="bi bi-box-arrow-up"></i> Issue
-    </a>
-    <a href="{% url 'inventory:stock_transfer' %}" class="eo-btn eo-btn-secondary">
-      <i class="bi bi-arrow-left-right"></i> Transfer
-    </a>
-    {% endif %}
-  </div>
-</div>
+{% block inv_content %}
 
-<!-- Stat cards -->
-<div class="row g-3 mb-4">
-  <div class="col-6 col-md-3">
-    <a href="{% url 'inventory:product_list' %}" class="eo-card" style="text-decoration:none;display:block">
-      <div style="display:flex;align-items:center;gap:14px">
-        <div style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:#e0f2fe;color:#0369a1;font-size:1.4rem">
-          <i class="bi bi-box-seam-fill"></i>
-        </div>
-        <div>
-          <div style="font-size:1.6rem;font-weight:800;color:var(--eo-text);line-height:1">{{ stats.product_count|intcomma }}</div>
-          <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px">Products</div>
-        </div>
+  {# Hero / page header #}
+  <div class="inv-hero">
+    <div style="flex:1;min-width:260px">
+      <div class="inv-hero-eyebrow">Inventory module</div>
+      <h1 class="inv-hero-title">Welcome back, {{ request.user.first_name|default:request.user.username }}</h1>
+      <div class="inv-hero-meta">
+        Tracking <strong>{{ stats.product_count|intcomma }}</strong> products,
+        <strong>{{ stats.asset_count|intcomma }}</strong> assets across
+        <strong>{{ stats.location_count|intcomma }}</strong> locations.
       </div>
-    </a>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <a href="{% url 'inventory:scan' %}" class="inv-btn" style="background:rgba(255,255,255,.95)">
+        <i class="bi bi-qr-code-scan"></i> Scan QR
+      </a>
+      {% if can_manage %}
+      <a href="{% url 'inventory:stock_receive' %}" class="inv-btn inv-btn-success">
+        <i class="bi bi-box-arrow-in-down"></i> Receive stock
+      </a>
+      {% endif %}
+    </div>
   </div>
-  <div class="col-6 col-md-3">
-    <a href="{% url 'inventory:asset_list' %}" class="eo-card" style="text-decoration:none;display:block">
-      <div style="display:flex;align-items:center;gap:14px">
-        <div style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:#fef3c7;color:#a16207;font-size:1.4rem">
-          <i class="bi bi-laptop-fill"></i>
-        </div>
-        <div>
-          <div style="font-size:1.6rem;font-weight:800;color:var(--eo-text);line-height:1">{{ stats.asset_count|intcomma }}</div>
-          <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px">Assets</div>
-        </div>
-      </div>
-    </a>
-  </div>
-  <div class="col-6 col-md-3">
-    <a href="{% url 'inventory:location_list' %}" class="eo-card" style="text-decoration:none;display:block">
-      <div style="display:flex;align-items:center;gap:14px">
-        <div style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:#dcfce7;color:#15803d;font-size:1.4rem">
-          <i class="bi bi-geo-alt-fill"></i>
-        </div>
-        <div>
-          <div style="font-size:1.6rem;font-weight:800;color:var(--eo-text);line-height:1">{{ stats.location_count|intcomma }}</div>
-          <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px">Locations</div>
-        </div>
-      </div>
-    </a>
-  </div>
-  <div class="col-6 col-md-3">
-    <a href="{% url 'inventory:supplier_list' %}" class="eo-card" style="text-decoration:none;display:block">
-      <div style="display:flex;align-items:center;gap:14px">
-        <div style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:#ede9fe;color:#6d28d9;font-size:1.4rem">
-          <i class="bi bi-truck"></i>
-        </div>
-        <div>
-          <div style="font-size:1.6rem;font-weight:800;color:var(--eo-text);line-height:1">{{ stats.supplier_count|intcomma }}</div>
-          <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px">Suppliers</div>
-        </div>
-      </div>
-    </a>
-  </div>
-</div>
 
-<div class="row g-4">
-
-  <!-- Left column: low stock + open requests -->
-  <div class="col-lg-7">
-
-    <!-- Low stock alert -->
-    <div class="eo-card mb-4">
-      <div class="eo-card-header" style="margin-bottom:12px">
+  {# Stat tiles #}
+  <div class="row g-3">
+    <div class="col-6 col-lg-3">
+      <a href="{% url 'inventory:product_list' %}" class="inv-stat">
+        <div class="inv-stat-icon blue"><i class="bi bi-box-seam-fill"></i></div>
         <div>
-          <h2 class="eo-card-title">
-            <i class="bi bi-exclamation-triangle-fill" style="color:#dc2626"></i>
-            Low Stock Alerts
-          </h2>
-          <p class="eo-card-subtitle">
-            {% if low_stock_total %}
-              {{ low_stock_total }} product{{ low_stock_total|pluralize }} below reorder point
-            {% else %}
-              Everything looks healthy
-            {% endif %}
-          </p>
+          <div class="inv-stat-value">{{ stats.product_count|intcomma }}</div>
+          <div class="inv-stat-label">Products</div>
+          {% if low_stock_total %}
+          <div class="inv-stat-hint" style="color:#dc2626">
+            <i class="bi bi-exclamation-triangle-fill"></i> {{ low_stock_total }} low
+          </div>
+          {% else %}
+          <div class="inv-stat-hint">All healthy</div>
+          {% endif %}
         </div>
-        {% if can_manage %}
-        <a href="{% url 'inventory:stock_receive' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
-          <i class="bi bi-plus-lg"></i> Receive stock
-        </a>
+      </a>
+    </div>
+    <div class="col-6 col-lg-3">
+      <a href="{% url 'inventory:asset_list' %}" class="inv-stat">
+        <div class="inv-stat-icon amber"><i class="bi bi-laptop-fill"></i></div>
+        <div>
+          <div class="inv-stat-value">{{ stats.asset_count|intcomma }}</div>
+          <div class="inv-stat-label">Assets</div>
+          <div class="inv-stat-hint">Trackable units</div>
+        </div>
+      </a>
+    </div>
+    <div class="col-6 col-lg-3">
+      <a href="{% url 'inventory:location_list' %}" class="inv-stat">
+        <div class="inv-stat-icon green"><i class="bi bi-geo-alt-fill"></i></div>
+        <div>
+          <div class="inv-stat-value">{{ stats.location_count|intcomma }}</div>
+          <div class="inv-stat-label">Locations</div>
+          <div class="inv-stat-hint">Storage points</div>
+        </div>
+      </a>
+    </div>
+    <div class="col-6 col-lg-3">
+      <a href="{% url 'inventory:supplier_list' %}" class="inv-stat">
+        <div class="inv-stat-icon purple"><i class="bi bi-truck"></i></div>
+        <div>
+          <div class="inv-stat-value">{{ stats.supplier_count|intcomma }}</div>
+          <div class="inv-stat-label">Suppliers</div>
+          <div class="inv-stat-hint">Active vendors</div>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  <div class="row g-3">
+
+    {# Left column #}
+    <div class="col-lg-7" style="display:flex;flex-direction:column;gap:18px">
+
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header">
+          <div>
+            <h2 class="inv-card-title">
+              <i class="bi bi-exclamation-triangle-fill" style="color:#dc2626"></i>
+              Low stock alerts
+            </h2>
+            <div class="inv-card-subtitle">
+              {% if low_stock_total %}{{ low_stock_total }} product{{ low_stock_total|pluralize }} below reorder point
+              {% else %}Everything's above its threshold{% endif %}
+            </div>
+          </div>
+          {% if can_manage %}
+          <a href="{% url 'inventory:stock_receive' %}" class="inv-btn inv-btn-sm">
+            <i class="bi bi-plus-lg"></i> Receive
+          </a>
+          {% endif %}
+        </div>
+
+        {% if low_stock %}
+        <table class="inv-table">
+          <thead><tr><th>Product</th><th>SKU</th><th class="inv-table-num">On hand</th><th class="inv-table-num">Reorder at</th></tr></thead>
+          <tbody>
+            {% for p in low_stock %}
+            <tr style="cursor:pointer" onclick="window.location='{% url 'inventory:product_detail' p.pk %}'">
+              <td><strong>{{ p.name }}</strong></td>
+              <td><span class="inv-table-mono">{{ p.sku }}</span></td>
+              <td class="inv-table-num"><span style="color:#dc2626;font-weight:700">{{ p.total_on_hand|floatformat:0 }}</span></td>
+              <td class="inv-table-num">{{ p.reorder_point|floatformat:0 }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="inv-empty" style="padding:36px 24px">
+          <div class="inv-empty-icon" style="background:linear-gradient(135deg,#d1fae5,#a7f3d0);color:#047857"><i class="bi bi-check2-circle"></i></div>
+          <div class="inv-empty-title">All stocked products are healthy</div>
+          <div class="inv-empty-msg">Nothing's below its reorder point right now.</div>
+        </div>
         {% endif %}
       </div>
 
-      {% if low_stock %}
-      <div style="display:flex;flex-direction:column;gap:10px">
-        {% for p in low_stock %}
-        <a href="{% url 'inventory:product_detail' p.pk %}"
-           style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--eo-border);border-radius:8px;text-decoration:none;color:inherit">
-          <div style="min-width:0;flex:1">
-            <div style="font-size:.86rem;font-weight:700;color:var(--eo-text)">{{ p.name }}</div>
-            <div style="font-size:.72rem;color:var(--eo-text-muted)">
-              SKU {{ p.sku }} · Reorder at {{ p.reorder_point|floatformat:0 }} {{ p.unit }}
-            </div>
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header">
+          <div>
+            <h2 class="inv-card-title">Open stock requests</h2>
+            <div class="inv-card-subtitle">Internal requests waiting for action</div>
           </div>
-          <div style="text-align:right;flex-shrink:0">
-            <div style="font-size:.95rem;font-weight:800;color:#dc2626">{{ p.total_on_hand|floatformat:0 }}</div>
-            <div style="font-size:.65rem;color:var(--eo-text-muted)">on hand</div>
-          </div>
-        </a>
-        {% endfor %}
+          <a href="{% url 'inventory:stock_request_list' %}" class="inv-btn inv-btn-sm">View all</a>
+        </div>
+        {% if open_requests %}
+        <table class="inv-table">
+          <thead><tr><th>Reference</th><th>Title</th><th>Requester</th><th>Status</th><th class="inv-table-actions">When</th></tr></thead>
+          <tbody>
+            {% for sr in open_requests %}
+            <tr style="cursor:pointer" onclick="window.location='{% url 'inventory:stock_request_detail' sr.pk %}'">
+              <td><span class="inv-table-mono">{{ sr.reference }}</span></td>
+              <td>{{ sr.title|default:"—"|truncatechars:28 }}</td>
+              <td><small>{{ sr.requested_by.get_full_name|default:sr.requested_by.username }}</small></td>
+              <td>
+                {% with s=sr.status %}
+                <span class="inv-chip {% if s == 'pending' %}inv-chip-amber{% elif s == 'approved' %}inv-chip-blue{% elif s == 'partial' %}inv-chip-orange{% else %}inv-chip-slate{% endif %}">
+                  {{ sr.get_status_display }}
+                </span>
+                {% endwith %}
+              </td>
+              <td class="inv-table-actions"><small style="color:#64748b">{{ sr.created_at|naturaltime }}</small></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="inv-empty" style="padding:36px 24px">
+          <div class="inv-empty-icon"><i class="bi bi-clipboard2"></i></div>
+          <div class="inv-empty-title">No open requests</div>
+          <div class="inv-empty-msg">When staff request items, they'll appear here.</div>
+        </div>
+        {% endif %}
       </div>
-      {% else %}
-      <div style="text-align:center;padding:24px;color:var(--eo-text-muted);font-size:.85rem">
-        <i class="bi bi-check2-circle" style="font-size:1.8rem;display:block;color:#10b981;margin-bottom:6px"></i>
-        All stocked products are above their reorder point.
-      </div>
-      {% endif %}
     </div>
 
-    <!-- Open requests -->
-    <div class="eo-card">
-      <div class="eo-card-header" style="margin-bottom:12px">
-        <div>
-          <h2 class="eo-card-title">Open Stock Requests</h2>
-          <p class="eo-card-subtitle">Internal staff requests for stock or assets</p>
-        </div>
-        <a href="{% url 'inventory:stock_request_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
-          View all
-        </a>
-      </div>
+    {# Right column #}
+    <div class="col-lg-5" style="display:flex;flex-direction:column;gap:18px">
 
-      {% if open_requests %}
-      <div style="display:flex;flex-direction:column;gap:8px">
-        {% for sr in open_requests %}
-        <a href="{% url 'inventory:stock_request_detail' sr.pk %}"
-           style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--eo-border);border-radius:8px;text-decoration:none;color:inherit">
-          <div style="min-width:0;flex:1">
-            <div style="font-size:.86rem;font-weight:700">{{ sr.reference }} · {{ sr.title|default:"(no title)" }}</div>
-            <div style="font-size:.72rem;color:var(--eo-text-muted)">
-              {{ sr.requested_by.get_full_name|default:sr.requested_by.username }}
-              {% if sr.department %} · {{ sr.department.name }}{% endif %}
-              · {{ sr.created_at|naturaltime }}
-            </div>
+      {% if asset_status_breakdown %}
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:14px">Asset fleet</h3>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          {% for row in asset_status_breakdown %}
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0">
+            <span style="font-size:.84rem;color:#475569;text-transform:capitalize">{{ row.status|cut:"_" }}</span>
+            <strong style="font-size:1rem;color:#0f172a">{{ row.count }}</strong>
           </div>
-          <span style="font-size:.66rem;font-weight:700;padding:3px 8px;border-radius:6px;background:#e0f2fe;color:#0369a1">
-            {{ sr.get_status_display }}
-          </span>
-        </a>
-        {% endfor %}
-      </div>
-      {% else %}
-      <div style="text-align:center;padding:24px;color:var(--eo-text-muted);font-size:.85rem">
-        No open stock requests.
+          {% endfor %}
+        </div>
       </div>
       {% endif %}
+
+      {% if my_assets %}
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header"><h2 class="inv-card-title">My assigned assets</h2></div>
+        <div style="padding:6px 8px">
+          {% for a in my_assets %}
+          <a href="{% url 'inventory:asset_detail' a.pk %}"
+             style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:8px;text-decoration:none;color:inherit">
+            <div style="min-width:0;flex:1">
+              <div style="font-size:.86rem;font-weight:700;color:#0f172a">{{ a.name }}</div>
+              <div style="font-size:.72rem;color:#64748b" class="inv-table-mono">{{ a.tag }}</div>
+            </div>
+            <span class="inv-chip" style="background:{{ a.status_color }}18;color:{{ a.status_color }}">{{ a.get_status_display }}</span>
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header">
+          <div>
+            <h2 class="inv-card-title">Recent movements</h2>
+            <div class="inv-card-subtitle">Last 10 stock changes</div>
+          </div>
+          <a href="{% url 'inventory:movement_list' %}" class="inv-btn inv-btn-sm">All</a>
+        </div>
+
+        {% if recent_movements %}
+        <div style="padding:4px 8px">
+          {% for m in recent_movements|slice:":10" %}
+          {% with is_in='receive,return_in,transfer_in,adjust_in' %}
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px">
+            <div style="width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;{% if m.kind in is_in %}background:#d1fae5;color:#047857{% else %}background:#ffe4e6;color:#be123c{% endif %}">
+              <i class="bi bi-arrow-{% if m.kind in is_in %}down{% else %}up{% endif %}"></i>
+            </div>
+            <div style="min-width:0;flex:1">
+              <div style="font-size:.82rem;font-weight:600;color:#0f172a">{{ m.product.name|truncatechars:32 }}</div>
+              <div style="font-size:.68rem;color:#64748b">{{ m.get_kind_display }} · {{ m.location.code }} · {{ m.occurred_at|naturaltime }}</div>
+            </div>
+            <div style="font-size:.92rem;font-weight:800;{% if m.kind in is_in %}color:#047857{% else %}color:#be123c{% endif %}">
+              {% if m.kind in is_in %}+{% else %}−{% endif %}{{ m.quantity|floatformat:0 }}
+            </div>
+          </div>
+          {% endwith %}
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="inv-empty" style="padding:30px 24px">
+          <div class="inv-empty-icon"><i class="bi bi-arrow-left-right"></i></div>
+          <div class="inv-empty-title">No movements yet</div>
+          <div class="inv-empty-msg">Stock changes will appear here as they happen.</div>
+        </div>
+        {% endif %}
+      </div>
     </div>
   </div>
 
-  <!-- Right column: my assets + recent movements -->
-  <div class="col-lg-5">
-
-    <!-- Asset status pills -->
-    {% if asset_status_breakdown %}
-    <div class="eo-card mb-4">
-      <div class="eo-card-header" style="margin-bottom:12px">
-        <div>
-          <h2 class="eo-card-title">Asset Status</h2>
-          <p class="eo-card-subtitle">Where your fleet stands</p>
-        </div>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">
-        {% for row in asset_status_breakdown %}
-        <span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;background:var(--eo-bg);border:1px solid var(--eo-border);font-size:.78rem">
-          <strong>{{ row.count }}</strong>
-          <span style="color:var(--eo-text-muted)">{{ row.status|title }}</span>
-        </span>
-        {% endfor %}
-      </div>
-    </div>
-    {% endif %}
-
-    <!-- My assets -->
-    {% if my_assets %}
-    <div class="eo-card mb-4">
-      <div class="eo-card-header" style="margin-bottom:12px">
-        <div>
-          <h2 class="eo-card-title">My Assigned Assets</h2>
-          <p class="eo-card-subtitle">Currently in your custody</p>
-        </div>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        {% for a in my_assets %}
-        <a href="{% url 'inventory:asset_detail' a.pk %}"
-           style="display:flex;justify-content:space-between;gap:8px;padding:8px 10px;border:1px solid var(--eo-border);border-radius:8px;text-decoration:none;color:inherit">
-          <div style="min-width:0;flex:1">
-            <div style="font-size:.84rem;font-weight:700">{{ a.name }}</div>
-            <div style="font-size:.7rem;color:var(--eo-text-muted)">{{ a.tag }}{% if a.serial_no %} · SN {{ a.serial_no }}{% endif %}</div>
-          </div>
-          <span style="font-size:.66rem;align-self:center;padding:2px 6px;border-radius:5px;background:{{ a.status_color }}18;color:{{ a.status_color }};font-weight:700">
-            {{ a.get_status_display }}
-          </span>
-        </a>
-        {% endfor %}
-      </div>
-    </div>
-    {% endif %}
-
-    <!-- Recent movements -->
-    <div class="eo-card">
-      <div class="eo-card-header" style="margin-bottom:12px">
-        <div>
-          <h2 class="eo-card-title">Recent Movements</h2>
-          <p class="eo-card-subtitle">Last 12 stock changes</p>
-        </div>
-        <a href="{% url 'inventory:movement_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">View all</a>
-      </div>
-
-      {% if recent_movements %}
-      <div style="display:flex;flex-direction:column;gap:6px">
-        {% for m in recent_movements %}
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 10px;border-bottom:1px solid var(--eo-border)">
-          <div style="min-width:0;flex:1">
-            <div style="font-size:.78rem;font-weight:600">{{ m.product.name|truncatechars:32 }}</div>
-            <div style="font-size:.66rem;color:var(--eo-text-muted)">
-              {{ m.get_kind_display }} · {{ m.location.code }} · {{ m.occurred_at|naturaltime }}
-            </div>
-          </div>
-          <div style="font-size:.86rem;font-weight:800;color:{% if m.kind in 'receive,return_in,transfer_in,adjust_in' %}#16a34a{% else %}#dc2626{% endif %}">
-            {% if m.kind in 'receive,return_in,transfer_in,adjust_in' %}+{% else %}−{% endif %}{{ m.quantity|floatformat:0 }}
-          </div>
-        </div>
-        {% endfor %}
-      </div>
-      {% else %}
-      <div style="text-align:center;padding:24px;color:var(--eo-text-muted);font-size:.85rem">No movements yet.</div>
-      {% endif %}
-    </div>
-  </div>
-</div>
 {% endblock %}

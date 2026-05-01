@@ -1,48 +1,52 @@
-{% extends "base.html" %}
+{% extends "inventory/inventory_base.html" %}
 {% load humanize %}
 {% block title %}Cycle Counts — Inventory{% endblock %}
 {% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / Cycle counts{% endblock %}
 
-{% block content %}
-<div class="eo-page-header">
-  <div>
-    <h1 class="eo-page-title">Cycle Counts</h1>
-    <p class="eo-page-subtitle">Periodic stock takes — discover and reconcile variances</p>
-  </div>
-  <a href="{% url 'inventory:stocktake_create' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus-lg"></i> New count</a>
-</div>
+{% block inv_content %}
 
-<div class="eo-card">
-  {% if takes %}
-  <table class="table align-middle">
-    <thead><tr style="font-size:.74rem;text-transform:uppercase;color:var(--eo-text-muted)">
-      <th>Reference</th><th>Location</th><th>Started</th><th>Completed</th><th>Status</th>
-    </tr></thead>
-    <tbody>
-      {% for st in takes %}
-      <tr>
-        <td><a href="{% url 'inventory:stocktake_detail' st.pk %}" style="text-decoration:none;font-weight:700">{{ st.reference }}</a></td>
-        <td>{{ st.location.code }} — {{ st.location.name }}</td>
-        <td><small>{{ st.started_at|date:"d M Y H:i" }}</small></td>
-        <td><small>{{ st.finalised_at|date:"d M Y H:i"|default:"—" }}</small></td>
-        <td>
-          {% if st.status == 'completed' %}
-            <span style="font-size:.7rem;padding:2px 8px;border-radius:5px;background:#dcfce7;color:#15803d;font-weight:700">Completed</span>
-          {% elif st.status == 'in_progress' %}
-            <span style="font-size:.7rem;padding:2px 8px;border-radius:5px;background:#dbeafe;color:#1d4ed8;font-weight:700">In progress</span>
-          {% else %}
-            <span style="font-size:.7rem;padding:2px 8px;border-radius:5px;background:var(--eo-bg);border:1px solid var(--eo-border)">{{ st.get_status_display }}</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <div style="text-align:center;padding:36px;color:var(--eo-text-muted)">
-    <i class="bi bi-clipboard-check" style="font-size:2.4rem;display:block;margin-bottom:8px"></i>
-    No cycle counts yet.
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Reconciliation</div>
+      <h1 class="inv-page-title">Cycle counts</h1>
+      <p class="inv-page-subtitle">Periodic stock takes — discover and reconcile variances</p>
+    </div>
+    <div class="inv-page-actions">
+      <a href="{% url 'inventory:stocktake_create' %}" class="inv-btn inv-btn-primary">
+        <i class="bi bi-plus-lg"></i> New count
+      </a>
+    </div>
   </div>
-  {% endif %}
-</div>
+
+  <div class="inv-card inv-card-pad-0">
+    {% if takes %}
+    <table class="inv-table">
+      <thead><tr><th>Reference</th><th>Location</th><th>Started</th><th>Completed</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for st in takes %}
+        <tr style="cursor:pointer" onclick="window.location='{% url 'inventory:stocktake_detail' st.pk %}'">
+          <td><span class="inv-table-mono">{{ st.reference }}</span></td>
+          <td><strong>{{ st.location.code }}</strong> — <small style="color:#64748b">{{ st.location.name }}</small></td>
+          <td><small>{{ st.started_at|date:"d M Y H:i" }}</small></td>
+          <td><small>{{ st.finalised_at|date:"d M Y H:i"|default:"—" }}</small></td>
+          <td>
+            {% if st.status == 'completed' %}<span class="inv-chip inv-chip-green">Completed</span>
+            {% elif st.status == 'in_progress' %}<span class="inv-chip inv-chip-blue">In progress</span>
+            {% elif st.status == 'cancelled' %}<span class="inv-chip inv-chip-rose">Cancelled</span>
+            {% else %}<span class="inv-chip inv-chip-slate">{{ st.get_status_display }}</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="inv-empty">
+      <div class="inv-empty-icon"><i class="bi bi-ui-checks"></i></div>
+      <div class="inv-empty-title">No cycle counts yet</div>
+      <div class="inv-empty-msg">Run a cycle count to compare what's on the shelf with what's in the system.</div>
+      <a href="{% url 'inventory:stocktake_create' %}" class="inv-btn inv-btn-primary"><i class="bi bi-plus-lg"></i> Start your first count</a>
+    </div>
+    {% endif %}
+  </div>
+
 {% endblock %}

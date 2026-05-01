@@ -111,6 +111,91 @@
   .add-row-bar .hint { font-size: .76rem; color: var(--eo-text-muted); }
   .add-row-bar .hint kbd { display: inline-block; padding: 1px 6px; background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: 4px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: .72rem; }
 
+  /* ── Inventory product picker (combobox) ────────────────────────────── */
+  .pp { position: relative; }
+  .pp-input-wrap { position: relative; display: flex; align-items: center; }
+  .pp-input-wrap > input { padding-right: 28px !important; }
+  .pp-chevron {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    color: var(--eo-text-muted); font-size: .82rem; pointer-events: none;
+  }
+  .pp-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-right: 6px; padding: 1px 7px; border-radius: 999px;
+    font-size: .65rem; font-weight: 700; letter-spacing: .02em;
+    background: #dbeafe; color: #1d4ed8;
+    flex-shrink: 0;
+  }
+  .pp-badge.custom { background: #fef3c7; color: #92400e; }
+  .pp-badge i { font-size: .7rem; }
+  .pp-input-wrap.has-product > input { padding-left: 78px !important; }
+  .pp-input-wrap.has-custom  > input { padding-left: 76px !important; }
+  .pp-input-wrap .pp-badge {
+    position: absolute; left: 6px; top: 50%; transform: translateY(-50%);
+  }
+  .pp-menu {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+    background: #fff; border: 1px solid var(--eo-border);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, .14);
+    max-height: 320px; overflow-y: auto;
+    z-index: 60; display: none;
+  }
+  .pp-menu.open { display: block; }
+  .pp-menu .pp-section {
+    padding: 6px 12px 4px;
+    font-size: .62rem; text-transform: uppercase; letter-spacing: .08em;
+    color: #94a3b8; font-weight: 700;
+    border-bottom: 1px solid #f1f5f9;
+    background: #fafbfc;
+  }
+  .pp-menu .pp-opt {
+    padding: 9px 12px;
+    cursor: pointer;
+    display: flex; gap: 10px; align-items: center;
+    border-bottom: 1px solid #f8fafc;
+    transition: background .08s;
+  }
+  .pp-menu .pp-opt:last-child { border-bottom: 0; }
+  .pp-menu .pp-opt:hover,
+  .pp-menu .pp-opt.active { background: #eff6ff; }
+  .pp-opt-main { flex: 1; min-width: 0; }
+  .pp-opt-name { font-size: .86rem; font-weight: 600; color: var(--eo-text); }
+  .pp-opt-meta { font-size: .68rem; color: var(--eo-text-muted); margin-top: 1px; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .pp-opt-num  { text-align: right; flex-shrink: 0; }
+  .pp-opt-price { font-size: .8rem; font-weight: 700; color: var(--eo-text); font-variant-numeric: tabular-nums; }
+  .pp-opt-stock { font-size: .65rem; color: #047857; font-weight: 700; margin-top: 2px; }
+  .pp-opt-stock.low { color: #c2410c; }
+  .pp-empty {
+    padding: 14px; text-align: center; color: var(--eo-text-muted); font-size: .82rem;
+  }
+  .pp-custom {
+    padding: 10px 12px;
+    cursor: pointer; display: flex; gap: 10px; align-items: center;
+    background: #fffbeb; border-top: 1px solid #fde68a;
+    transition: background .08s;
+  }
+  .pp-custom:hover, .pp-custom.active { background: #fef3c7; }
+  .pp-custom i {
+    width: 28px; height: 28px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: #fef3c7; color: #92400e; border-radius: 7px;
+    flex-shrink: 0;
+  }
+  .pp-custom-text {
+    font-size: .82rem; color: #92400e; font-weight: 600; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .qty-warn {
+    display: block;
+    margin-top: 3px;
+    font-size: .65rem;
+    color: #c2410c;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+  .qty-warn.hidden { display: none; }
+
   /* ── Sticky summary ─────────────────────────────────────────────────── */
   .summary-card { position: sticky; top: 80px; background: var(--eo-surface); border: 1px solid var(--eo-border); border-radius: var(--eo-radius); overflow: hidden; }
   .summary-head { padding: 16px 20px; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: #fff; }
@@ -356,8 +441,24 @@
     tr.dataset.idx = idx;
     tr.innerHTML = `
       <td class="col-pos" data-role="rownum">·</td>
-      <td class="col-desc"><input type="text" name="items-${idx}-description" placeholder="What are they buying?"></td>
-      <td class="col-qty"><input type="number" name="items-${idx}-quantity" value="1" step="0.01" min="0"></td>
+      <td class="col-desc">
+        <div class="pp" data-role="picker">
+          <div class="pp-input-wrap">
+            <input type="hidden" name="items-${idx}-product_id" value="" data-role="productid">
+            <input type="text"
+                   name="items-${idx}-description"
+                   placeholder="Search inventory or type a custom item…"
+                   autocomplete="off"
+                   data-role="desc">
+            <i class="bi bi-chevron-down pp-chevron"></i>
+          </div>
+          <div class="pp-menu" data-role="menu" role="listbox"></div>
+        </div>
+      </td>
+      <td class="col-qty">
+        <input type="number" name="items-${idx}-quantity" value="1" step="0.01" min="0">
+        <span class="qty-warn hidden" data-role="qtywarn"></span>
+      </td>
       <td class="col-price"><input type="number" name="items-${idx}-unit_price" value="0" step="0.01" min="0"></td>
       <td class="col-total" data-role="rowtotal">0.00</td>
       <td class="col-actions"><button type="button" class="icon-btn" data-role="del" title="Remove"><i class="bi bi-trash"></i></button></td>
@@ -418,11 +519,238 @@
     if (ccyInput && ccyLabel) ccyLabel.textContent = (ccyInput.value || 'GMD').toUpperCase();
   }
 
+  // ── Inventory picker ──────────────────────────────────────────────────
+  const SELLABLE_URL = "{% url 'orders:api_sellable_products' %}";
+  let lastFetchToken = 0;        // race-safe: only the latest request wins
+  const cache = new Map();       // q -> [results]
+
+  async function fetchProducts(q) {
+    if (cache.has(q)) return cache.get(q);
+    const myToken = ++lastFetchToken;
+    try {
+      const url = SELLABLE_URL + (q ? '?q=' + encodeURIComponent(q) : '');
+      const resp = await fetch(url, {
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+        credentials: 'same-origin',
+      });
+      if (!resp.ok) return [];
+      const data = await resp.json();
+      const list = (data && data.results) || [];
+      if (myToken !== lastFetchToken) return null;  // a later request superseded us
+      cache.set(q, list);
+      return list;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function renderMenu(menuEl, items, query) {
+    const q = (query || '').trim();
+    let html = '';
+
+    if (items.length) {
+      html += '<div class="pp-section">In stock</div>';
+      items.forEach((p, i) => {
+        const stockCls = parseFloat(p.available) <= 5 ? 'low' : '';
+        html += `
+          <div class="pp-opt" data-i="${i}" role="option">
+            <div class="pp-opt-main">
+              <div class="pp-opt-name">${escapeHtml(p.name)}</div>
+              <div class="pp-opt-meta">${escapeHtml(p.sku)}${p.category ? ' · ' + escapeHtml(p.category) : ''}</div>
+            </div>
+            <div class="pp-opt-num">
+              <div class="pp-opt-price">${escapeHtml(p.currency)} ${formatMoney(p.sell_price)}</div>
+              <div class="pp-opt-stock ${stockCls}">${formatNum(p.available)} ${escapeHtml(p.unit || 'in stock')}</div>
+            </div>
+          </div>`;
+      });
+    } else if (q) {
+      html += '<div class="pp-empty">No matching products in stock.</div>';
+    } else {
+      html += '<div class="pp-empty">Start typing to search inventory…</div>';
+    }
+
+    if (q) {
+      html += `
+        <div class="pp-custom" data-role="custom" role="option">
+          <i class="bi bi-pencil-square"></i>
+          <div class="pp-custom-text">Use as custom item: "${escapeHtml(q)}"</div>
+        </div>`;
+    }
+
+    menuEl.innerHTML = html;
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function formatMoney(s) {
+    const n = parseFloat(s || '0'); return n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  }
+  function formatNum(s) {
+    const n = parseFloat(s || '0'); return n % 1 ? n.toFixed(2) : n.toFixed(0);
+  }
+
+  function attachPicker(tr) {
+    const wrap     = tr.querySelector('[data-role=picker]');
+    const inputW   = wrap.querySelector('.pp-input-wrap');
+    const desc     = wrap.querySelector('[data-role=desc]');
+    const prodId   = wrap.querySelector('[data-role=productid]');
+    const menu     = wrap.querySelector('[data-role=menu]');
+    const qtyInput = tr.querySelector('input[name$="-quantity"]');
+    const upInput  = tr.querySelector('input[name$="-unit_price"]');
+    const qtyWarn  = tr.querySelector('[data-role=qtywarn]');
+
+    let currentItems = [];
+    let activeIdx = -1;
+    let debounceT = null;
+
+    function setBadge(kind) {
+      // kind: '', 'product', 'custom'
+      const old = inputW.querySelector('.pp-badge');
+      if (old) old.remove();
+      inputW.classList.remove('has-product', 'has-custom');
+      if (!kind) return;
+      const span = document.createElement('span');
+      span.className = 'pp-badge' + (kind === 'custom' ? ' custom' : '');
+      span.innerHTML = kind === 'custom'
+        ? '<i class="bi bi-pencil"></i>Custom'
+        : '<i class="bi bi-box-seam"></i>Stock';
+      inputW.classList.add(kind === 'custom' ? 'has-custom' : 'has-product');
+      inputW.insertBefore(span, desc);
+    }
+
+    function showMenu() { menu.classList.add('open'); activeIdx = -1; }
+    function hideMenu() { menu.classList.remove('open'); }
+
+    function updateActive() {
+      menu.querySelectorAll('.pp-opt, .pp-custom').forEach((el, i) => {
+        el.classList.toggle('active', i === activeIdx);
+      });
+    }
+
+    async function refresh() {
+      const q = (desc.value || '').trim();
+      const items = await fetchProducts(q);
+      if (items === null) return;  // superseded
+      currentItems = items;
+      renderMenu(menu, items, q);
+      showMenu();
+    }
+
+    function pickProduct(p) {
+      prodId.value = p.id;
+      desc.value = `${p.sku} — ${p.name}`;
+      desc.dataset.maxQty = p.available;
+      // Auto-fill price if the row is still at default 0
+      if (parseFloat(upInput.value || '0') === 0) {
+        upInput.value = p.sell_price;
+      }
+      qtyInput.max = p.available;
+      setBadge('product');
+      hideMenu();
+      enforceQtyCap();
+      recalc();
+    }
+
+    function pickCustom(text) {
+      prodId.value = '';
+      desc.value = text;
+      delete desc.dataset.maxQty;
+      qtyInput.removeAttribute('max');
+      setBadge(text ? 'custom' : '');
+      qtyWarn.classList.add('hidden');
+      hideMenu();
+      recalc();
+    }
+
+    function clearLink() {
+      // Whenever the user manually edits the description after picking a
+      // product, that link is broken — go back to "custom" mode.
+      if (prodId.value) {
+        prodId.value = '';
+        delete desc.dataset.maxQty;
+        qtyInput.removeAttribute('max');
+        setBadge('custom');
+      }
+    }
+
+    function enforceQtyCap() {
+      const max = parseFloat(desc.dataset.maxQty || '');
+      if (isNaN(max)) {
+        qtyWarn.classList.add('hidden');
+        return;
+      }
+      const val = parseFloat(qtyInput.value || '0');
+      if (val > max) {
+        qtyInput.value = max;
+        qtyWarn.textContent = `Capped at ${formatNum(max)} (in stock)`;
+        qtyWarn.classList.remove('hidden');
+        recalc();
+      } else {
+        qtyWarn.classList.add('hidden');
+      }
+    }
+
+    // ── Events ─────────────────────────────────────────────────────────
+    desc.addEventListener('focus', refresh);
+    desc.addEventListener('input', () => {
+      clearLink();
+      clearTimeout(debounceT);
+      debounceT = setTimeout(refresh, 150);
+    });
+    desc.addEventListener('keydown', (e) => {
+      const opts = menu.querySelectorAll('.pp-opt, .pp-custom');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (!menu.classList.contains('open')) refresh();
+        activeIdx = Math.min(activeIdx + 1, opts.length - 1);
+        updateActive();
+        const el = opts[activeIdx]; if (el) el.scrollIntoView({block: 'nearest'});
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        activeIdx = Math.max(activeIdx - 1, 0);
+        updateActive();
+      } else if (e.key === 'Enter' && menu.classList.contains('open')) {
+        if (activeIdx >= 0 && opts[activeIdx]) {
+          e.preventDefault();
+          opts[activeIdx].click();
+        }
+      } else if (e.key === 'Escape') {
+        hideMenu();
+      }
+    });
+
+    menu.addEventListener('mousedown', (e) => {
+      // mousedown not click — click would fire after blur and the menu
+      // would already be hidden.
+      const optEl = e.target.closest('.pp-opt');
+      const customEl = e.target.closest('[data-role=custom]');
+      if (optEl) {
+        e.preventDefault();
+        const i = parseInt(optEl.dataset.i, 10);
+        if (currentItems[i]) pickProduct(currentItems[i]);
+      } else if (customEl) {
+        e.preventDefault();
+        pickCustom((desc.value || '').trim());
+      }
+    });
+
+    desc.addEventListener('blur', () => {
+      // Delay so a click on the menu has time to register
+      setTimeout(hideMenu, 120);
+    });
+
+    qtyInput.addEventListener('input', enforceQtyCap);
+  }
+
   function addRow(opts) {
     opts = opts || {};
     const tr = buildRow(rowIdx++);
     tbody.appendChild(tr);
-    tr.querySelectorAll('input').forEach(i => i.addEventListener('input', recalc));
+    tr.querySelectorAll('input[type=number], input[type=text]').forEach(i => i.addEventListener('input', recalc));
     tr.querySelector('[data-role=del]').addEventListener('click', () => {
       if (tbody.querySelectorAll('tr').length <= 1) return;
       tr.remove();
@@ -437,6 +765,7 @@
         addRow({ focus: true });
       }
     });
+    attachPicker(tr);
     renumber();
     recalc();
     if (opts.focus) {

@@ -1,70 +1,95 @@
-{% extends "base.html" %}
+{% extends "inventory/inventory_base.html" %}
 {% load humanize %}
 {% block title %}Stock Movements — Inventory{% endblock %}
 {% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / Movements{% endblock %}
 
-{% block content %}
-<div class="eo-page-header">
-  <h1 class="eo-page-title">Stock Movements</h1>
-</div>
+{% block inv_content %}
 
-<div class="eo-card mb-3">
-  <form method="get" class="row g-2 align-items-end">
-    <div class="col-md-4">
-      <label class="eo-form-label">Product</label>
-      <input type="text" name="q" value="{{ request.GET.q }}" class="eo-form-control" placeholder="Search by product name or SKU">
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Audit trail</div>
+      <h1 class="inv-page-title">Stock movements</h1>
+      <p class="inv-page-subtitle">Append-only ledger of every quantity change</p>
     </div>
-    <div class="col-md-3">
-      <label class="eo-form-label">Kind</label>
-      <select name="kind" class="eo-form-select">
-        <option value="">All</option>
-        {% for k, v in kind_choices %}<option value="{{ k }}" {% if request.GET.kind == k %}selected{% endif %}>{{ v }}</option>{% endfor %}
-      </select>
-    </div>
-    <div class="col-md-3">
-      <label class="eo-form-label">Location</label>
-      <select name="location" class="eo-form-select">
-        <option value="">Any</option>
-        {% for loc in locations %}<option value="{{ loc.pk }}" {% if request.GET.location == loc.pk|stringformat:"s" %}selected{% endif %}>{{ loc.code }}</option>{% endfor %}
-      </select>
-    </div>
-    <div class="col-md-2">
-      <button class="eo-btn eo-btn-primary eo-btn-sm">Filter</button>
-    </div>
-  </form>
-</div>
+  </div>
 
-<div class="eo-card">
-  {% if movements %}
-  <table class="table table-sm align-middle">
-    <thead><tr style="font-size:.74rem;text-transform:uppercase;color:var(--eo-text-muted)">
-      <th>When</th><th>Kind</th><th>Product</th><th>Location</th><th class="text-end">Qty</th><th>Reference</th><th>By</th>
-    </tr></thead>
-    <tbody>
-      {% for m in movements %}
-      <tr>
-        <td><small>{{ m.occurred_at|date:"d M Y H:i" }}</small></td>
-        <td><span style="font-size:.7rem;padding:2px 8px;border-radius:5px;background:var(--eo-bg);border:1px solid var(--eo-border);font-weight:700">{{ m.get_kind_display }}</span></td>
-        <td><a href="{% url 'inventory:product_detail' m.product.pk %}" style="text-decoration:none">{{ m.product.name|truncatechars:36 }}</a><br><small style="color:var(--eo-text-muted)">{{ m.product.sku }}</small></td>
-        <td><small>{{ m.location.code }}</small></td>
-        <td class="text-end" style="font-weight:700">{{ m.quantity|floatformat:0 }}</td>
-        <td><small>{% if m.source_kind %}{{ m.source_kind }}:{{ m.source_ref }}{% else %}—{% endif %}</small></td>
-        <td><small>{{ m.actor.username|default:"—" }}</small></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="inv-card">
+    <form method="get" class="inv-filter-row">
+      <div>
+        <label class="inv-form-label">Search</label>
+        <input type="text" name="q" value="{{ request.GET.q }}" class="inv-input" placeholder="Product name or SKU…">
+      </div>
+      <div>
+        <label class="inv-form-label">Type</label>
+        <select name="kind" class="inv-select">
+          <option value="">All movements</option>
+          {% for k, v in kind_choices %}<option value="{{ k }}" {% if request.GET.kind == k %}selected{% endif %}>{{ v }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="inv-form-label">Location</label>
+        <select name="location" class="inv-select">
+          <option value="">Anywhere</option>
+          {% for loc in locations %}<option value="{{ loc.pk }}" {% if request.GET.location == loc.pk|stringformat:"s" %}selected{% endif %}>{{ loc.code }}</option>{% endfor %}
+        </select>
+      </div>
+      <div></div>
+      <div style="display:flex;gap:6px">
+        <button class="inv-btn inv-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
+        <a href="{% url 'inventory:movement_list' %}" class="inv-btn">Reset</a>
+      </div>
+    </form>
+  </div>
 
-  {% if is_paginated %}
-  <nav class="mt-3"><ul class="pagination pagination-sm mb-0">
-    {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{% for k,v in request.GET.items %}{% if k != 'page' %}&{{ k }}={{ v }}{% endif %}{% endfor %}">Prev</a></li>{% endif %}
-    <li class="page-item active"><span class="page-link">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span></li>
-    {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}{% for k,v in request.GET.items %}{% if k != 'page' %}&{{ k }}={{ v }}{% endif %}{% endfor %}">Next</a></li>{% endif %}
-  </ul></nav>
-  {% endif %}
+  <div class="inv-card inv-card-pad-0">
+    {% if movements %}
+    <div style="overflow-x:auto">
+      <table class="inv-table">
+        <thead><tr><th>When</th><th>Type</th><th>Product</th><th>Location</th><th class="inv-table-num">Qty</th><th>Reference</th><th>By</th></tr></thead>
+        <tbody>
+          {% for m in movements %}
+          {% with is_in='receive,return_in,transfer_in,adjust_in' %}
+          <tr>
+            <td><small style="color:#64748b">{{ m.occurred_at|date:"d M Y H:i" }}</small></td>
+            <td>
+              <span class="inv-chip {% if m.kind in is_in %}inv-chip-green{% else %}inv-chip-rose{% endif %}">
+                <i class="bi bi-arrow-{% if m.kind in is_in %}down{% else %}up{% endif %}"></i> {{ m.get_kind_display }}
+              </span>
+            </td>
+            <td>
+              <a href="{% url 'inventory:product_detail' m.product.pk %}" style="text-decoration:none;color:#0f172a;font-weight:600">{{ m.product.name|truncatechars:30 }}</a>
+              <div style="font-size:.66rem;color:#94a3b8" class="inv-table-mono">{{ m.product.sku }}</div>
+            </td>
+            <td><small class="inv-table-mono">{{ m.location.code }}</small></td>
+            <td class="inv-table-num"><strong style="{% if m.kind in is_in %}color:#047857{% else %}color:#be123c{% endif %}">
+              {% if m.kind in is_in %}+{% else %}−{% endif %}{{ m.quantity|floatformat:0 }}
+            </strong></td>
+            <td><small style="color:#64748b">{% if m.source_kind %}{{ m.source_kind }}:{{ m.source_ref }}{% else %}—{% endif %}</small></td>
+            <td><small>{{ m.actor.username|default:"—" }}</small></td>
+          </tr>
+          {% endwith %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
 
-  {% else %}
-  <div style="text-align:center;padding:36px;color:var(--eo-text-muted)">No movements found.</div>
-  {% endif %}
-</div>
+    {% if is_paginated %}
+    <div style="padding:14px 18px;border-top:1px solid #f1f5f9;display:flex;justify-content:space-between;align-items:center">
+      <div style="color:#64748b;font-size:.8rem">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</div>
+      <div style="display:flex;gap:6px">
+        {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}{% for k,v in request.GET.items %}{% if k != 'page' %}&{{ k }}={{ v }}{% endif %}{% endfor %}" class="inv-btn inv-btn-sm">← Prev</a>{% endif %}
+        {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}{% for k,v in request.GET.items %}{% if k != 'page' %}&{{ k }}={{ v }}{% endif %}{% endfor %}" class="inv-btn inv-btn-sm">Next →</a>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="inv-empty">
+      <div class="inv-empty-icon"><i class="bi bi-arrow-left-right"></i></div>
+      <div class="inv-empty-title">No movements yet</div>
+      <div class="inv-empty-msg">Stock changes appear here as they happen — receives, sales, transfers, adjustments.</div>
+    </div>
+    {% endif %}
+  </div>
+
 {% endblock %}

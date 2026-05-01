@@ -19,4 +19,7 @@ urlpatterns = [
     path('<uuid:pk>/attach-customer/',        views.OrderAttachCustomerView.as_view(),           name='order_attach_customer'),
     # CEO one-click sign
     path('<uuid:pk>/sign-with-saved/',        views.OrderQuickCEOSignView.as_view(),             name='order_sign_with_saved'),
+
+    # Internal JSON: live inventory typeahead for the line-item picker
+    path('api/sellable-products/',            views.SellableProductsAPIView.as_view(),           name='api_sellable_products'),
 ]

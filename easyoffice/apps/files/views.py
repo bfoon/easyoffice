@@ -1222,7 +1222,26 @@ def _embed_signatures_in_pdf(sig_req):
     DS_CHECK       = (0.063, 0.271, 0.773)
 
     # ── Header / footer metadata ──────────────────────────────────────────────
-    doc_hash   = (document.file_hash or 'N/A')
+    # Trust the bytes we are about to stamp, not whatever is in the DB.
+    # `document.file_hash` can be empty for files created programmatically
+    # (offer letters, conversion outputs, etc.) where the hash step was
+    # skipped or a swallowed exception left it blank — that's where
+    # "SHA-256: N/A" came from. Recomputing here from `pdf_bytes` always
+    # gives a value that matches the bytes the user is looking at.
+    doc_hash = document.file_hash or ''
+    if not doc_hash:
+        try:
+            doc_hash = hashlib.sha256(pdf_bytes).hexdigest()
+            # Best-effort backfill so subsequent renders / audit trails
+            # don't have to recompute. Don't let a save failure abort
+            # signature embedding.
+            try:
+                document.file_hash = doc_hash
+                document.save(update_fields=['file_hash'])
+            except Exception:
+                logger.exception('Could not persist backfilled file_hash for %s', document.pk)
+        except Exception:
+            doc_hash = 'N/A'
     short_hash = doc_hash[:16] + '…' if len(doc_hash) > 16 else doc_hash
     full_hash  = doc_hash
     signed_at  = _dt.now().strftime('%d %b %Y %H:%M UTC')
@@ -4402,107 +4421,41 @@ class SignDocumentView(View):
                 notes=f'Signature type: {sig_type}'
             )
 
-            # ── Notify creator: someone signed ─────────────────────────────
-            if sig_req.created_by != signer.user:
-                _notify(
-                    sig_req.created_by, 'sign_signed',
-                    title=f'{signer.name} signed your document',
-                    body=sig_req.title,
-                    link=f'/files/signatures/{sig_req.pk}/',
-                )
-                try:
-                    send_mail(
-                        subject=f'[EasyOffice] {signer.name} signed "{sig_req.title}"',
-                        message=(
-                            f'Hello {sig_req.created_by.full_name},\n\n'
-                            f'{signer.name} has signed your document "{sig_req.title}".\n\n'
-                            f'View the audit trail:\n/files/signatures/{sig_req.pk}/\n\n'
-                            f'— EasyOffice'
-                        ),
-                        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@easyoffice.local'),
-                        recipient_list=[sig_req.created_by.email],
-                        fail_silently=True,
-                    )
-                except Exception:
-                    pass
-
-            # ── If this is an ORDERED request and there's still a
-            # ── signer waiting for their turn, kick off their invite
-            # ── now (in a background thread). Idempotent — won't
-            # ── re-email anyone already invited.
+            # ── Background: notifications, ordered-signing chain, PDF stamping,
+            # ── completion email, CC notifications. The signer's redirect to
+            # ── the completion page no longer waits for any of this.
+            #
+            # Synchronous critical path (already done above):
+            #   • signer marked 'signed', signature data + IP saved
+            #   • audit event written, audit_hash rebuilt
+            #   • SavedSignature stored if requested
+            #
+            # Everything below is fire-and-forget via Celery.
             try:
-                if getattr(sig_req, 'ordered_signing', False):
-                    _notify_next_pending_signer(
-                        sig_req, request.build_absolute_uri('/')
-                    )
+                from apps.files.tasks import finalise_signature_after_sign
+                finalise_signature_after_sign.delay(
+                    sig_req_id=str(sig_req.pk),
+                    signer_id=str(signer.pk),
+                    base_url=request.build_absolute_uri('/'),
+                )
             except Exception:
-                # Notification failures must not block the signing flow.
-                pass
-
-            # Check completion BEFORE saving SignatureRequest as completed.
-            # This lets us burn the signed PDF first, so the orders signal will email
-            # the correct signed document, not the unsigned original.
-            all_signers_signed = not sig_req.signers.exclude(status='signed').exists()
-
-            if all_signers_signed:
+                # If the broker is unreachable, fall back to inline so the
+                # creator still gets notified — slow path but not broken.
                 try:
-                    signed_file = _embed_signatures_in_pdf(sig_req)
-                    if signed_file:
-                        sig_req.refresh_from_db(fields=['document', 'status', 'completed_at', 'updated_at'])
-                except Exception:
-                    # PDF stamping should not block completion, but log it properly.
-                    try:
-                        import logging
-                        logging.getLogger(__name__).exception(
-                            'Could not embed signatures for signature request %s',
-                            sig_req.pk,
-                        )
-                    except Exception:
-                        pass
-
-            # Now update the SignatureRequest status.
-            # This save triggers apps/orders/signals.py, and at this point sig_req.document
-            # already points to the signed PDF if stamping succeeded.
-            if hasattr(sig_req, 'update_status'):
-                sig_req.update_status()
-
-            if getattr(sig_req, 'status', None) == 'completed':
-                _log_audit(sig_req, 'completed', request=request)
-
-                # ── Notify creator: all done (WS + email) ─────────────────
-                _notify(
-                    sig_req.created_by,
-                    'sign_completed',
-                    title=f'All signatures collected: {sig_req.title}',
-                    body=f'{sig_req.signers.count()} signer(s) have all signed.',
-                    link=f'/files/signatures/{sig_req.pk}/',
-                )
-
-                try:
-                    _send_completion_email(sig_req, request.build_absolute_uri('/'))
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        'Celery dispatch failed for sig %s — running inline fallback',
+                        sig_req.pk,
+                    )
                 except Exception:
                     pass
-
                 try:
-                    for cc in sig_req.cc_recipients.all():
-                        _notify_cc_recipient(cc, request.build_absolute_uri('/'), event='completed')
-                except Exception:
-                    pass
-                # ── Notify creator: all done (WS + email) ─────────────────
-                _notify(
-                    sig_req.created_by, 'sign_completed',
-                    title=f'All signatures collected: {sig_req.title}',
-                    body=f'{sig_req.signers.count()} signer(s) have all signed.',
-                    link=f'/files/signatures/{sig_req.pk}/',
-                )
-                try:
-                    _send_completion_email(sig_req, request.build_absolute_uri('/'))
-                except Exception:
-                    pass
-                # Notify CC recipients of completion
-                try:
-                    for cc in sig_req.cc_recipients.all():
-                        _notify_cc_recipient(cc, request.build_absolute_uri('/'), event='completed')
+                    from apps.files.tasks import finalise_signature_after_sign
+                    finalise_signature_after_sign(
+                        sig_req_id=str(sig_req.pk),
+                        signer_id=str(signer.pk),
+                        base_url=request.build_absolute_uri('/'),
+                    )
                 except Exception:
                     pass
 
@@ -4518,30 +4471,28 @@ class SignDocumentView(View):
 
             _log_audit(sig_req, 'declined', signer=signer, request=request, notes=signer.decline_reason)
 
-            # ── Notify creator: someone declined (WS + email) ─────────────
-            if sig_req.created_by != signer.user:
-                reason_suffix = f' Reason: {signer.decline_reason}' if signer.decline_reason else ''
-                _notify(
-                    sig_req.created_by, 'sign_declined',
-                    title=f'{signer.name} declined to sign',
-                    body=f'{sig_req.title}.{reason_suffix}',
-                    link=f'/files/signatures/{sig_req.pk}/',
-                )
-                try:
-                    from django.core.mail import EmailMessage as _EM
-                    _org = getattr(settings,'ORGANISATION_NAME',getattr(settings,'OFFICE_NAME','EasyOffice'))
-                    _from = getattr(settings,'DEFAULT_FROM_EMAIL',f'noreply@{_org.lower().replace(" ","")}.org')
-                    _reason_html = f'<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 16px;font-size:14px;color:#991b1b;margin:14px 0"><strong>Reason:</strong> {signer.decline_reason}</div>' if signer.decline_reason else ''
-                    _detail_url = request.build_absolute_uri(f'/files/signatures/{sig_req.pk}/')
-                    _html = f'''<!DOCTYPE html><html><head><meta charset="UTF-8"/><style>body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif;}} .w{{max-width:580px;margin:28px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08);}} .hdr{{background:linear-gradient(135deg,#7f1d1d,#ef4444);padding:32px 36px;text-align:center;}} .hdr h1{{margin:0;color:#fff;font-size:20px;font-weight:800;}} .hdr p{{margin:6px 0 0;color:rgba(255,255,255,.75);font-size:13px;}} .body{{padding:28px 36px;font-size:15px;color:#1e293b;line-height:1.7;}} .btn{{display:inline-block;background:#3b82f6;color:#fff;padding:11px 26px;border-radius:10px;text-decoration:none;font-weight:700;}} .footer{{background:#f8fafc;padding:16px 36px;border-top:1px solid #e2e8f0;text-align:center;font-size:12px;color:#94a3b8;}}</style></head><body><div class="w"><div class="hdr"><h1>❌ Signing Declined</h1><p>{_org}</p></div><div class="body"><p>Dear <strong>{sig_req.created_by.full_name}</strong>,</p><p><strong>{signer.name}</strong> ({signer.email}) has <strong>declined</strong> to sign <em>"{sig_req.title}"</em>.</p>{_reason_html}<div style="text-align:center;margin:20px 0"><a href="{_detail_url}" class="btn">View Signature Request →</a></div></div><div class="footer">{_org} · Document Signing System</div></div></body></html>'''
-                    _m = _EM(subject=f'Declined: {signer.name} declined to sign "{sig_req.title}"',body=_html,from_email=_from,to=[sig_req.created_by.email])
-                    _m.content_subtype='html'
-                    _m.send()
-                except Exception:
-                    pass
-
             if hasattr(sig_req, 'update_status'):
                 sig_req.update_status()
+
+            # Background: in-app notification + styled HTML decline email.
+            try:
+                from apps.files.tasks import notify_signature_declined
+                notify_signature_declined.delay(
+                    sig_req_id=str(sig_req.pk),
+                    signer_id=str(signer.pk),
+                    base_url=request.build_absolute_uri('/'),
+                )
+            except Exception:
+                # Broker unreachable — fall back to inline.
+                try:
+                    from apps.files.tasks import notify_signature_declined
+                    notify_signature_declined(
+                        sig_req_id=str(sig_req.pk),
+                        signer_id=str(signer.pk),
+                        base_url=request.build_absolute_uri('/'),
+                    )
+                except Exception:
+                    pass
 
             messages.warning(request, 'You declined to sign this document.')
             return redirect('sign_document_complete', token=token)

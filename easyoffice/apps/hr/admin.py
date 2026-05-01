@@ -14,6 +14,7 @@ from apps.hr.models import (
     HRSetting,
     PayrollRecord,
     PerformanceAppraisal,
+    EmployeeOnboardingInvite,
 )
 
 
@@ -99,3 +100,26 @@ class AttendanceAdmin(admin.ModelAdmin):
     list_display = ['staff', 'date', 'status', 'check_in', 'check_out', 'minutes_late', 'worked_hours']
     list_filter = ['status', 'date']
     search_fields = ['staff__email', 'staff__first_name', 'staff__last_name']
+
+@admin.register(EmployeeOnboardingInvite)
+class EmployeeOnboardingInviteAdmin(admin.ModelAdmin):
+    list_display = [
+        'candidate_email',
+        'candidate_name',
+        'created_by',
+        'expires_at',
+        'submitted_at',
+        'is_cancelled',
+        'created_at',
+    ]
+    list_filter = ['is_cancelled', 'expires_at', 'submitted_at', 'created_at']
+    search_fields = ['candidate_email', 'candidate_name', 'token']
+    readonly_fields = [
+        'id',
+        'token',
+        'created_at',
+        'submitted_at',
+        'submitted_ip',
+        'submitted_user_agent',
+        'onboarding',
+    ]

@@ -216,6 +216,58 @@
     }
     .doc-field .bi{margin-right:4px}
 
+    /* ─────────── Inline inputs (date / text) — typed directly on the page ─────────── */
+    .doc-field-inline{
+      position:absolute;
+      box-sizing:border-box;
+      padding:2px 6px;
+      font-family:inherit;
+      font-size:.78rem;
+      line-height:1.1;
+      background:rgba(255,255,255,.96);
+      border:1.5px dashed var(--accent);
+      border-radius:4px;
+      color:var(--text);
+      box-shadow:0 1px 2px rgba(15,23,42,.06);
+      transition:all .12s;
+      outline:none;
+    }
+    .doc-field-inline:hover{
+      border-style:solid;
+      box-shadow:0 0 0 3px rgba(29,78,216,.12);
+    }
+    .doc-field-inline:focus{
+      border-style:solid;
+      border-color:var(--accent);
+      background:#fff;
+      box-shadow:0 0 0 3px rgba(29,78,216,.18);
+    }
+    .doc-field-inline[data-type="date"]{
+      border-color:var(--success);
+      background:rgba(255,255,255,.96);
+      color:var(--text);
+    }
+    .doc-field-inline[data-type="date"]:focus{
+      border-color:var(--success);
+      box-shadow:0 0 0 3px rgba(5,150,105,.18);
+    }
+    .doc-field-inline[data-type="text"]{
+      border-color:var(--warning);
+    }
+    .doc-field-inline[data-type="text"]:focus{
+      border-color:var(--warning);
+      box-shadow:0 0 0 3px rgba(217,119,6,.18);
+    }
+    .doc-field-inline.filled{
+      border-style:solid;
+      border-color:var(--success);
+      background:rgba(5,150,105,.05);
+    }
+    .doc-field-inline.saving{
+      opacity:.6;
+      cursor:wait;
+    }
+
     /* ─────────── Side panel ─────────── */
     .side{display:flex;flex-direction:column;gap:14px}
     .card{
@@ -497,6 +549,33 @@
     .trust-badges{display:flex;gap:14px;flex-wrap:wrap}
     .trust-badge{display:inline-flex;align-items:center;gap:5px}
     .trust-badge .bi{color:var(--success)}
+
+    /* SHA-256 audit hash — visible proof the audit trail is being rebuilt
+       on the server every time the signer writes a field or signs. */
+    .audit-hash-strip{
+      max-width:1280px;margin:8px auto 0;padding:10px 16px;
+      background:var(--surface-2);border:1px solid var(--border);
+      border-radius:var(--radius);
+      display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+      font-size:.72rem;color:var(--text-muted);
+    }
+    .audit-hash-strip .audit-label{
+      font-weight:700;color:var(--text);text-transform:uppercase;
+      letter-spacing:.06em;display:inline-flex;align-items:center;gap:6px;
+    }
+    .audit-hash-strip .audit-label .bi{color:var(--success);font-size:.85rem}
+    .audit-hash-strip code{
+      font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+      font-size:.7rem;color:var(--text);
+      word-break:break-all;flex:1 1 240px;min-width:0;
+    }
+    .audit-hash-strip .audit-flash{
+      animation:auditFlash .8s ease;
+    }
+    @keyframes auditFlash{
+      0%{background:rgba(5,150,105,.15)}
+      100%{background:transparent}
+    }
 
     .standalone-foot{
       max-width:1280px;margin:0 auto;padding:14px 20px 24px;
@@ -853,6 +932,17 @@
       </div>
     </div>
 
+    {# SHA-256 audit hash — rebuilt server-side on every audit event #}
+    {# (view / sign / decline / complete). Static here on page load; the #}
+    {# next page render after you sign or decline will show the new hash. #}
+    <div class="audit-hash-strip" id="auditHashStrip">
+      <span class="audit-label"><i class="bi bi-shield-lock-fill"></i> SHA-256</span>
+      <code id="auditHashValue">{{ sig_req.audit_hash|default:"(no audit events yet)" }}</code>
+      <span style="font-size:.66rem;color:var(--text-light);flex-shrink:0">
+        Updated on each audit event
+      </span>
+    </div>
+
     {% endif %}{# /not error and not already_done #}
   </main>
 
@@ -977,18 +1067,103 @@
     var cw = canvas.offsetWidth;
     var ch = canvas.offsetHeight;
     fields.filter(function(f){ return Number(f.page) === Number(currentPage); }).forEach(function(f){
+      var x = (f.x * cw / 100);
+      var y = (f.y * ch / 100);
+      var w = (f.w * cw / 100);
+      var h = (f.h * ch / 100);
+
+      // ── Date and Text: render an inline input the signer types directly ──
+      // No modal, no overlay button. Saves on blur / change via the same
+      // FillSignatureFieldView JSON endpoint already used by the modal.
+      if (f.type === 'date' || f.type === 'text'){
+        var input = document.createElement('input');
+        input.type = (f.type === 'date') ? 'date' : 'text';
+        input.className = 'doc-field-inline ' + (f.value ? 'filled' : '');
+        input.dataset.type = f.type;
+        input.dataset.fieldId = f.id;
+        input.placeholder = f.label || (f.type === 'date' ? 'YYYY-MM-DD' : 'Type here…');
+        // Strip the "font:NAME|" prefix that signature values can carry —
+        // not relevant for date/text but harmless to be defensive.
+        input.value = (f.value || '').replace(/^font:[^|]+\|/, '');
+        input.style.position = 'absolute';
+        input.style.left   = x + 'px';
+        input.style.top    = y + 'px';
+        input.style.width  = w + 'px';
+        input.style.height = h + 'px';
+        // Save on blur (when the signer tabs/clicks away) — that mirrors
+        // how desktop document-signing tools behave and avoids a save per
+        // keystroke.
+        input.addEventListener('change', function(){ saveInlineField(f, input); });
+        input.addEventListener('blur',   function(){ saveInlineField(f, input); });
+        layer.appendChild(input);
+        return;
+      }
+
+      // ── Signature and Initials still open the modal (richer UI) ────────
       var el = document.createElement('button');
       el.type = 'button';
       el.className = 'doc-field ' + (f.value ? 'filled' : '');
       el.dataset.type = f.type;
-      el.style.left   = (f.x * cw / 100) + 'px';
-      el.style.top    = (f.y * ch / 100) + 'px';
-      el.style.width  = (f.w * cw / 100) + 'px';
-      el.style.height = (f.h * ch / 100) + 'px';
+      el.style.left   = x + 'px';
+      el.style.top    = y + 'px';
+      el.style.width  = w + 'px';
+      el.style.height = h + 'px';
       el.innerHTML = '<i class="bi bi-' + icon(f.type) + '"></i> ' + esc(f.value ? 'Filled' : (f.label || f.type));
       el.onclick = function(){ openField(f.id); };
       layer.appendChild(el);
     });
+  }
+
+  // Save an inline date/text field to the server. Mirrors the body shape
+  // sent by saveCurrentField() so FillSignatureFieldView treats it the same.
+  function saveInlineField(field, input){
+    var raw = (input.value || '').trim();
+    // Don't ping the server when the value hasn't actually changed.
+    if (raw === (field.value || '')) return;
+    if (!raw){
+      // Empty — clear the local state but don't POST (server rejects empty).
+      field.value = '';
+      input.classList.remove('filled');
+      renderFieldList();
+      updateCompleteState();
+      return;
+    }
+    if (!fillTemplate){ alert('The field-save URL is missing.'); return; }
+    input.classList.add('saving');
+    fetch(fillTemplate.replace('__FIELD_ID__', field.id), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': csrfToken,
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: JSON.stringify({ type: field.type, value: raw })
+    }).then(function(r){ return r.json(); }).then(function(data){
+      input.classList.remove('saving');
+      if (data.status !== 'ok'){
+        alert(data.message || 'Could not save this field.');
+        return;
+      }
+      field.value = raw;
+      input.classList.add('filled');
+      renderFieldList();
+      updateCompleteState();
+    }).catch(function(){
+      input.classList.remove('saving');
+      alert('Network error while saving the field.');
+    });
+  }
+
+  // Scroll to and focus an inline input by field id (used when the user
+  // clicks the side-panel field item for a date/text field).
+  function focusInlineField(fieldId){
+    var input = document.querySelector('.doc-field-inline[data-field-id="' + fieldId + '"]');
+    if (!input) return;
+    input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    input.focus();
+    if (input.type === 'text') {
+      try { input.select(); } catch (_) {}
+    }
   }
 
   function renderPage(n){
@@ -1028,6 +1203,21 @@
   window.openField = function(id){
     currentField = fields.find(function(f){ return f.id === id; });
     if (!currentField) return;
+
+    // For date/text we no longer use the modal — these are inline inputs
+    // on the page itself. Jump to the right page, then focus the input.
+    if (currentField.type === 'date' || currentField.type === 'text'){
+      if (Number(currentField.page) !== Number(currentPage)){
+        currentPage = Number(currentField.page);
+        renderPage(currentPage);
+        // Wait for the page render to drop the input into place.
+        setTimeout(function(){ focusInlineField(id); }, 200);
+      } else {
+        focusInlineField(id);
+      }
+      return;
+    }
+
     ['signatureTools','initialTools','dateTools','textTools'].forEach(function(elId){
       var el = document.getElementById(elId); if (el) el.style.display = 'none';
     });

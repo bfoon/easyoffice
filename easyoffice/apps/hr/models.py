@@ -141,6 +141,9 @@ class EmployeeOnboarding(models.Model):
         APPROVED = 'approved', _('Approved')
         DECLINED = 'declined', _('Declined')
         HIRED = 'hired', _('Hired / Staff Created')
+        EMPLOYEE_LINK_SENT = 'employee_link_sent', _('Employee Form Link Sent')
+        HR_REVIEW = 'hr_review', _('Employee Submitted - HR Review')
+        CONTRACT_PENDING = 'contract_pending', _('Contract Signature Pending')
 
     class Gender(models.TextChoices):
         MALE = 'male', _('Male')
@@ -225,6 +228,9 @@ class EmployeeOnboarding(models.Model):
 
     status = models.CharField(max_length=30, choices=Status.choices, default=Status.IT_SETUP)
     hr_notes = models.TextField(blank=True)
+    welcome_sent_at = models.DateTimeField(null=True, blank=True)
+    contract_due_at = models.DateField(null=True, blank=True)
+    contract_note = models.TextField(blank=True)
     ceo_comments = models.TextField(blank=True)
     decline_reason = models.TextField(blank=True)
 
@@ -358,34 +364,78 @@ class EmployeeOnboarding(models.Model):
     def approve_and_create_staff(self, user):
         if not self.account_ready or not self.official_email:
             raise ValueError('IT must update the official email before CEO approval can create the staff account.')
+
         self.validate_hire_ready()
 
         UserModel = get_user_model()
-        staff_user = self.staff_user
-        if not staff_user:
+
+        # If this onboarding was already approved before, do not create/link again.
+        if self.staff_user_id:
+            staff_user = self.staff_user
+        else:
             staff_user = UserModel.objects.filter(email__iexact=self.official_email).first()
 
+        # Create user only if no existing account uses the official email.
         if not staff_user:
+            # Make sure proposed username is not already taken.
+            username = self.proposed_username or self._build_username()
+            while UserModel.objects.filter(username=username).exists():
+                username = self._build_username()
+
             staff_user = UserModel.objects.create_user(
-                username=self.proposed_username,
+                username=username,
                 email=self.official_email,
                 password=None,
             )
 
+        # Prevent duplicate OneToOne crash:
+        # one staff user cannot be attached to two onboarding records.
+        existing_onboarding = EmployeeOnboarding.objects.filter(
+            staff_user=staff_user
+        ).exclude(pk=self.pk).first()
+
+        if existing_onboarding:
+            raise ValueError(
+                'This official email/account is already linked to another onboarding record: '
+                f'{existing_onboarding.full_name} '
+                f'({existing_onboarding.employee_code or existing_onboarding.pk}). '
+                'Please use a different official email, or detach the old onboarding record first.'
+            )
+
+        # Prevent username conflict with another user.
+        if self.proposed_username:
+            username_owner = UserModel.objects.filter(
+                username=self.proposed_username
+            ).exclude(pk=staff_user.pk).first()
+
+            if username_owner:
+                raise ValueError(
+                    f'The proposed username "{self.proposed_username}" is already used by another account. '
+                    'Please update the proposed username before CEO approval.'
+                )
+
         staff_user.first_name = self.first_name
         staff_user.last_name = self.last_name
         staff_user.email = self.official_email
-        staff_user.username = self.proposed_username
+        staff_user.username = self.proposed_username or staff_user.username
         staff_user.is_active = True
+
         if hasattr(staff_user, 'status'):
             staff_user.status = 'active'
+
         staff_user.save()
 
         self.staff_user = staff_user
         self.status = self.Status.HIRED
         self.approved_by = user
         self.approved_at = timezone.now()
-        self.save()
+        self.save(update_fields=[
+            'staff_user',
+            'status',
+            'approved_by',
+            'approved_at',
+            'updated_at',
+        ])
 
         employment, _ = EmployeeEmployment.objects.update_or_create(
             user=staff_user,
@@ -408,8 +458,70 @@ class EmployeeOnboarding(models.Model):
                 'status': EmployeeEmployment.Status.ACTIVE,
             }
         )
+
         employment.sync_staff_profile_from_employment()
         return staff_user
+
+
+class EmployeeOnboardingInvite(models.Model):
+    """
+    Temporary public onboarding link created by HR.
+    The link can only be submitted once and expires automatically.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+
+    candidate_name = models.CharField(max_length=180, blank=True)
+    candidate_email = models.EmailField()
+
+    hr_message = models.TextField(blank=True)
+    expires_at = models.DateTimeField()
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    submitted_ip = models.GenericIPAddressField(null=True, blank=True)
+    submitted_user_agent = models.TextField(blank=True)
+
+    onboarding = models.OneToOneField(
+        EmployeeOnboarding,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='public_invite',
+    )
+
+    is_cancelled = models.BooleanField(default=False)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_onboarding_invites',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['token']),
+            models.Index(fields=['candidate_email']),
+            models.Index(fields=['expires_at']),
+            models.Index(fields=['submitted_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.candidate_email} - {"Submitted" if self.submitted_at else "Pending"}'
+
+    @property
+    def is_expired(self):
+        return timezone.now() > self.expires_at
+
+    @property
+    def is_used(self):
+        return bool(self.submitted_at or self.onboarding_id)
+
+    @property
+    def can_submit(self):
+        return not self.is_cancelled and not self.is_expired and not self.is_used
 
 
 class EmployeeDocument(models.Model):

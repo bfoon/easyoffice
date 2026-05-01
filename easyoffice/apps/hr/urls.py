@@ -8,6 +8,22 @@ urlpatterns = [
     path('onboarding/', views.EmployeeOnboardingListView.as_view(), name='employee_onboarding_list'),
     path('onboarding/new/', views.EmployeeOnboardingCreateView.as_view(), name='employee_onboarding_create'),
     path('onboarding/<uuid:pk>/', views.EmployeeOnboardingDetailView.as_view(), name='employee_onboarding_detail'),
+    path(
+        'onboarding/<uuid:pk>/offer-letter/',
+        views.OfferLetterDownloadView.as_view(),
+        name='employee_onboarding_offer_letter',
+    ),
+    path(
+        'onboarding/invite/',
+        views.EmployeeOnboardingInviteCreateView.as_view(),
+        name='employee_onboarding_invite_create',
+    ),
+
+    path(
+        'public/onboarding/<uuid:token>/',
+        views.PublicEmployeeOnboardingView.as_view(),
+        name='employee_onboarding_public',
+    ),
 
     # Staff employment lifecycle
     path('staff/', views.EmploymentListView.as_view(), name='employment_list'),

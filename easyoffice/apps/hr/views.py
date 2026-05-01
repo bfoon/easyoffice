@@ -9,10 +9,11 @@ from django.core.mail import EmailMessage
 from django.core.exceptions import PermissionDenied
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.db.models import Q, Sum
 from django.http import HttpResponse, HttpResponseForbidden
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.generic import DetailView, TemplateView, View
 
@@ -30,9 +31,16 @@ from apps.hr.models import (
     HRSetting,
     PayrollRecord,
     PerformanceAppraisal,
+    EmployeeOnboardingInvite,
 )
 from apps.staff.models import LeaveRequest
 from apps.organization.models import Department, Unit, Position, OfficeLocation
+
+from apps.hr.offer_letter import (
+    build_offer_letter_pdf,
+    offer_letter_filename,
+    save_offer_letter_for_onboarding,
+)
 
 User = get_user_model()
 
@@ -275,6 +283,155 @@ def notify_onboarding_stage(request, onboarding, stage, sender=None):
         sent_to += 1
 
     return sent_to
+
+
+def _client_ip(request):
+    forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR')
+
+
+def notify_hr_public_onboarding_submitted(request, onboarding):
+    """
+    Notify HR that an employee has submitted the public onboarding form.
+    """
+    link = reverse('employee_onboarding_detail', kwargs={'pk': onboarding.pk})
+    try:
+        action_url = request.build_absolute_uri(link)
+    except Exception:
+        action_url = link
+
+    title = f'Employee onboarding submitted: {onboarding.full_name}'
+    body = (
+        f'{onboarding.full_name} has completed the public onboarding form. '
+        f'HR should now review the information, complete the hire details, and submit to CEO.'
+    )
+
+    recipients = _users_for_groups(['HR'], fallback_superusers=True)
+
+    sent = 0
+    for user in recipients:
+        _store_stage_notification(user, onboarding.created_by, title, body, link)
+        _push_realtime_notification(
+            user,
+            title,
+            body,
+            link,
+            icon='bi-person-check-fill',
+            color='#0d9488',
+        )
+        _send_stage_email(user, title, body, action_url)
+        sent += 1
+
+    return sent
+
+
+def send_onboarding_invite_email(request, invite):
+    public_url = request.build_absolute_uri(
+        reverse('employee_onboarding_public', kwargs={'token': invite.token})
+    )
+
+    subject = 'Employee Onboarding Form - EasyOffice HR'
+    body = f"""
+Dear {invite.candidate_name or 'Candidate'},
+
+HR has invited you to complete your employee onboarding form.
+
+Please use the secure link below:
+
+{public_url}
+
+This link is temporary and will expire on {invite.expires_at.strftime('%d %B %Y at %H:%M')}.
+
+Important:
+- This link can only be submitted once.
+- Please complete your personal details, work history, references, emergency contacts, and upload the requested documents.
+
+{invite.hr_message or ''}
+
+Best regards,
+EasyOffice HR
+""".strip()
+
+    email = EmailMessage(
+        subject=subject,
+        body=body,
+        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
+        to=[invite.candidate_email],
+    )
+    email.send(fail_silently=False)
+    return public_url
+
+
+def send_employee_welcome_offer(request, onboarding):
+    """
+    Send welcome/offer message after CEO approval.
+    The contract signing itself can be handled by your existing Files/Signature workflow.
+    """
+    recipients = []
+    if onboarding.personal_email:
+        recipients.append(onboarding.personal_email)
+    if onboarding.official_email and onboarding.official_email not in recipients:
+        recipients.append(onboarding.official_email)
+
+    if not recipients:
+        return False
+
+    contract_due = onboarding.start_date or timezone.now().date()
+    onboarding.contract_due_at = contract_due
+    onboarding.contract_note = (
+        'Employee must review the welcome offer and sign the employment contract '
+        'before the official start date.'
+    )
+    onboarding.welcome_sent_at = timezone.now()
+    onboarding.status = EmployeeOnboarding.Status.CONTRACT_PENDING
+    onboarding.save(update_fields=[
+        'contract_due_at',
+        'contract_note',
+        'welcome_sent_at',
+        'status',
+        'updated_at',
+    ])
+
+    subject = f'Welcome to EasyOffice - Offer Approved for {onboarding.full_name}'
+
+    body = f"""
+Dear {onboarding.full_name},
+
+Congratulations. Your employment offer has been approved.
+
+Offer Summary
+-------------
+Employee Code: {onboarding.employee_code}
+Job Title: {onboarding.job_title_display or onboarding.job_title or 'To be confirmed'}
+Department: {onboarding.department_display or onboarding.department or 'To be confirmed'}
+Start Date: {onboarding.start_date or 'To be confirmed'}
+Salary: {onboarding.salary}
+
+Next Step
+---------
+Please review your welcome offer and sign your employment contract before your starting date.
+
+Contract signing deadline: {contract_due}
+
+HR will share the contract signing link with you. Your onboarding process will be closed once the contract is signed.
+
+Welcome onboard.
+
+Best regards,
+EasyOffice HR
+""".strip()
+
+    email = EmailMessage(
+        subject=subject,
+        body=body,
+        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
+        to=recipients,
+    )
+    email.send(fail_silently=False)
+    return True
+
 def parse_allowances_from_post(post):
     """
     Accepts fields like allowance_transport=500, allowance_housing=1000.
@@ -925,6 +1082,240 @@ class EmployeeOnboardingCreateView(LoginRequiredMixin, TemplateView):
         messages.success(request, f'Employee record created. Username suggestion: {onboarding.proposed_username}. IT can now update the official email.')
         return redirect('employee_onboarding_detail', pk=onboarding.pk)
 
+class EmployeeOnboardingInviteCreateView(LoginRequiredMixin, View):
+    """
+    HR creates a temporary one-time public onboarding link.
+    The employee fills only their own sections.
+    """
+
+    def post(self, request):
+        if not is_hr_user(request.user):
+            return HttpResponseForbidden('Only HR can create onboarding links.')
+
+        candidate_email = request.POST.get('candidate_email', '').strip()
+        candidate_name = request.POST.get('candidate_name', '').strip()
+        expires_days = int(request.POST.get('expires_days') or 7)
+        hr_message = request.POST.get('hr_message', '').strip()
+
+        if not candidate_email:
+            messages.error(request, 'Candidate email is required.')
+            return redirect('employee_onboarding_list')
+
+        expires_days = max(1, min(expires_days, 30))
+
+        invite = EmployeeOnboardingInvite.objects.create(
+            candidate_name=candidate_name,
+            candidate_email=candidate_email,
+            hr_message=hr_message,
+            expires_at=timezone.now() + timedelta(days=expires_days),
+            created_by=request.user,
+        )
+
+        try:
+            public_url = send_onboarding_invite_email(request, invite)
+            messages.success(request, f'Onboarding link sent to {candidate_email}.')
+            messages.info(request, f'Public link: {public_url}')
+        except Exception as exc:
+            messages.warning(
+                request,
+                f'Invite created but email could not be sent: {exc}'
+            )
+
+        return redirect('employee_onboarding_list')
+
+class PublicEmployeeOnboardingView(View):
+    """
+    Public no-login onboarding form.
+
+    Employee fills:
+    - Personal identity and contact details
+    - Address
+    - Documents
+    - Work history
+    - References
+    - Emergency contacts
+
+    HR later fills:
+    - Hire category
+    - Department/unit/position/location
+    - Supervisor
+    - Start/end date
+    - Salary/allowances
+    - HR notes
+    - Submit to CEO
+    """
+
+    template_name = 'hr/public_onboarding_form.html'
+
+    def get_invite(self, token):
+        return get_object_or_404(EmployeeOnboardingInvite, token=token)
+
+    def get(self, request, token):
+        invite = self.get_invite(token)
+
+        if not invite.can_submit:
+            return render(request, 'hr/public_onboarding_invalid.html', {
+                'invite': invite,
+            })
+
+        return render(request, self.template_name, {
+            'invite': invite,
+            'gender_choices': EmployeeOnboarding.Gender.choices,
+            'document_types': EmployeeDocument.DocumentType.choices,
+        })
+
+    @transaction.atomic
+    def post(self, request, token):
+        invite = get_object_or_404(
+            EmployeeOnboardingInvite.objects.select_for_update(),
+            token=token,
+        )
+
+        if not invite.can_submit:
+            return render(request, 'hr/public_onboarding_invalid.html', {
+                'invite': invite,
+            })
+
+        first_name = request.POST.get('first_name', '').strip()
+        last_name = request.POST.get('last_name', '').strip()
+        personal_email = request.POST.get('personal_email', '').strip()
+
+        if not first_name or not last_name or not personal_email:
+            messages.error(request, 'First name, last name, and personal email are required.')
+            return render(request, self.template_name, {
+                'invite': invite,
+                'gender_choices': EmployeeOnboarding.Gender.choices,
+                'document_types': EmployeeDocument.DocumentType.choices,
+            })
+
+        onboarding = EmployeeOnboarding.objects.create(
+            first_name=first_name,
+            middle_name=request.POST.get('middle_name', '').strip(),
+            last_name=last_name,
+            gender=request.POST.get('gender', '').strip(),
+            date_of_birth=parse_date(request.POST.get('date_of_birth')),
+            nationality=request.POST.get('nationality', '').strip(),
+            personal_email=personal_email,
+            phone=request.POST.get('phone', '').strip(),
+            alternative_phone=request.POST.get('alternative_phone', '').strip(),
+            address_line=request.POST.get('address_line', '').strip(),
+            city=request.POST.get('city', '').strip(),
+            region=request.POST.get('region', '').strip(),
+            country=request.POST.get('country', 'The Gambia').strip() or 'The Gambia',
+            status=EmployeeOnboarding.Status.HR_REVIEW,
+            hr_notes='Submitted by employee through temporary onboarding link. HR should review and complete hire details.',
+            created_by=invite.created_by,
+        )
+
+        invite.onboarding = onboarding
+        invite.submitted_at = timezone.now()
+        invite.submitted_ip = _client_ip(request)
+        invite.submitted_user_agent = request.META.get('HTTP_USER_AGENT', '')[:1000]
+        invite.save(update_fields=[
+            'onboarding',
+            'submitted_at',
+            'submitted_ip',
+            'submitted_user_agent',
+        ])
+
+        # Documents
+        document_files = request.FILES.getlist('document_files')
+        document_titles = request.POST.getlist('document_titles')
+        document_types = request.POST.getlist('document_types')
+
+        for index, upload in enumerate(document_files):
+            if not upload:
+                continue
+
+            title = ''
+            doc_type = EmployeeDocument.DocumentType.OTHER
+
+            if index < len(document_titles):
+                title = document_titles[index].strip()
+            if index < len(document_types) and document_types[index]:
+                doc_type = document_types[index]
+
+            EmployeeDocument.objects.create(
+                onboarding=onboarding,
+                document_type=doc_type,
+                title=title or upload.name,
+                file=upload,
+                uploaded_by=invite.created_by,
+            )
+
+        # Work history
+        employers = request.POST.getlist('work_employer')
+        work_titles = request.POST.getlist('work_job_title')
+        work_start_dates = request.POST.getlist('work_start_date')
+        work_end_dates = request.POST.getlist('work_end_date')
+        work_responsibilities = request.POST.getlist('work_responsibilities')
+
+        for index, employer in enumerate(employers):
+            employer = employer.strip()
+            if not employer:
+                continue
+
+            EmployeeWorkHistory.objects.create(
+                onboarding=onboarding,
+                employer=employer,
+                job_title=work_titles[index].strip() if index < len(work_titles) else '',
+                start_date=parse_date(work_start_dates[index]) if index < len(work_start_dates) else None,
+                end_date=parse_date(work_end_dates[index]) if index < len(work_end_dates) else None,
+                responsibilities=work_responsibilities[index].strip() if index < len(work_responsibilities) else '',
+            )
+
+        # References
+        ref_names = request.POST.getlist('ref_name')
+        ref_relationships = request.POST.getlist('ref_relationship')
+        ref_organizations = request.POST.getlist('ref_organization')
+        ref_phones = request.POST.getlist('ref_phone')
+        ref_emails = request.POST.getlist('ref_email')
+        ref_notes = request.POST.getlist('ref_notes')
+
+        for index, name in enumerate(ref_names):
+            name = name.strip()
+            if not name:
+                continue
+
+            EmployeeReference.objects.create(
+                onboarding=onboarding,
+                name=name,
+                relationship=ref_relationships[index].strip() if index < len(ref_relationships) else '',
+                organization=ref_organizations[index].strip() if index < len(ref_organizations) else '',
+                phone=ref_phones[index].strip() if index < len(ref_phones) else '',
+                email=ref_emails[index].strip() if index < len(ref_emails) else '',
+                notes=ref_notes[index].strip() if index < len(ref_notes) else '',
+            )
+
+        # Emergency contacts
+        contact_names = request.POST.getlist('contact_name')
+        contact_relationships = request.POST.getlist('contact_relationship')
+        contact_phones = request.POST.getlist('contact_phone')
+        contact_alt_phones = request.POST.getlist('contact_alt_phone')
+        contact_addresses = request.POST.getlist('contact_address')
+
+        for index, name in enumerate(contact_names):
+            name = name.strip()
+            phone = contact_phones[index].strip() if index < len(contact_phones) else ''
+
+            if not name or not phone:
+                continue
+
+            EmployeeEmergencyContact.objects.create(
+                onboarding=onboarding,
+                name=name,
+                relationship=contact_relationships[index].strip() if index < len(contact_relationships) else '',
+                phone=phone,
+                alternative_phone=contact_alt_phones[index].strip() if index < len(contact_alt_phones) else '',
+                address=contact_addresses[index].strip() if index < len(contact_addresses) else '',
+            )
+
+        notify_hr_public_onboarding_submitted(request, onboarding)
+
+        return render(request, 'hr/public_onboarding_done.html', {
+            'invite': invite,
+            'onboarding': onboarding,
+        })
 
 class EmployeeOnboardingDetailView(LoginRequiredMixin, DetailView):
     model = EmployeeOnboarding
@@ -1076,7 +1467,46 @@ class EmployeeOnboardingDetailView(LoginRequiredMixin, DetailView):
                 onboarding.ceo_comments = request.POST.get('ceo_comments', '').strip()
                 onboarding.save(update_fields=['ceo_comments', 'updated_at'])
                 staff_user = onboarding.approve_and_create_staff(request.user)
-                messages.success(request, f'Hire approved and staff account created for {staff_user.get_full_name() or staff_user.username}.')
+                send_employee_welcome_offer(request, onboarding)
+
+                # Auto-generate the offer letter PDF — attach to onboarding
+                # AND save into the Files app under HR / Offer Letters.
+                offer_letter_msg = ''
+                try:
+                    save_offer_letter_for_onboarding(onboarding, request.user)
+                    offer_letter_msg = ' Offer letter PDF generated and saved.'
+                except Exception as exc:
+                    offer_letter_msg = (
+                        f' Note: offer letter PDF could not be generated automatically '
+                        f'({exc}). You can retry from the Generate Offer Letter button.'
+                    )
+
+                messages.success(
+                    request,
+                    f'Hire approved, staff account created for '
+                    f'{staff_user.get_full_name() or staff_user.username}, '
+                    f'and welcome/offer message sent.{offer_letter_msg}'
+                )
+
+            elif action == 'generate_offer_letter':
+                # Manual (re)generate. HR or CEO only, and only after CEO approval.
+                if not (is_hr_user(request.user) or is_ceo_user(request.user)):
+                    return HttpResponseForbidden('Only HR or CEO can generate offer letters.')
+                if onboarding.status not in [
+                    EmployeeOnboarding.Status.APPROVED,
+                    EmployeeOnboarding.Status.HIRED,
+                    EmployeeOnboarding.Status.CONTRACT_PENDING,
+                ]:
+                    messages.error(
+                        request,
+                        'The offer letter can only be generated after the CEO has approved the hire.'
+                    )
+                else:
+                    try:
+                        save_offer_letter_for_onboarding(onboarding, request.user)
+                        messages.success(request, 'Offer letter regenerated and saved.')
+                    except Exception as exc:
+                        messages.error(request, f'Offer letter generation failed: {exc}')
 
             elif action == 'ceo_rework':
                 if not is_ceo_user(request.user):
@@ -1097,7 +1527,58 @@ class EmployeeOnboardingDetailView(LoginRequiredMixin, DetailView):
         except ValueError as exc:
             messages.error(request, str(exc))
 
+        except IntegrityError as exc:
+            messages.error(
+                request,
+                'The staff account could not be linked because it is already connected to another onboarding or employment record. '
+                'Please check the official email, proposed username, and existing staff record before approving again.'
+            )
+
         return redirect('employee_onboarding_detail', pk=onboarding.pk)
+
+
+
+
+class OfferLetterDownloadView(LoginRequiredMixin, View):
+    """
+    Stream the latest generated offer letter PDF for an onboarding record.
+
+    Use ?inline=1 to display in the browser; default is download.
+    Falls back to building the PDF on the fly if no EmployeeDocument is saved
+    yet (so a freshly-approved record without a stored PDF still works).
+    """
+
+    def get(self, request, pk):
+        if not (is_hr_user(request.user) or is_ceo_user(request.user)):
+            return HttpResponseForbidden('You do not have permission to view this offer letter.')
+
+        onboarding = get_object_or_404(EmployeeOnboarding, pk=pk)
+
+        # Prefer the saved EmployeeDocument so the URL matches what HR sees in
+        # the documents table; build on the fly only if nothing is saved.
+        saved = EmployeeDocument.objects.filter(
+            onboarding=onboarding,
+            document_type=EmployeeDocument.DocumentType.CONTRACT,
+            title__startswith='Offer Letter',
+        ).order_by('-uploaded_at').first()
+
+        if saved and saved.file:
+            saved.file.open('rb')
+            try:
+                pdf_bytes = saved.file.read()
+            finally:
+                saved.file.close()
+        else:
+            try:
+                pdf_bytes = build_offer_letter_pdf(onboarding)
+            except Exception as exc:
+                messages.error(request, f'Offer letter could not be built: {exc}')
+                return redirect('employee_onboarding_detail', pk=onboarding.pk)
+
+        disposition = 'inline' if request.GET.get('inline') else 'attachment'
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'{disposition}; filename="{offer_letter_filename(onboarding)}"'
+        return response
 
 
 class EmploymentListView(LoginRequiredMixin, TemplateView):

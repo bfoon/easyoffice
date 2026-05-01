@@ -58,6 +58,8 @@ urlpatterns = [
     path('opportunities/', include('apps.opportunities.urls')),
     path('customer-service/', include('apps.customer_service.urls')),
     path('users/', include('apps.user_admin.urls', namespace='user_admin')),
+    path('inventory/',     include('apps.inventory.urls')),
+       path('api/inventory/', include('apps.inventory.api.urls')),
 
 ]
 

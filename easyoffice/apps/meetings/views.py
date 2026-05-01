@@ -41,6 +41,181 @@ def _can_view_meeting(user, meeting):
     return False
 
 
+# ── Minutes rich-text helpers ───────────────────────────────────────────────
+# Whitelist-based HTML sanitiser. The minutes editor on the page produces a
+# small, predictable subset of HTML (headings, bold, italic, lists, links,
+# paragraphs, line breaks). Anything outside that set is stripped before
+# saving so we never store arbitrary user-submitted markup.
+
+_ALLOWED_TAGS = {
+    'p', 'br', 'b', 'strong', 'i', 'em', 'u',
+    'h1', 'h2', 'h3',
+    'ul', 'ol', 'li',
+    'blockquote', 'a',
+}
+_ALLOWED_ATTRS = {
+    'a': {'href', 'title'},
+}
+# Self-closing / void tags that ReportLab and HTML both treat specially
+_VOID_TAGS = {'br'}
+
+_TAG_RE = re.compile(r'<\s*(/?)\s*([a-zA-Z0-9]+)([^>]*)>')
+_ATTR_RE = re.compile(r'([a-zA-Z\-]+)\s*=\s*"([^"]*)"')
+
+
+def _sanitise_minutes_html(raw):
+    """
+    Keep only whitelisted tags / attrs from the WYSIWYG editor output.
+    Unknown tags are dropped (their text content is preserved). Dangerous
+    href schemes (javascript:, data:) on <a> are blanked.
+    """
+    if not raw:
+        return ''
+    out_parts = []
+    pos = 0
+    for m in _TAG_RE.finditer(raw):
+        # text before this tag — keep as is (browser already escaped it)
+        out_parts.append(raw[pos:m.start()])
+        pos = m.end()
+
+        closing, name, attrs = m.group(1), m.group(2).lower(), m.group(3)
+        if name not in _ALLOWED_TAGS:
+            # Drop the tag itself, keep surrounding text.
+            continue
+
+        if closing:
+            out_parts.append(f'</{name}>')
+            continue
+
+        # Build allowed attributes for this tag
+        allowed = _ALLOWED_ATTRS.get(name, set())
+        kept_attrs = []
+        for am in _ATTR_RE.finditer(attrs or ''):
+            attr_name = am.group(1).lower()
+            if attr_name not in allowed:
+                continue
+            attr_val = am.group(2).strip()
+            if attr_name == 'href':
+                low = attr_val.lower().strip()
+                if low.startswith(('javascript:', 'data:', 'vbscript:')):
+                    continue
+            attr_val = attr_val.replace('"', '&quot;')
+            kept_attrs.append(f'{attr_name}="{attr_val}"')
+
+        attrs_str = (' ' + ' '.join(kept_attrs)) if kept_attrs else ''
+        if name in _VOID_TAGS:
+            out_parts.append(f'<{name}{attrs_str}/>')
+        else:
+            out_parts.append(f'<{name}{attrs_str}>')
+
+    out_parts.append(raw[pos:])
+    return ''.join(out_parts).strip()
+
+
+def _looks_like_html(text):
+    """Heuristic: treat content as HTML if it contains a known block tag."""
+    if not text:
+        return False
+    return bool(re.search(r'<\s*(p|h[1-3]|ul|ol|li|br|b|strong|i|em)\b', text, re.IGNORECASE))
+
+
+# Block-level tags we split on for PDF rendering. Inline tags (b, i, u, a)
+# are left in place because ReportLab's Paragraph parser understands them.
+_BLOCK_SPLIT_RE = re.compile(
+    r'<\s*(p|h1|h2|h3|li|br)\b[^>]*>|<\s*/\s*(p|h1|h2|h3|li|ul|ol)\s*>',
+    re.IGNORECASE,
+)
+_STRIP_TAGS_RE = re.compile(r'<\s*/?\s*(?:ul|ol|div|span)\b[^>]*>', re.IGNORECASE)
+_NORMALISE_BOLD_RE = re.compile(r'<\s*(/?)strong\s*>', re.IGNORECASE)
+_NORMALISE_ITALIC_RE = re.compile(r'<\s*(/?)em\s*>', re.IGNORECASE)
+
+
+def _parse_html_to_flowables(html, sBody, sSection, sBullet):
+    """
+    Walk the saved HTML and emit ReportLab paragraphs for the PDF builder.
+    Block boundaries are <p>, <h1..3>, <li>, and <br/>. Inline formatting
+    tags (<b>, <i>, <u>, <a>) are passed through to Paragraph as-is.
+    """
+    from reportlab.platypus import Paragraph, Spacer
+    from reportlab.lib.units import mm
+
+    if not html:
+        return []
+
+    # ReportLab understands <b>/<i> better than <strong>/<em>; normalise.
+    html = _NORMALISE_BOLD_RE.sub(r'<\1b>', html)
+    html = _NORMALISE_ITALIC_RE.sub(r'<\1i>', html)
+
+    # Drop list/wrapper containers — we treat each <li> as a bullet line.
+    html = _STRIP_TAGS_RE.sub('', html)
+
+    flowables = []
+
+    # Walk the source, picking up tag boundaries that mark new blocks.
+    tokens = []
+    pos = 0
+    for m in _BLOCK_SPLIT_RE.finditer(html):
+        text_before = html[pos:m.start()]
+        if text_before.strip():
+            tokens.append(('text', text_before))
+        open_tag = (m.group(1) or '').lower() or None
+        close_tag = (m.group(2) or '').lower() or None
+        tokens.append(('tag', open_tag, close_tag))
+        pos = m.end()
+    tail = html[pos:]
+    if tail.strip():
+        tokens.append(('text', tail))
+
+    # Build blocks based on the most recently opened block tag.
+    current_kind = 'p'        # default block style
+    buffer = []
+
+    def flush():
+        if not buffer:
+            return
+        text = ''.join(buffer).strip()
+        buffer.clear()
+        if not text:
+            return
+        try:
+            if current_kind in ('h1', 'h2', 'h3'):
+                flowables.append(Paragraph(text, sSection))
+            elif current_kind == 'li':
+                flowables.append(Paragraph(f'•&nbsp;&nbsp;{text}', sBullet))
+            else:
+                flowables.append(Paragraph(text, sBody))
+        except Exception:
+            # Malformed inline markup — fall back to escaped plain text.
+            safe = (text.replace('&', '&amp;')
+                        .replace('<', '&lt;')
+                        .replace('>', '&gt;'))
+            flowables.append(Paragraph(safe, sBody))
+
+    for tok in tokens:
+        if tok[0] == 'text':
+            buffer.append(tok[1])
+        else:
+            _, open_tag, close_tag = tok
+            if open_tag == 'br':
+                buffer.append('<br/>')
+                continue
+            # Any block boundary flushes whatever's been collected.
+            flush()
+            if open_tag in ('p', 'h1', 'h2', 'h3', 'li'):
+                current_kind = open_tag
+            elif close_tag in ('p', 'h1', 'h2', 'h3', 'li'):
+                current_kind = 'p'
+
+    flush()
+    if not flowables:
+        # No block tags at all (rare) — render the whole thing as one para.
+        try:
+            flowables.append(Paragraph(html.strip(), sBody))
+        except Exception:
+            pass
+    return flowables
+
+
 def _notify_attendees(meeting, sender, title, message, exclude_ids=None):
     try:
         from apps.core.models import CoreNotification
@@ -365,6 +540,13 @@ def _build_minutes_pdf(meeting, minutes):
 
     def parse_body(text):
         flowables = []
+        if not text:
+            return flowables
+
+        # If it looks like HTML (from the WYSIWYG editor), parse blocks.
+        if _looks_like_html(text):
+            return _parse_html_to_flowables(text, sBody, sSection, sBullet)
+
         buf_lines = []
 
         def flush():
@@ -433,6 +615,13 @@ def _build_minutes_pdf(meeting, minutes):
     if meeting.agenda:
         story.append(Paragraph('Agenda', sSection))
         story.extend(parse_body(meeting.agenda))
+
+    if getattr(meeting, 'agenda_attachment_id', None) and meeting.agenda_attachment:
+        story.append(Paragraph('Agenda', sSection) if not meeting.agenda else Spacer(1, 2*mm))
+        story.append(Paragraph(
+            f'Attached agenda document: <b>{meeting.agenda_attachment.name}</b>',
+            sBody,
+        ))
 
     if minutes.content:
         story.append(Paragraph('Meeting Notes', sSection))
@@ -1068,8 +1257,8 @@ class MeetingMinutesView(LoginRequiredMixin, View):
 
         # ── SAVE / SUBMIT / ADOPT ──────────────────────────────────────────
         if action in ('save', 'submit_for_adoption') and (minutes.is_editable or request.user.is_superuser):
-            minutes.content   = request.POST.get('content', '')
-            minutes.decisions = request.POST.get('decisions', '')
+            minutes.content   = _sanitise_minutes_html(request.POST.get('content', ''))
+            minutes.decisions = _sanitise_minutes_html(request.POST.get('decisions', ''))
             minutes.author    = request.user
 
             # Rebuild action items
@@ -1114,6 +1303,57 @@ class MeetingMinutesView(LoginRequiredMixin, View):
             else:
                 minutes.save()
                 messages.success(request, 'Draft minutes saved.')
+
+        elif action == 'upload_agenda' and (minutes.is_editable or request.user.is_superuser):
+            # Allow the minutes editor to attach a file as the agenda.
+            uploaded = request.FILES.get('agenda_file')
+            if not uploaded:
+                messages.error(request, 'Please choose a file to upload as the agenda.')
+            else:
+                MAX_BYTES = 25 * 1024 * 1024  # 25 MB
+                if uploaded.size > MAX_BYTES:
+                    messages.error(request, 'Agenda file is too large (max 25 MB).')
+                else:
+                    try:
+                        from apps.files.models import SharedFile
+                        sf = SharedFile.objects.create(
+                            name=uploaded.name,
+                            uploaded_by=request.user,
+                            visibility='unit',
+                            description=f'Agenda for meeting: {meeting.title}',
+                            file_type=getattr(uploaded, 'content_type', '') or 'application/octet-stream',
+                            file_size=uploaded.size,
+                        )
+                        sf.file.save(uploaded.name, uploaded, save=True)
+                        try:
+                            sf.file_hash = sf.compute_hash()
+                            sf.save(update_fields=['file_hash'])
+                        except Exception:
+                            pass
+
+                        # Replace any previous agenda attachment.
+                        old = meeting.agenda_attachment
+                        meeting.agenda_attachment = sf
+                        meeting.save(update_fields=['agenda_attachment', 'updated_at'])
+                        if old and old.pk != sf.pk:
+                            try:
+                                old.delete()
+                            except Exception:
+                                pass
+                        messages.success(request, f'Agenda file "{uploaded.name}" attached.')
+                    except Exception as e:
+                        messages.error(request, f'Could not attach agenda file: {e}')
+
+        elif action == 'remove_agenda' and (minutes.is_editable or request.user.is_superuser):
+            old = meeting.agenda_attachment
+            meeting.agenda_attachment = None
+            meeting.save(update_fields=['agenda_attachment', 'updated_at'])
+            if old:
+                try:
+                    old.delete()
+                except Exception:
+                    pass
+            messages.info(request, 'Agenda attachment removed.')
 
         elif action == 'adopt' and not minutes.is_editable:
             # Organiser or superuser adopts the minutes

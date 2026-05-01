@@ -952,11 +952,11 @@ class NotificationsBellView(LoginRequiredMixin, View):
         if request.headers.get('x-requested-with') != 'XMLHttpRequest':
             return redirect('notifications')
 
-        qs = (
-            request.user.core_notifications
-            .filter(is_read=False)
-            .order_by('-created_at')[:20]
-        )
+        unread_qs = request.user.core_notifications.filter(is_read=False)
+        # True total unread count (the badge shows this).
+        unread_count = unread_qs.count()
+        # Only the latest 5 items are surfaced in the dropdown UI.
+        latest = unread_qs.order_by('-created_at')[:5]
 
         notifications = [
             {
@@ -968,10 +968,10 @@ class NotificationsBellView(LoginRequiredMixin, View):
                 'link':     n.link or '#',
                 'actions':  (n.data or {}).get('actions', []),
             }
-            for n in qs
+            for n in latest
         ]
 
         return JsonResponse({
-            'unread_count':  qs.count(),
+            'unread_count':  unread_count,
             'notifications': notifications,
         })

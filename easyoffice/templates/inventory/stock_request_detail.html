@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ sr.reference }} — Inventory{% endblock %}
+{% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / <a href="{% url 'inventory:stock_request_list' %}">Requests</a> / {{ sr.reference }}{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">{{ sr.reference }}</h1>
+    <p class="eo-page-subtitle">{{ sr.title|default:"(no title)" }}</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:start">
+    {% with s=sr.status %}
+    <span style="font-size:.78rem;padding:6px 12px;border-radius:8px;font-weight:700;
+      {% if s == 'pending' %}background:#fef3c7;color:#a16207
+      {% elif s == 'approved' %}background:#dbeafe;color:#1d4ed8
+      {% elif s == 'issued' %}background:#dcfce7;color:#15803d
+      {% elif s == 'partial' %}background:#fed7aa;color:#c2410c
+      {% elif s == 'rerouted' %}background:#ede9fe;color:#6d28d9
+      {% else %}background:var(--eo-bg);color:var(--eo-text-muted){% endif %}">
+      {{ sr.get_status_display }}
+    </span>
+    {% endwith %}
+
+    {% if can_manage and sr.status in 'pending,approved,partial' %}
+    <form method="post" action="{% url 'inventory:stock_request_issue' sr.pk %}" style="display:inline">
+      {% csrf_token %}
+      <button class="eo-btn eo-btn-primary"><i class="bi bi-box-arrow-up"></i> Issue stock</button>
+    </form>
+    <form method="post" action="{% url 'inventory:stock_request_reroute' sr.pk %}" style="display:inline"
+          onsubmit="return confirm('Send this to Purchasing as a Purchase Request?');">
+      {% csrf_token %}
+      <button class="eo-btn eo-btn-secondary"><i class="bi bi-arrow-up-right-square"></i> Reroute to Purchase</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-4">
+    <div class="eo-card">
+      <h3 class="eo-card-title" style="margin-bottom:14px">Details</h3>
+      <div style="font-size:.86rem">
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--eo-border)">
+          <span style="color:var(--eo-text-muted)">Requester</span>
+          <span><strong>{{ sr.requested_by.get_full_name|default:sr.requested_by.username }}</strong></span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--eo-border)">
+          <span style="color:var(--eo-text-muted)">Department</span>
+          <span>{{ sr.department.name|default:"—" }}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--eo-border)">
+          <span style="color:var(--eo-text-muted)">Created</span>
+          <span><small>{{ sr.created_at|date:"d M Y H:i" }}</small></span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0">
+          <span style="color:var(--eo-text-muted)">Needed by</span>
+          <span>{% if sr.needed_by %}{{ sr.needed_by|date:"d M Y" }}{% else %}—{% endif %}</span>
+        </div>
+      </div>
+      {% if sr.reason %}
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--eo-border)">
+        <div style="font-size:.7rem;color:var(--eo-text-muted);margin-bottom:4px">Reason</div>
+        <div style="font-size:.86rem">{{ sr.reason|linebreaksbr }}</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="eo-card">
+      <h3 class="eo-card-title" style="margin-bottom:12px">Items requested</h3>
+      <table class="table table-sm">
+        <thead><tr><th>Product</th><th>SKU</th><th class="text-end">Requested</th><th class="text-end">Issued</th><th>Note</th></tr></thead>
+        <tbody>
+          {% for line in sr.lines.all %}
+          <tr>
+            <td><a href="{% url 'inventory:product_detail' line.product.pk %}" style="text-decoration:none">{{ line.product.name }}</a></td>
+            <td><code style="font-size:.72rem">{{ line.product.sku }}</code></td>
+            <td class="text-end"><strong>{{ line.quantity_requested|floatformat:0 }}</strong></td>
+            <td class="text-end" style="font-weight:700;color:{% if line.quantity_issued >= line.quantity_requested %}#16a34a{% elif line.quantity_issued > 0 %}#a16207{% else %}#dc2626{% endif %}">
+              {{ line.quantity_issued|floatformat:0 }}
+            </td>
+            <td><small style="color:var(--eo-text-muted)">{{ line.note|default:"" }}</small></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

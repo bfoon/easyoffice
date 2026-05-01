@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}New Stock Request — Inventory{% endblock %}
+{% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / <a href="{% url 'inventory:stock_request_list' %}">Requests</a> / New{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">New Stock Request</h1>
+    <p class="eo-page-subtitle">Request items from inventory for your team</p>
+  </div>
+</div>
+
+<form method="post" novalidate>
+  {% csrf_token %}
+
+  <div class="eo-card mb-3" style="max-width:760px">
+    <h3 class="eo-card-title" style="margin-bottom:14px">Request details</h3>
+    {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+    <div class="row g-3">
+      {% for field in form %}
+      <div class="col-md-{% if field.name == 'reason' %}12{% else %}6{% endif %}">
+        <label class="eo-form-label">{{ field.label }}{% if field.field.required %} <span style="color:#dc2626">*</span>{% endif %}</label>
+        {{ field }}
+        {% if field.help_text %}<small style="color:var(--eo-text-muted);font-size:.7rem">{{ field.help_text }}</small>{% endif %}
+        {% if field.errors %}<div style="color:#dc2626;font-size:.74rem;margin-top:3px">{{ field.errors|join:", " }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="eo-card mb-3" style="max-width:920px">
+    <div class="eo-card-header" style="margin-bottom:12px">
+      <h3 class="eo-card-title">Items requested</h3>
+      <button type="button" id="addLine" class="eo-btn eo-btn-secondary eo-btn-sm">+ Add line</button>
+    </div>
+    <table class="table table-sm" id="linesTable">
+      <thead><tr><th style="width:55%">Product</th><th style="width:20%">Quantity</th><th style="width:20%">Note</th><th></th></tr></thead>
+      <tbody id="linesBody">
+        <!-- one initial line -->
+        <tr>
+          <td>
+            <select name="line_product[]" class="eo-form-select" required>
+              <option value="">— select product —</option>
+              {% for p in products %}<option value="{{ p.pk }}">{{ p.name }} ({{ p.sku }})</option>{% endfor %}
+            </select>
+          </td>
+          <td><input type="number" name="line_qty[]" min="0.01" step="0.01" class="eo-form-control" placeholder="Qty" required></td>
+          <td><input type="text" name="line_note[]" class="eo-form-control" placeholder="Optional"></td>
+          <td><button type="button" class="eo-btn eo-btn-danger eo-btn-sm rmLine">×</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="display:flex;gap:8px;max-width:920px">
+    <button class="eo-btn eo-btn-primary"><i class="bi bi-check-lg"></i> Submit request</button>
+    <a href="{% url 'inventory:stock_request_list' %}" class="eo-btn eo-btn-secondary">Cancel</a>
+  </div>
+</form>
+
+<script>
+(function(){
+  const body = document.getElementById('linesBody');
+  document.getElementById('addLine').addEventListener('click', function(){
+    const first = body.querySelector('tr');
+    const clone = first.cloneNode(true);
+    clone.querySelectorAll('input, select').forEach(el => el.value = '');
+    body.appendChild(clone);
+  });
+  body.addEventListener('click', function(e){
+    if(e.target.classList.contains('rmLine')){
+      if(body.querySelectorAll('tr').length > 1){ e.target.closest('tr').remove(); }
+    }
+  });
+})();
+</script>
+{% endblock %}

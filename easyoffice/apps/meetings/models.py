@@ -55,6 +55,13 @@ class Meeting(models.Model):
     department     = models.ForeignKey('organization.Department', on_delete=models.SET_NULL,
                                        null=True, blank=True)
     agenda         = models.TextField(blank=True)
+    agenda_attachment = models.ForeignKey(
+        'files.SharedFile',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='agenda_for_meetings',
+        help_text='Optional file attached as the meeting agenda (PDF, DOCX, etc.)',
+    )
     is_private     = models.BooleanField(default=False)
 
     # ── Follow-up ─────────────────────────────────────────────────────────────

@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ product.name }} — Inventory{% endblock %}
+{% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / <a href="{% url 'inventory:product_list' %}">Products</a> / {{ product.name }}{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">{{ product.name }}</h1>
+    <p class="eo-page-subtitle">
+      <code>{{ product.sku }}</code>
+      · {{ product.get_kind_display }}
+      {% if product.category %} · {{ product.category.name }}{% endif %}
+    </p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a href="{% url 'inventory:qr_label' 'product' product.pk %}" target="_blank" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-qr-code"></i> Print label
+    </a>
+    {% if can_manage %}
+    <a href="{% url 'inventory:product_update' product.pk %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-pencil"></i> Edit
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="row g-4">
+
+  <div class="col-lg-4">
+    <div class="eo-card mb-3">
+      <h3 class="eo-card-title" style="margin-bottom:14px">Pricing</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <div style="font-size:.7rem;color:var(--eo-text-muted)">Cost</div>
+          <div style="font-weight:700">{% if product.cost_price %}{{ product.currency }} {{ product.cost_price|floatformat:2|intcomma }}{% else %}—{% endif %}</div>
+        </div>
+        <div>
+          <div style="font-size:.7rem;color:var(--eo-text-muted)">Sell</div>
+          <div style="font-weight:700">{% if product.sell_price %}{{ product.currency }} {{ product.sell_price|floatformat:2|intcomma }}{% else %}—{% endif %}</div>
+        </div>
+        <div>
+          <div style="font-size:.7rem;color:var(--eo-text-muted)">Reorder at</div>
+          <div style="font-weight:700">{{ product.reorder_point|floatformat:0 }} {{ product.unit }}</div>
+        </div>
+        <div>
+          <div style="font-size:.7rem;color:var(--eo-text-muted)">Reorder qty</div>
+          <div style="font-weight:700">{{ product.reorder_qty|floatformat:0 }} {{ product.unit }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="eo-card mb-3">
+      <h3 class="eo-card-title" style="margin-bottom:14px">Properties</h3>
+      <div style="font-size:.84rem">
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--eo-border)">
+          <span style="color:var(--eo-text-muted)">Sellable</span>
+          <span>{% if product.is_sellable %}Yes{% else %}No{% endif %}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--eo-border)">
+          <span style="color:var(--eo-text-muted)">Internal use</span>
+          <span>{% if product.is_for_internal %}Yes{% else %}No{% endif %}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--eo-border)">
+          <span style="color:var(--eo-text-muted)">Track batch</span>
+          <span>{% if product.track_batch %}Yes{% else %}No{% endif %}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0">
+          <span style="color:var(--eo-text-muted)">Track serial</span>
+          <span>{% if product.track_serial %}Yes{% else %}No{% endif %}</span>
+        </div>
+      </div>
+    </div>
+
+    {% if product.preferred_supplier %}
+    <div class="eo-card">
+      <h3 class="eo-card-title" style="margin-bottom:10px">Preferred supplier</h3>
+      <div style="font-weight:700">{{ product.preferred_supplier.name }}</div>
+      {% if product.preferred_supplier.phone %}<div style="font-size:.78rem;color:var(--eo-text-muted)">{{ product.preferred_supplier.phone }}</div>{% endif %}
+      {% if product.preferred_supplier.email %}<div style="font-size:.78rem;color:var(--eo-text-muted)">{{ product.preferred_supplier.email }}</div>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-8">
+
+    <div class="eo-card mb-3">
+      <div class="eo-card-header" style="margin-bottom:12px">
+        <h3 class="eo-card-title">Stock by location</h3>
+        <div style="display:flex;gap:6px">
+          <span style="font-size:.78rem;color:var(--eo-text-muted)">Total on hand:</span>
+          <strong>{{ product.total_on_hand|floatformat:0 }} {{ product.unit }}</strong>
+        </div>
+      </div>
+
+      {% if stock_items %}
+      <table class="table table-sm">
+        <thead><tr><th>Location</th><th>Bin</th><th class="text-end">On hand</th><th class="text-end">Reserved</th><th class="text-end">Available</th></tr></thead>
+        <tbody>
+          {% for si in stock_items %}
+          <tr>
+            <td><a href="{% url 'inventory:location_detail' si.location.pk %}" style="text-decoration:none">{{ si.location.code }} — {{ si.location.name }}</a></td>
+            <td><small style="color:var(--eo-text-muted)">{{ si.bin_code|default:"—" }}</small></td>
+            <td class="text-end">{{ si.quantity|floatformat:0 }}</td>
+            <td class="text-end">{{ si.reserved_quantity|floatformat:0 }}</td>
+            <td class="text-end" style="font-weight:700">{{ si.available|floatformat:0 }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div style="color:var(--eo-text-muted);text-align:center;padding:18px">No stock recorded yet.</div>
+      {% endif %}
+    </div>
+
+    {% if batches %}
+    <div class="eo-card mb-3">
+      <h3 class="eo-card-title" style="margin-bottom:10px">Active batches</h3>
+      <table class="table table-sm">
+        <thead><tr><th>Batch</th><th>Location</th><th class="text-end">Qty</th><th>Expiry</th></tr></thead>
+        <tbody>
+          {% for b in batches %}
+          <tr>
+            <td><code>{{ b.batch_no }}</code></td>
+            <td><small>{{ b.stock_item.location.code }}</small></td>
+            <td class="text-end">{{ b.quantity|floatformat:0 }}</td>
+            <td>
+              {% if b.expiry_date %}
+                {{ b.expiry_date|date:"d M Y" }}
+                {% if b.is_expired %}<span style="color:#dc2626;font-size:.7rem">(expired)</span>
+                {% elif b.is_expiring_soon %}<span style="color:#a16207;font-size:.7rem">(soon)</span>{% endif %}
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    <div class="eo-card">
+      <h3 class="eo-card-title" style="margin-bottom:10px">Recent movements</h3>
+      {% if movements %}
+      <table class="table table-sm">
+        <thead><tr><th>When</th><th>Kind</th><th>Location</th><th class="text-end">Qty</th><th>Note</th></tr></thead>
+        <tbody>
+          {% for m in movements %}
+          <tr>
+            <td><small>{{ m.occurred_at|date:"d M Y H:i" }}</small></td>
+            <td>{{ m.get_kind_display }}</td>
+            <td><small>{{ m.location.code }}</small></td>
+            <td class="text-end" style="font-weight:700">{{ m.quantity|floatformat:0 }}</td>
+            <td><small style="color:var(--eo-text-muted)">{{ m.notes|truncatechars:40 }}</small></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div style="color:var(--eo-text-muted);text-align:center;padding:18px">No movements yet.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

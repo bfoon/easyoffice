@@ -154,6 +154,106 @@
       font-size:.65rem;
     }
   }
+
+  /* ── Notification dropdown: overflow-safe sizing ─────────────────────── */
+  /* IMPORTANT: only apply our flex layout when the menu is open.
+     Bootstrap toggles visibility by adding/removing .show; if we set
+     display:flex unconditionally we override its `display:none` and the
+     menu can't close (it just shifts off to the right via Popper). */
+  .eo-notif-dropdown.show{
+    display:flex;
+    flex-direction:column;
+  }
+  .eo-notif-dropdown{
+    width:360px;
+    max-width:calc(100vw - 24px);
+    max-height:min(70vh, 520px);
+    padding:0;
+    overflow:hidden;
+  }
+  .eo-notif-dropdown .eo-notif-header{
+    padding:12px 14px;
+    border-bottom:1px solid rgba(148,163,184,.18);
+    flex:0 0 auto;
+  }
+  #notificationDropdownList{
+    overflow-y:auto;
+    overflow-x:hidden;
+    flex:1 1 auto;
+    min-width:0;
+  }
+  .eo-notif-item{
+    padding:10px 14px;
+    border-bottom:1px solid rgba(148,163,184,.12);
+    min-width:0;
+    overflow:hidden;
+  }
+  .eo-notif-item:last-of-type{ border-bottom:0; }
+  /* Cap visible unread items at 5 inside the dropdown */
+  #notificationDropdownList .bell-notification-item:nth-of-type(n+6){
+    display:none;
+  }
+  .eo-notif-main-link{
+    align-items:flex-start;
+    min-width:0;
+  }
+  .eo-notif-icon{
+    flex:0 0 auto;
+  }
+  .eo-notif-body{
+    flex:1 1 auto;
+    min-width:0;
+    overflow:hidden;
+  }
+  .eo-notif-title,
+  .eo-notif-msg{
+    margin:0;
+    min-width:0;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+  .eo-notif-title{
+    font-size:.85rem;
+    font-weight:650;
+    line-height:1.35;
+    display:-webkit-box;
+    -webkit-line-clamp:2;
+    -webkit-box-orient:vertical;
+    overflow:hidden;
+  }
+  .eo-notif-msg{
+    font-size:.78rem;
+    color:#64748b;
+    line-height:1.4;
+    margin-top:2px;
+    display:-webkit-box;
+    -webkit-line-clamp:2;
+    -webkit-box-orient:vertical;
+    overflow:hidden;
+  }
+  .eo-notif-time{
+    font-size:.7rem;
+    color:#94a3b8;
+    margin-top:4px;
+    display:block;
+  }
+  .eo-notif-dropdown .eo-notif-footer{
+    flex:0 0 auto;
+    border-top:1px solid rgba(148,163,184,.18);
+    text-align:center;
+    padding:10px 14px;
+    display:block;
+  }
+  /* "+ N more" line shown when unread count exceeds the visible 5 */
+  .eo-notif-more{
+    padding:8px 14px;
+    text-align:center;
+    font-size:.74rem;
+    font-weight:600;
+    color:#64748b;
+    background:#f8fafc;
+    border-bottom:1px solid rgba(148,163,184,.12);
+  }
     /* Prevent internal wrappers from staying narrow on big screens */
     .eo-main > .container,
     .eo-main > .container-fluid,
@@ -331,6 +431,10 @@
         <i class="bi bi-cart-check"></i><span>Orders</span>
       </a>
 
+      <a href="{% url 'inventory:dashboard' %}" class="eo-nav-link {% if request.resolver_match.namespace == 'inventory' %}active{% endif %}">
+        <i class="bi bi-box-seam"></i><span>Inventory</span>
+      </a>
+
       <a href="{% url 'it_dashboard' %}" class="eo-nav-link {% if 'it' in request.resolver_match.url_name or 'ticket' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-pc-display-horizontal"></i><span>IT Support</span>
         {% if unread_notification_count %}<span class="eo-badge eo-badge-warning">{{ unread_notification_count }}</span>{% endif %}
@@ -405,7 +509,7 @@
           </div>
 
           <div id="notificationDropdownList">
-          {% for notif in request.user.core_notifications.all|slice:":20" %}
+          {% for notif in request.user.core_notifications.all|slice:":40" %}
             {% if not notif.is_read %}
             {# read URL built in JS from notification ID — no {% url %} needed #}
             <div
@@ -438,29 +542,19 @@
                 </div>
 
                 <div class="eo-notif-body">
-                  <p class="eo-notif-title">{{ notif.title }}</p>
-                  <p class="eo-notif-msg">{{ notif.message|truncatechars:80 }}</p>
+                  <p class="eo-notif-title">{{ notif.title|truncatechars:60 }}</p>
                   <span class="eo-notif-time">{{ notif.created_at|naturaltime }}</span>
                 </div>
               </a>
-
-              {% if notif.data.actions %}
-                <div class="eo-notif-actions">
-                  {% for action in notif.data.actions %}
-                    <a href="{{ action.url }}"
-                       class="eo-notif-action-btn {{ action.style|default:'secondary' }}"
-                       onclick="event.stopPropagation();">
-                      {% if action.icon %}
-                        <i class="bi {{ action.icon }}"></i>
-                      {% endif %}
-                      {{ action.label }}
-                    </a>
-                  {% endfor %}
-                </div>
-              {% endif %}
             </div>
             {% endif %}
           {% endfor %}
+
+          {% if unread_notification_count and unread_notification_count > 5 %}
+            <a href="#" class="eo-notif-more" id="eo-notif-more-link">
+              + {{ unread_notification_count|add:"-5" }} more unread
+            </a>
+          {% endif %}
 
           <div
             class="eo-notif-empty"
@@ -658,6 +752,8 @@
     document.querySelectorAll('.bell-notification-item').forEach(function (el) {
       el.remove();
     });
+    var moreLink = document.getElementById('eo-notif-more-link');
+    if (moreLink) moreLink.remove();
   }
 
   function unreadDropdownCount() {
@@ -736,7 +832,10 @@
     wrapper.dataset.notificationId = data.id || '';
 
     const iconClass = getNotificationIconClass(data.type || 'default');
-    const actions   = data.actions || (data.data && data.data.actions) || [];
+
+    // Trim very long titles so they don't blow out the dropdown.
+    let title = (data.title || 'Notification').toString();
+    if (title.length > 60) title = title.slice(0, 57) + '…';
 
     wrapper.innerHTML = `
       <a class="eo-notif-main-link" href="${escapeHtml(data.link || '#')}">
@@ -744,12 +843,10 @@
           <i class="bi ${iconClass}"></i>
         </div>
         <div class="eo-notif-body">
-          <p class="eo-notif-title">${escapeHtml(data.title || 'Notification')}</p>
-          <p class="eo-notif-msg">${escapeHtml(data.body || '')}</p>
+          <p class="eo-notif-title">${escapeHtml(title)}</p>
           <span class="eo-notif-time">Just now</span>
         </div>
       </a>
-      ${renderNotificationActions(actions)}
     `;
     return wrapper;
   }
@@ -775,20 +872,40 @@
       if (!res.ok) return;
       const json = await res.json();
 
-      updateNotificationBadge(json.unread_count || 0);
+      const totalUnread = json.unread_count || 0;
+      updateNotificationBadge(totalUnread);
 
       const list = document.getElementById('notificationDropdownList');
       if (!list) return;
 
-      // Remove current items, keep the empty-state div
+      // Remove current items + any existing "+ N more" line
       removeAllNotificationItems();
 
       if (json.notifications && json.notifications.length) {
         hideNotificationEmptyState();
+        // Show only the latest 5 in the dropdown.
+        const visible = json.notifications.slice(0, 5);
         // Append in reverse so newest ends up at the top (insertBefore firstChild)
-        json.notifications.slice().reverse().forEach(function (n) {
+        visible.slice().reverse().forEach(function (n) {
           list.insertBefore(buildNotificationItem(n), list.firstChild);
         });
+
+        // If there are more unread than we just showed, surface a "+ N more" link.
+        if (totalUnread > 5) {
+          const more = document.createElement('a');
+          more.id = 'eo-notif-more-link';
+          more.className = 'eo-notif-more';
+          more.href = (typeof NOTIF_URL === 'string' && NOTIF_URL) ? NOTIF_URL : '#';
+          more.textContent = '+ ' + (totalUnread - 5) + ' more unread';
+          // Insert just after the visible items so it sits at the bottom
+          // of the list, above the "View all" footer.
+          const empty = document.getElementById('notificationDropdownEmpty');
+          if (empty && empty.parentNode === list) {
+            list.insertBefore(more, empty);
+          } else {
+            list.appendChild(more);
+          }
+        }
       } else {
         showNotificationEmptyState();
       }
@@ -807,6 +924,10 @@
     // Wire up footer "View all" link and mark-all button with derived URLs
     var footerLink = document.getElementById('eo-notif-footer-link');
     if (footerLink && NOTIF_URL) footerLink.href = NOTIF_URL;
+
+    // "+ N more" link (rendered only when > 5 unread) goes to the same page
+    var moreLink = document.getElementById('eo-notif-more-link');
+    if (moreLink && NOTIF_URL) moreLink.href = NOTIF_URL;
 
     // Mark ALL read
     if (markBtn) {

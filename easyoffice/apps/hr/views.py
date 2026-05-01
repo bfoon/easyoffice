@@ -974,7 +974,7 @@ class HRDashboardView(LoginRequiredMixin, TemplateView):
 
         if is_hr_user(user) or is_ceo_user(user):
             ctx['active_staff_count'] = EmployeeEmployment.objects.filter(status=EmployeeEmployment.Status.ACTIVE).count()
-            ctx['pending_onboarding_count'] = EmployeeOnboarding.objects.exclude(status__in=[EmployeeOnboarding.Status.HIRED, EmployeeOnboarding.Status.DECLINED]).count()
+            ctx['pending_onboarding_count'] = EmployeeOnboarding.objects.exclude(status__in=[EmployeeOnboarding.Status.HIRED, EmployeeOnboarding.Status.DECLINED, EmployeeOnboarding.Status.COMPLETED]).count()
             ctx['ceo_review_count'] = EmployeeOnboarding.objects.filter(status=EmployeeOnboarding.Status.CEO_REVIEW).count()
             ctx['it_setup_count'] = EmployeeOnboarding.objects.filter(status=EmployeeOnboarding.Status.IT_SETUP).count()
             ctx['discipline_active_count'] = DisciplinaryAction.objects.filter(status=DisciplinaryAction.Status.ACTIVE).count()
@@ -1523,6 +1523,42 @@ class EmployeeOnboardingDetailView(LoginRequiredMixin, DetailView):
                 onboarding.decline_reason = request.POST.get('decline_reason', '').strip()
                 onboarding.save(update_fields=['status', 'decline_reason', 'updated_at'])
                 messages.error(request, 'Hire request declined.')
+
+            elif action == 'mark_offer_letter_signed':
+                if not (is_hr_user(request.user) or is_ceo_user(request.user)):
+                    return HttpResponseForbidden(
+                        'Only HR or CEO can confirm the offer letter has been signed.'
+                    )
+                signed = request.POST.get('signed', '1') in ['1', 'true', 'on', 'yes']
+                onboarding.mark_offer_letter_signed(request.user, signed=signed)
+                if signed:
+                    messages.success(request, 'Offer letter marked as signed.')
+                else:
+                    messages.info(request, 'Offer letter signature cleared.')
+
+            elif action == 'mark_contract_signed':
+                if not (is_hr_user(request.user) or is_ceo_user(request.user)):
+                    return HttpResponseForbidden(
+                        'Only HR or CEO can confirm the contract has been signed.'
+                    )
+                signed = request.POST.get('signed', '1') in ['1', 'true', 'on', 'yes']
+                onboarding.mark_contract_signed(request.user, signed=signed)
+                if signed:
+                    messages.success(request, 'Employment contract marked as signed.')
+                else:
+                    messages.info(request, 'Contract signature cleared.')
+
+            elif action == 'mark_hiring_complete':
+                if not (is_hr_user(request.user) or is_ceo_user(request.user)):
+                    return HttpResponseForbidden(
+                        'Only HR or CEO can mark hiring complete.'
+                    )
+                onboarding.mark_hiring_complete(request.user)
+                messages.success(
+                    request,
+                    f'Hiring complete for {onboarding.full_name}. '
+                    f'The onboarding record is now closed.'
+                )
 
         except ValueError as exc:
             messages.error(request, str(exc))

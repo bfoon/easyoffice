@@ -26,7 +26,7 @@
       </div>
       <div class="hrp-actions">
         <a href="{% url 'employee_onboarding_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-arrow-left"></i> Back</a>
-        {% if onboarding.status == 'approved' or onboarding.status == 'hired' or onboarding.status == 'contract_pending' %}
+        {% if onboarding.status == 'approved' or onboarding.status == 'hired' or onboarding.status == 'contract_pending' or onboarding.status == 'completed' %}
           <a href="{% url 'employee_onboarding_offer_letter' onboarding.pk %}?inline=1" target="_blank" class="eo-btn eo-btn-secondary"><i class="bi bi-file-earmark-pdf"></i> View Offer Letter</a>
           {% if is_hr_user or is_ceo_user %}
           <form method="post" style="display:inline">
@@ -64,7 +64,8 @@
           <div class="hrp-step active"><span class="hrp-step-dot"></span><div><strong>HR Intake</strong><br><span>Employee profile created</span></div></div>
           <div class="hrp-step {% if onboarding.official_email %}active{% endif %}"><span class="hrp-step-dot"></span><div><strong>IT Account</strong><br><span>Username and official email</span></div></div>
           <div class="hrp-step {% if onboarding.hire_category %}active{% endif %}"><span class="hrp-step-dot"></span><div><strong>Hire Setup</strong><br><span>Department, salary, supervisor</span></div></div>
-          <div class="hrp-step {% if onboarding.status == 'approved' %}active{% endif %}"><span class="hrp-step-dot"></span><div><strong>CEO Decision</strong><br><span>Approval or rework</span></div></div>
+          <div class="hrp-step {% if onboarding.status == 'approved' or onboarding.status == 'hired' or onboarding.status == 'contract_pending' or onboarding.status == 'completed' %}active{% endif %}"><span class="hrp-step-dot"></span><div><strong>CEO Decision</strong><br><span>Approval or rework</span></div></div>
+          <div class="hrp-step {% if onboarding.status == 'completed' %}active{% endif %}"><span class="hrp-step-dot"></span><div><strong>Hiring Complete</strong><br><span>Offer & contract signed</span></div></div>
         </div>
       </div>
 
@@ -117,6 +118,164 @@
           <table class="table align-middle hrp-table"><thead><tr><th>Document</th><th>Type</th><th>Uploaded</th><th></th></tr></thead><tbody>{% for doc in onboarding.documents.all %}<tr><td><strong>{{ doc.title }}</strong></td><td>{{ doc.get_document_type_display }}</td><td>{{ doc.uploaded_at|date:'Y-m-d' }}</td><td><a href="{{ doc.file.url }}" target="_blank" class="eo-btn eo-btn-secondary eo-btn-sm">Open</a></td></tr>{% empty %}<tr><td colspan="4" style="color:var(--muted);padding:22px">No documents uploaded yet. Identity file is required before final approval.</td></tr>{% endfor %}</tbody></table>
         </div>
       </div>
+
+      {% if is_hr_user or is_ceo_user %}{% if onboarding.status == 'hired' or onboarding.status == 'contract_pending' or onboarding.status == 'completed' %}
+      <div class="hrp-card">
+        <div class="hrp-section-title"><i class="bi bi-check2-all"></i> Hiring Completion</div>
+        <p class="hrp-card-subtitle">
+          Confirm the candidate has signed both the offer letter and the employment contract,
+          then close out the onboarding record.
+        </p>
+
+        <style>
+          .hrp-sign-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:14px}
+          .hrp-sign-tile{border:1px solid var(--line);border-radius:18px;padding:14px;background:#fbfdff;display:flex;flex-direction:column;gap:10px}
+          .hrp-sign-tile.signed{border-color:#a7f3d0;background:linear-gradient(180deg,#f0fdf4,#ecfdf5)}
+          .hrp-sign-head{display:flex;align-items:center;gap:10px}
+          .hrp-sign-icon{width:34px;height:34px;border-radius:12px;background:#eef6ff;color:var(--brand);display:grid;place-items:center;font-size:1rem}
+          .hrp-sign-tile.signed .hrp-sign-icon{background:#dcfce7;color:#166534}
+          .hrp-sign-title{font-weight:900;color:var(--ink);margin:0;font-size:.95rem}
+          .hrp-sign-meta{margin:0;color:var(--muted);font-size:.78rem}
+          .hrp-sign-pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:.72rem;font-weight:800;background:#fef3c7;color:#92400e;width:fit-content}
+          .hrp-sign-tile.signed .hrp-sign-pill{background:#dcfce7;color:#166534}
+          .hrp-sign-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto}
+          .hrp-complete-bar{margin-top:16px;padding:14px 16px;border-radius:18px;border:1px solid var(--line);background:linear-gradient(135deg,#f0fdfa,#eff6ff);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+          .hrp-complete-bar.ready{border-color:#5eead4;background:linear-gradient(135deg,#ccfbf1,#dbeafe)}
+          .hrp-complete-bar.done{border-color:#a7f3d0;background:linear-gradient(135deg,#dcfce7,#d1fae5)}
+          .hrp-complete-msg{margin:0;color:var(--ink);font-weight:750;font-size:.88rem}
+          .hrp-complete-msg small{display:block;color:var(--muted);font-weight:500;font-size:.78rem;margin-top:2px}
+        </style>
+
+        <div class="hrp-sign-grid">
+          <!-- Offer Letter -->
+          <div class="hrp-sign-tile {% if onboarding.offer_letter_signed %}signed{% endif %}">
+            <div class="hrp-sign-head">
+              <div class="hrp-sign-icon"><i class="bi bi-file-earmark-text"></i></div>
+              <div>
+                <p class="hrp-sign-title">Offer Letter</p>
+                <p class="hrp-sign-meta">
+                  {% if onboarding.offer_letter_signed %}
+                    Signed{% if onboarding.offer_letter_signed_at %} on {{ onboarding.offer_letter_signed_at|date:'Y-m-d H:i' }}{% endif %}
+                    {% if onboarding.offer_letter_signed_by %} · confirmed by {{ onboarding.offer_letter_signed_by.get_full_name|default:onboarding.offer_letter_signed_by.username }}{% endif %}
+                  {% else %}
+                    Awaiting candidate signature.
+                  {% endif %}
+                </p>
+              </div>
+            </div>
+            <span class="hrp-sign-pill">
+              <i class="bi {% if onboarding.offer_letter_signed %}bi-check-circle-fill{% else %}bi-hourglass-split{% endif %}"></i>
+              {% if onboarding.offer_letter_signed %}Signed{% else %}Pending{% endif %}
+            </span>
+            {% if onboarding.status != 'completed' %}
+            <div class="hrp-sign-actions">
+              {% if onboarding.offer_letter_signed %}
+              <form method="post" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="mark_offer_letter_signed">
+                <input type="hidden" name="signed" value="0">
+                <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm" title="Clear offer letter signature">
+                  <i class="bi bi-arrow-counterclockwise"></i> Undo
+                </button>
+              </form>
+              {% else %}
+              <form method="post" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="mark_offer_letter_signed">
+                <input type="hidden" name="signed" value="1">
+                <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm">
+                  <i class="bi bi-check2"></i> Mark Offer Letter Signed
+                </button>
+              </form>
+              {% endif %}
+            </div>
+            {% endif %}
+          </div>
+
+          <!-- Contract -->
+          <div class="hrp-sign-tile {% if onboarding.contract_signed %}signed{% endif %}">
+            <div class="hrp-sign-head">
+              <div class="hrp-sign-icon"><i class="bi bi-file-earmark-check"></i></div>
+              <div>
+                <p class="hrp-sign-title">Employment Contract</p>
+                <p class="hrp-sign-meta">
+                  {% if onboarding.contract_signed %}
+                    Signed{% if onboarding.contract_signed_at %} on {{ onboarding.contract_signed_at|date:'Y-m-d H:i' }}{% endif %}
+                    {% if onboarding.contract_signed_by %} · confirmed by {{ onboarding.contract_signed_by.get_full_name|default:onboarding.contract_signed_by.username }}{% endif %}
+                  {% else %}
+                    {% if onboarding.contract_due_at %}Due by {{ onboarding.contract_due_at|date:'Y-m-d' }}.{% else %}Awaiting candidate signature.{% endif %}
+                  {% endif %}
+                </p>
+              </div>
+            </div>
+            <span class="hrp-sign-pill">
+              <i class="bi {% if onboarding.contract_signed %}bi-check-circle-fill{% else %}bi-hourglass-split{% endif %}"></i>
+              {% if onboarding.contract_signed %}Signed{% else %}Pending{% endif %}
+            </span>
+            {% if onboarding.status != 'completed' %}
+            <div class="hrp-sign-actions">
+              {% if onboarding.contract_signed %}
+              <form method="post" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="mark_contract_signed">
+                <input type="hidden" name="signed" value="0">
+                <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm" title="Clear contract signature">
+                  <i class="bi bi-arrow-counterclockwise"></i> Undo
+                </button>
+              </form>
+              {% else %}
+              <form method="post" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="mark_contract_signed">
+                <input type="hidden" name="signed" value="1">
+                <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm">
+                  <i class="bi bi-check2"></i> Mark Contract Signed
+                </button>
+              </form>
+              {% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </div>
+
+        {% if onboarding.status == 'completed' %}
+          <div class="hrp-complete-bar done">
+            <p class="hrp-complete-msg">
+              <i class="bi bi-patch-check-fill" style="color:#15803d"></i>
+              Hiring complete.
+              <small>
+                Closed{% if onboarding.hiring_completed_at %} on {{ onboarding.hiring_completed_at|date:'Y-m-d H:i' }}{% endif %}
+                {% if onboarding.hiring_completed_by %} by {{ onboarding.hiring_completed_by.get_full_name|default:onboarding.hiring_completed_by.username }}{% endif %}.
+              </small>
+            </p>
+          </div>
+        {% elif onboarding.offer_letter_signed and onboarding.contract_signed %}
+          <form method="post" class="hrp-complete-bar ready">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="mark_hiring_complete">
+            <p class="hrp-complete-msg">
+              <i class="bi bi-stars" style="color:#0d9488"></i>
+              Both documents are signed.
+              <small>You can now close out this onboarding record.</small>
+            </p>
+            <button type="submit" class="eo-btn eo-btn-primary">
+              <i class="bi bi-check2-all"></i> Mark Hiring Complete
+            </button>
+          </form>
+        {% else %}
+          <div class="hrp-complete-bar">
+            <p class="hrp-complete-msg">
+              <i class="bi bi-info-circle" style="color:var(--brand)"></i>
+              Waiting on signatures.
+              <small>Hiring can be marked complete once both the offer letter and the employment contract are signed.</small>
+            </p>
+            <button type="button" class="eo-btn eo-btn-secondary" disabled>
+              <i class="bi bi-check2-all"></i> Mark Hiring Complete
+            </button>
+          </div>
+        {% endif %}
+      </div>
+      {% endif %}{% endif %}
 
       {% if is_ceo_user %}
       <div class="hrp-card">

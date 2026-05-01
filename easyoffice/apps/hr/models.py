@@ -144,6 +144,7 @@ class EmployeeOnboarding(models.Model):
         EMPLOYEE_LINK_SENT = 'employee_link_sent', _('Employee Form Link Sent')
         HR_REVIEW = 'hr_review', _('Employee Submitted - HR Review')
         CONTRACT_PENDING = 'contract_pending', _('Contract Signature Pending')
+        COMPLETED = 'completed', _('Hiring Complete')
 
     class Gender(models.TextChoices):
         MALE = 'male', _('Male')
@@ -231,6 +232,34 @@ class EmployeeOnboarding(models.Model):
     welcome_sent_at = models.DateTimeField(null=True, blank=True)
     contract_due_at = models.DateField(null=True, blank=True)
     contract_note = models.TextField(blank=True)
+
+    # Tracking for the final two onboarding steps before hiring is closed.
+    offer_letter_signed = models.BooleanField(default=False)
+    offer_letter_signed_at = models.DateTimeField(null=True, blank=True)
+    offer_letter_signed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='marked_offer_letter_signed',
+    )
+    contract_signed = models.BooleanField(default=False)
+    contract_signed_at = models.DateTimeField(null=True, blank=True)
+    contract_signed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='marked_contract_signed',
+    )
+    hiring_completed_at = models.DateTimeField(null=True, blank=True)
+    hiring_completed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='marked_hiring_complete',
+    )
     ceo_comments = models.TextField(blank=True)
     decline_reason = models.TextField(blank=True)
 
@@ -461,6 +490,99 @@ class EmployeeOnboarding(models.Model):
 
         employment.sync_staff_profile_from_employment()
         return staff_user
+
+    def mark_offer_letter_signed(self, user, signed=True):
+        """HR/CEO confirms the candidate has signed the offer letter."""
+        if self.status not in [
+            self.Status.HIRED,
+            self.Status.CONTRACT_PENDING,
+            self.Status.COMPLETED,
+        ]:
+            raise ValueError(
+                'The offer letter can only be marked as signed after the CEO has approved the hire.'
+            )
+        self.offer_letter_signed = bool(signed)
+        if signed:
+            self.offer_letter_signed_at = timezone.now()
+            self.offer_letter_signed_by = user
+        else:
+            self.offer_letter_signed_at = None
+            self.offer_letter_signed_by = None
+        self.save(update_fields=[
+            'offer_letter_signed',
+            'offer_letter_signed_at',
+            'offer_letter_signed_by',
+            'updated_at',
+        ])
+
+    def mark_contract_signed(self, user, signed=True):
+        """HR/CEO confirms the candidate has signed the employment contract."""
+        if self.status not in [
+            self.Status.HIRED,
+            self.Status.CONTRACT_PENDING,
+            self.Status.COMPLETED,
+        ]:
+            raise ValueError(
+                'The contract can only be marked as signed after the CEO has approved the hire.'
+            )
+        self.contract_signed = bool(signed)
+        if signed:
+            self.contract_signed_at = timezone.now()
+            self.contract_signed_by = user
+        else:
+            self.contract_signed_at = None
+            self.contract_signed_by = None
+        self.save(update_fields=[
+            'contract_signed',
+            'contract_signed_at',
+            'contract_signed_by',
+            'updated_at',
+        ])
+
+    @property
+    def can_complete_hiring(self):
+        return (
+            self.status in [self.Status.HIRED, self.Status.CONTRACT_PENDING]
+            and self.offer_letter_signed
+            and self.contract_signed
+        )
+
+    def mark_hiring_complete(self, user):
+        """
+        HR closes the onboarding once both the offer letter and the
+        employment contract have been signed.
+        """
+        if self.status == self.Status.COMPLETED:
+            raise ValueError('Hiring has already been marked complete for this record.')
+        if self.status not in [self.Status.HIRED, self.Status.CONTRACT_PENDING]:
+            raise ValueError(
+                'Hiring can only be completed after CEO approval and the welcome offer has been sent.'
+            )
+        missing = []
+        if not self.offer_letter_signed:
+            missing.append('offer letter signature')
+        if not self.contract_signed:
+            missing.append('contract signature')
+        if missing:
+            raise ValueError(
+                'Cannot mark hiring complete. Still waiting on: ' + ', '.join(missing) + '.'
+            )
+
+        self.status = self.Status.COMPLETED
+        self.hiring_completed_at = timezone.now()
+        self.hiring_completed_by = user
+        self.save(update_fields=[
+            'status',
+            'hiring_completed_at',
+            'hiring_completed_by',
+            'updated_at',
+        ])
+
+        # Keep the linked employment record aligned.
+        employment = getattr(self, 'employment', None)
+        if employment and employment.status != EmployeeEmployment.Status.ACTIVE:
+            employment.status = EmployeeEmployment.Status.ACTIVE
+            employment.save(update_fields=['status', 'updated_at'])
 
 
 class EmployeeOnboardingInvite(models.Model):

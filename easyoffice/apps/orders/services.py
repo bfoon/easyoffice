@@ -76,8 +76,15 @@ def create_order_from_payload(payload: dict, *, source: str = OrderSource.PHONE,
     payload keys:
         customer_id, contact_name, contact_phone, contact_email,
         delivery_address, notes, currency, tax_rate, discount_amount,
-        external_ref, idempotency_key, items (list of {description,
-        quantity, unit_price})
+        external_ref, idempotency_key,
+        items — list of dicts. Each item supports:
+            product_id    optional UUID — when set, links to inventory.Product
+                          and the line will deduct stock on fulfillment.
+                          Server validates qty <= available stock.
+            description   required free text. Always stored even when product
+                          is set (so the order survives renames / archives).
+            quantity      required, defaults to 1
+            unit_price    required, defaults to 0
     """
     items = payload.get('items') or []
     if not items:
@@ -89,6 +96,53 @@ def create_order_from_payload(payload: dict, *, source: str = OrderSource.PHONE,
         existing = SalesOrder.objects.filter(idempotency_key=idem).first()
         if existing:
             return existing
+
+    # ── Validate inventory-linked items BEFORE creating anything ───────────
+    # We resolve each line's optional product_id once, accumulate per-product
+    # demand, and refuse the whole order if any product is unknown, not
+    # sellable, or oversold. This is cheaper to do up-front than to roll back
+    # a half-created order.
+    resolved_lines = []  # list of (raw_item_dict, product_or_None)
+    demand_by_product = {}   # product_id -> total Decimal qty across the order
+
+    # Lazy import to keep the orders app loadable even if inventory is
+    # mid-migration or temporarily uninstalled.
+    try:
+        from apps.inventory.models import Product
+    except Exception:  # pragma: no cover
+        Product = None
+
+    for i, it in enumerate(items, start=1):
+        product = None
+        prod_id = it.get('product_id') or it.get('product')
+        if prod_id and Product is not None:
+            try:
+                product = (Product.objects
+                           .select_related('preferred_supplier')
+                           .get(pk=prod_id))
+            except Product.DoesNotExist:
+                raise ValueError(f'Line {i}: product not found in catalog.')
+            if not product.is_sellable or not product.is_active:
+                raise ValueError(
+                    f'Line {i}: "{product.name}" is not currently sellable.'
+                )
+            qty = Decimal(str(it.get('quantity') or 0))
+            if qty <= 0:
+                raise ValueError(f'Line {i}: quantity must be greater than zero.')
+            demand_by_product[product.pk] = demand_by_product.get(product.pk, Decimal('0')) + qty
+        resolved_lines.append((it, product))
+
+    # Now check aggregated demand against current stock.
+    for prod_id, demanded in demand_by_product.items():
+        product = next((p for _, p in resolved_lines if p and p.pk == prod_id), None)
+        if product is None:
+            continue
+        available = product.total_available
+        if demanded > available:
+            raise ValueError(
+                f'Not enough stock for "{product.name}": '
+                f'asked for {demanded:g}, only {available:g} available.'
+            )
 
     order = SalesOrder.objects.create(
         source=source,
@@ -107,11 +161,12 @@ def create_order_from_payload(payload: dict, *, source: str = OrderSource.PHONE,
         created_by=actor if (actor and getattr(actor, 'is_authenticated', False)) else None,
     )
 
-    for i, it in enumerate(items):
+    for i, (it, product) in enumerate(resolved_lines):
         SalesOrderItem.objects.create(
             order=order,
             position=i,
-            description=str(it.get('description', '')).strip()[:300],
+            product=product,
+            description=str(it.get('description', '')).strip()[:300] or (product.name if product else ''),
             quantity=Decimal(str(it.get('quantity') or 1)),
             unit_price=Decimal(str(it.get('unit_price') or 0)),
         )

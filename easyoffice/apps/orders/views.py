@@ -353,6 +353,13 @@ class OrderDetailView(OrdersAccessMixin, DetailView):
         ctx['cancel_form']          = CancelOrderForm()
         return ctx
 
+    def post(self, request, *args, **kwargs):
+        # Browsers sometimes replay an old POST against this URL when the
+        # user hits Refresh after a Post-Redirect-Get cycle. The proper
+        # answer is "look, here's the current page" — not a 405. Redirect
+        # back to the canonical GET so the order detail just re-renders.
+        return redirect('orders:order_detail', pk=kwargs.get('pk'))
+
 
 # ── Action endpoints ───────────────────────────────────────────────────────
 
@@ -742,9 +749,11 @@ class SellableProductsAPIView(OrdersAccessMixin, View):
     """
     GET /orders/api/sellable-products/?q=<search>
 
-    Returns up to 20 inventory.Product rows that are:
-        • flagged sellable + active
-        • have available stock > 0   (on_hand minus reservations)
+    Returns up to 20 inventory.Product rows that:
+        • are flagged sellable + active
+        • are kind=STOCKED (services and bundles never appear)
+        • have available stock > 0   (on_hand minus reservations, summed
+          across every StockItem the product has)
 
     Used by the line-item picker on the order create page. Search matches
     SKU, name, or barcode (case-insensitive). Inventory app must be
@@ -757,13 +766,26 @@ class SellableProductsAPIView(OrdersAccessMixin, View):
         try:
             from apps.inventory.models import Product
         except Exception:
-            return JsonResponse({'results': []})
+            return JsonResponse({'results': [], 'reason': 'inventory_app_unavailable'})
 
+        from django.db.models import Sum, F, DecimalField, Value
+        from django.db.models.functions import Coalesce
+        from decimal import Decimal as D
+
+        # Aggregate stock in ONE query so we don't trigger 60 sub-queries
+        # via the @property accessors.
+        zero = Value(D('0'), output_field=DecimalField(max_digits=14, decimal_places=2))
         qs = (Product.objects
               .filter(is_sellable=True, is_active=True,
                       kind=Product.Kind.STOCKED)
-              .select_related('preferred_supplier')
-              .prefetch_related('stock_items'))
+              .annotate(
+                  _on_hand=Coalesce(Sum('stock_items__quantity'), zero),
+                  _reserved=Coalesce(Sum('stock_items__reserved_quantity'), zero),
+              )
+              .annotate(_available=F('_on_hand') - F('_reserved'))
+              .filter(_available__gt=0)
+              .select_related('category')
+              .order_by('name'))
 
         if q:
             qs = qs.filter(Q(sku__icontains=q) |
@@ -771,22 +793,15 @@ class SellableProductsAPIView(OrdersAccessMixin, View):
                            Q(barcode__icontains=q))
 
         results = []
-        # We over-fetch slightly because we filter by computed availability
-        # in Python, then trim to 20.
-        for p in qs[:60]:
-            available = p.total_available
-            if available <= 0:
-                continue
+        for p in qs[:20]:
             results.append({
                 'id':         str(p.pk),
                 'sku':        p.sku,
                 'name':       p.name,
-                'unit':       p.unit,
+                'unit':       getattr(p, 'unit_label', '') or '',
                 'currency':   p.currency,
                 'sell_price': str(p.sell_price or '0'),
-                'available':  str(available),
+                'available':  str(p._available),
                 'category':   p.category.name if p.category_id else '',
             })
-            if len(results) >= 20:
-                break
         return JsonResponse({'results': results})

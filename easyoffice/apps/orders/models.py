@@ -235,6 +235,18 @@ class SalesOrderItem(models.Model):
     id          = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     order       = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
     position    = models.PositiveSmallIntegerField(default=0)
+
+    # ── Inventory link ──────────────────────────────────────────────────────
+    # When `product` is set, this line was picked from the inventory catalog
+    # and will deduct stock on fulfillment. The denormalised `description`
+    # is still stored so the order survives even if the product is later
+    # archived or renamed.
+    # When `product` is NULL, this is a free-text "special" line — no stock
+    # deduction, no product link. Used for one-off custom items.
+    product     = models.ForeignKey(
+        'inventory.Product', on_delete=models.PROTECT,
+        null=True, blank=True, related_name='order_lines',
+    )
     description = models.CharField(max_length=300)
     quantity    = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('1.00'))
     unit_price  = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
@@ -245,6 +257,10 @@ class SalesOrderItem(models.Model):
     @property
     def line_total(self) -> Decimal:
         return (self.quantity or Decimal('0')) * (self.unit_price or Decimal('0'))
+
+    @property
+    def is_inventory_linked(self) -> bool:
+        return self.product_id is not None
 
     def __str__(self):
         return f'{self.description} ({self.quantity} × {self.unit_price})'

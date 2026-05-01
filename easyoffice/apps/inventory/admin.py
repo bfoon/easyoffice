@@ -94,7 +94,7 @@ class AssetMaintenanceInline(admin.TabularInline):
 class AssetAdmin(admin.ModelAdmin):
     list_display    = ('tag', 'name', 'category', 'status', 'condition', 'location', 'purchase_cost')
     list_filter     = ('status', 'condition', 'category', 'location')
-    search_fields   = ('tag', 'name', 'serial_number', 'qr_token')
+    search_fields   = ('tag', 'name', 'serial_no', 'qr_token')
     readonly_fields = ('qr_token',)
     inlines         = [AssetAssignmentInline, AssetMaintenanceInline]
 

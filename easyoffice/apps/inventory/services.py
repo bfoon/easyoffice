@@ -770,10 +770,22 @@ def on_sales_order_fulfilled(order, *, actor=None):
 
 def _match_product(order_line) -> Optional[Product]:
     """
-    Best-effort match between an order line and a Product.
-    Order lines are free-text in this project (per the orders README), so
-    we try SKU-in-description, then exact-name, then return None.
+    Map an order line to a Product.
+
+    Preferred path: the order line has a direct FK to inventory.Product
+    (set when the agent picked from the inventory typeahead). If that's
+    set, we trust it and return immediately.
+
+    Fallback: order lines created before the FK existed, or via legacy
+    integrations that only know the description, fall through to a
+    best-effort search — leading SKU, exact name, then fuzzy contains.
+    Returns None for free-text "custom" lines that don't match anything.
     """
+    # Direct FK — set when the line was picked from the inventory typeahead
+    direct = getattr(order_line, 'product', None)
+    if direct is not None:
+        return direct
+
     desc = (order_line.description or '').strip()
     if not desc:
         return None

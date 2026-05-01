@@ -174,6 +174,22 @@ def _discover_notification_model():
             None),
     }
 
+    # Capture each text field's max_length so callers can truncate before
+    # we hit psycopg2.errors.StringDataRightTruncation. JSON / FK fields
+    # don't expose max_length and stay None.
+    max_lengths = {}
+    for role, fname in field_map.items():
+        if not fname:
+            continue
+        try:
+            f = chosen._meta.get_field(fname)
+            ml = getattr(f, 'max_length', None)
+            if ml:
+                max_lengths[role] = int(ml)
+        except Exception:
+            pass
+    field_map['_max_lengths'] = max_lengths
+
     if not field_map['recipient']:
         logger.warning(
             'Notification model %s has no recognisable recipient FK — in-app dispatch disabled.',
@@ -203,17 +219,27 @@ def _create_in_app(recipients, *, kind: str, title: str, body: str, order, link=
 
     link = link or reverse('orders:order_detail', kwargs={'pk': order.pk})
 
+    caps = fields.get('_max_lengths') or {}
+
+    def _trim(role, value, default):
+        """Trim value to the column's max_length (or the supplied default)."""
+        if value is None:
+            return value
+        cap = caps.get(role) or default
+        s = str(value)
+        return s[:cap] if cap else s
+
     rows = []
     for u in recipients:
         kwargs = {fields['recipient']: u}
         if fields['kind']:
-            kwargs[fields['kind']] = kind
+            kwargs[fields['kind']] = _trim('kind', kind, 50)
         if fields['title']:
-            kwargs[fields['title']] = title[:200]
+            kwargs[fields['title']] = _trim('title', title, 200)
         if fields['body']:
-            kwargs[fields['body']] = body[:500]
+            kwargs[fields['body']] = _trim('body', body, 500)
         if fields['link']:
-            kwargs[fields['link']] = link[:500]
+            kwargs[fields['link']] = _trim('link', link, 500)
         if fields['payload']:
             kwargs[fields['payload']] = {
                 'order_id': str(order.pk),
@@ -273,7 +299,7 @@ def notify_order_created(order, *, actor=None):
     if order.source in ('website', 'api', 'email'):
         _create_in_app(
             _users_in_groups(GROUP_SUPERVISOR),
-            kind='orders.created.external',
+            kind='orders.new_external',
             title=f'External order {order.order_no} received',
             body=f'Source: {order.get_source_display()}. Needs review.',
             order=order,
@@ -363,7 +389,7 @@ def _notify_doc_pending_signature(order, *, doc_label: str, kind: str, signature
 def notify_proforma_pending_signature(order, *, actor=None, signature_request=None):
     _notify_doc_pending_signature(
         order, doc_label='Proforma',
-        kind='orders.proforma_pending_signature',
+        kind='orders.proforma_pend',
         signature_request=signature_request, actor=actor,
     )
 
@@ -371,7 +397,7 @@ def notify_proforma_pending_signature(order, *, actor=None, signature_request=No
 def notify_invoice_pending_signature(order, *, actor=None, signature_request=None):
     _notify_doc_pending_signature(
         order, doc_label='Invoice',
-        kind='orders.invoice_pending_signature',
+        kind='orders.invoice_pend',
         signature_request=signature_request, actor=actor,
     )
 
@@ -379,7 +405,7 @@ def notify_invoice_pending_signature(order, *, actor=None, signature_request=Non
 def notify_delivery_note_pending_signature(order, *, actor=None, signature_request=None):
     _notify_doc_pending_signature(
         order, doc_label='Delivery Note',
-        kind='orders.delivery_note_pending_signature',
+        kind='orders.dn_pend',
         signature_request=signature_request, actor=actor,
     )
 
@@ -397,7 +423,7 @@ def notify_proforma_ready(order, *, actor=None, pdf_bytes: Optional[bytes] = Non
         recipients.append(order.created_by)
     _create_in_app(
         recipients,
-        kind='orders.proforma_ready',
+        kind='orders.proforma_ok',
         title=f'Proforma signed for {order.order_no}',
         body=f'{order.proforma.number if order.proforma_id else ""} — Invoice step now unlocked.',
         order=order,
@@ -424,7 +450,7 @@ def notify_invoice_issued(order, *, actor=None, pdf_bytes: Optional[bytes] = Non
     recipients += list(_users_in_groups(GROUP_FINANCE))
     _create_in_app(
         recipients,
-        kind='orders.invoice_issued',
+        kind='orders.invoice_ok',
         title=f'Invoice signed — {order.order_no}',
         body=f'{order.invoice.number if order.invoice_id else ""} · {order.currency} {order.total}',
         order=order,
@@ -452,7 +478,7 @@ def notify_delivery_note_issued(order, *, actor=None, pdf_bytes: Optional[bytes]
     recipients += logistics_users
     _create_in_app(
         recipients,
-        kind='orders.delivery_note',
+        kind='orders.dn_issued',
         title=f'Order {order.order_no} fulfilled',
         body=f'Delivery note {order.delivery_note.number if order.delivery_note_id else ""} signed and issued.',
         order=order,
@@ -513,7 +539,7 @@ def notify_customer_attached(order, *, actor=None):
         return
     _create_in_app(
         [order.created_by],
-        kind='orders.customer_attached',
+        kind='orders.cust_attach',
         title=f'Customer linked to {order.order_no}',
         body=f'{getattr(order.customer, "display_name", None) or getattr(order.customer, "full_name", "Customer")} attached.',
         order=order,

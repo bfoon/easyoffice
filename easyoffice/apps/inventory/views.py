@@ -616,10 +616,36 @@ class StockRequestListView(_InventoryContextMixin, InventoryAccessMixin, ListVie
 class StockRequestCreateView(_InventoryContextMixin, InventoryAccessMixin, View):
     template_name = 'inventory/stock_request_form.html'
 
+    def _eligible_products(self):
+        """
+        Products that can appear in the dropdown.
+
+        Internal stock requests cover BOTH things being sold AND things used
+        internally (printer paper, cleaning supplies, etc.), so we filter on
+        is_active + kind=STOCKED rather than is_sellable. We also exclude
+        anything with zero or negative on-hand stock — you can't request what
+        isn't there.
+        """
+        from django.db.models import Sum, F, Value, DecimalField
+        from django.db.models.functions import Coalesce
+        from decimal import Decimal as D
+
+        zero = Value(D('0'), output_field=DecimalField(max_digits=14, decimal_places=2))
+        return (Product.objects
+                .filter(is_active=True, kind=Product.Kind.STOCKED)
+                .annotate(
+                    on_hand_total=Coalesce(Sum('stock_items__quantity'), zero),
+                    reserved_total=Coalesce(Sum('stock_items__reserved_quantity'), zero),
+                )
+                .annotate(available=F('on_hand_total') - F('reserved_total'))
+                .filter(available__gt=0)
+                .select_related('category')
+                .order_by('name'))
+
     def get(self, request):
         return render(request, self.template_name, {
             'form': StockRequestForm(),
-            'products': Product.objects.filter(is_active=True, kind=Product.Kind.STOCKED).order_by('name'),
+            'products': self._eligible_products(),
         })
 
     def post(self, request):
@@ -627,26 +653,38 @@ class StockRequestCreateView(_InventoryContextMixin, InventoryAccessMixin, View)
         if not form.is_valid():
             return render(request, self.template_name, {
                 'form': form,
-                'products': Product.objects.filter(is_active=True).order_by('name'),
+                'products': self._eligible_products(),
             })
 
-        # Build line list from POST: line_product_X / line_qty_X arrays
+        # Build line list from POST. Field names match what the template
+        # actually submits: line_product / line_qty / line_note (no [] —
+        # Django's getlist returns multi-valued posts under the bare name).
         lines = []
         product_ids = request.POST.getlist('line_product')
         quantities  = request.POST.getlist('line_qty')
-        for pid, qty in zip(product_ids, quantities):
+        notes       = request.POST.getlist('line_note')
+
+        for idx, (pid, qty) in enumerate(zip(product_ids, quantities)):
             if not pid or not qty:
                 continue
             try:
-                lines.append({'product': pid, 'quantity': Decimal(str(qty))})
+                qty_dec = Decimal(str(qty))
             except (InvalidOperation, ValueError):
                 continue
+            if qty_dec <= 0:
+                continue
+            note = notes[idx] if idx < len(notes) else ''
+            lines.append({
+                'product':  pid,
+                'quantity': qty_dec,
+                'note':     note,
+            })
 
         if not lines:
             messages.error(request, 'Please add at least one product line.')
             return render(request, self.template_name, {
                 'form': form,
-                'products': Product.objects.filter(is_active=True).order_by('name'),
+                'products': self._eligible_products(),
             })
 
         try:
@@ -662,7 +700,7 @@ class StockRequestCreateView(_InventoryContextMixin, InventoryAccessMixin, View)
             messages.error(request, f'Could not submit: {e}')
             return render(request, self.template_name, {
                 'form': form,
-                'products': Product.objects.filter(is_active=True).order_by('name'),
+                'products': self._eligible_products(),
             })
 
 

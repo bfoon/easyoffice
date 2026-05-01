@@ -36,30 +36,51 @@
           <h3 class="inv-card-title">Items requested</h3>
           <div class="inv-card-subtitle">Add one row per product</div>
         </div>
+        {% if products %}
         <button type="button" id="addLine" class="inv-btn inv-btn-sm"><i class="bi bi-plus-lg"></i> Add line</button>
+        {% endif %}
       </div>
       <div style="padding:6px 14px 14px">
         <table class="inv-table" id="linesTable">
           <thead><tr><th style="width:50%">Product</th><th style="width:18%">Quantity</th><th style="width:25%">Note</th><th style="width:7%"></th></tr></thead>
           <tbody id="linesBody">
+            {% if products %}
             <tr>
               <td>
-                <select name="line_product[]" class="inv-select" required>
+                <select name="line_product" class="inv-select" required>
                   <option value="">— select product —</option>
-                  {% for p in products %}<option value="{{ p.pk }}">{{ p.name }} ({{ p.sku }})</option>{% endfor %}
+                  {% for p in products %}
+                    <option value="{{ p.pk }}"
+                            data-available="{{ p.available }}"
+                            data-unit="{{ p.unit_label }}">
+                      {{ p.name }} ({{ p.sku }}) · {{ p.available|floatformat:0 }} {{ p.unit_label }} available
+                    </option>
+                  {% endfor %}
                 </select>
               </td>
-              <td><input type="number" name="line_qty[]" min="0.01" step="0.01" class="inv-input" placeholder="Qty" required></td>
-              <td><input type="text" name="line_note[]" class="inv-input" placeholder="Optional"></td>
+              <td><input type="number" name="line_qty" min="0.01" step="0.01" class="inv-input" placeholder="Qty" required></td>
+              <td><input type="text" name="line_note" class="inv-input" placeholder="Optional"></td>
               <td><button type="button" class="inv-btn inv-btn-sm inv-btn-danger rmLine" title="Remove">×</button></td>
             </tr>
+            {% endif %}
           </tbody>
         </table>
+        {% if not products %}
+        <div style="padding:36px 24px;text-align:center;color:#64748b">
+          <i class="bi bi-inbox" style="font-size:1.6rem;display:block;margin-bottom:8px;color:#94a3b8"></i>
+          <div style="font-weight:700;color:#0f172a;margin-bottom:4px">Nothing in stock right now</div>
+          <div style="font-size:.84rem">There aren't any stocked products with available quantity. Receive stock first, then come back to create a request.</div>
+        </div>
+        {% endif %}
       </div>
     </div>
 
     <div style="display:flex;gap:8px;max-width:1080px">
+      {% if products %}
       <button class="inv-btn inv-btn-primary"><i class="bi bi-check-lg"></i> Submit request</button>
+      {% else %}
+      <button class="inv-btn inv-btn-primary" disabled style="opacity:.5;cursor:not-allowed"><i class="bi bi-check-lg"></i> Submit request</button>
+      {% endif %}
       <a href="{% url 'inventory:stock_request_list' %}" class="inv-btn">Cancel</a>
     </div>
   </form>
@@ -67,12 +88,50 @@
 <script>
 (function(){
   const body = document.getElementById('linesBody');
-  document.getElementById('addLine').addEventListener('click', function(){
-    const first = body.querySelector('tr');
-    const clone = first.cloneNode(true);
-    clone.querySelectorAll('input, select').forEach(el => el.value = '');
-    body.appendChild(clone);
-  });
+  if (!body) return;
+
+  function wireRow(tr) {
+    const sel  = tr.querySelector('select[name="line_product"]');
+    const qty  = tr.querySelector('input[name="line_qty"]');
+    if (!sel || !qty) return;
+
+    function updateCap() {
+      const opt = sel.options[sel.selectedIndex];
+      const avail = parseFloat((opt && opt.dataset.available) || '');
+      if (isNaN(avail) || avail <= 0) {
+        qty.removeAttribute('max');
+        return;
+      }
+      qty.max = avail;
+      const v = parseFloat(qty.value || '0');
+      if (v > avail) qty.value = avail;
+    }
+    sel.addEventListener('change', updateCap);
+    qty.addEventListener('input', () => {
+      const max = parseFloat(qty.max || '');
+      if (!isNaN(max) && parseFloat(qty.value || '0') > max) qty.value = max;
+    });
+  }
+
+  // Wire whatever rows already exist on page-load
+  body.querySelectorAll('tr').forEach(wireRow);
+
+  const addBtn = document.getElementById('addLine');
+  if (addBtn) {
+    addBtn.addEventListener('click', function(){
+      const first = body.querySelector('tr');
+      if (!first) return;
+      const clone = first.cloneNode(true);
+      clone.querySelectorAll('input, select').forEach(el => {
+        if (el.tagName === 'SELECT') el.selectedIndex = 0;
+        else el.value = '';
+        el.removeAttribute('max');
+      });
+      body.appendChild(clone);
+      wireRow(clone);
+    });
+  }
+
   body.addEventListener('click', function(e){
     if(e.target.classList.contains('rmLine')){
       if(body.querySelectorAll('tr').length > 1){ e.target.closest('tr').remove(); }

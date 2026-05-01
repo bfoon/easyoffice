@@ -779,11 +779,11 @@ class SellableProductsAPIView(OrdersAccessMixin, View):
               .filter(is_sellable=True, is_active=True,
                       kind=Product.Kind.STOCKED)
               .annotate(
-                  _on_hand=Coalesce(Sum('stock_items__quantity'), zero),
-                  _reserved=Coalesce(Sum('stock_items__reserved_quantity'), zero),
+                  on_hand_total=Coalesce(Sum('stock_items__quantity'), zero),
+                  reserved_total=Coalesce(Sum('stock_items__reserved_quantity'), zero),
               )
-              .annotate(_available=F('_on_hand') - F('_reserved'))
-              .filter(_available__gt=0)
+              .annotate(available=F('on_hand_total') - F('reserved_total'))
+              .filter(available__gt=0)
               .select_related('category')
               .order_by('name'))
 
@@ -801,7 +801,7 @@ class SellableProductsAPIView(OrdersAccessMixin, View):
                 'unit':       getattr(p, 'unit_label', '') or '',
                 'currency':   p.currency,
                 'sell_price': str(p.sell_price or '0'),
-                'available':  str(p._available),
+                'available':  str(p.available),
                 'category':   p.category.name if p.category_id else '',
             })
         return JsonResponse({'results': results})

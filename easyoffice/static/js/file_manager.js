@@ -224,6 +224,10 @@
         // Restore current view (grid/list) preference
         var savedView = localStorage.getItem('eo_fm_view') || 'grid';
         setView(savedView);
+        // Re-bind list-view sticky-column scroll buttons + overflow shadows.
+        // The new grid's .fm-list-wrap has no listeners yet; this is a no-op
+        // if the inline script in file_manager.html hasn't run yet.
+        if (typeof window.fmInitListScroll === 'function') window.fmInitListScroll();
       })
       .catch(function (reason) {
         if (reason !== 'unavailable') window.location.reload();
@@ -856,6 +860,17 @@
     if (byId('shareModalFileName')) byId('shareModalFileName').textContent = name;
     if (byId('shareModalTitle'))   byId('shareModalTitle').textContent    = isFolder ? 'Share Folder' : 'Share File';
     if (byId('shareModalQuestion')) byId('shareModalQuestion').textContent = isFolder ? 'Who can access this folder?' : 'Who can access this file?';
+
+    // Stamp the current item's id onto the form dataset so the
+    // External People tab can resolve which file to share. Folders
+    // don't support external shares, so the External tab will hide
+    // itself (it reads shareItemType to decide).
+    var _shareFormEl = byId('shareForm');
+    if (_shareFormEl) {
+      _shareFormEl.dataset.currentFileId = isFolder ? '' : id;
+      _shareFormEl.dataset.currentItemId = id;
+      _shareFormEl.dataset.currentItemType = type;
+    }
 
     if (byId('folderShareOptions')) byId('folderShareOptions').style.display = isFolder ? '' : 'none';
     if (byId('fileShareOptions'))   byId('fileShareOptions').style.display   = isFolder ? 'none' : '';

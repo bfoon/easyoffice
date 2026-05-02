@@ -94,7 +94,7 @@ class AssetMaintenanceInline(admin.TabularInline):
 class AssetAdmin(admin.ModelAdmin):
     list_display    = ('tag', 'name', 'category', 'status', 'condition', 'location', 'purchase_cost')
     list_filter     = ('status', 'condition', 'category', 'location')
-    search_fields   = ('tag', 'name', 'serial_no', 'qr_token')
+    search_fields   = ('tag', 'name', 'serial_number', 'qr_token')
     readonly_fields = ('qr_token',)
     inlines         = [AssetAssignmentInline, AssetMaintenanceInline]
 
@@ -129,3 +129,16 @@ class ApiKeyAdmin(admin.ModelAdmin):
     def has_add_permission(self, request):
         # Force use of the management command — never let admins add raw keys.
         return False
+
+
+from .models import InventoryAccessGrant
+
+
+@admin.register(InventoryAccessGrant)
+class InventoryAccessGrantAdmin(admin.ModelAdmin):
+    list_display = ('scope_label', 'module', 'level', 'is_active',
+                    'expires_at', 'granted_by', 'granted_at')
+    list_filter  = ('is_active', 'module', 'level')
+    search_fields = ('user__username', 'user__email', 'department__name', 'notes')
+    readonly_fields = ('granted_at', 'updated_at')
+    autocomplete_fields = ('user',)

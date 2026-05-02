@@ -299,3 +299,60 @@ def notify_signature_declined(sig_req_id, signer_id, base_url):
             sig_req.update_status()
     except Exception:
         logger.exception('Could not update_status after decline for %s', sig_req.pk)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# External (no-login) file sharing
+# ─────────────────────────────────────────────────────────────────────────────
+
+@_task
+def send_external_share_invitation(share_id, base_url):
+    """Send the initial 'you have a shared document' email to the recipient."""
+    from apps.files.models import ExternalFileShare
+    from apps.files.external_share_utils import send_invitation_email, write_audit
+
+    try:
+        share = ExternalFileShare.objects.select_related('file', 'created_by').get(pk=share_id)
+    except ExternalFileShare.DoesNotExist:
+        logger.warning('send_external_share_invitation: share %s gone', share_id)
+        return
+
+    if send_invitation_email(share, base_url):
+        write_audit(share, 'email_sent',
+                    actor=share.created_by,
+                    notes=f'Invitation sent to {share.recipient_email}')
+
+
+@_task
+def send_external_share_device_verification(device_id, base_url):
+    """Owner-side email asking accept/decline for a newly-seen device."""
+    from apps.files.models import ExternalShareDevice
+    from apps.files.external_share_utils import send_device_verification_email, write_audit
+
+    try:
+        device = ExternalShareDevice.objects.select_related(
+            'share', 'share__file', 'share__created_by'
+        ).get(pk=device_id)
+    except ExternalShareDevice.DoesNotExist:
+        return
+
+    if send_device_verification_email(device, base_url):
+        write_audit(device.share, 'device_pending',
+                    device=device,
+                    notes=f'Verification email sent to {device.share.created_by.email}')
+
+
+@_task
+def send_external_share_device_decision(device_id, base_url):
+    """Recipient-side notification — 'your device was accepted/declined'."""
+    from apps.files.models import ExternalShareDevice
+    from apps.files.external_share_utils import send_device_decision_to_recipient
+
+    try:
+        device = ExternalShareDevice.objects.select_related(
+            'share', 'share__file', 'share__created_by'
+        ).get(pk=device_id)
+    except ExternalShareDevice.DoesNotExist:
+        return
+
+    send_device_decision_to_recipient(device, base_url)

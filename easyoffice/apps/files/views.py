@@ -8212,3 +8212,19 @@ class SignatureRequestDocumentManageView(LoginRequiredMixin, View):
             return JsonResponse({'status': 'ok'})
 
         return JsonResponse({'status': 'error', 'message': 'Unknown action'}, status=400)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# External (no-login) file sharing — re-exported from external_share_views so
+# that urls.py can keep using `views.ExternalShareXxxView` like the rest.
+# ─────────────────────────────────────────────────────────────────────────────
+from apps.files.external_share_views import (  # noqa: E402
+    ExternalShareCreateView,
+    ExternalShareListView,
+    ExternalShareManageView,
+    ExternalShareRevokeView,
+    ExternalShareDeviceManageView,
+    ExternalShareDeviceDecideView,
+    ExternalShareOpenView,
+    ExternalShareFingerprintView,
+)

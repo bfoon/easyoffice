@@ -1,0 +1,405 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block title %}External share — {{ share.file.name }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid" style="max-width:1100px;padding:20px 16px">
+
+  <!-- ── Page header ─────────────────────────────────────────────────── -->
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px;flex-wrap:wrap">
+    <a href="{% url 'file_manager' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+      <i class="bi bi-arrow-left"></i> Files
+    </a>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:1.15rem;font-weight:800;color:var(--eo-text);
+                  display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <i class="bi bi-share" style="color:var(--eo-accent)"></i>
+        External share
+        <span class="es-status es-status-{{ share.status }}">
+          {{ share.get_status_display }}
+        </span>
+      </div>
+      <div style="font-size:.84rem;color:var(--eo-text-muted);margin-top:2px">
+        For <strong>{{ share.recipient_email }}</strong>
+        · <em>{{ share.file.name }}</em>
+      </div>
+    </div>
+    {% if share.is_active %}
+    <button type="button" class="eo-btn eo-btn-danger" id="esRevokeBtn"
+            data-revoke-url="{% url 'external_share_revoke' share.pk %}">
+      <i class="bi bi-slash-circle"></i> Revoke share
+    </button>
+    {% endif %}
+  </div>
+
+  <!-- ── Summary cards ───────────────────────────────────────────────── -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+              gap:12px;margin-bottom:20px">
+
+    <div class="es-card">
+      <div class="es-card-label">Recipient</div>
+      <div class="es-card-value" style="font-size:.95rem">
+        {{ share.recipient_email }}
+      </div>
+      {% if share.recipient_name %}
+      <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px">
+        {{ share.recipient_name }}
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="es-card">
+      <div class="es-card-label">Permission</div>
+      <div class="es-card-value">
+        <i class="bi bi-{% if share.permission == 'view' %}eye{% else %}download{% endif %}"
+           style="margin-right:4px"></i>
+        {{ share.get_permission_display }}
+      </div>
+    </div>
+
+    <div class="es-card">
+      <div class="es-card-label">Expires</div>
+      <div class="es-card-value">{{ share.expires_at|date:"M j, Y · H:i" }}</div>
+      <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:2px">
+        {% if share.is_expired %}
+          Expired {{ share.expires_at|naturaltime }}
+        {% else %}
+          {{ share.expires_at|timeuntil }} remaining
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="es-card">
+      <div class="es-card-label">Downloads</div>
+      <div class="es-card-value">
+        {{ share.download_count }}{% if share.max_downloads %}<span style="color:var(--eo-text-muted)">&nbsp;/&nbsp;{{ share.max_downloads }}</span>{% endif %}
+      </div>
+    </div>
+
+    <div class="es-card">
+      <div class="es-card-label">Created</div>
+      <div class="es-card-value" style="font-size:.92rem">
+        {{ share.created_at|date:"M j, Y" }}
+      </div>
+      <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:2px">
+        by {{ share.created_by.full_name }}
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Devices ────────────────────────────────────────────────────── -->
+  <div class="es-section">
+    <div class="es-section-head">
+      <div>
+        <div class="es-section-title">
+          <i class="bi bi-laptop"></i> Devices
+          <span style="font-weight:600;color:var(--eo-text-muted)">
+            ({{ devices.count }})
+          </span>
+        </div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted)">
+          Each browser/device combination that opened the share is tracked separately.
+        </div>
+      </div>
+    </div>
+
+    {% if devices %}
+    <div style="overflow-x:auto">
+    <table class="eo-table" style="margin:0;min-width:760px">
+      <thead>
+        <tr>
+          <th>Device</th>
+          <th>Status</th>
+          <th>IP / Location</th>
+          <th>Activity</th>
+          <th>First / last seen</th>
+          <th style="text-align:right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in devices %}
+        <tr data-device-id="{{ d.pk }}">
+          <td>
+            <div style="display:flex;align-items:center;gap:10px">
+              <i class="bi bi-{% if d.device_type == 'mobile' %}phone
+                         {% elif d.device_type == 'tablet' %}tablet
+                         {% else %}laptop{% endif %}"
+                 style="font-size:1.2rem;color:var(--eo-text-muted);flex-shrink:0"></i>
+              <div style="min-width:0">
+                <div style="font-weight:600;font-size:.86rem">
+                  {{ d.browser_name|default:"Unknown browser" }}
+                  {% if d.os_name %}<span style="color:var(--eo-text-muted)">· {{ d.os_name }}</span>{% endif %}
+                </div>
+                <div style="font-size:.7rem;color:var(--eo-text-muted);
+                            font-family:ui-monospace,Menlo,monospace">
+                  {{ d.fingerprint|slice:":16" }}…
+                </div>
+              </div>
+            </div>
+          </td>
+          <td>
+            <span class="es-status es-status-device-{{ d.status }}">
+              {{ d.get_status_display }}
+            </span>
+            {% if d.is_declined and d.decline_reason %}
+            <div style="font-size:.7rem;color:#991b1b;margin-top:3px;
+                        max-width:160px;white-space:normal;line-height:1.35">
+              {{ d.decline_reason|truncatechars:80 }}
+            </div>
+            {% endif %}
+          </td>
+          <td style="font-family:ui-monospace,Menlo,monospace;font-size:.78rem">
+            {{ d.ip_address|default:"—" }}
+            {% if d.country_code %}
+            <div style="font-family:'Segoe UI',Arial,sans-serif;font-size:.7rem;
+                        color:var(--eo-text-muted);margin-top:2px">
+              {{ d.city }} {{ d.country_code }}
+            </div>
+            {% endif %}
+          </td>
+          <td style="font-size:.82rem;color:var(--eo-text-muted)">
+            {{ d.access_count }} open{{ d.access_count|pluralize }}
+          </td>
+          <td style="font-size:.74rem;color:var(--eo-text-muted)">
+            <div>{{ d.first_seen_at|date:"M j H:i" }}</div>
+            <div>last {{ d.last_seen_at|naturaltime }}</div>
+          </td>
+          <td style="text-align:right;white-space:nowrap">
+            {% if d.is_pending %}
+            <button type="button"
+                    class="eo-btn eo-btn-sm es-device-action"
+                    data-action="accept"
+                    data-url="{% url 'external_share_device_manage' share.pk d.pk 'accept' %}"
+                    style="background:#10b981;color:#fff">
+              <i class="bi bi-check-lg"></i> Accept
+            </button>
+            <button type="button"
+                    class="eo-btn eo-btn-sm es-device-action"
+                    data-action="decline"
+                    data-url="{% url 'external_share_device_manage' share.pk d.pk 'decline' %}"
+                    style="background:#ef4444;color:#fff">
+              <i class="bi bi-x-lg"></i> Decline
+            </button>
+            {% elif d.is_accepted %}
+            <button type="button"
+                    class="eo-btn eo-btn-sm eo-btn-secondary es-device-action"
+                    data-action="decline"
+                    data-url="{% url 'external_share_device_manage' share.pk d.pk 'decline' %}">
+              <i class="bi bi-slash-circle"></i> Revoke device
+            </button>
+            {% else %}
+            <button type="button"
+                    class="eo-btn eo-btn-sm eo-btn-secondary es-device-action"
+                    data-action="accept"
+                    data-url="{% url 'external_share_device_manage' share.pk d.pk 'accept' %}">
+              <i class="bi bi-arrow-counterclockwise"></i> Re-accept
+            </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <div style="padding:24px;text-align:center;color:var(--eo-text-muted);font-size:.86rem">
+      <i class="bi bi-laptop" style="font-size:2rem;display:block;margin-bottom:8px;opacity:.4"></i>
+      No devices have opened this share yet.
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── Audit timeline ─────────────────────────────────────────────── -->
+  <div class="es-section">
+    <div class="es-section-head">
+      <div>
+        <div class="es-section-title">
+          <i class="bi bi-clock-history"></i> Activity log
+        </div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted)">
+          Every action on this share is recorded here.
+        </div>
+      </div>
+    </div>
+
+    <ol class="es-timeline">
+      {% for ev in audit %}
+      <li>
+        <span class="es-timeline-dot es-action-{{ ev.action }}"></span>
+        <div class="es-timeline-body">
+          <div class="es-timeline-line">
+            <strong>{{ ev.get_action_display }}</strong>
+            <span style="color:var(--eo-text-muted);font-size:.78rem;margin-left:8px">
+              {{ ev.timestamp|date:"M j · H:i" }}
+            </span>
+          </div>
+          {% if ev.notes %}
+          <div style="font-size:.8rem;color:var(--eo-text-muted);margin-top:2px">
+            {{ ev.notes }}
+          </div>
+          {% endif %}
+          <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:2px">
+            {% if ev.actor %}by {{ ev.actor.full_name }}{% endif %}
+            {% if ev.ip_address %} · {{ ev.ip_address }}{% endif %}
+            {% if ev.device %} · device {{ ev.device.fingerprint|slice:":12" }}…{% endif %}
+          </div>
+        </div>
+      </li>
+      {% empty %}
+      <li style="color:var(--eo-text-muted);font-size:.85rem;padding:12px 0">
+        No activity recorded yet.
+      </li>
+      {% endfor %}
+    </ol>
+  </div>
+
+</div>
+
+<style>
+  .es-status {
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-size: .72rem; font-weight: 700; letter-spacing: .02em;
+  }
+  .es-status-pending { background: #fef3c7; color: #92400e; }
+  .es-status-active  { background: #d1fae5; color: #065f46; }
+  .es-status-revoked { background: #fee2e2; color: #991b1b; }
+  .es-status-expired { background: #e2e8f0; color: #475569; }
+
+  .es-status-device-pending  { background: #fef3c7; color: #92400e; }
+  .es-status-device-accepted { background: #d1fae5; color: #065f46; }
+  .es-status-device-declined { background: #fee2e2; color: #991b1b; }
+
+  .es-card {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: 12px;
+    padding: 12px 14px;
+  }
+  .es-card-label {
+    font-size: .68rem; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--eo-text-muted);
+    margin-bottom: 4px;
+  }
+  .es-card-value {
+    font-size: 1.05rem; font-weight: 700; color: var(--eo-text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .es-section {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: 14px;
+    margin-bottom: 18px;
+    padding: 16px;
+  }
+  .es-section-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    margin-bottom: 12px;
+  }
+  .es-section-title {
+    font-size: 1rem; font-weight: 800; color: var(--eo-text);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .es-section-title i { color: var(--eo-accent); }
+
+  .es-timeline { list-style: none; padding: 0; margin: 0; position: relative; }
+  .es-timeline::before {
+    content: ''; position: absolute; left: 7px; top: 8px; bottom: 8px;
+    width: 2px; background: var(--eo-border);
+  }
+  .es-timeline > li {
+    position: relative; padding-left: 28px; padding-bottom: 14px;
+  }
+  .es-timeline > li:last-child { padding-bottom: 0; }
+  .es-timeline-dot {
+    position: absolute; left: 0; top: 4px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--eo-text-muted); border: 3px solid var(--eo-surface);
+    box-shadow: 0 0 0 1px var(--eo-border);
+  }
+  .es-action-created          { background: #3b82f6; }
+  .es-action-email_sent       { background: #6366f1; }
+  .es-action-opened           { background: #06b6d4; }
+  .es-action-device_pending   { background: #f59e0b; }
+  .es-action-device_accepted  { background: #10b981; }
+  .es-action-device_declined  { background: #ef4444; }
+  .es-action-downloaded       { background: #8b5cf6; }
+  .es-action-revoked          { background: #dc2626; }
+  .es-action-expired          { background: #94a3b8; }
+  .es-action-failed_attempt   { background: #f97316; }
+</style>
+
+<script>
+(function() {
+  'use strict';
+
+  function getCsrfToken() {
+    /* Try standard cookie first, then a hidden input. */
+    var name = 'csrftoken';
+    var cookies = document.cookie ? document.cookie.split(';') : [];
+    for (var i = 0; i < cookies.length; i++) {
+      var c = cookies[i].trim();
+      if (c.indexOf(name + '=') === 0) return decodeURIComponent(c.substring(name.length + 1));
+    }
+    var input = document.querySelector('[name=csrfmiddlewaretoken]');
+    return input ? input.value : '';
+  }
+
+  /* Revoke share */
+  var revokeBtn = document.getElementById('esRevokeBtn');
+  if (revokeBtn) {
+    revokeBtn.addEventListener('click', function() {
+      if (!confirm('Revoke this share? The recipient will no longer be able to open the file.')) return;
+      var url = revokeBtn.dataset.revokeUrl;
+      revokeBtn.disabled = true;
+      fetch(url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'X-CSRFToken': getCsrfToken(), 'X-Requested-With': 'XMLHttpRequest' }
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.ok) { window.location.reload(); }
+        else { alert(d.error || 'Could not revoke.'); revokeBtn.disabled = false; }
+      })
+      .catch(function() { alert('Network error.'); revokeBtn.disabled = false; });
+    });
+  }
+
+  /* Per-device accept/decline/revoke */
+  document.querySelectorAll('.es-device-action').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var action = btn.dataset.action;
+      var url = btn.dataset.url;
+      var promptMsg = action === 'accept'
+        ? 'Approve this device for the share?'
+        : 'Decline this device? It will no longer be able to open the file.';
+      if (!confirm(promptMsg)) return;
+
+      var body = new FormData();
+      if (action === 'decline') {
+        var reason = prompt('Optional reason for declining (shown to the recipient):') || '';
+        body.append('reason', reason);
+      }
+
+      btn.disabled = true;
+      fetch(url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'X-CSRFToken': getCsrfToken(), 'X-Requested-With': 'XMLHttpRequest' },
+        body: body
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.ok) { window.location.reload(); }
+        else { alert(d.error || 'Could not update device.'); btn.disabled = false; }
+      })
+      .catch(function() { alert('Network error.'); btn.disabled = false; });
+    });
+  });
+})();
+</script>
+
+{% endblock %}

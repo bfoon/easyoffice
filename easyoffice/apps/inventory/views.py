@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core.exceptions import PermissionDenied
 from django.db.models import Count, F, Q, Sum
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -952,3 +953,119 @@ class AssetReportView(_InventoryContextMixin, InventoryManagerMixin, TemplateVie
         ctx['total_cost'] = total_cost
         ctx['total_book'] = total_book
         return ctx
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Access control admin
+# ════════════════════════════════════════════════════════════════════════════
+
+class _AdminMixin(LoginRequiredMixin):
+    """Gate for the access-control admin views."""
+    def dispatch(self, request, *args, **kwargs):
+        from .permissions import can_administer_access
+        if request.user.is_authenticated and not can_administer_access(request.user):
+            raise PermissionDenied("You don't have rights to administer inventory access.")
+        return super().dispatch(request, *args, **kwargs)
+
+
+class AccessControlListView(_InventoryContextMixin, _AdminMixin, View):
+    """
+    GET  /inventory/access/
+        Lists every grant grouped by scope (departments first, then users).
+        Has an inline form to add a new grant.
+    POST /inventory/access/
+        Adds a new grant from the form. Redirects back to the list.
+    """
+    template_name = 'inventory/access_list.html'
+
+    def get(self, request):
+        from .models import InventoryAccessGrant
+        from .access import Module, Level
+
+        Department = self._department_model()
+        UserModel  = get_user_model()
+
+        dept_grants = (InventoryAccessGrant.objects
+                       .filter(department__isnull=False, is_active=True)
+                       .select_related('department', 'granted_by')
+                       .order_by('department__name', 'module'))
+        user_grants = (InventoryAccessGrant.objects
+                       .filter(user__isnull=False, is_active=True)
+                       .select_related('user', 'granted_by')
+                       .order_by('user__username', 'module'))
+
+        ctx = {
+            'dept_grants':  dept_grants,
+            'user_grants':  user_grants,
+            'departments':  Department.objects.all().order_by('name') if Department else [],
+            'users':        UserModel.objects.filter(is_active=True).order_by(
+                              'first_name', 'last_name', 'username'),
+            'module_choices': Module.CHOICES,
+            'level_choices':  Level.CHOICES,
+        }
+        return render(request, self.template_name, ctx)
+
+    def post(self, request):
+        from .models import InventoryAccessGrant
+        from .access import Module, Level, invalidate_cache
+
+        scope    = request.POST.get('scope') or ''
+        target   = request.POST.get('target') or ''
+        module   = (request.POST.get('module') or '').strip()
+        level    = (request.POST.get('level') or 'view').strip()
+        notes    = (request.POST.get('notes') or '').strip()[:200]
+
+        if not target or scope not in {'user', 'department'}:
+            messages.error(request, 'Pick a scope and a target.')
+            return redirect('inventory:access_list')
+        if module not in Module.ALL:
+            messages.error(request, 'Unknown module.')
+            return redirect('inventory:access_list')
+        if level not in {'view', 'operate', 'manage'}:
+            messages.error(request, 'Unknown level.')
+            return redirect('inventory:access_list')
+
+        # Existing rows for the same scope+module are upserted (level may
+        # change). The unique constraint enforces this at the DB level too.
+        defaults = {
+            'level':       level,
+            'notes':       notes,
+            'is_active':   True,
+            'granted_by':  request.user,
+        }
+        if scope == 'user':
+            obj, created = InventoryAccessGrant.objects.update_or_create(
+                user_id=target, module=module, defaults=defaults,
+            )
+        else:
+            obj, created = InventoryAccessGrant.objects.update_or_create(
+                department_id=target, module=module, defaults=defaults,
+            )
+
+        invalidate_cache(request.user)  # in case admin granted to themselves
+        verb = 'created' if created else 'updated'
+        messages.success(request, f'Grant {verb}: {obj}')
+        return redirect('inventory:access_list')
+
+    @staticmethod
+    def _department_model():
+        try:
+            from django.apps import apps as django_apps
+            return django_apps.get_model('organization', 'Department')
+        except Exception:
+            return None
+
+
+class AccessControlRevokeView(_AdminMixin, View):
+    """POST /inventory/access/<pk>/revoke/  — soft-delete a grant."""
+    def post(self, request, pk):
+        from .models import InventoryAccessGrant
+        try:
+            grant = InventoryAccessGrant.objects.get(pk=pk)
+        except InventoryAccessGrant.DoesNotExist:
+            messages.error(request, 'Grant not found.')
+            return redirect('inventory:access_list')
+        grant.is_active = False
+        grant.save(update_fields=['is_active', 'updated_at'])
+        messages.success(request, f'Revoked: {grant}')
+        return redirect('inventory:access_list')

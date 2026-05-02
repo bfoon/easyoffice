@@ -113,5 +113,28 @@ urlpatterns = [
     path('live-preview/<uuid:token>/accept/',   views.LivePreviewAcceptView.as_view(),          name='live_preview_accept'),
     path('live-preview/<uuid:token>/end/',      views.LivePreviewEndView.as_view(),             name='live_preview_end'),
 
+    # ── External (no-login) file share ───────────────────────────────────────
+    # Owner-side (authenticated)
+    path('<uuid:pk>/external/create/',
+         views.ExternalShareCreateView.as_view(),                                                name='external_share_create'),
+    path('external/',
+         views.ExternalShareListView.as_view(),                                                  name='external_share_list'),
+    path('external/<uuid:pk>/',
+         views.ExternalShareManageView.as_view(),                                                name='external_share_manage'),
+    path('external/<uuid:pk>/revoke/',
+         views.ExternalShareRevokeView.as_view(),                                                name='external_share_revoke'),
+    path('external/<uuid:pk>/devices/<uuid:device_pk>/<str:decision>/',
+         views.ExternalShareDeviceManageView.as_view(),                                          name='external_share_device_manage'),
+
+    # Owner accept/decline link from verification email (still requires login)
+    path('ext/device/<uuid:token>/<str:decision>/',
+         views.ExternalShareDeviceDecideView.as_view(),                                          name='external_share_device_decide'),
+
+    # Public (no-login) recipient flow
+    path('ext/<uuid:token>/',
+         views.ExternalShareOpenView.as_view(),                                                  name='external_share_open'),
+    path('ext/<uuid:token>/fp/',
+         views.ExternalShareFingerprintView.as_view(),                                           name='external_share_fingerprint'),
+
     path('collabora/', include('apps.files.collabora.urls')),
 ]

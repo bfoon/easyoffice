@@ -892,3 +892,87 @@ class StockRequestLine(models.Model):
 
     def __str__(self):
         return f'{self.product.sku} ×{self.quantity}'
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Access control
+# ════════════════════════════════════════════════════════════════════════════
+
+class InventoryAccessGrant(models.Model):
+    """
+    Grants access to a single inventory module at a given level, scoped to
+    either an individual user OR a department. Exactly one of `user` /
+    `department` is set per row.
+
+    The effective access for a user on a module is the *highest* level
+    across every grant that touches them — see apps.inventory.access.
+
+    Grants can be time-bound via `expires_at` (e.g. give a contractor
+    operate-on-products until 2026-12-31).
+    """
+    from .access import Module, Level   # local import to avoid stale strings
+
+    id            = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    user          = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        null=True, blank=True, related_name='inventory_access_grants',
+    )
+    department    = models.ForeignKey(
+        'organization.Department', on_delete=models.CASCADE,
+        null=True, blank=True, related_name='inventory_access_grants',
+    )
+
+    module        = models.CharField(max_length=20, choices=Module.CHOICES)
+    level         = models.CharField(max_length=10, choices=Level.CHOICES, default='view')
+
+    is_active     = models.BooleanField(default=True)
+    expires_at    = models.DateTimeField(null=True, blank=True)
+    notes         = models.CharField(max_length=200, blank=True)
+
+    granted_by    = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='+',
+    )
+    granted_at    = models.DateTimeField(auto_now_add=True)
+    updated_at    = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Inventory access grant'
+        ordering = ['-granted_at']
+        indexes = [
+            models.Index(fields=['user', 'is_active', 'module']),
+            models.Index(fields=['department', 'is_active', 'module']),
+        ]
+        constraints = [
+            # Exactly one of user / department must be set.
+            models.CheckConstraint(
+                name='inv_grant_user_xor_department',
+                check=(
+                    models.Q(user__isnull=False, department__isnull=True) |
+                    models.Q(user__isnull=True,  department__isnull=False)
+                ),
+            ),
+            # Don't allow duplicate active grants (same scope+module).
+            models.UniqueConstraint(
+                fields=['user', 'module'], name='inv_grant_unique_user_module',
+                condition=models.Q(user__isnull=False),
+            ),
+            models.UniqueConstraint(
+                fields=['department', 'module'],
+                name='inv_grant_unique_department_module',
+                condition=models.Q(department__isnull=False),
+            ),
+        ]
+
+    def __str__(self):
+        scope = self.user or self.department
+        return f'{scope} → {self.module} ({self.level})'
+
+    @property
+    def scope_label(self):
+        if self.user_id:
+            return f'User: {self.user.get_full_name() or self.user.username}'
+        if self.department_id:
+            return f'Department: {self.department.name}'
+        return 'Unknown scope'

@@ -2032,6 +2032,223 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
 .fn-foot-btn:hover { filter: brightness(.86); }
 .fn-foot-btn-clear { background: rgba(0,0,0,.1); color: #78350f; }
 .fn-foot-btn-done  { background: #d97706; color: #fff; }
+
+/* ─────────────────────────────────────────────────────────────────────
+   List-view table — sticky Name column (left) + sticky Actions column
+   (right), plus left/right scroll buttons that ride the wrapper.
+
+   Why sticky position instead of position:absolute?
+   • position:sticky participates in normal table layout, so column
+     widths still auto-size to content.
+   • The sticky cell takes the row's background so when the rest of the
+     row scrolls under it the text doesn't bleed through.
+   • A box-shadow on the inside edge gives a subtle "depth" cue that
+     content is hidden under it.
+───────────────────────────────────────────────────────────────────── */
+
+.fm-list-wrap {
+  position: relative;
+  border: 1px solid var(--eo-border);
+  border-radius: var(--eo-radius);
+  background: var(--eo-surface);
+  overflow: hidden; /* clip the scroll buttons against rounded corners */
+}
+.fm-list-scroller {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+/* Hide native scrollbar on WebKit when the chrome buttons are doing the
+   work — keeps the visual cleaner. We still let touch scroll natively. */
+.fm-list-scroller::-webkit-scrollbar { height: 8px; }
+.fm-list-scroller::-webkit-scrollbar-thumb {
+  background: var(--eo-border); border-radius: 4px;
+}
+
+/* Sticky first column — Name */
+.fm-list-wrap table.eo-table thead th:first-child,
+.fm-list-wrap table.eo-table tbody td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--eo-surface);
+}
+.fm-list-wrap table.eo-table thead th:first-child {
+  z-index: 4;     /* header stays above sticky cells when both are visible */
+  background: var(--eo-bg);
+}
+.fm-list-wrap table.eo-table tbody tr:hover td:first-child {
+  background: var(--eo-bg);
+}
+
+/* Sticky last column — Actions */
+.fm-list-wrap table.eo-table thead th:last-child,
+.fm-list-wrap table.eo-table tbody td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  background: var(--eo-surface);
+}
+.fm-list-wrap table.eo-table thead th:last-child {
+  z-index: 4;
+  background: var(--eo-bg);
+}
+.fm-list-wrap table.eo-table tbody tr:hover td:last-child {
+  background: var(--eo-bg);
+}
+
+/* Edge-shadows that appear ONLY when there's hidden content behind the
+   sticky column. JS toggles .has-overflow-left / .has-overflow-right on
+   the wrapper as the user scrolls. */
+.fm-list-wrap.has-overflow-left  table.eo-table thead th:first-child::after,
+.fm-list-wrap.has-overflow-left  table.eo-table tbody td:first-child::after {
+  content: ''; position: absolute; top: 0; bottom: 0; right: -8px;
+  width: 8px; pointer-events: none;
+  background: linear-gradient(to right, rgba(15,23,42,.08), transparent);
+}
+.fm-list-wrap.has-overflow-right table.eo-table thead th:last-child::before,
+.fm-list-wrap.has-overflow-right table.eo-table tbody td:last-child::before {
+  content: ''; position: absolute; top: 0; bottom: 0; left: -8px;
+  width: 8px; pointer-events: none;
+  background: linear-gradient(to left, rgba(15,23,42,.08), transparent);
+}
+
+/* Scroll buttons — vertically centred chevrons that fade in/out with
+   overflow. They sit on top of the sticky columns so users can always
+   reach them. */
+.fm-scroll-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: var(--eo-surface);
+  border: 1px solid var(--eo-border);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, .12);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  font-size: 1rem; color: var(--eo-text);
+  z-index: 6;             /* above the sticky cells */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease, transform .12s ease;
+}
+.fm-scroll-btn:hover { background: var(--eo-bg); transform: translateY(-50%) scale(1.06); }
+.fm-scroll-btn-left  { left: 8px; }
+.fm-scroll-btn-right { right: 8px; }
+.fm-list-wrap.has-overflow-left  .fm-scroll-btn-left,
+.fm-list-wrap.has-overflow-right .fm-scroll-btn-right {
+  opacity: 1; pointer-events: auto;
+}
+
+/* Hide buttons on small touch devices — native swipe is more natural. */
+@media (hover: none) {
+  .fm-scroll-btn { display: none; }
+}
+
+/* The Actions cell needs a min-width that stays consistent so the sticky
+   right column doesn't jiggle as content varies row-to-row. */
+.fm-list-wrap table.eo-table thead th:last-child,
+.fm-list-wrap table.eo-table tbody td:last-child {
+  min-width: 230px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   External-share panel inside the share modal
+───────────────────────────────────────────────────────────────────── */
+
+.es-tabs {
+  display: flex; gap: 4px;
+  border-bottom: 1px solid var(--eo-border);
+  margin-bottom: 14px;
+}
+.es-tab {
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  font-size: .85rem; font-weight: 600;
+  color: var(--eo-text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.es-tab:hover { color: var(--eo-text); }
+.es-tab.active {
+  color: var(--eo-accent);
+  border-bottom-color: var(--eo-accent);
+}
+.es-tab .badge {
+  display: inline-block; margin-left: 6px;
+  background: var(--eo-accent); color: #fff;
+  font-size: .68rem; font-weight: 700;
+  padding: 1px 7px; border-radius: 999px;
+}
+
+.es-pane { display: none; }
+.es-pane.active { display: block; }
+
+.es-form-row { margin-bottom: 12px; }
+.es-form-row label {
+  display: block;
+  font-size: .76rem; font-weight: 700;
+  color: var(--eo-text-muted);
+  text-transform: uppercase; letter-spacing: .04em;
+  margin-bottom: 4px;
+}
+.es-form-row input,
+.es-form-row select,
+.es-form-row textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--eo-border);
+  border-radius: 8px;
+  font-size: .88rem;
+  background: var(--eo-surface);
+  color: var(--eo-text);
+}
+.es-form-row textarea { min-height: 56px; resize: vertical; }
+.es-form-row .es-form-help {
+  font-size: .72rem; color: var(--eo-text-muted); margin-top: 3px;
+}
+
+.es-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 520px) { .es-form-grid { grid-template-columns: 1fr; } }
+
+.es-share-list { margin-top: 14px; }
+.es-share-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--eo-border);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  background: var(--eo-bg);
+}
+.es-share-row .es-share-meta { flex: 1; min-width: 0; }
+.es-share-row .es-share-email {
+  font-weight: 700; font-size: .86rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.es-share-row .es-share-info {
+  font-size: .72rem; color: var(--eo-text-muted); margin-top: 2px;
+}
+.es-share-row .es-share-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+.es-warning-banner {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: .78rem;
+  color: #1e3a8a;
+  line-height: 1.55;
+  margin-bottom: 14px;
+}
+.es-warning-banner i { margin-right: 4px; }
+
 </style>
 
 <!-- ══ STATS BAR ══ -->
@@ -2572,7 +2789,16 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
 
       <!-- ─── LIST VIEW ─── -->
       <div id="viewList" style="display:none">
-        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--eo-border);border-radius:var(--eo-radius);background:var(--eo-surface)">
+        <div class="fm-list-wrap" data-list-wrap>
+          <button type="button" class="fm-scroll-btn fm-scroll-btn-left"
+                  data-scroll-dir="-1" aria-label="Scroll left">
+            <i class="bi bi-chevron-left"></i>
+          </button>
+          <button type="button" class="fm-scroll-btn fm-scroll-btn-right"
+                  data-scroll-dir="1" aria-label="Scroll right">
+            <i class="bi bi-chevron-right"></i>
+          </button>
+          <div class="fm-list-scroller" data-list-scroller>
           <table class="eo-table" style="margin:0;min-width:780px;white-space:nowrap">
             <thead>
               <tr>
@@ -2817,7 +3043,8 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
               {% endfor %}
             </tbody>
           </table>
-        </div>
+          </div><!-- /fm-list-scroller -->
+        </div><!-- /fm-list-wrap -->
       </div><!-- /viewList -->
 
       {% endif %}
@@ -8557,6 +8784,391 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
       _lpShowInvite(_lpInviteQueue.shift());
     } else {
       document.getElementById('lpInviteToast').classList.remove('show');
+    }
+  }
+
+  /* ───────────────────────────────────────────────────────────────────
+     List-view sticky-column scroll buttons + overflow shadows.
+
+     This runs on initial page load AND every time the file grid is
+     replaced via the AJAX soft-refresh. We expose
+     window.fmInitListScroll() so the existing _file_grid reload helper
+     can call it after swapping innerHTML.
+  ─────────────────────────────────────────────────────────────────── */
+
+  function _fmBindOneListWrap(wrap) {
+    if (!wrap || wrap.dataset.fmListBound === '1') return;
+    var scroller = wrap.querySelector('[data-list-scroller]');
+    if (!scroller) return;
+
+    function refreshOverflow() {
+      var maxScroll = scroller.scrollWidth - scroller.clientWidth;
+      // 1px slack to avoid flicker at the edges
+      wrap.classList.toggle('has-overflow-left',  scroller.scrollLeft > 1);
+      wrap.classList.toggle('has-overflow-right', scroller.scrollLeft < maxScroll - 1);
+    }
+
+    wrap.querySelectorAll('.fm-scroll-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var dir = parseInt(btn.dataset.scrollDir || '1', 10) || 1;
+        // Scroll by ~75% of visible width — enough to feel like turning a page
+        var step = Math.max(220, Math.floor(scroller.clientWidth * 0.75));
+        scroller.scrollBy({ left: dir * step, behavior: 'smooth' });
+      });
+    });
+
+    scroller.addEventListener('scroll', refreshOverflow, { passive: true });
+    window.addEventListener('resize', refreshOverflow);
+    // First measurement happens after layout settles.
+    requestAnimationFrame(refreshOverflow);
+    refreshOverflow();
+
+    wrap.dataset.fmListBound = '1';
+  }
+
+  window.fmInitListScroll = function() {
+    document.querySelectorAll('[data-list-wrap]').forEach(_fmBindOneListWrap);
+  };
+
+  // Initial bind on DOMContentLoaded — but we may already be past that
+  // by the time this script runs (it's a deferred IIFE), so call now too.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', window.fmInitListScroll);
+  } else {
+    window.fmInitListScroll();
+  }
+
+
+  /* ───────────────────────────────────────────────────────────────────
+     Share modal — External-people tab integration.
+
+     We piggyback on the existing share modal by injecting two extra
+     panes (Internal vs External) the first time the modal is opened.
+     The internal pane wraps everything that's already in the modal so
+     no other code has to change.
+  ─────────────────────────────────────────────────────────────────── */
+
+  function _esGetCsrf() {
+    var ck = document.cookie.split(';').map(function(s){return s.trim();})
+              .find(function(s){return s.indexOf('csrftoken=')===0;});
+    if (ck) return decodeURIComponent(ck.substring('csrftoken='.length));
+    var inp = document.querySelector('[name=csrfmiddlewaretoken]');
+    return inp ? inp.value : '';
+  }
+
+  function _esCurrentFileId() {
+    /* The existing share form stamps the file id on its dataset. */
+    var form = document.getElementById('shareForm');
+    return form ? (form.dataset.currentFileId || '') : '';
+  }
+
+  function _esCurrentItemType() {
+    var t = document.getElementById('shareItemType');
+    return t ? (t.value || 'file') : 'file';
+  }
+
+  function _esRenderTabs(modalBody) {
+    if (modalBody.querySelector('.es-tabs')) return; // already injected
+
+    /* Wrap everything currently inside .fm-modal-body into an "Internal"
+       pane so we can switch it on/off. */
+    var existing = Array.prototype.slice.call(modalBody.children);
+    var internalPane = document.createElement('div');
+    internalPane.className = 'es-pane es-pane-internal active';
+    existing.forEach(function(el){ internalPane.appendChild(el); });
+
+    var externalPane = document.createElement('div');
+    externalPane.className = 'es-pane es-pane-external';
+    externalPane.innerHTML =
+      '<div class="es-warning-banner">' +
+        '<i class="bi bi-shield-lock"></i>' +
+        '<strong>External share.</strong> ' +
+        'Send this file to someone outside the office via a tokenised, ' +
+        'time-limited link. The recipient does <em>not</em> need an account. ' +
+        'Each device they use will be verified by you before download.' +
+      '</div>' +
+      '<form id="esCreateForm">' +
+        '<div class="es-form-row">' +
+          '<label>Recipient email *</label>' +
+          '<input type="email" name="recipient_email" required ' +
+                 'placeholder="vendor@example.com">' +
+        '</div>' +
+        '<div class="es-form-row">' +
+          '<label>Recipient name (optional)</label>' +
+          '<input type="text" name="recipient_name" ' +
+                 'placeholder="Jane Doe">' +
+        '</div>' +
+        '<div class="es-form-grid">' +
+          '<div class="es-form-row">' +
+            '<label>Link expires in</label>' +
+            '<select name="expires_in_hours">' +
+              '<option value="24">24 hours</option>' +
+              '<option value="72">3 days</option>' +
+              '<option value="168" selected>7 days</option>' +
+              '<option value="336">14 days</option>' +
+              '<option value="720">30 days</option>' +
+            '</select>' +
+          '</div>' +
+          '<div class="es-form-row">' +
+            '<label>Permission</label>' +
+            '<select name="permission">' +
+              '<option value="download" selected>View &amp; Download</option>' +
+              '<option value="view">View only (inline preview)</option>' +
+            '</select>' +
+          '</div>' +
+        '</div>' +
+        '<div class="es-form-grid">' +
+          '<div class="es-form-row">' +
+            '<label>Max downloads</label>' +
+            '<input type="number" name="max_downloads" min="0" max="1000" value="0">' +
+            '<div class="es-form-help">0 = unlimited while link is valid</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="es-form-row">' +
+          '<label>Message (optional)</label>' +
+          '<textarea name="message" maxlength="2000" ' +
+                    'placeholder="A note shown in the invitation email…"></textarea>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px">' +
+          '<button type="submit" class="eo-btn eo-btn-primary flex-grow-1">' +
+            '<i class="bi bi-send"></i> Send invitation' +
+          '</button>' +
+        '</div>' +
+        '<div id="esCreateResult" style="margin-top:10px"></div>' +
+      '</form>' +
+      '<div class="es-share-list" id="esShareList">' +
+        '<div style="font-size:.78rem;color:var(--eo-text-muted);' +
+                  'padding:14px 0;text-align:center">' +
+          'Loading existing external shares…' +
+        '</div>' +
+      '</div>';
+
+    var tabs = document.createElement('div');
+    tabs.className = 'es-tabs';
+    tabs.innerHTML =
+      '<button type="button" class="es-tab active" data-pane="internal">' +
+        '<i class="bi bi-people"></i> Internal' +
+      '</button>' +
+      '<button type="button" class="es-tab" data-pane="external">' +
+        '<i class="bi bi-globe2"></i> External People' +
+        '<span class="badge" id="esExtCount" style="display:none">0</span>' +
+      '</button>';
+
+    modalBody.appendChild(tabs);
+    modalBody.appendChild(internalPane);
+    modalBody.appendChild(externalPane);
+
+    tabs.querySelectorAll('.es-tab').forEach(function(tab) {
+      tab.addEventListener('click', function() {
+        tabs.querySelectorAll('.es-tab').forEach(function(t){ t.classList.remove('active'); });
+        tab.classList.add('active');
+        var which = tab.dataset.pane;
+        modalBody.querySelectorAll('.es-pane').forEach(function(p){
+          p.classList.toggle('active',
+            (which === 'internal' && p.classList.contains('es-pane-internal')) ||
+            (which === 'external' && p.classList.contains('es-pane-external'))
+          );
+        });
+        if (which === 'external') {
+          _esLoadShareList();
+        }
+      });
+    });
+
+    /* Submit handler */
+    var form = externalPane.querySelector('#esCreateForm');
+    form.addEventListener('submit', function(ev) {
+      ev.preventDefault();
+      _esSubmitCreate(form);
+    });
+  }
+
+  function _esLoadShareList() {
+    var fileId = _esCurrentFileId();
+    if (!fileId) return;
+    var list = document.getElementById('esShareList');
+    var countEl = document.getElementById('esExtCount');
+    if (!list) return;
+    list.innerHTML =
+      '<div style="font-size:.78rem;color:var(--eo-text-muted);' +
+              'padding:14px 0;text-align:center">Loading…</div>';
+    fetch('/files/external/?file=' + encodeURIComponent(fileId), {
+      credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (!d.ok) {
+        list.innerHTML = '<div style="color:#dc2626;font-size:.8rem">' +
+                         (d.error || 'Could not load shares') + '</div>';
+        return;
+      }
+      _esRenderShareList(list, countEl, d.shares || []);
+    })
+    .catch(function(){
+      list.innerHTML = '<div style="color:#dc2626;font-size:.8rem">Network error.</div>';
+    });
+  }
+
+  function _esRenderShareList(list, countEl, shares) {
+    if (countEl) {
+      var active = shares.filter(function(s){ return s.is_active; }).length;
+      if (active > 0) {
+        countEl.textContent = active;
+        countEl.style.display = 'inline-block';
+      } else {
+        countEl.style.display = 'none';
+      }
+    }
+    if (!shares.length) {
+      list.innerHTML =
+        '<div style="font-size:.78rem;color:var(--eo-text-muted);' +
+                  'padding:14px 0;text-align:center">' +
+          'No external shares yet for this file.' +
+        '</div>';
+      return;
+    }
+    var html = '<div style="font-size:.72rem;font-weight:700;color:var(--eo-text-muted);' +
+                  'text-transform:uppercase;letter-spacing:.04em;margin:8px 0">' +
+                'Existing external shares</div>';
+    shares.forEach(function(s) {
+      var statusClass =
+        s.is_revoked ? 'es-status-revoked' :
+        (!s.is_active ? 'es-status-expired' :
+        (s.status === 'pending' ? 'es-status-pending' : 'es-status-active'));
+      var pendingHint = (s.pending_count > 0)
+        ? ' · <span style="color:#92400e;font-weight:700">' + s.pending_count +
+          ' device' + (s.pending_count === 1 ? '' : 's') + ' awaiting</span>'
+        : '';
+      html +=
+        '<div class="es-share-row">' +
+          '<i class="bi bi-envelope" style="font-size:1.1rem;color:#3b82f6"></i>' +
+          '<div class="es-share-meta">' +
+            '<div class="es-share-email">' + _esEsc(s.recipient_email) + '</div>' +
+            '<div class="es-share-info">' +
+              '<span class="es-status ' + statusClass + '">' +
+                _esEsc(s.status_display) + '</span>' +
+              ' · ' + _esEsc(s.permission_display) +
+              ' · expires ' + _esFmtDate(s.expires_at) +
+              ' · ' + s.download_count + ' download' + (s.download_count === 1 ? '' : 's') +
+              pendingHint +
+            '</div>' +
+          '</div>' +
+          '<div class="es-share-actions">' +
+            '<a href="' + s.manage_url + '" class="eo-btn eo-btn-secondary eo-btn-sm" ' +
+               'title="Manage devices &amp; activity"><i class="bi bi-gear"></i></a>' +
+            (s.is_active
+              ? ('<button type="button" class="eo-btn eo-btn-sm" ' +
+                'data-revoke="' + s.id + '" ' +
+                'style="background:#fee2e2;color:#991b1b;border-color:#fecaca" ' +
+                'title="Revoke share"><i class="bi bi-slash-circle"></i></button>')
+              : '') +
+          '</div>' +
+        '</div>';
+    });
+    list.innerHTML = html;
+    list.querySelectorAll('[data-revoke]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        if (!confirm('Revoke this share? The recipient will no longer be able to open the file.')) return;
+        var id = btn.dataset.revoke;
+        btn.disabled = true;
+        fetch('/files/external/' + id + '/revoke/', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'X-CSRFToken': _esGetCsrf(), 'X-Requested-With': 'XMLHttpRequest' }
+        })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (d.ok) { _esLoadShareList(); }
+          else { alert(d.error || 'Could not revoke.'); btn.disabled = false; }
+        })
+        .catch(function(){ alert('Network error.'); btn.disabled = false; });
+      });
+    });
+  }
+
+  function _esSubmitCreate(form) {
+    var fileId = _esCurrentFileId();
+    var resultEl = form.querySelector('#esCreateResult');
+    if (!fileId) {
+      resultEl.innerHTML = '<div style="color:#dc2626;font-size:.82rem">' +
+                           'Please open the share dialog from a file row first.</div>';
+      return;
+    }
+    var fd = new FormData(form);
+    var submitBtn = form.querySelector('button[type=submit]');
+    if (submitBtn) submitBtn.disabled = true;
+    resultEl.innerHTML =
+      '<div style="font-size:.8rem;color:var(--eo-text-muted)">Sending invitation…</div>';
+
+    fetch('/files/' + fileId + '/external/create/', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'X-CSRFToken': _esGetCsrf(), 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (submitBtn) submitBtn.disabled = false;
+      if (!d.ok) {
+        resultEl.innerHTML = '<div style="color:#dc2626;font-size:.82rem">' +
+                             _esEsc(d.error || 'Could not create share.') + '</div>';
+        return;
+      }
+      var verb = d.created ? 'created' : 'updated';
+      resultEl.innerHTML =
+        '<div style="background:#d1fae5;border:1px solid #10b981;border-radius:8px;' +
+                'padding:10px 12px;color:#065f46;font-size:.82rem">' +
+          '<i class="bi bi-check-circle-fill"></i> Invitation ' + verb + ' for <strong>' +
+          _esEsc(d.share.recipient_email) + '</strong>. Email sent in the background.' +
+        '</div>';
+      form.reset();
+      _esLoadShareList();
+    })
+    .catch(function(){
+      if (submitBtn) submitBtn.disabled = false;
+      resultEl.innerHTML = '<div style="color:#dc2626;font-size:.82rem">Network error.</div>';
+    });
+  }
+
+  function _esEsc(s) {
+    if (s == null) return '';
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function _esFmtDate(iso) {
+    try {
+      var d = new Date(iso);
+      return d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) +
+             ' ' + d.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'});
+    } catch (e) { return iso || ''; }
+  }
+
+  /* Hook into the existing share modal opener. We don't have a direct
+     reference to openShareModal (it lives in file_manager.js), so we
+     observe the modal becoming visible and inject our tabs once. */
+  var _esShareModal = document.getElementById('shareModal');
+  if (_esShareModal) {
+    var _esBody = _esShareModal.querySelector('.fm-modal-body');
+    if (_esBody) {
+      // Inject lazily on first open: watch for the .open class on the
+      // backdrop, which is how the existing modal system shows it.
+      var mo = new MutationObserver(function() {
+        if (_esShareModal.classList.contains('open')) {
+          _esRenderTabs(_esBody);
+          // Reset to internal tab on each open + clear external
+          // pane's transient state.
+          var firstTab = _esBody.querySelector('.es-tab[data-pane=internal]');
+          if (firstTab) firstTab.click();
+          // Only show external tab when sharing a file (not folders)
+          var extTab = _esBody.querySelector('.es-tab[data-pane=external]');
+          if (extTab) {
+            extTab.style.display = (_esCurrentItemType() === 'file') ? '' : 'none';
+          }
+        }
+      });
+      mo.observe(_esShareModal, { attributes: true, attributeFilter: ['class'] });
     }
   }
 

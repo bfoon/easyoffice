@@ -1,0 +1,383 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Opening "{{ share.file.name }}" · External Share</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+<style>
+  :root {
+    --eo-accent: #3b82f6;
+    --eo-accent-dark: #1e3a8a;
+    --eo-bg: #f1f5f9;
+    --eo-surface: #ffffff;
+    --eo-text: #1e293b;
+    --eo-muted: #64748b;
+    --eo-border: #e2e8f0;
+    --eo-success: #10b981;
+    --eo-warn: #f59e0b;
+    --eo-danger: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    background: var(--eo-bg);
+    font-family: 'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
+    color: var(--eo-text);
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px 16px;
+  }
+  .card {
+    width: 100%; max-width: 540px;
+    background: var(--eo-surface);
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 8px 40px rgba(15, 23, 42, .12);
+  }
+  .card-head {
+    background: linear-gradient(135deg, var(--eo-accent-dark), var(--eo-accent));
+    padding: 28px 32px;
+    color: #fff;
+    text-align: center;
+  }
+  .card-head .icon-wrap {
+    width: 56px; height: 56px;
+    background: rgba(255, 255, 255, .15);
+    border-radius: 14px;
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-bottom: 12px;
+  }
+  .card-head .icon-wrap i { font-size: 1.6rem; }
+  .card-head h1 { margin: 0; font-size: 1.25rem; font-weight: 800; }
+  .card-head p  { margin: 4px 0 0; font-size: .82rem; opacity: .85; }
+
+  .card-body { padding: 26px 32px; }
+  .file-pill {
+    display: flex; align-items: center; gap: 12px;
+    background: #f8fafc;
+    border: 1px solid var(--eo-border);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+  }
+  .file-pill i { font-size: 1.6rem; color: var(--eo-accent); flex-shrink: 0; }
+  .file-pill .meta { min-width: 0; flex: 1; }
+  .file-pill .name {
+    font-weight: 700; font-size: .92rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .file-pill .from { font-size: .76rem; color: var(--eo-muted); margin-top: 2px; }
+
+  .state-block {
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin: 16px 0 8px;
+    font-size: .92rem;
+    line-height: 1.55;
+  }
+  .state-loading {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1e3a8a;
+    text-align: center;
+  }
+  .state-pending {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    color: #92400e;
+  }
+  .state-error {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #991b1b;
+  }
+
+  .spinner {
+    width: 32px; height: 32px;
+    border: 3px solid #dbeafe;
+    border-top-color: var(--eo-accent);
+    border-radius: 50%;
+    margin: 0 auto 12px;
+    animation: spin .9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .pulse-dot {
+    display: inline-block;
+    width: 10px; height: 10px;
+    background: var(--eo-warn);
+    border-radius: 50%;
+    margin-right: 8px;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: .4; transform: scale(.85); }
+  }
+
+  .meta-grid {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 6px 14px;
+    font-size: .82rem;
+    margin-top: 12px;
+  }
+  .meta-grid dt { color: var(--eo-muted); font-weight: 600; }
+  .meta-grid dd { margin: 0; color: var(--eo-text); }
+
+  .info-strip {
+    margin-top: 20px;
+    padding: 12px 14px;
+    background: #f8fafc;
+    border-left: 3px solid var(--eo-accent);
+    border-radius: 6px;
+    font-size: .78rem;
+    color: var(--eo-muted);
+    line-height: 1.55;
+  }
+
+  .footer {
+    text-align: center;
+    margin-top: 18px;
+    font-size: .72rem;
+    color: var(--eo-muted);
+  }
+
+  .btn {
+    display: inline-block;
+    padding: 10px 22px;
+    border-radius: 10px;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: .88rem;
+    border: none;
+    cursor: pointer;
+  }
+  .btn-primary { background: var(--eo-accent); color: #fff; }
+  .btn-primary:hover { background: var(--eo-accent-dark); }
+  .text-center { text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="card-head">
+    <div class="icon-wrap"><i class="bi bi-file-earmark-lock"></i></div>
+    <h1>Secure External Share</h1>
+    <p>You're being granted access to a document</p>
+  </div>
+
+  <div class="card-body">
+
+    <div class="file-pill">
+      <i class="bi bi-file-earmark-text"></i>
+      <div class="meta">
+        <div class="name">{{ share.file.name }}</div>
+        <div class="from">Shared by {{ share.created_by.full_name }}</div>
+      </div>
+    </div>
+
+    {# ── States rendered conditionally — JS swaps which one is visible ── #}
+
+    <div id="state-loading" class="state-block state-loading">
+      <div class="spinner"></div>
+      <div><strong>Verifying your device…</strong></div>
+      <div style="font-size:.8rem;margin-top:4px;opacity:.85">
+        We're checking whether this device has already been approved.
+      </div>
+    </div>
+
+    <div id="state-pending" class="state-block state-pending" style="display:none">
+      <div><span class="pulse-dot"></span><strong>Waiting for owner approval</strong></div>
+      <p style="margin:8px 0 0">
+        Because this is the first time you've opened this share from this device,
+        <strong>{{ share.created_by.full_name }}</strong> has been emailed to approve it.
+        You'll get a follow-up email as soon as they decide.
+      </p>
+      <p style="margin:10px 0 0;font-size:.8rem;opacity:.9">
+        Keep this tab open or come back to this link from <strong>this same browser</strong>
+        — once approved, it'll open straight to the file.
+      </p>
+    </div>
+
+    <div id="state-error" class="state-block state-error" style="display:none">
+      <strong>We couldn't verify your device.</strong>
+      <p id="state-error-msg" style="margin:6px 0 0;font-size:.86rem"></p>
+    </div>
+
+    <dl class="meta-grid">
+      <dt>Permission</dt>
+      <dd>{{ share.get_permission_display }}</dd>
+
+      <dt>Expires</dt>
+      <dd>{{ share.expires_at|date:"N j, Y · H:i" }} UTC</dd>
+
+      {% if share.max_downloads %}
+      <dt>Downloads</dt>
+      <dd>{{ share.download_count }} of {{ share.max_downloads }} used</dd>
+      {% endif %}
+    </dl>
+
+    {% if share.message %}
+    <div class="info-strip">
+      <strong>Message from sender:</strong><br>
+      {{ share.message|linebreaksbr }}
+    </div>
+    {% endif %}
+
+    <div class="footer">
+      🔒 This link is unique to you and your device.
+      Sharing it won't grant access elsewhere.
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  /* ─────────────────────────────────────────────────────────────────────
+     Build a stable client-side fingerprint token.
+
+     We persist a uuid in localStorage on first visit. That uuid alone is
+     the "client_token" sent to the server, which combines it with UA + /24
+     IP to derive the actual fingerprint. As long as the same browser
+     profile is used, the fingerprint stays the same — even if the user
+     moves between WiFi and cellular.
+  ───────────────────────────────────────────────────────────────────── */
+
+  function uuid4() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    // Fallback for very old browsers
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      var r = Math.random() * 16 | 0;
+      return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+  }
+
+  function getClientToken() {
+    var key = 'eo_ext_client_token';
+    var t;
+    try { t = localStorage.getItem(key); } catch (e) { t = null; }
+    if (!t) {
+      t = uuid4();
+      try { localStorage.setItem(key, t); } catch (e) { /* private mode */ }
+    }
+    return t;
+  }
+
+  function getScreen() {
+    try {
+      return (window.screen.width || 0) + 'x' + (window.screen.height || 0)
+           + '@' + (window.devicePixelRatio || 1);
+    } catch (e) { return ''; }
+  }
+
+  function getTimezone() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
+    catch (e) { return ''; }
+  }
+
+  function show(stateId) {
+    var ids = ['state-loading', 'state-pending', 'state-error'];
+    ids.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = (id === stateId ? 'block' : 'none');
+    });
+  }
+
+  function showError(msg) {
+    show('state-error');
+    var el = document.getElementById('state-error-msg');
+    if (el) el.textContent = msg || 'Please try again or contact the sender.';
+  }
+
+  var clientToken = getClientToken();
+
+  /* The fp_url is rendered server-side via reverse() — a plain ASCII path
+     with hyphens. We embed it as a quoted JS string literal directly.
+     (Earlier versions used escapejs|stringformat which double-encoded
+     hyphens as \u002D and broke UUID URL routing.) */
+  var FP_URL = "{{ fp_url }}";
+
+  function attempt(retry) {
+    fetch(FP_URL, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-EO-Fingerprint': clientToken,
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: JSON.stringify({
+        client_token: clientToken,
+        screen:       getScreen(),
+        timezone:     getTimezone(),
+      })
+    })
+    .then(function(r) {
+      if (r.status === 410) {
+        showError('This share has expired or been revoked.');
+        return null;
+      }
+      if (r.status === 403) {
+        showError('Access blocked by the server (403). The share owner can review the activity log.');
+        return null;
+      }
+      if (r.status === 404) {
+        showError('Share not found. The link may have been mistyped or removed.');
+        return null;
+      }
+      if (!r.ok) {
+        /* Try to surface server error body for debugging */
+        return r.text().then(function(txt) {
+          showError('Verification failed (HTTP ' + r.status + ').' +
+                    (txt && txt.length < 200 ? ' ' + txt : ''));
+          return null;
+        }).catch(function() {
+          showError('Verification failed (HTTP ' + r.status + ').');
+          return null;
+        });
+      }
+      return r.json().catch(function() {
+        showError('Server returned an unexpected response.');
+        return null;
+      });
+    })
+    .then(function(data) {
+      if (!data) return;
+      if (!data.ok) {
+        showError(data.error || 'Verification failed. Please try again.');
+        return;
+      }
+
+      if (data.is_accepted || data.reload) {
+        window.location.reload();
+        return;
+      }
+
+      if (data.is_declined) {
+        window.location.reload();
+        return;
+      }
+
+      /* Pending */
+      show('state-pending');
+    })
+    .catch(function(err) {
+      console.error('Verification network error:', err);
+      if (!retry) {
+        /* One automatic retry after 1.5s — handles flaky mobile networks */
+        setTimeout(function() { attempt(true); }, 1500);
+      } else {
+        showError('Network error. Check your connection and reload the page.');
+      }
+    });
+  }
+
+  attempt(false);
+})();
+</script>
+</body>
+</html>

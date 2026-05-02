@@ -66,4 +66,8 @@ urlpatterns = [
     path('scan/',                     views.QRScanPageView.as_view(),  name='scan'),
     path('q/<str:token>/',            views.QRResolveView.as_view(),   name='qr_resolve'),
     path('label/<str:kind>/<uuid:pk>/', views.QRLabelView.as_view(),   name='qr_label'),
+
+    # Access control
+    path('access/',                   views.AccessControlListView.as_view(),    name='access_list'),
+    path('access/<uuid:pk>/revoke/',  views.AccessControlRevokeView.as_view(),  name='access_revoke'),
 ]

@@ -1,0 +1,223 @@
+{% extends "inventory/inventory_base.html" %}
+{% load humanize %}
+{% block title %}Access Control — Inventory{% endblock %}
+{% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / Access control{% endblock %}
+
+{% block inv_content %}
+
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Access</div>
+      <h1 class="inv-page-title">Access control</h1>
+      <p class="inv-page-subtitle">
+        Grant access to inventory modules — by department or by individual user.
+        Each grant has a level: View, Operate, or Manage.
+      </p>
+    </div>
+  </div>
+
+  {# ── Add a new grant ───────────────────────────────────────────────── #}
+  <div class="inv-card" style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border-color:#cbd5e1">
+    <h3 class="inv-card-title" style="margin-bottom:14px"><i class="bi bi-plus-circle-fill" style="color:#1d4ed8"></i> Grant access</h3>
+    <form method="post" class="row g-3">
+      {% csrf_token %}
+
+      <div class="col-md-3">
+        <label class="inv-form-label">Scope</label>
+        <select name="scope" id="scopeSelect" class="inv-select" required>
+          <option value="department">Department</option>
+          <option value="user">Individual user</option>
+        </select>
+      </div>
+
+      <div class="col-md-4" id="targetWrap">
+        <label class="inv-form-label">Target</label>
+        <select name="target" id="targetSelect" class="inv-select" required>
+          {% for d in departments %}<option value="{{ d.pk }}" data-scope="department">{{ d.name }}</option>{% endfor %}
+          {% for u in users %}<option value="{{ u.pk }}" data-scope="user" hidden>{{ u.get_full_name|default:u.username }} ({{ u.username }})</option>{% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-3">
+        <label class="inv-form-label">Module</label>
+        <select name="module" class="inv-select" required>
+          {% for k, v in module_choices %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="inv-form-label">Level</label>
+        <select name="level" class="inv-select" required>
+          {% for k, v in level_choices %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-9">
+        <label class="inv-form-label">Note (optional)</label>
+        <input type="text" name="notes" maxlength="200" class="inv-input"
+               placeholder="e.g. 'Temporary cover for storekeeper on leave'">
+      </div>
+      <div class="col-md-3" style="display:flex;align-items:flex-end">
+        <button class="inv-btn inv-btn-primary" style="width:100%">
+          <i class="bi bi-check-lg"></i> Grant access
+        </button>
+      </div>
+    </form>
+  </div>
+
+  {# ── Department grants ─────────────────────────────────────────────── #}
+  <div class="inv-card inv-card-pad-0">
+    <div class="inv-card-header">
+      <div>
+        <h2 class="inv-card-title"><i class="bi bi-buildings"></i> Department grants</h2>
+        <div class="inv-card-subtitle">Apply to every active member of the department</div>
+      </div>
+      <span class="inv-chip inv-chip-slate">{{ dept_grants|length }}</span>
+    </div>
+    {% if dept_grants %}
+    <table class="inv-table">
+      <thead><tr>
+        <th>Department</th><th>Module</th><th>Level</th><th>Note</th><th>Granted</th>
+        <th class="inv-table-actions">Actions</th>
+      </tr></thead>
+      <tbody>
+        {% for g in dept_grants %}
+        <tr>
+          <td><strong>{{ g.department.name }}</strong></td>
+          <td><span class="inv-chip inv-chip-slate">{{ g.get_module_display }}</span></td>
+          <td>
+            {% if g.level == 'manage' %}<span class="inv-chip inv-chip-rose">Manage</span>
+            {% elif g.level == 'operate' %}<span class="inv-chip inv-chip-blue">Operate</span>
+            {% else %}<span class="inv-chip inv-chip-green">View</span>{% endif %}
+          </td>
+          <td><small style="color:#64748b">{{ g.notes|default:"—"|truncatechars:42 }}</small></td>
+          <td>
+            <small style="color:#64748b">
+              {{ g.granted_at|date:"d M Y" }}
+              {% if g.granted_by %}<br>by {{ g.granted_by.username }}{% endif %}
+              {% if g.expires_at %}<br><span style="color:#c2410c">expires {{ g.expires_at|date:"d M Y" }}</span>{% endif %}
+            </small>
+          </td>
+          <td class="inv-table-actions">
+            <form method="post" action="{% url 'inventory:access_revoke' g.pk %}" style="display:inline"
+                  onsubmit="return confirm('Revoke this department grant?');">
+              {% csrf_token %}
+              <button class="inv-btn inv-btn-sm inv-btn-danger"><i class="bi bi-x-lg"></i> Revoke</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="inv-empty">
+      <div class="inv-empty-icon"><i class="bi bi-buildings"></i></div>
+      <div class="inv-empty-title">No department grants yet</div>
+      <div class="inv-empty-msg">Use the form above to grant access to a whole department in one go.</div>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── User grants ───────────────────────────────────────────────────── #}
+  <div class="inv-card inv-card-pad-0">
+    <div class="inv-card-header">
+      <div>
+        <h2 class="inv-card-title"><i class="bi bi-person-badge"></i> Individual user grants</h2>
+        <div class="inv-card-subtitle">One-off access overrides for specific people</div>
+      </div>
+      <span class="inv-chip inv-chip-slate">{{ user_grants|length }}</span>
+    </div>
+    {% if user_grants %}
+    <table class="inv-table">
+      <thead><tr>
+        <th>User</th><th>Module</th><th>Level</th><th>Note</th><th>Granted</th>
+        <th class="inv-table-actions">Actions</th>
+      </tr></thead>
+      <tbody>
+        {% for g in user_grants %}
+        <tr>
+          <td>
+            <strong>{{ g.user.get_full_name|default:g.user.username }}</strong>
+            <div style="font-size:.7rem;color:#94a3b8;font-family:monospace">{{ g.user.username }}</div>
+          </td>
+          <td><span class="inv-chip inv-chip-slate">{{ g.get_module_display }}</span></td>
+          <td>
+            {% if g.level == 'manage' %}<span class="inv-chip inv-chip-rose">Manage</span>
+            {% elif g.level == 'operate' %}<span class="inv-chip inv-chip-blue">Operate</span>
+            {% else %}<span class="inv-chip inv-chip-green">View</span>{% endif %}
+          </td>
+          <td><small style="color:#64748b">{{ g.notes|default:"—"|truncatechars:42 }}</small></td>
+          <td>
+            <small style="color:#64748b">
+              {{ g.granted_at|date:"d M Y" }}
+              {% if g.granted_by %}<br>by {{ g.granted_by.username }}{% endif %}
+              {% if g.expires_at %}<br><span style="color:#c2410c">expires {{ g.expires_at|date:"d M Y" }}</span>{% endif %}
+            </small>
+          </td>
+          <td class="inv-table-actions">
+            <form method="post" action="{% url 'inventory:access_revoke' g.pk %}" style="display:inline"
+                  onsubmit="return confirm('Revoke this user grant?');">
+              {% csrf_token %}
+              <button class="inv-btn inv-btn-sm inv-btn-danger"><i class="bi bi-x-lg"></i> Revoke</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="inv-empty">
+      <div class="inv-empty-icon"><i class="bi bi-person-badge"></i></div>
+      <div class="inv-empty-title">No individual grants yet</div>
+      <div class="inv-empty-msg">Use the form above to grant access to a specific person.</div>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Reference card ────────────────────────────────────────────────── #}
+  <div class="inv-card" style="background:#fafbfc">
+    <h3 class="inv-card-title" style="margin-bottom:12px">Levels at a glance</h3>
+    <div class="row g-3">
+      <div class="col-md-4">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <span class="inv-chip inv-chip-green" style="flex-shrink:0">View</span>
+          <small style="color:#64748b">Read-only access. List, search, scan QR — but no edits.</small>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <span class="inv-chip inv-chip-blue" style="flex-shrink:0">Operate</span>
+          <small style="color:#64748b">Day-to-day use: create / edit, move stock, raise requests, log maintenance.</small>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <span class="inv-chip inv-chip-rose" style="flex-shrink:0">Manage</span>
+          <small style="color:#64748b">Approve requests, finalise counts, dispose assets, edit cost prices.</small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const scopeSel  = document.getElementById('scopeSelect');
+  const targetSel = document.getElementById('targetSelect');
+  if (!scopeSel || !targetSel) return;
+
+  function refresh() {
+    const wanted = scopeSel.value;
+    let firstVisible = null;
+    Array.from(targetSel.options).forEach(opt => {
+      const match = (opt.dataset.scope === wanted);
+      opt.hidden = !match;
+      opt.disabled = !match;
+      if (match && !firstVisible) firstVisible = opt;
+    });
+    if (firstVisible) targetSel.value = firstVisible.value;
+  }
+  scopeSel.addEventListener('change', refresh);
+  refresh();
+})();
+</script>
+{% endblock %}

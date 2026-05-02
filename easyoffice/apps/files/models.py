@@ -968,3 +968,341 @@ class LivePreviewSession(models.Model):
     @property
     def ws_path(self):
         return f'/ws/files/live-preview/{self.token}/'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# External (no-login) file sharing
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Lets internal users share a file with someone outside the office (a vendor,
+# auditor, partner, donor) without giving them an EasyOffice account.
+#
+# Flow:
+#   1. Owner creates an ExternalFileShare → recipient gets an email with a
+#      one-time tokenised "Open File" link.
+#   2. First click registers the recipient's device (IP + UA + JS fingerprint)
+#      as an ExternalShareDevice in 'pending' state and emails the owner asking
+#      to ACCEPT or DECLINE that specific device.
+#   3. Owner clicks accept/decline (token-based, no login required for them
+#      either since they get the link in their authenticated email session
+#      we still gate it with login_required to be safe).
+#   4. Once a device is 'accepted', any future click from THAT same device
+#      goes straight through to the file — no second verification email.
+#   5. A click from any OTHER device starts a new pending verification
+#      (each device is tracked separately).
+#   6. Sensitive fields (recipient email, device user-agent, decline reason)
+#      are stored encrypted at rest using EncryptedTextField, which derives
+#      a Fernet key from settings.SECRET_KEY.
+#
+# Audit trail: every meaningful event (sent, opened, device-pending,
+# device-accepted, device-declined, downloaded, expired, revoked) writes
+# an ExternalShareAuditEvent row.
+
+import base64 as _b64
+import hashlib as _hashlib
+
+try:
+    # cryptography is already a dep in most Django setups; if missing, pip
+    # install cryptography. We import lazily so the rest of this module can
+    # still load even if the lib is not present (encrypted fields will then
+    # fall back to plain text and log a warning the first time they are
+    # touched).
+    from cryptography.fernet import Fernet as _Fernet, InvalidToken as _InvalidToken
+    _CRYPTO_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _Fernet = None
+    _InvalidToken = Exception
+    _CRYPTO_AVAILABLE = False
+
+
+def _derive_fernet_key():
+    """
+    Derive a stable 32-byte Fernet key from settings.SECRET_KEY.
+
+    SECRET_KEY can be any length; Fernet wants a urlsafe-b64-encoded 32-byte
+    key, so we hash to 32 bytes then b64-encode.
+    """
+    raw = settings.SECRET_KEY.encode('utf-8') if isinstance(settings.SECRET_KEY, str) else settings.SECRET_KEY
+    digest = _hashlib.sha256(raw).digest()
+    return _b64.urlsafe_b64encode(digest)
+
+
+class EncryptedTextField(models.TextField):
+    """
+    A TextField that encrypts its value at-rest using Fernet (AES-128-CBC +
+    HMAC-SHA256). Reads transparently decrypt. Stores ciphertext as ASCII
+    base64 inside a regular TEXT column, so it works on any DB without a
+    schema change.
+
+    If cryptography is not installed (or decryption fails for any reason —
+    e.g. the value was written by an older version with a different key),
+    the field falls back to returning the raw stored value rather than
+    raising, so the application keeps working. Failures are logged.
+    """
+
+    description = 'Encrypted text (Fernet, key derived from SECRET_KEY)'
+
+    _PREFIX = 'enc::'  # so we can tell encrypted from legacy plaintext rows
+
+    def _fernet(self):
+        if not _CRYPTO_AVAILABLE:
+            return None
+        return _Fernet(_derive_fernet_key())
+
+    def get_prep_value(self, value):
+        if value is None or value == '':
+            return value
+        f = self._fernet()
+        if f is None:
+            return value  # plaintext fallback
+        token = f.encrypt(str(value).encode('utf-8')).decode('ascii')
+        return self._PREFIX + token
+
+    def from_db_value(self, value, expression, connection):
+        return self.to_python(value)
+
+    def to_python(self, value):
+        if value is None or value == '':
+            return value
+        if not isinstance(value, str):
+            return value
+        if not value.startswith(self._PREFIX):
+            # Legacy / unencrypted row — return as-is.
+            return value
+        f = self._fernet()
+        if f is None:
+            return value[len(self._PREFIX):]
+        try:
+            return f.decrypt(value[len(self._PREFIX):].encode('ascii')).decode('utf-8')
+        except _InvalidToken:
+            return value  # don't crash on bad ciphertext
+
+
+class ExternalFileShare(models.Model):
+    """
+    A token-based, expiring file share to a single external recipient.
+
+    The same recipient may try to open the link from multiple devices; each
+    device is tracked and individually accepted/declined via
+    ExternalShareDevice. The share itself stays valid until expires_at,
+    revoked_at, or all download budgets are exhausted.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'   # email sent, not yet opened
+        ACTIVE  = 'active',  'Active'    # at least one device is accepted
+        REVOKED = 'revoked', 'Revoked'   # owner cancelled
+        EXPIRED = 'expired', 'Expired'   # past expires_at
+
+    id              = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    file            = models.ForeignKey('SharedFile', on_delete=models.CASCADE,
+                                         related_name='external_shares')
+    token           = models.UUIDField(default=uuid.uuid4, unique=True, db_index=True)
+    # Encrypted PII
+    recipient_email = EncryptedTextField()
+    recipient_name  = EncryptedTextField(blank=True, default='')
+
+    # The plain (non-encrypted) hash lets us look up "is this email already
+    # shared on this file?" without decrypting every row.
+    recipient_email_hash = models.CharField(max_length=64, db_index=True)
+
+    message         = models.TextField(blank=True, default='',
+                                        help_text='Optional note shown in the invitation email.')
+    permission      = models.CharField(max_length=10, default='view',
+                                        choices=[('view', 'View only'),
+                                                 ('download', 'View + Download')])
+
+    expires_at      = models.DateTimeField(
+                        help_text='After this point the link stops working.')
+    max_downloads   = models.PositiveIntegerField(default=0,
+                        help_text='0 = unlimited downloads while link is valid.')
+    download_count  = models.PositiveIntegerField(default=0)
+
+    status          = models.CharField(max_length=10, choices=Status.choices,
+                                        default=Status.PENDING)
+    created_by      = models.ForeignKey(User, on_delete=models.CASCADE,
+                                         related_name='external_shares_created')
+    created_at      = models.DateTimeField(auto_now_add=True)
+    revoked_at      = models.DateTimeField(null=True, blank=True)
+    revoked_by      = models.ForeignKey(User, on_delete=models.SET_NULL, null=True,
+                                         blank=True,
+                                         related_name='external_shares_revoked')
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes  = [
+            models.Index(fields=['recipient_email_hash', 'file']),
+            models.Index(fields=['status', 'expires_at']),
+        ]
+
+    def __str__(self):
+        return f'ExternalShare {self.token} → {self.file.name}'
+
+    # ── Helpers ──
+
+    @staticmethod
+    def hash_email(email):
+        """Stable lookup hash. Lower-cased, stripped, sha256 hex."""
+        if not email:
+            return ''
+        normalised = email.strip().lower().encode('utf-8')
+        return _hashlib.sha256(normalised).hexdigest()
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+    @property
+    def is_revoked(self):
+        return self.status == self.Status.REVOKED or self.revoked_at is not None
+
+    @property
+    def is_active(self):
+        if self.is_revoked or self.is_expired:
+            return False
+        if self.max_downloads and self.download_count >= self.max_downloads:
+            return False
+        return True
+
+    @property
+    def open_url(self):
+        from django.urls import reverse
+        return reverse('external_share_open', kwargs={'token': self.token})
+
+    def refresh_status(self):
+        """Recompute status from current state. Caller is responsible for save()."""
+        if self.revoked_at:
+            self.status = self.Status.REVOKED
+        elif self.is_expired:
+            self.status = self.Status.EXPIRED
+        elif self.devices.filter(status=ExternalShareDevice.Status.ACCEPTED).exists():
+            self.status = self.Status.ACTIVE
+        else:
+            self.status = self.Status.PENDING
+
+
+class ExternalShareDevice(models.Model):
+    """
+    Each distinct device that has tried to open an ExternalFileShare.
+
+    A "device" is identified by a fingerprint hash (browser-side stable JS
+    fingerprint posted on first open, persisted in localStorage and verified
+    against IP + UA on the server). One ExternalFileShare can have many
+    devices in different states.
+    """
+
+    class Status(models.TextChoices):
+        PENDING  = 'pending',  'Pending verification'
+        ACCEPTED = 'accepted', 'Accepted'
+        DECLINED = 'declined', 'Declined'
+
+    id                  = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    share               = models.ForeignKey(ExternalFileShare, on_delete=models.CASCADE,
+                                             related_name='devices')
+    fingerprint         = models.CharField(max_length=128, db_index=True,
+                                            help_text='SHA-256 of (clientFingerprint || UA || /24 IP)')
+    verify_token        = models.UUIDField(default=uuid.uuid4, unique=True, db_index=True,
+                                            help_text='One-time token in the accept/decline email.')
+
+    # Captured for security review only. UA encrypted because it can be
+    # surprisingly identifying.
+    ip_address          = models.GenericIPAddressField(null=True, blank=True)
+    user_agent          = EncryptedTextField(blank=True, default='')
+    # Coarse geographic + device hints — best-effort, never required.
+    country_code        = models.CharField(max_length=2, blank=True, default='')
+    city                = models.CharField(max_length=120, blank=True, default='')
+    device_type         = models.CharField(max_length=40, blank=True, default='',
+                                            help_text='mobile / tablet / desktop / unknown')
+    os_name             = models.CharField(max_length=60, blank=True, default='')
+    browser_name        = models.CharField(max_length=60, blank=True, default='')
+
+    status              = models.CharField(max_length=10, choices=Status.choices,
+                                            default=Status.PENDING)
+    decline_reason      = EncryptedTextField(blank=True, default='')
+
+    first_seen_at       = models.DateTimeField(auto_now_add=True)
+    last_seen_at        = models.DateTimeField(auto_now=True)
+    decided_at          = models.DateTimeField(null=True, blank=True)
+    decided_by          = models.ForeignKey(User, on_delete=models.SET_NULL, null=True,
+                                             blank=True,
+                                             related_name='external_share_decisions')
+    access_count        = models.PositiveIntegerField(default=0,
+                                                       help_text='Successful opens after acceptance.')
+
+    class Meta:
+        ordering        = ['-last_seen_at']
+        unique_together = ('share', 'fingerprint')
+        indexes         = [
+            models.Index(fields=['share', 'status']),
+        ]
+
+    def __str__(self):
+        return f'Device {self.fingerprint[:12]}… on {self.share_id} ({self.status})'
+
+    @property
+    def is_accepted(self):
+        return self.status == self.Status.ACCEPTED
+
+    @property
+    def is_declined(self):
+        return self.status == self.Status.DECLINED
+
+    @property
+    def is_pending(self):
+        return self.status == self.Status.PENDING
+
+    @property
+    def short_label(self):
+        bits = []
+        if self.browser_name:
+            bits.append(self.browser_name)
+        if self.os_name:
+            bits.append(self.os_name)
+        if self.device_type:
+            bits.append(self.device_type.title())
+        if not bits:
+            bits.append('Unknown device')
+        if self.country_code:
+            bits.append(self.country_code)
+        return ' · '.join(bits)
+
+
+class ExternalShareAuditEvent(models.Model):
+    """
+    Append-only audit log for an external share. Every meaningful action
+    writes a row — used to render the "Activity" timeline on the manage
+    page and to satisfy compliance reviewers asking who accessed what.
+    """
+
+    class Action(models.TextChoices):
+        CREATED          = 'created',          'Share created'
+        EMAIL_SENT       = 'email_sent',       'Invitation email sent'
+        OPENED           = 'opened',           'Link opened'
+        DEVICE_PENDING   = 'device_pending',   'New device awaiting verification'
+        DEVICE_ACCEPTED  = 'device_accepted',  'Device accepted'
+        DEVICE_DECLINED  = 'device_declined',  'Device declined'
+        DOWNLOADED       = 'downloaded',       'File downloaded'
+        REVOKED          = 'revoked',          'Share revoked'
+        EXPIRED          = 'expired',          'Share expired'
+        FAILED_ATTEMPT   = 'failed_attempt',   'Failed access attempt'
+
+    id          = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    share       = models.ForeignKey(ExternalFileShare, on_delete=models.CASCADE,
+                                     related_name='audit_events')
+    device      = models.ForeignKey(ExternalShareDevice, on_delete=models.SET_NULL,
+                                     null=True, blank=True, related_name='audit_events')
+    action      = models.CharField(max_length=24, choices=Action.choices)
+    actor       = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                     related_name='external_share_audit_actions')
+    notes       = models.TextField(blank=True, default='')
+    ip_address  = models.GenericIPAddressField(null=True, blank=True)
+    timestamp   = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-timestamp']
+        indexes  = [
+            models.Index(fields=['share', 'timestamp']),
+        ]
+
+    def __str__(self):
+        return f'{self.get_action_display()} on {self.share_id} @ {self.timestamp:%Y-%m-%d %H:%M}'

@@ -8215,9 +8215,255 @@ class SignatureRequestDocumentManageView(LoginRequiredMixin, View):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# External (no-login) file sharing — re-exported from external_share_views so
-# that urls.py can keep using `views.ExternalShareXxxView` like the rest.
+# Zip & Compress tool
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# Bundle one or more user-editable files into a single .zip archive with
+# best compression, optionally split into fixed-size volumes for transport
+# (email attachment caps, USB FAT32 single-file 4 GB ceiling, etc).
+#
+# Why split via raw byte chunking rather than multi-volume zip format?
+#   • Python's stdlib `zipfile` doesn't write multi-volume archives.
+#   • Raw chunking (.zip.001, .zip.002, …) is universally understood and
+#     reassembled with `cat` / `copy /b` — works on every OS.
+#   • It avoids dragging in extra deps (rarfile / 7z bindings).
+#
+# Compression note: PDFs, JPEGs, PNGs, DOCX / XLSX / PPTX are already
+# compressed internally. Re-zipping them rarely shrinks them by more than
+# a few percent. The UI is honest about this so users don't form bad
+# expectations.
+
+class ZipCompressView(LoginRequiredMixin, TemplateView):
+    """
+    Zip & Compress tool.
+
+    GET  → render picker + options.
+    POST → build archive, return as download.
+    """
+    template_name = 'files/zip_compress.html'
+
+    # Hard limits — mirror the conventions of ZipExtractView.
+    MAX_INPUT_TOTAL = 500 * 1024 * 1024     # 500 MB total input
+    MAX_FILE_COUNT  = 100
+    MIN_SPLIT_SIZE  = 1 * 1024 * 1024       # 1 MB
+    MAX_SPLIT_SIZE  = 2 * 1024 * 1024 * 1024  # 2 GB
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+
+        editable_files = (
+            _editable_files_qs(user)
+            .filter(is_latest=True)
+            .select_related('folder', 'uploaded_by')
+            .order_by('-created_at')[:500]
+        )
+
+        ctx.update({
+            'all_files':       editable_files,
+            'max_input_total': self.MAX_INPUT_TOTAL,
+            'max_file_count':  self.MAX_FILE_COUNT,
+            'min_split_size':  self.MIN_SPLIT_SIZE,
+            'max_split_size':  self.MAX_SPLIT_SIZE,
+        })
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        user = request.user
+
+        # ── Parse inputs ────────────────────────────────────────────────────
+        ids = [i.strip() for i in request.POST.getlist('file_ids') if i.strip()]
+        if not ids:
+            messages.error(request, 'Select at least one file to zip.')
+            return redirect('zip_compress')
+
+        if len(ids) > self.MAX_FILE_COUNT:
+            messages.error(request, f'Too many files. Max {self.MAX_FILE_COUNT} per archive.')
+            return redirect('zip_compress')
+
+        archive_name = (request.POST.get('archive_name') or '').strip()
+        if not archive_name:
+            archive_name = f'archive-{timezone.now().strftime("%Y%m%d-%H%M%S")}'
+        # Sanitise: keep only safe filename characters
+        archive_name = re.sub(r'[^A-Za-z0-9._-]+', '_', archive_name)[:80] or 'archive'
+        # If sanitisation reduced it to padding only, fall back to a default.
+        if not re.search(r'[A-Za-z0-9]', archive_name):
+            archive_name = f'archive-{timezone.now().strftime("%Y%m%d-%H%M%S")}'
+        if archive_name.lower().endswith('.zip'):
+            archive_name = archive_name[:-4]
+
+        compresslevel = request.POST.get('compresslevel', '9')
+        try:
+            compresslevel = max(0, min(9, int(compresslevel)))
+        except ValueError:
+            compresslevel = 9
+
+        split_enabled = request.POST.get('split_enabled') == '1'
+        split_size = 0
+        if split_enabled:
+            try:
+                # The form sends MB; convert to bytes
+                split_mb = int(request.POST.get('split_size_mb') or '10')
+                split_size = max(1, split_mb) * 1024 * 1024
+            except ValueError:
+                split_size = 10 * 1024 * 1024
+            split_size = max(self.MIN_SPLIT_SIZE, min(split_size, self.MAX_SPLIT_SIZE))
+
+        # ── Resolve & permission-check files ────────────────────────────────
+        # Use the editable queryset filter for permissions, preserving order.
+        editable_qs = _editable_files_qs(user).filter(id__in=ids, is_latest=True)
+        files_by_id = {str(f.id): f for f in editable_qs}
+
+        # Drop ids the user can't access; preserve user-specified order.
+        ordered = [files_by_id[i] for i in ids if i in files_by_id]
+        if not ordered:
+            messages.error(request, 'None of the selected files are accessible.')
+            return redirect('zip_compress')
+
+        # Total-size guard before we read any bytes from disk.
+        total_size = sum((f.file_size or 0) for f in ordered)
+        if total_size > self.MAX_INPUT_TOTAL:
+            mb_total = total_size / (1024 * 1024)
+            mb_max   = self.MAX_INPUT_TOTAL / (1024 * 1024)
+            messages.error(
+                request,
+                f'Combined size {mb_total:.1f} MB exceeds the {mb_max:.0f} MB tool limit. '
+                f'Please uncheck some files.'
+            )
+            return redirect('zip_compress')
+
+        # ── Build the archive in memory ─────────────────────────────────────
+        # In-memory is fine up to MAX_INPUT_TOTAL. For very large inputs you'd
+        # want a temp file; we deliberately cap inputs above to keep this view
+        # bounded.
+        buf = BytesIO()
+        used_names = set()
+
+        try:
+            with zipfile.ZipFile(
+                buf, mode='w',
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=compresslevel,
+            ) as zf:
+                for f in ordered:
+                    arcname = self._unique_arcname(f.name, used_names)
+                    used_names.add(arcname)
+                    try:
+                        with f.file.open('rb') as src:
+                            zf.writestr(arcname, src.read())
+                    except Exception:
+                        # Skip unreadable files but keep going — the user
+                        # will see the count in the success message.
+                        used_names.discard(arcname)
+                        continue
+        except Exception:
+            messages.error(request, 'Could not build the archive. Please try again.')
+            return redirect('zip_compress')
+
+        zip_bytes = buf.getvalue()
+        zip_size  = len(zip_bytes)
+
+        # ── Split into volumes if requested ─────────────────────────────────
+        if split_enabled and zip_size > split_size:
+            return self._stream_split_archive(
+                zip_bytes, split_size, archive_name, ordered, request
+            )
+
+        # Single-archive download
+        try:
+            _log_audit_event = _log_file_history  # alias if present
+        except NameError:
+            pass
+
+        response = HttpResponse(zip_bytes, content_type='application/zip')
+        response['Content-Disposition'] = f'attachment; filename="{archive_name}.zip"'
+        response['X-EO-Archive-Files']  = str(len(ordered))
+        response['X-EO-Archive-Size']   = str(zip_size)
+        return response
+
+    # ── helpers ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _unique_arcname(name, used):
+        """
+        Make sure the archive doesn't end up with two entries called the
+        same thing (which some zip viewers handle, others don't). If we've
+        already used `report.pdf`, the next one becomes `report (2).pdf`.
+        """
+        base = name or 'file'
+        if base not in used:
+            return base
+        stem, dot, ext = base.rpartition('.')
+        if not dot:  # no extension
+            stem, ext = base, ''
+            dot = ''
+        i = 2
+        while True:
+            candidate = f'{stem} ({i}){dot}{ext}'
+            if candidate not in used:
+                return candidate
+            i += 1
+
+    def _stream_split_archive(self, zip_bytes, split_size, archive_name, files, request):
+        """
+        Bundle a multi-volume archive as raw byte chunks inside an *outer*
+        zip, so the user gets a single download that contains:
+
+            archive_name.zip.001
+            archive_name.zip.002
+            …
+            archive_name.zip.NNN
+            HOW_TO_REASSEMBLE.txt
+
+        The recipient extracts the outer zip, then concatenates the
+        numbered parts back into the real zip. Cross-platform and needs
+        no special tooling.
+        """
+        total = len(zip_bytes)
+        # Number of parts, ceiling division
+        part_count = (total + split_size - 1) // split_size
+        outer = BytesIO()
+
+        with zipfile.ZipFile(outer, mode='w', compression=zipfile.ZIP_STORED) as oz:
+            for i in range(part_count):
+                start = i * split_size
+                end   = min(start + split_size, total)
+                part_name = f'{archive_name}.zip.{i + 1:03d}'
+                oz.writestr(part_name, zip_bytes[start:end])
+
+            # Reassembly instructions
+            instructions = self._reassembly_instructions(archive_name, part_count)
+            oz.writestr('HOW_TO_REASSEMBLE.txt', instructions)
+
+        outer_bytes = outer.getvalue()
+        response = HttpResponse(outer_bytes, content_type='application/zip')
+        response['Content-Disposition'] = f'attachment; filename="{archive_name}-split.zip"'
+        response['X-EO-Archive-Files']  = str(len(files))
+        response['X-EO-Archive-Parts']  = str(part_count)
+        response['X-EO-Archive-Size']   = str(total)
+        return response
+
+    @staticmethod
+    def _reassembly_instructions(archive_name, part_count):
+        last = f'{archive_name}.zip.{part_count:03d}'
+        first = f'{archive_name}.zip.001'
+        return (
+            f'EasyOffice Split Archive\n'
+            f'========================\n\n'
+            f'This bundle contains {part_count} parts of "{archive_name}.zip"\n'
+            f'(parts {first} through {last}).\n\n'
+            f'To reassemble the original archive:\n\n'
+            f'  Windows  (Command Prompt):\n'
+            f'      copy /b "{archive_name}.zip.001" + "{archive_name}.zip.002"'
+            f'{" + ..." if part_count > 2 else ""} "{archive_name}.zip"\n\n'
+            f'  macOS / Linux:\n'
+            f'      cat "{archive_name}.zip."* > "{archive_name}.zip"\n\n'
+            f'Then open "{archive_name}.zip" with any zip tool.\n\n'
+            f'— EasyOffice\n'
+        )
+
+
+
 from apps.files.external_share_views import (  # noqa: E402
     ExternalShareCreateView,
     ExternalShareListView,

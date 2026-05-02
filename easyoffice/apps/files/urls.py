@@ -80,6 +80,7 @@ urlpatterns = [
     path('pdf-tools/split/<uuid:pk>/',          views.PDFSplitView.as_view(),                   name='pdf_split'),
     path('pdf-tools/merge-images/',             views.PDFMergeImagesView.as_view(),             name='pdf_merge_images'),
     path('tools/zip-extract/',                  views.ZipExtractView.as_view(),                  name='zip_extract'),
+    path('tools/zip-compress/',                 views.ZipCompressView.as_view(),                 name='zip_compress'),
     path('tools/letterhead-apply/',             views.LetterheadApplyToolView.as_view(),        name='letterhead_apply_tool'),
 
     path('quick-sign/',                         views.QuickSignView.as_view(),                  name='quick_sign'),

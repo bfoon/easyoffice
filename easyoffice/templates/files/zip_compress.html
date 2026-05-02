@@ -1,0 +1,397 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block title %}Zip & Compress · Files{% endblock %}
+
+{% block content %}
+<div class="container-fluid" style="max-width:1100px;padding:20px 16px">
+
+  <!-- ── Page header ─────────────────────────────────────────────────── -->
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px;flex-wrap:wrap">
+    <a href="{% url 'pdf_tools_page' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+      <i class="bi bi-arrow-left"></i> Tools
+    </a>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:1.15rem;font-weight:800;color:var(--eo-text);
+                  display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <i class="bi bi-file-earmark-zip" style="color:var(--eo-accent)"></i>
+        Zip &amp; Compress
+      </div>
+      <div style="font-size:.84rem;color:var(--eo-text-muted);margin-top:2px">
+        Bundle files into a single archive — optionally split into smaller
+        volumes for email or transport.
+      </div>
+    </div>
+  </div>
+
+  {% if messages %}
+  <div style="margin-bottom:14px">
+    {% for m in messages %}
+    <div class="eo-alert eo-alert-{{ m.tags|default:'info' }}">{{ m }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <form method="post" id="zcForm">
+    {% csrf_token %}
+
+    <div class="zc-grid">
+
+      <!-- ── LEFT: file picker ─────────────────────────────────────── -->
+      <div class="zc-panel">
+        <div class="zc-panel-head">
+          <div class="zc-panel-title">
+            <i class="bi bi-files"></i> Select files
+            <span class="zc-counter" id="zcCount">0 selected</span>
+          </div>
+          <div style="display:flex;gap:6px">
+            <input type="text" id="zcSearch" placeholder="Search…"
+                   class="eo-form-input" style="font-size:.82rem;width:160px">
+            <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm"
+                    id="zcSelectAll">
+              <i class="bi bi-check2-all"></i>
+            </button>
+            <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm"
+                    id="zcSelectNone">
+              <i class="bi bi-square"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="zc-file-list" id="zcFileList">
+          {% for f in all_files %}
+          <label class="zc-file-row" data-name="{{ f.name|lower }}"
+                 data-size="{{ f.file_size }}">
+            <input type="checkbox" name="file_ids" value="{{ f.id }}"
+                   class="zc-file-cb">
+            <i class="bi {{ f.icon_class|default:'bi-file-earmark' }}"
+               style="font-size:1.1rem;color:{{ f.icon_color|default:'#64748b' }}"></i>
+            <div class="zc-file-meta">
+              <div class="zc-file-name">{{ f.name|truncatechars:60 }}</div>
+              <div class="zc-file-info">
+                {{ f.size_display|default:f.file_size|filesizeformat }}
+                {% if f.folder %} · {{ f.folder.name }}{% endif %}
+                · {{ f.created_at|date:"M j" }}
+              </div>
+            </div>
+          </label>
+          {% empty %}
+          <div style="padding:24px;text-align:center;color:var(--eo-text-muted);font-size:.85rem">
+            <i class="bi bi-inbox" style="font-size:2rem;display:block;margin-bottom:8px;opacity:.4"></i>
+            No files available to zip.
+          </div>
+          {% endfor %}
+        </div>
+
+        <div class="zc-total" id="zcTotal">
+          <span><i class="bi bi-hdd"></i> Total selected:</span>
+          <span><strong id="zcTotalBytes">0 B</strong></span>
+        </div>
+      </div>
+
+      <!-- ── RIGHT: options ────────────────────────────────────────── -->
+      <div class="zc-panel">
+        <div class="zc-panel-head">
+          <div class="zc-panel-title">
+            <i class="bi bi-sliders"></i> Archive options
+          </div>
+        </div>
+
+        <div class="zc-form">
+
+          <div class="zc-form-row">
+            <label>Archive name</label>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input type="text" name="archive_name" id="zcArchiveName"
+                     class="eo-form-input"
+                     placeholder="archive-{{ 'now'|date:'Ymd' }}"
+                     maxlength="80" style="flex:1">
+              <span style="color:var(--eo-text-muted);font-size:.86rem">.zip</span>
+            </div>
+            <div class="zc-help">Letters, numbers, dot, underscore, dash. Max 80 chars.</div>
+          </div>
+
+          <div class="zc-form-row">
+            <label>Compression level</label>
+            <div style="display:flex;align-items:center;gap:10px">
+              <input type="range" name="compresslevel" id="zcLevel"
+                     min="0" max="9" value="9" style="flex:1">
+              <span id="zcLevelLabel" style="font-weight:700;font-size:.88rem;
+                    color:var(--eo-accent);min-width:32px;text-align:right">9</span>
+            </div>
+            <div class="zc-help">
+              0 = no compression (fastest), 9 = maximum.
+              <em>Note: PDFs, images, and Office files are already compressed
+              internally — re-zipping rarely shrinks them by much.</em>
+            </div>
+          </div>
+
+          <div class="zc-form-row" style="margin-top:6px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" name="split_enabled" id="zcSplitChk" value="1">
+              <span>Split into volumes if archive exceeds…</span>
+            </label>
+
+            <div id="zcSplitWrap" style="display:none;margin-top:8px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <input type="number" name="split_size_mb" id="zcSplitSize"
+                       class="eo-form-input"
+                       min="1" max="2048" value="10" step="1"
+                       style="width:96px">
+                <span style="color:var(--eo-text-muted);font-size:.86rem">MB per part</span>
+              </div>
+              <div class="zc-help">
+                Common targets: 10 MB (Gmail), 25 MB (Outlook),
+                100 MB (Slack), 4096 MB (FAT32).
+                The download will contain numbered parts plus a
+                <code>HOW_TO_REASSEMBLE.txt</code> with a one-line command
+                to merge them back.
+              </div>
+            </div>
+          </div>
+
+          <div class="zc-summary" id="zcSummary">
+            <div class="zc-summary-row">
+              <span>Files</span>
+              <strong><span id="zcSummaryCount">0</span></strong>
+            </div>
+            <div class="zc-summary-row">
+              <span>Combined size</span>
+              <strong><span id="zcSummarySize">0 B</span></strong>
+            </div>
+            <div class="zc-summary-row" id="zcSummaryLimit"
+                 style="color:var(--eo-danger);display:none">
+              <i class="bi bi-exclamation-triangle-fill"></i>
+              <span>Exceeds tool limit of {{ max_input_total|filesizeformat }}</span>
+            </div>
+          </div>
+
+          <button type="submit" class="eo-btn eo-btn-primary"
+                  id="zcSubmit" style="width:100%;margin-top:6px" disabled>
+            <i class="bi bi-file-earmark-zip"></i>
+            Build &amp; Download Archive
+          </button>
+
+        </div>
+      </div>
+
+    </div>
+  </form>
+
+</div>
+
+<style>
+  .zc-grid {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 880px) { .zc-grid { grid-template-columns: 1fr; } }
+
+  .zc-panel {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: 14px;
+    padding: 14px;
+  }
+  .zc-panel-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 12px; gap: 10px; flex-wrap: wrap;
+  }
+  .zc-panel-title {
+    font-size: .95rem; font-weight: 800; color: var(--eo-text);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .zc-panel-title i { color: var(--eo-accent); }
+
+  .zc-counter {
+    margin-left: 6px;
+    font-size: .72rem; font-weight: 700; padding: 2px 9px;
+    background: var(--eo-bg); color: var(--eo-text-muted);
+    border-radius: 999px;
+  }
+  .zc-counter.has-selected {
+    background: #dbeafe; color: #1e3a8a;
+  }
+
+  .zc-file-list {
+    max-height: 480px;
+    overflow-y: auto;
+    border: 1px solid var(--eo-border);
+    border-radius: 10px;
+    background: var(--eo-bg);
+  }
+  .zc-file-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--eo-border);
+    cursor: pointer;
+    transition: background .12s;
+  }
+  .zc-file-row:last-child { border-bottom: none; }
+  .zc-file-row:hover { background: var(--eo-surface); }
+  .zc-file-row input[type=checkbox] { flex-shrink: 0; cursor: pointer; }
+  .zc-file-row.is-selected { background: #eff6ff; }
+  .zc-file-row.is-hidden { display: none; }
+
+  .zc-file-meta { min-width: 0; flex: 1; }
+  .zc-file-name {
+    font-weight: 600; font-size: .85rem; color: var(--eo-text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .zc-file-info {
+    font-size: .7rem; color: var(--eo-text-muted); margin-top: 1px;
+  }
+
+  .zc-total {
+    display: flex; justify-content: space-between;
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: var(--eo-bg);
+    border-radius: 8px;
+    font-size: .82rem; color: var(--eo-text-muted);
+  }
+  .zc-total i { margin-right: 4px; }
+
+  .zc-form { display: flex; flex-direction: column; gap: 12px; }
+  .zc-form-row label {
+    display: block;
+    font-size: .76rem; font-weight: 700;
+    color: var(--eo-text-muted);
+    text-transform: uppercase; letter-spacing: .04em;
+    margin-bottom: 4px;
+  }
+  .zc-form-row .eo-form-input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--eo-border);
+    border-radius: 8px;
+    font-size: .88rem;
+    background: var(--eo-surface);
+  }
+  .zc-help {
+    font-size: .72rem; color: var(--eo-text-muted); margin-top: 4px;
+    line-height: 1.5;
+  }
+  .zc-help code {
+    background: var(--eo-bg); padding: 1px 4px; border-radius: 3px;
+    font-size: .7rem;
+  }
+
+  .zc-summary {
+    background: var(--eo-bg);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: .82rem;
+  }
+  .zc-summary-row {
+    display: flex; justify-content: space-between;
+    padding: 3px 0;
+    color: var(--eo-text-muted);
+  }
+  .zc-summary-row strong { color: var(--eo-text); }
+</style>
+
+<script>
+(function() {
+  'use strict';
+
+  var MAX_INPUT_TOTAL = {{ max_input_total }};
+  var MAX_FILE_COUNT  = {{ max_file_count }};
+
+  var checkboxes = function() {
+    return Array.prototype.slice.call(
+      document.querySelectorAll('.zc-file-cb')
+    );
+  };
+
+  function fmtBytes(n) {
+    if (!n) return '0 B';
+    var units = ['B', 'KB', 'MB', 'GB'], i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return (i === 0 ? n.toFixed(0) : n.toFixed(1)) + ' ' + units[i];
+  }
+
+  function recompute() {
+    var picked = checkboxes().filter(function(cb){ return cb.checked; });
+    var total = 0;
+    picked.forEach(function(cb) {
+      var row = cb.closest('.zc-file-row');
+      total += parseInt(row.dataset.size || '0', 10) || 0;
+      row.classList.add('is-selected');
+    });
+    checkboxes().forEach(function(cb) {
+      if (!cb.checked) cb.closest('.zc-file-row').classList.remove('is-selected');
+    });
+
+    var counter = document.getElementById('zcCount');
+    counter.textContent = picked.length + ' selected';
+    counter.classList.toggle('has-selected', picked.length > 0);
+
+    document.getElementById('zcTotalBytes').textContent = fmtBytes(total);
+    document.getElementById('zcSummaryCount').textContent = picked.length;
+    document.getElementById('zcSummarySize').textContent  = fmtBytes(total);
+
+    var overLimit = total > MAX_INPUT_TOTAL || picked.length > MAX_FILE_COUNT;
+    document.getElementById('zcSummaryLimit').style.display = overLimit ? 'flex' : 'none';
+
+    var btn = document.getElementById('zcSubmit');
+    btn.disabled = (picked.length === 0) || overLimit;
+  }
+
+  /* Search filter */
+  document.getElementById('zcSearch').addEventListener('input', function(ev) {
+    var q = (ev.target.value || '').trim().toLowerCase();
+    document.querySelectorAll('.zc-file-row').forEach(function(row) {
+      var match = !q || (row.dataset.name || '').indexOf(q) !== -1;
+      row.classList.toggle('is-hidden', !match);
+    });
+  });
+
+  /* Select-all / select-none operate on currently-visible rows so a search
+     filter scopes the action — that's what users expect from the affordance. */
+  document.getElementById('zcSelectAll').addEventListener('click', function() {
+    document.querySelectorAll('.zc-file-row:not(.is-hidden) .zc-file-cb')
+      .forEach(function(cb) { cb.checked = true; });
+    recompute();
+  });
+  document.getElementById('zcSelectNone').addEventListener('click', function() {
+    checkboxes().forEach(function(cb) { cb.checked = false; });
+    recompute();
+  });
+
+  document.getElementById('zcFileList').addEventListener('change', function(ev) {
+    if (ev.target.classList.contains('zc-file-cb')) recompute();
+  });
+
+  /* Compression slider */
+  var lvl = document.getElementById('zcLevel');
+  var lvlLabel = document.getElementById('zcLevelLabel');
+  lvl.addEventListener('input', function() { lvlLabel.textContent = lvl.value; });
+
+  /* Split toggle */
+  var splitChk = document.getElementById('zcSplitChk');
+  var splitWrap = document.getElementById('zcSplitWrap');
+  splitChk.addEventListener('change', function() {
+    splitWrap.style.display = splitChk.checked ? 'block' : 'none';
+  });
+
+  /* Submit feedback — the response is a binary download, so we can't
+     parse it. Just disable the button + show a spinner; the browser's
+     download dialog will appear when the response is ready. */
+  document.getElementById('zcForm').addEventListener('submit', function() {
+    var btn = document.getElementById('zcSubmit');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Building archive…';
+    /* Re-enable after a generous timeout in case of failure */
+    setTimeout(function() {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-file-earmark-zip"></i> Build &amp; Download Archive';
+    }, 30000);
+  });
+
+  recompute();
+})();
+</script>
+
+{% endblock %}

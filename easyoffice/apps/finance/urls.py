@@ -37,5 +37,11 @@ urlpatterns = [
     path('contracts/new/', views.ContractCreateView.as_view(), name='contract_create'),
     path('contracts/<uuid:pk>/', views.ContractDetailView.as_view(), name='contract_detail'),
     path('contracts/<uuid:pk>/edit/', views.ContractUpdateView.as_view(), name='contract_update'),
+    path(
+        'contracts/<uuid:pk>/generate-invoice/',
+        views.ContractGenerateInvoiceView.as_view(),
+        name='contract_generate_invoice',
+    )
+
 
 ]

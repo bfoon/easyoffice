@@ -4,6 +4,7 @@ from datetime import timedelta
 from django.db import models
 from django.utils import timezone
 from apps.core.models import User
+from django.conf import settings
 
 
 class Budget(models.Model):
@@ -647,6 +648,14 @@ class Contract(models.Model):
         related_name='contracts'
     )
 
+    default_invoice_template = models.ForeignKey(
+        'invoices.InvoiceTemplate',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='default_for_contracts',
+        help_text='Pre-selected template for invoices generated from this contract',
+    )
+
     # Billing / invoice automation
     standard_cost = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     currency = models.CharField(max_length=10, default='GMD')
@@ -761,3 +770,61 @@ class ContractInvoiceLink(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+
+class ContractInvoiceLink(models.Model):
+    """
+    Audit row connecting a Contract to an InvoiceDocument that was generated
+    from it. One row per generation event (manual or scheduled).
+
+    The contract_detail.html template iterates `contract.invoice_links.all`
+    and reads:
+        - link.invoice.invoice_number  → we expose `.invoice_number` as a
+                                          property on the link itself OR
+                                          on the InvoiceDocument (we use a
+                                          template-side adapter, see below).
+        - link.invoice.amount
+        - link.invoice.currency
+        - link.invoice.get_status_display
+        - link.period_start
+        - link.period_end
+    """
+
+    class Source(models.TextChoices):
+        MANUAL = 'manual', 'Manual'
+        SCHEDULED = 'scheduled', 'Scheduled'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    contract = models.ForeignKey(
+        'finance.Contract',
+        on_delete=models.CASCADE,
+        related_name='invoice_links',
+    )
+    invoice = models.OneToOneField(
+        'invoices.InvoiceDocument',
+        on_delete=models.CASCADE,
+        related_name='contract_link',
+    )
+    period_start = models.DateField(null=True, blank=True,
+                                    help_text='Start of the billing period this invoice covers')
+    period_end = models.DateField(null=True, blank=True,
+                                  help_text='End of the billing period this invoice covers')
+
+    source = models.CharField(max_length=20, choices=Source.choices,
+                              default=Source.MANUAL)
+    generated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='generated_contract_invoices',
+    )
+    notes = models.CharField(max_length=300, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['contract', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.contract_id} → {self.invoice_id}'

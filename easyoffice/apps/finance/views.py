@@ -9,11 +9,19 @@ from django.http import HttpResponseForbidden
 from django.core.mail import send_mail
 from django.conf import settings
 from apps.core.models import User
+from django.urls import reverse
 
 from apps.finance.models import (
     Budget, PurchaseRequest, Payment,
     EmployeeFinanceRequest, EmployeeLoan, EmployeeLoanPayment,
     Contract, ContractAlertLog, ContractInvoiceLink, IncomingPaymentRequest,
+)
+
+from apps.invoices.models import InvoiceTemplate
+from apps.invoices.permissions import can_use_invoices
+from .contract_invoice_service import (
+    generate_invoice_for_contract,
+    ContractInvoiceError,
 )
 
 
@@ -2333,6 +2341,102 @@ class ContractUpdateView(LoginRequiredMixin, View):
         messages.success(request, f'Contract "{c.title}" updated.')
         return redirect('contract_detail', pk=c.pk)
 
+
+def _user_can_manage_contract_invoices(user):
+    """
+    Same gate as the existing 'edit contract' permission in your templates:
+    superuser OR finance OR CEO. We also require invoice-app access since
+    we'll be writing to that module.
+    """
+    if not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    in_finance_or_ceo = user.groups.filter(
+        name__iregex=r'^(Finance|CEO)$'
+    ).exists()
+    return in_finance_or_ceo and can_use_invoices(user)
+
+
+def _user_template_qs(user):
+    """Templates this user is allowed to use: shared OR their own."""
+    if user.is_superuser:
+        return InvoiceTemplate.objects.all()
+    return InvoiceTemplate.objects.filter(
+        Q(visibility=InvoiceTemplate.Visibility.SHARED) | Q(owner=user)
+    )
+
+
+class ContractGenerateInvoiceView(LoginRequiredMixin, View):
+    """
+    POST handler that generates one invoice for a contract.
+
+    Form fields expected:
+        template_id  — UUID, optional. Falls back to contract.default_invoice_template.
+        finalize     — '1' to finalize immediately (default), '0' for draft.
+
+    On success, redirects to the new invoice's detail page (in the invoice app).
+    On failure, redirects back to the contract with a flashed error.
+    """
+
+    def post(self, request, pk):
+        # local import to keep top-of-file tidy if you copy-paste
+        from .models import Contract
+
+        if not _user_can_manage_contract_invoices(request.user):
+            return HttpResponseForbidden(
+                "You don't have permission to generate invoices for contracts."
+            )
+
+        contract = get_object_or_404(Contract, pk=pk)
+
+        # Resolve template: explicit override → contract default
+        template = None
+        tmpl_id = (request.POST.get('template_id') or '').strip()
+        if tmpl_id:
+            template = (
+                _user_template_qs(request.user)
+                .filter(pk=tmpl_id)
+                .first()
+            )
+            if template is None:
+                messages.error(request, 'Selected invoice template is not available to you.')
+                return redirect('contract_detail', pk=contract.pk)
+
+        finalize = request.POST.get('finalize', '1') != '0'
+
+        try:
+            result = generate_invoice_for_contract(
+                contract,
+                actor=request.user,
+                template=template,
+                finalize=finalize,
+                source='manual',
+            )
+        except ContractInvoiceError as e:
+            messages.error(request, str(e))
+            return redirect('contract_detail', pk=contract.pk)
+        except Exception as e:  # noqa - last-resort safety net
+            messages.error(request, f'Could not generate invoice: {e}')
+            return redirect('contract_detail', pk=contract.pk)
+
+        if result.was_finalized:
+            messages.success(
+                request,
+                f'Invoice {result.invoice.number} generated and finalized for '
+                f'{contract.title}.'
+            )
+        else:
+            messages.success(
+                request,
+                f'Draft invoice created for {contract.title}. Review and finalize '
+                f'in the invoice module.'
+            )
+
+        # Send the user to the new invoice in the invoice module
+        return redirect(reverse('invoices:invoice_detail', kwargs={'pk': result.invoice.pk}))
+
+
 class ContractDetailView(LoginRequiredMixin, DetailView):
     model = Contract
     template_name = 'finance/contract_detail.html'
@@ -2345,7 +2449,14 @@ class ContractDetailView(LoginRequiredMixin, DetailView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx['is_finance'] = _is_finance(self.request.user)
-        ctx['is_ceo'] = _is_ceo(self.request.user)
-        ctx['is_hr'] = _is_hr(self.request.user)
+        user = self.request.user
+        ctx['can_generate_invoice'] = (
+            _user_can_manage_contract_invoices(user)
+            and self.object.status == 'active'
+        )
+        ctx['available_templates'] = (
+            _user_template_qs(user).order_by('-usage_count', 'name')
+            if can_use_invoices(user) else []
+        )
+        ctx['default_template'] = self.object.default_invoice_template
         return ctx

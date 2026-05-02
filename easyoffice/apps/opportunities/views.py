@@ -94,7 +94,7 @@ class OpportunitySourceListView(LoginRequiredMixin, ListView):
 class OpportunitySourceCreateView(LoginRequiredMixin, CreateView):
     model = OpportunitySource
     template_name = 'opportunities/source_form.html'
-    fields = ['name', 'url', 'source_type', 'is_active', 'scan_interval_minutes']
+    fields = ['name', 'url', 'source_type', 'is_active', 'scan_interval_minutes', 'country_filter']
     success_url = reverse_lazy('opportunity_source_list')
 
     def dispatch(self, request, *args, **kwargs):
@@ -109,6 +109,11 @@ class OpportunitySourceCreateView(LoginRequiredMixin, CreateView):
                 field.widget.attrs.update({'class': 'form-check-input'})
             else:
                 field.widget.attrs.update({'class': 'form-control'})
+        if 'country_filter' in form.fields:
+            form.fields['country_filter'].widget.attrs.update({
+                'rows': 2,
+                'placeholder': 'e.g. Philippines, Kenya, Gambia (leave blank for all countries)',
+            })
         return form
 
     def form_valid(self, form):
@@ -124,7 +129,7 @@ class OpportunitySourceCreateView(LoginRequiredMixin, CreateView):
 class OpportunitySourceUpdateView(LoginRequiredMixin, UpdateView):
     model = OpportunitySource
     template_name = 'opportunities/source_form.html'
-    fields = ['name', 'url', 'source_type', 'is_active', 'scan_interval_minutes']
+    fields = ['name', 'url', 'source_type', 'is_active', 'scan_interval_minutes', 'country_filter']
     success_url = reverse_lazy('opportunity_source_list')
 
     def dispatch(self, request, *args, **kwargs):
@@ -139,6 +144,11 @@ class OpportunitySourceUpdateView(LoginRequiredMixin, UpdateView):
                 field.widget.attrs.update({'class': 'form-check-input'})
             else:
                 field.widget.attrs.update({'class': 'form-control'})
+        if 'country_filter' in form.fields:
+            form.fields['country_filter'].widget.attrs.update({
+                'rows': 2,
+                'placeholder': 'e.g. Philippines, Kenya, Gambia (leave blank for all countries)',
+            })
         return form
 
     def form_valid(self, form):

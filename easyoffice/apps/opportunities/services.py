@@ -280,6 +280,12 @@ def create_match_if_new(
     if not title or not link:
         return None
 
+    # Apply per-source country filter early. If the source has a country_filter
+    # configured and this row's country doesn't pass, drop it silently — this
+    # is by design, not an error condition.
+    if not source.country_is_allowed(country):
+        return None
+
     normalized_ref = normalize_reference(reference_no)
 
     if normalized_ref and OpportunityMatch.objects.filter(

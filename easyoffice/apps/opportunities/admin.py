@@ -4,9 +4,9 @@ from .models import OpportunitySource, OpportunityKeyword, OpportunityWatcher, O
 
 @admin.register(OpportunitySource)
 class OpportunitySourceAdmin(admin.ModelAdmin):
-    list_display = ('name', 'source_type', 'url', 'is_active', 'last_checked_at', 'last_status')
+    list_display = ('name', 'source_type', 'url', 'is_active', 'country_filter', 'last_checked_at', 'last_status')
     list_filter = ('source_type', 'is_active', 'last_status')
-    search_fields = ('name', 'url')
+    search_fields = ('name', 'url', 'country_filter')
 
 
 @admin.register(OpportunityKeyword)

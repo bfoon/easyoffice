@@ -17,6 +17,17 @@ class OpportunitySource(models.Model):
     source_type = models.CharField(max_length=20, choices=SOURCE_TYPES, default='html')
     is_active = models.BooleanField(default=True)
     scan_interval_minutes = models.PositiveIntegerField(default=180)
+    country_filter = models.TextField(
+        blank=True,
+        default='',
+        help_text=(
+            "Optional. Comma-separated list of country names to include "
+            "(e.g. 'Philippines, Kenya, Gambia'). Leave blank to accept all "
+            "countries. Matching is case-insensitive and tolerates partial "
+            "names. RSS items without an extracted country are skipped when "
+            "this filter is set."
+        )
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -33,6 +44,41 @@ class OpportunitySource(models.Model):
 
     def __str__(self):
         return self.name
+
+    def get_country_filter_list(self):
+        """Return a normalised list of allowed country names (lowercase, stripped).
+
+        Empty list means "no filter — accept all countries".
+        """
+        if not self.country_filter:
+            return []
+        parts = [p.strip().lower() for p in self.country_filter.split(',')]
+        return [p for p in parts if p]
+
+    def country_is_allowed(self, country):
+        """Return True if `country` passes this source's country filter.
+
+        Matching rules:
+        - If no filter is configured, every country is allowed.
+        - Match is case-insensitive.
+        - A configured entry matches if it appears as a substring of the
+          extracted country, OR vice versa. This tolerates minor variations
+          like 'Philippines' vs 'PHILIPPINES' vs 'Philippines, Republic of'.
+        - If a filter is configured but no country was extracted, the row
+          is rejected (we can't confirm it's wanted).
+        """
+        allowed = self.get_country_filter_list()
+        if not allowed:
+            return True
+
+        if not country:
+            return False
+
+        c = country.strip().lower()
+        for entry in allowed:
+            if entry in c or c in entry:
+                return True
+        return False
 
 
 class OpportunityKeyword(models.Model):

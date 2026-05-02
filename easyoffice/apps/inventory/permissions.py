@@ -182,18 +182,56 @@ def can_view_stock_request(user, sr):
 # ════════════════════════════════════════════════════════════════════════════
 
 class InventoryAccessMixin(LoginRequiredMixin):
-    """Drop-in dispatch gate — any authenticated user."""
+    """
+    Drop-in dispatch gate — any authenticated user.
+
+    If the view declares an `inv_module` class attribute, the mixin also
+    enforces the dynamic-grant check (defaults to 'view' level — set
+    `inv_level = 'operate'` or 'manage' for stricter views). Views without
+    `inv_module` keep the legacy behaviour of "any authenticated user".
+    """
+    inv_module: str = ''
+    inv_level: str = 'view'
+
     def dispatch(self, request, *args, **kwargs):
-        if request.user.is_authenticated and not can_use_inventory(request.user):
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
+        if not can_use_inventory(request.user):
             raise PermissionDenied("You don't have access to the Inventory module.")
+        # If the view declares a module, enforce the per-module grant.
+        if self.inv_module:
+            actual = effective_access(request.user, self.inv_module)
+            required = Level.to_int(self.inv_level)
+            if actual < required:
+                # Render a friendly splash, not a flat 403.
+                from django.shortcuts import render
+                return render(request, 'inventory/no_access.html', {
+                    'denied_module': self.inv_module,
+                    'denied_level':  self.inv_level,
+                }, status=403)
         return super().dispatch(request, *args, **kwargs)
 
 
 class InventoryManagerMixin(LoginRequiredMixin):
     """Restricts views to stock managers (legacy compat)."""
+    inv_module: str = ''
+    inv_level: str = 'operate'
+
     def dispatch(self, request, *args, **kwargs):
-        if request.user.is_authenticated and not can_manage_stock(request.user):
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
+        if not can_manage_stock(request.user):
             raise PermissionDenied("You don't have inventory management rights.")
+        # Same per-module enforcement when declared
+        if self.inv_module:
+            actual = effective_access(request.user, self.inv_module)
+            required = Level.to_int(self.inv_level)
+            if actual < required:
+                from django.shortcuts import render
+                return render(request, 'inventory/no_access.html', {
+                    'denied_module': self.inv_module,
+                    'denied_level':  self.inv_level,
+                }, status=403)
         return super().dispatch(request, *args, **kwargs)
 
 

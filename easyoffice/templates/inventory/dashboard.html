@@ -1,26 +1,27 @@
 {% extends "inventory/inventory_base.html" %}
-{% load humanize %}
+{% load humanize inv_access %}
 {% block title %}Inventory{% endblock %}
 {% block breadcrumb %}Inventory{% endblock %}
 
 {% block inv_content %}
 
-  {# Hero / page header #}
+  {# Hero / page header — counts only show for users who can see them #}
   <div class="inv-hero">
     <div style="flex:1;min-width:260px">
       <div class="inv-hero-eyebrow">Inventory module</div>
       <h1 class="inv-hero-title">Welcome back, {{ request.user.first_name|default:request.user.username }}</h1>
       <div class="inv-hero-meta">
-        Tracking <strong>{{ stats.product_count|intcomma }}</strong> products,
-        <strong>{{ stats.asset_count|intcomma }}</strong> assets across
-        <strong>{{ stats.location_count|intcomma }}</strong> locations.
+        {% if can_view_products %}Tracking <strong>{{ stats.product_count|intcomma }}</strong> products{% endif %}{% if can_view_products and can_view_assets %},
+        {% endif %}{% if can_view_assets %}<strong>{{ stats.asset_count|intcomma }}</strong> assets{% endif %}{% if can_view_locations %}{% if can_view_products or can_view_assets %} across {% endif %}<strong>{{ stats.location_count|intcomma }}</strong> locations{% endif %}.
       </div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
+      {% if request.user|can_view:"scan" %}
       <a href="{% url 'inventory:scan' %}" class="inv-btn" style="background:rgba(255,255,255,.95)">
         <i class="bi bi-qr-code-scan"></i> Scan QR
       </a>
-      {% if can_manage %}
+      {% endif %}
+      {% if can_operate_movements %}
       <a href="{% url 'inventory:stock_receive' %}" class="inv-btn inv-btn-success">
         <i class="bi bi-box-arrow-in-down"></i> Receive stock
       </a>
@@ -28,8 +29,9 @@
     </div>
   </div>
 
-  {# Stat tiles #}
+  {# Stat tiles — each one only renders if the user has view access #}
   <div class="row g-3">
+    {% if can_view_products %}
     <div class="col-6 col-lg-3">
       <a href="{% url 'inventory:product_list' %}" class="inv-stat">
         <div class="inv-stat-icon blue"><i class="bi bi-box-seam-fill"></i></div>
@@ -46,6 +48,8 @@
         </div>
       </a>
     </div>
+    {% endif %}
+    {% if can_view_assets %}
     <div class="col-6 col-lg-3">
       <a href="{% url 'inventory:asset_list' %}" class="inv-stat">
         <div class="inv-stat-icon amber"><i class="bi bi-laptop-fill"></i></div>
@@ -56,6 +60,8 @@
         </div>
       </a>
     </div>
+    {% endif %}
+    {% if can_view_locations %}
     <div class="col-6 col-lg-3">
       <a href="{% url 'inventory:location_list' %}" class="inv-stat">
         <div class="inv-stat-icon green"><i class="bi bi-geo-alt-fill"></i></div>
@@ -66,6 +72,8 @@
         </div>
       </a>
     </div>
+    {% endif %}
+    {% if can_view_suppliers %}
     <div class="col-6 col-lg-3">
       <a href="{% url 'inventory:supplier_list' %}" class="inv-stat">
         <div class="inv-stat-icon purple"><i class="bi bi-truck"></i></div>
@@ -76,6 +84,7 @@
         </div>
       </a>
     </div>
+    {% endif %}
   </div>
 
   <div class="row g-3">
@@ -83,6 +92,7 @@
     {# Left column #}
     <div class="col-lg-7" style="display:flex;flex-direction:column;gap:18px">
 
+      {% if can_view_products %}
       <div class="inv-card inv-card-pad-0">
         <div class="inv-card-header">
           <div>
@@ -95,7 +105,7 @@
               {% else %}Everything's above its threshold{% endif %}
             </div>
           </div>
-          {% if can_manage %}
+          {% if can_operate_movements %}
           <a href="{% url 'inventory:stock_receive' %}" class="inv-btn inv-btn-sm">
             <i class="bi bi-plus-lg"></i> Receive
           </a>
@@ -124,7 +134,9 @@
         </div>
         {% endif %}
       </div>
+      {% endif %}
 
+      {% if can_view_requests %}
       <div class="inv-card inv-card-pad-0">
         <div class="inv-card-header">
           <div>
@@ -162,12 +174,13 @@
         </div>
         {% endif %}
       </div>
+      {% endif %}
     </div>
 
     {# Right column #}
     <div class="col-lg-5" style="display:flex;flex-direction:column;gap:18px">
 
-      {% if asset_status_breakdown %}
+      {% if can_view_assets and asset_status_breakdown %}
       <div class="inv-card">
         <h3 class="inv-card-title" style="margin-bottom:14px">Asset fleet</h3>
         <div style="display:flex;flex-direction:column;gap:8px">
@@ -199,6 +212,7 @@
       </div>
       {% endif %}
 
+      {% if can_view_movements %}
       <div class="inv-card inv-card-pad-0">
         <div class="inv-card-header">
           <div>
@@ -235,6 +249,7 @@
         </div>
         {% endif %}
       </div>
+      {% endif %}
     </div>
   </div>
 

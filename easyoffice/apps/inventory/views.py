@@ -69,25 +69,52 @@ class _InventoryContextMixin:
 class InventoryDashboardView(_InventoryContextMixin, InventoryAccessMixin, TemplateView):
     template_name = 'inventory/dashboard.html'
 
+    def get(self, request, *args, **kwargs):
+        # If the user has zero visible modules → splash, not the dashboard.
+        # Superusers / staff always pass (they implicitly have everything).
+        from .access import visible_modules, can_view as _can_view
+        if request.user.is_authenticated and not (
+            request.user.is_superuser or request.user.is_staff
+        ):
+            if not visible_modules(request.user):
+                return render(request, 'inventory/no_access.html', status=403)
+        return super().get(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        from .access import can_view as _can_view, can_operate as _can_operate
 
-        # Top-line counts
+        # Per-module visibility flags so the template can hide tiles
+        # the user can't reach.
+        u = self.request.user
+        ctx['can_view_products']   = _can_view(u, 'products')
+        ctx['can_view_assets']     = _can_view(u, 'assets')
+        ctx['can_view_locations']  = _can_view(u, 'locations')
+        ctx['can_view_suppliers']  = _can_view(u, 'suppliers')
+        ctx['can_view_movements']  = _can_view(u, 'movements')
+        ctx['can_view_requests']   = _can_view(u, 'requests')
+        ctx['can_view_reports']    = _can_view(u, 'reports')
+        ctx['can_operate_movements'] = _can_operate(u, 'movements')
+
+        # Top-line counts — only computed for tiles the user can actually see.
+        # For hidden tiles, the count is suppressed entirely (no information leak).
         ctx['stats'] = {
-            'product_count':  Product.objects.filter(is_active=True).count(),
-            'asset_count':    Asset.objects.filter(is_active=True).count(),
-            'location_count': Location.objects.filter(is_active=True).count(),
-            'supplier_count': Supplier.objects.filter(is_active=True).count(),
+            'product_count':  Product.objects.filter(is_active=True).count()  if ctx['can_view_products']  else None,
+            'asset_count':    Asset.objects.filter(is_active=True).count()    if ctx['can_view_assets']    else None,
+            'location_count': Location.objects.filter(is_active=True).count() if ctx['can_view_locations'] else None,
+            'supplier_count': Supplier.objects.filter(is_active=True).count() if ctx['can_view_suppliers'] else None,
         }
 
         # Low-stock products (computed in Python because the rule depends
-        # on aggregating stock_items per product)
+        # on aggregating stock_items per product). Skip if the user can't
+        # see products at all.
         low = []
-        for p in (Product.objects
-                  .filter(is_active=True, kind=Product.Kind.STOCKED)
-                  .prefetch_related('stock_items')[:200]):
-            if p.is_low_stock:
-                low.append(p)
+        if ctx['can_view_products']:
+            for p in (Product.objects
+                      .filter(is_active=True, kind=Product.Kind.STOCKED)
+                      .prefetch_related('stock_items')[:200]):
+                if p.is_low_stock:
+                    low.append(p)
         ctx['low_stock'] = low[:10]
         ctx['low_stock_total'] = len(low)
 
@@ -97,16 +124,16 @@ class InventoryDashboardView(_InventoryContextMixin, InventoryAccessMixin, Templ
             .values('status')
             .annotate(count=Count('id'))
             .order_by('status')
-        )
+        ) if ctx['can_view_assets'] else []
 
-        # Recent movements (everyone with inventory access can see this)
+        # Recent movements — only for users with access to movements
         ctx['recent_movements'] = (
             StockMovement.objects
             .select_related('product', 'location', 'actor')
             .order_by('-occurred_at')[:12]
-        )
+        ) if ctx['can_view_movements'] else []
 
-        # Open stock requests
+        # Open stock requests — only for users with access to requests
         ctx['open_requests'] = (
             StockRequest.objects
             .filter(status__in=[
@@ -116,7 +143,7 @@ class InventoryDashboardView(_InventoryContextMixin, InventoryAccessMixin, Templ
             ])
             .select_related('requested_by', 'department')
             .order_by('-created_at')[:8]
-        )
+        ) if ctx['can_view_requests'] else []
 
         # Assets currently assigned to me
         if self.request.user.is_authenticated:
@@ -135,6 +162,8 @@ class InventoryDashboardView(_InventoryContextMixin, InventoryAccessMixin, Templ
 # ════════════════════════════════════════════════════════════════════════════
 
 class ProductListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
+    inv_module = "products"
+    inv_level  = "view"
     template_name = 'inventory/product_list.html'
     context_object_name = 'products'
     paginate_by = 30
@@ -175,6 +204,8 @@ class ProductListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
 
 
 class ProductDetailView(_InventoryContextMixin, InventoryAccessMixin, DetailView):
+    inv_module = "products"
+    inv_level  = "view"
     model = Product
     template_name = 'inventory/product_detail.html'
     context_object_name = 'product'
@@ -200,6 +231,8 @@ class ProductDetailView(_InventoryContextMixin, InventoryAccessMixin, DetailView
 
 
 class ProductCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateView):
+    inv_module = "products"
+    inv_level  = "operate"
     model = Product
     form_class = ProductForm
     template_name = 'inventory/product_form.html'
@@ -211,6 +244,8 @@ class ProductCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateVie
 
 
 class ProductUpdateView(_InventoryContextMixin, InventoryManagerMixin, UpdateView):
+    inv_module = "products"
+    inv_level  = "operate"
     model = Product
     form_class = ProductForm
     template_name = 'inventory/product_form.html'
@@ -225,6 +260,8 @@ class ProductUpdateView(_InventoryContextMixin, InventoryManagerMixin, UpdateVie
 # ════════════════════════════════════════════════════════════════════════════
 
 class ReceiveStockView(_InventoryContextMixin, InventoryManagerMixin, View):
+    inv_module = "movements"
+    inv_level  = "operate"
     template_name = 'inventory/receive_stock.html'
 
     def get(self, request):
@@ -255,6 +292,8 @@ class ReceiveStockView(_InventoryContextMixin, InventoryManagerMixin, View):
 
 
 class IssueStockView(_InventoryContextMixin, InventoryManagerMixin, View):
+    inv_module = "movements"
+    inv_level  = "operate"
     template_name = 'inventory/issue_stock.html'
 
     def get(self, request):
@@ -284,6 +323,8 @@ class IssueStockView(_InventoryContextMixin, InventoryManagerMixin, View):
 
 
 class TransferStockView(_InventoryContextMixin, InventoryManagerMixin, View):
+    inv_module = "movements"
+    inv_level  = "operate"
     template_name = 'inventory/transfer_stock.html'
 
     def get(self, request):
@@ -315,6 +356,8 @@ class TransferStockView(_InventoryContextMixin, InventoryManagerMixin, View):
 
 
 class MovementListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
+    inv_module = "movements"
+    inv_level  = "view"
     template_name = 'inventory/movement_list.html'
     context_object_name = 'movements'
     paginate_by = 50
@@ -347,6 +390,8 @@ class MovementListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
 # ════════════════════════════════════════════════════════════════════════════
 
 class LocationListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
+    inv_module = "locations"
+    inv_level  = "view"
     template_name = 'inventory/location_list.html'
     context_object_name = 'locations'
 
@@ -359,6 +404,8 @@ class LocationListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
 
 
 class LocationDetailView(_InventoryContextMixin, InventoryAccessMixin, DetailView):
+    inv_module = "locations"
+    inv_level  = "view"
     model = Location
     template_name = 'inventory/location_detail.html'
     context_object_name = 'location'
@@ -374,6 +421,8 @@ class LocationDetailView(_InventoryContextMixin, InventoryAccessMixin, DetailVie
 
 
 class LocationCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateView):
+    inv_module = "locations"
+    inv_level  = "operate"
     model = Location
     form_class = LocationForm
     template_name = 'inventory/location_form.html'
@@ -381,6 +430,8 @@ class LocationCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateVi
 
 
 class LocationUpdateView(_InventoryContextMixin, InventoryManagerMixin, UpdateView):
+    inv_module = "locations"
+    inv_level  = "operate"
     model = Location
     form_class = LocationForm
     template_name = 'inventory/location_form.html'
@@ -388,6 +439,8 @@ class LocationUpdateView(_InventoryContextMixin, InventoryManagerMixin, UpdateVi
 
 
 class SupplierListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
+    inv_module = "suppliers"
+    inv_level  = "view"
     template_name = 'inventory/supplier_list.html'
     context_object_name = 'suppliers'
 
@@ -396,6 +449,8 @@ class SupplierListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
 
 
 class SupplierCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateView):
+    inv_module = "suppliers"
+    inv_level  = "operate"
     model = Supplier
     form_class = SupplierForm
     template_name = 'inventory/supplier_form.html'
@@ -403,6 +458,8 @@ class SupplierCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateVi
 
 
 class SupplierUpdateView(_InventoryContextMixin, InventoryManagerMixin, UpdateView):
+    inv_module = "suppliers"
+    inv_level  = "operate"
     model = Supplier
     form_class = SupplierForm
     template_name = 'inventory/supplier_form.html'
@@ -410,6 +467,8 @@ class SupplierUpdateView(_InventoryContextMixin, InventoryManagerMixin, UpdateVi
 
 
 class CategoryListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
+    inv_module = "categories"
+    inv_level  = "view"
     template_name = 'inventory/category_list.html'
     context_object_name = 'categories'
 
@@ -418,6 +477,8 @@ class CategoryListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
 
 
 class CategoryCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateView):
+    inv_module = "categories"
+    inv_level  = "operate"
     model = Category
     form_class = CategoryForm
     template_name = 'inventory/category_form.html'
@@ -429,6 +490,8 @@ class CategoryCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateVi
 # ════════════════════════════════════════════════════════════════════════════
 
 class AssetListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
+    inv_module = "assets"
+    inv_level  = "view"
     template_name = 'inventory/asset_list.html'
     context_object_name = 'assets'
     paginate_by = 30
@@ -461,6 +524,8 @@ class AssetListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
 
 
 class AssetDetailView(_InventoryContextMixin, InventoryAccessMixin, DetailView):
+    inv_module = "assets"
+    inv_level  = "view"
     model = Asset
     template_name = 'inventory/asset_detail.html'
     context_object_name = 'asset'
@@ -486,6 +551,8 @@ class AssetDetailView(_InventoryContextMixin, InventoryAccessMixin, DetailView):
 
 
 class AssetCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateView):
+    inv_module = "assets"
+    inv_level  = "operate"
     model = Asset
     form_class = AssetForm
     template_name = 'inventory/asset_form.html'
@@ -502,6 +569,8 @@ class AssetCreateView(_InventoryContextMixin, InventoryManagerMixin, CreateView)
 
 
 class AssetUpdateView(_InventoryContextMixin, InventoryManagerMixin, UpdateView):
+    inv_module = "assets"
+    inv_level  = "operate"
     model = Asset
     form_class = AssetForm
     template_name = 'inventory/asset_form.html'
@@ -515,6 +584,8 @@ class AssetUpdateView(_InventoryContextMixin, InventoryManagerMixin, UpdateView)
 
 
 class AssetAssignView(_InventoryContextMixin, InventoryManagerMixin, View):
+    inv_module = "assets"
+    inv_level  = "operate"
     def post(self, request, pk):
         asset = get_object_or_404(Asset, pk=pk)
         form = AssetAssignForm(request.POST)
@@ -533,6 +604,8 @@ class AssetAssignView(_InventoryContextMixin, InventoryManagerMixin, View):
 
 
 class AssetReturnView(_InventoryContextMixin, InventoryManagerMixin, View):
+    inv_module = "assets"
+    inv_level  = "operate"
     def post(self, request, pk):
         asset = get_object_or_404(Asset, pk=pk)
         form = AssetReturnForm(request.POST)
@@ -555,6 +628,8 @@ class AssetReturnView(_InventoryContextMixin, InventoryManagerMixin, View):
 
 
 class AssetMaintenanceView(_InventoryContextMixin, InventoryManagerMixin, View):
+    inv_module = "assets"
+    inv_level  = "operate"
     def post(self, request, pk):
         asset = get_object_or_404(Asset, pk=pk)
         form = AssetMaintenanceForm(request.POST, request.FILES)
@@ -573,6 +648,8 @@ class AssetMaintenanceView(_InventoryContextMixin, InventoryManagerMixin, View):
 
 
 class AssetScrapView(_InventoryContextMixin, InventoryAccessMixin, View):
+    inv_module = "assets"
+    inv_level  = "manage"
     def post(self, request, pk):
         if not can_dispose_assets(request.user):
             messages.error(request, 'Only the CEO/Admin can dispose of assets.')
@@ -592,6 +669,8 @@ class AssetScrapView(_InventoryContextMixin, InventoryAccessMixin, View):
 # ════════════════════════════════════════════════════════════════════════════
 
 class StockRequestListView(_InventoryContextMixin, InventoryAccessMixin, ListView):
+    inv_module = "requests"
+    inv_level  = "view"
     template_name = 'inventory/stock_request_list.html'
     context_object_name = 'requests'
     paginate_by = 30
@@ -616,6 +695,8 @@ class StockRequestListView(_InventoryContextMixin, InventoryAccessMixin, ListVie
 
 
 class StockRequestCreateView(_InventoryContextMixin, InventoryAccessMixin, View):
+    inv_module = "requests"
+    inv_level  = "operate"
     template_name = 'inventory/stock_request_form.html'
 
     def _eligible_products(self):
@@ -707,6 +788,8 @@ class StockRequestCreateView(_InventoryContextMixin, InventoryAccessMixin, View)
 
 
 class StockRequestDetailView(_InventoryContextMixin, InventoryAccessMixin, DetailView):
+    inv_module = "requests"
+    inv_level  = "view"
     model = StockRequest
     template_name = 'inventory/stock_request_detail.html'
     context_object_name = 'sr'
@@ -725,6 +808,8 @@ class StockRequestDetailView(_InventoryContextMixin, InventoryAccessMixin, Detai
 
 
 class StockRequestIssueView(_InventoryContextMixin, InventoryManagerMixin, View):
+    inv_module = "requests"
+    inv_level  = "manage"
     def post(self, request, pk):
         sr = get_object_or_404(StockRequest, pk=pk)
         location_id = request.POST.get('location') or None
@@ -743,6 +828,8 @@ class StockRequestIssueView(_InventoryContextMixin, InventoryManagerMixin, View)
 
 
 class StockRequestRerouteView(_InventoryContextMixin, InventoryManagerMixin, View):
+    inv_module = "requests"
+    inv_level  = "manage"
     def post(self, request, pk):
         sr = get_object_or_404(StockRequest, pk=pk)
         try:
@@ -790,6 +877,8 @@ class QRResolveView(LoginRequiredMixin, View):
 
 
 class QRScanPageView(_InventoryContextMixin, InventoryAccessMixin, TemplateView):
+    inv_module = "scan"
+    inv_level  = "view"
     """Render the camera-based scanner UI (HTML5 + jsQR)."""
     template_name = 'inventory/scan.html'
 
@@ -849,6 +938,8 @@ class QRLabelView(_InventoryContextMixin, InventoryAccessMixin, View):
 # ════════════════════════════════════════════════════════════════════════════
 
 class StockTakeListView(_InventoryContextMixin, InventoryManagerMixin, ListView):
+    inv_module = "stocktake"
+    inv_level  = "view"
     template_name = 'inventory/stocktake_list.html'
     context_object_name = 'takes'
     paginate_by = 20
@@ -858,6 +949,8 @@ class StockTakeListView(_InventoryContextMixin, InventoryManagerMixin, ListView)
 
 
 class StockTakeCreateView(_InventoryContextMixin, InventoryManagerMixin, View):
+    inv_module = "stocktake"
+    inv_level  = "operate"
     template_name = 'inventory/stocktake_form.html'
 
     def get(self, request):
@@ -884,6 +977,8 @@ class StockTakeCreateView(_InventoryContextMixin, InventoryManagerMixin, View):
 
 
 class StockTakeDetailView(_InventoryContextMixin, InventoryManagerMixin, DetailView):
+    inv_module = "stocktake"
+    inv_level  = "view"
     model = StockTake
     template_name = 'inventory/stocktake_detail.html'
     context_object_name = 'st'
@@ -920,6 +1015,8 @@ class StockTakeDetailView(_InventoryContextMixin, InventoryManagerMixin, DetailV
 # ════════════════════════════════════════════════════════════════════════════
 
 class StockReportView(_InventoryContextMixin, InventoryManagerMixin, TemplateView):
+    inv_module = "reports"
+    inv_level  = "view"
     template_name = 'inventory/report_stock.html'
 
     def get_context_data(self, **kwargs):
@@ -940,6 +1037,8 @@ class StockReportView(_InventoryContextMixin, InventoryManagerMixin, TemplateVie
 
 
 class AssetReportView(_InventoryContextMixin, InventoryManagerMixin, TemplateView):
+    inv_module = "reports"
+    inv_level  = "view"
     template_name = 'inventory/report_assets.html'
 
     def get_context_data(self, **kwargs):
@@ -1077,6 +1176,8 @@ class AccessControlRevokeView(_AdminMixin, View):
 # ════════════════════════════════════════════════════════════════════════════
 
 class CatalogBuilderView(_InventoryContextMixin, InventoryAccessMixin, TemplateView):
+    inv_module = "products"
+    inv_level  = "view"
     """
     GET /inventory/catalog/
         Renders the builder page — pick template, columns, theme — and a
@@ -1110,6 +1211,8 @@ class CatalogBuilderView(_InventoryContextMixin, InventoryAccessMixin, TemplateV
 
 
 class CatalogRenderView(_InventoryContextMixin, InventoryAccessMixin, View):
+    inv_module = "products"
+    inv_level  = "view"
     """
     GET /inventory/catalog/render/?template=grid&theme=midnight&...
         Renders the catalog as standalone HTML — used both as the iframe
@@ -1191,6 +1294,8 @@ class CatalogRenderView(_InventoryContextMixin, InventoryAccessMixin, View):
 
 
 class BestSellersView(_InventoryContextMixin, InventoryAccessMixin, TemplateView):
+    inv_module = "products"
+    inv_level  = "view"
     """
     GET /inventory/best-sellers/
         Builder for downloadable best-sellers card.
@@ -1225,6 +1330,8 @@ class BestSellersView(_InventoryContextMixin, InventoryAccessMixin, TemplateView
 
 
 class BestSellersCardView(_InventoryContextMixin, InventoryAccessMixin, View):
+    inv_module = "products"
+    inv_level  = "view"
     """
     GET /inventory/best-sellers/card/?theme=midnight&top=5
         Renders the standalone shareable card (HTML — user prints to PDF

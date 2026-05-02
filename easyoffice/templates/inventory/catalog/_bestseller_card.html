@@ -1,0 +1,159 @@
+{% load humanize %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+  @page { size: 110mm 110mm; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #f3f4f6; }
+  body {
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: #0f172a;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .card {
+    width: 110mm; height: 110mm;
+    margin: 18px auto;
+    background: linear-gradient(135deg, {{ theme.primary }} 0%, #000 100%);
+    color: #fff;
+    padding: 8mm;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 12px 40px rgba(15,23,42,.25);
+  }
+  .card::after {
+    content: ''; position: absolute; inset: 0;
+    background: radial-gradient(circle at 90% 10%, {{ theme.accent }}55, transparent 55%);
+    pointer-events: none;
+  }
+  .card-inner { position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; }
+
+  .head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    border-bottom: 1px solid rgba(255,255,255,.18); padding-bottom: 4mm;
+    margin-bottom: 5mm;
+  }
+  .head .label {
+    text-transform: uppercase; letter-spacing: .3em; font-size: 7pt;
+    opacity: .65; font-weight: 700;
+  }
+  .head h1 {
+    font-size: 22pt; font-weight: 800; line-height: 1; letter-spacing: -.02em;
+    margin: 2mm 0 0;
+  }
+  .head .right {
+    font-size: 7pt; opacity: .55; letter-spacing: .12em;
+    text-transform: uppercase; font-weight: 700; text-align: right;
+  }
+  .subtitle { font-size: 9pt; opacity: .7; margin: 1mm 0 0; }
+
+  ol { list-style: none; padding: 0; margin: 0; flex: 1; display: flex; flex-direction: column; gap: 2mm; }
+  li {
+    display: grid; grid-template-columns: 7mm 1fr auto; gap: 3mm; align-items: center;
+    padding: 3mm 0; border-bottom: 1px solid rgba(255,255,255,.1);
+  }
+  li:last-child { border-bottom: 0; }
+  .rank {
+    font-size: 16pt; font-weight: 800; color: {{ theme.accent }};
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .name { font-weight: 700; font-size: 11pt; line-height: 1.15; }
+  .meta { font-size: 7.5pt; opacity: .55; margin-top: 1pt; }
+  .qty {
+    text-align: right;
+    font-weight: 800; font-size: 12pt;
+    color: #fff;
+  }
+  .qty small { display: block; font-size: 7pt; opacity: .55; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; margin-top: 1pt; }
+
+  .footer {
+    border-top: 1px solid rgba(255,255,255,.18); padding-top: 3mm; margin-top: 4mm;
+    display: flex; justify-content: space-between; font-size: 7pt; opacity: .55;
+  }
+
+  .print-bar {
+    position: fixed; top: 14px; right: 14px; z-index: 9999;
+    display: flex; gap: 8px;
+  }
+  .print-bar button {
+    padding: 8px 14px; background: {{ theme.primary }}; color: #fff;
+    border: 0; border-radius: 8px; cursor: pointer; font-weight: 700;
+    box-shadow: 0 4px 12px rgba(15,23,42,.18);
+  }
+  .download-hint {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    background: #111; color: #fff; padding: 8px 14px; border-radius: 8px;
+    font-size: 12px;
+  }
+
+  @media print {
+    .print-bar, .download-hint { display: none !important; }
+    body { background: #fff; }
+    .card { margin: 0; box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="print-bar">
+  <button onclick="window.print()">🖨 Print / save PDF</button>
+  <button onclick="downloadPng()">📷 Save as image</button>
+</div>
+
+<div class="card" id="cardEl">
+  <div class="card-inner">
+    <div class="head">
+      <div>
+        <div class="label">⭐ Top sellers</div>
+        <h1>{{ title }}</h1>
+        <div class="subtitle">{{ subtitle }}</div>
+      </div>
+      <div class="right">{{ now|date:"M Y" }}</div>
+    </div>
+
+    <ol>
+      {% for p in rows %}
+      <li>
+        <div class="rank">{{ forloop.counter }}</div>
+        <div>
+          <div class="name">{{ p.name|truncatechars:36 }}</div>
+          <div class="meta">{{ p.sku }}{% if p.category %} · {{ p.category.name }}{% endif %}</div>
+        </div>
+        <div class="qty">
+          {{ p.sold|floatformat:0|intcomma }}
+          <small>sold</small>
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+
+    <div class="footer">
+      <span>{{ footer|default:"" }}</span>
+      <span>easyoffice · {{ now|date:"d.m.Y" }}</span>
+    </div>
+  </div>
+</div>
+
+<div class="download-hint">Tip: Right-click → "Save image" or print → "Save as PDF"</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script>
+  function downloadPng() {
+    const el = document.getElementById('cardEl');
+    if (typeof html2canvas !== 'function') {
+      alert('Image library not loaded yet — try again in a second.');
+      return;
+    }
+    html2canvas(el, {scale: 3, useCORS: true, backgroundColor: null}).then(canvas => {
+      const link = document.createElement('a');
+      link.download = 'best-sellers-' + new Date().toISOString().slice(0,10) + '.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    });
+  }
+</script>
+</body>
+</html>

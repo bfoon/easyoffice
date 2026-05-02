@@ -70,4 +70,10 @@ urlpatterns = [
     # Access control
     path('access/',                   views.AccessControlListView.as_view(),    name='access_list'),
     path('access/<uuid:pk>/revoke/',  views.AccessControlRevokeView.as_view(),  name='access_revoke'),
+
+    # Catalog generator
+    path('catalog/',                  views.CatalogBuilderView.as_view(),       name='catalog_builder'),
+    path('catalog/render/',           views.CatalogRenderView.as_view(),        name='catalog_render'),
+    path('best-sellers/',             views.BestSellersView.as_view(),          name='best_sellers'),
+    path('best-sellers/card/',        views.BestSellersCardView.as_view(),      name='best_sellers_card'),
 ]

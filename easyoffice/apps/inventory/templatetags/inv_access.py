@@ -60,3 +60,27 @@ def inv_has_any(user, *modules):
     """True if the user has at least VIEW on any of the listed modules.
     Used for collapsing whole sub-nav sections that turn out empty."""
     return any(_can_view(user, m) for m in modules)
+
+
+@register.filter(name='subtract')
+def subtract(a, b):
+    """Decimal-safe subtraction for templates: {{ sell|subtract:cost }}."""
+    from decimal import Decimal
+    try:
+        return Decimal(str(a or 0)) - Decimal(str(b or 0))
+    except Exception:
+        return ''
+
+
+@register.filter(name='margin_pct')
+def margin_pct(sell, cost):
+    """Percentage margin: ((sell - cost) / sell) * 100."""
+    from decimal import Decimal
+    try:
+        s = Decimal(str(sell or 0))
+        c = Decimal(str(cost or 0))
+        if s == 0:
+            return ''
+        return ((s - c) / s * 100).quantize(Decimal('0.1'))
+    except Exception:
+        return ''

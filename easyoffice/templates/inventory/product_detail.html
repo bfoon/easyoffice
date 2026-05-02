@@ -1,21 +1,31 @@
 {% extends "inventory/inventory_base.html" %}
-{% load humanize %}
+{% load humanize inv_access %}
 {% block title %}{{ product.name }} — Inventory{% endblock %}
 {% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / <a href="{% url 'inventory:product_list' %}">Products</a> / {{ product.name }}{% endblock %}
 
 {% block inv_content %}
 
   <div class="inv-page-header">
-    <div class="inv-page-title-block">
-      <div class="inv-page-eyebrow">
-        Product · {{ product.get_kind_display }}
-        {% if product.category %} · {{ product.category.name }}{% endif %}
+    <div class="inv-page-title-block" style="display:flex;gap:18px;align-items:flex-start">
+      {% if product.image %}
+      <img src="{{ product.image.url }}" alt="{{ product.name }}"
+           style="width:96px;height:96px;border-radius:14px;object-fit:cover;border:1px solid #e5e7eb;flex-shrink:0;background:#f8fafc">
+      {% else %}
+      <div style="width:96px;height:96px;border-radius:14px;background:linear-gradient(135deg,#f1f5f9,#e2e8f0);color:#94a3b8;display:flex;align-items:center;justify-content:center;font-size:2rem;flex-shrink:0">
+        <i class="bi bi-box-seam"></i>
       </div>
-      <h1 class="inv-page-title">{{ product.name }}</h1>
-      <p class="inv-page-subtitle">
-        <span class="inv-table-mono">{{ product.sku }}</span>
-        {% if product.barcode %} · <span class="inv-table-mono">BC {{ product.barcode }}</span>{% endif %}
-      </p>
+      {% endif %}
+      <div style="min-width:0;flex:1">
+        <div class="inv-page-eyebrow">
+          Product · {{ product.get_kind_display }}
+          {% if product.category %} · {{ product.category.name }}{% endif %}
+        </div>
+        <h1 class="inv-page-title">{{ product.name }}</h1>
+        <p class="inv-page-subtitle">
+          <span class="inv-table-mono">{{ product.sku }}</span>
+          {% if product.barcode %} · <span class="inv-table-mono">BC {{ product.barcode }}</span>{% endif %}
+        </p>
+      </div>
     </div>
     <div class="inv-page-actions">
       <a href="{% url 'inventory:qr_label' 'product' product.pk %}" target="_blank" class="inv-btn">
@@ -36,6 +46,7 @@
       <div class="inv-card">
         <h3 class="inv-card-title" style="margin-bottom:14px">Pricing</h3>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          {% if request.user|can_manage:"products" %}
           <div style="padding:10px;background:#f8fafc;border-radius:10px">
             <div style="font-size:.66rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Cost</div>
             <div style="font-size:1.05rem;font-weight:800;color:#0f172a;margin-top:2px">
@@ -48,7 +59,30 @@
               {% if product.sell_price %}<span style="font-size:.7rem;color:#1d4ed8">{{ product.currency }}</span> {{ product.sell_price|floatformat:2|intcomma }}{% else %}<span style="color:#94a3b8">—</span>{% endif %}
             </div>
           </div>
+          {% else %}
+          <div style="padding:10px;background:linear-gradient(135deg,#dbeafe,#bfdbfe);border-radius:10px;grid-column:span 2">
+            <div style="font-size:.66rem;color:#1d4ed8;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Sell price</div>
+            <div style="font-size:1.05rem;font-weight:800;color:#0f172a;margin-top:2px">
+              {% if product.sell_price %}<span style="font-size:.7rem;color:#1d4ed8">{{ product.currency }}</span> {{ product.sell_price|floatformat:2|intcomma }}{% else %}<span style="color:#94a3b8">—</span>{% endif %}
+            </div>
+          </div>
+          {% endif %}
         </div>
+        {% if request.user|can_manage:"products" and product.cost_price and product.sell_price %}
+        <div style="margin-top:10px;padding:10px 12px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:.66rem;color:#166534;font-weight:700;text-transform:uppercase;letter-spacing:.06em">Margin</span>
+            <div style="text-align:right">
+              <div style="font-size:.92rem;font-weight:800;color:#15803d">
+                {{ product.currency }} {{ product.sell_price|subtract:product.cost_price|floatformat:2|intcomma }}
+              </div>
+              <div style="font-size:.66rem;color:#166534;font-weight:600">
+                {{ product.sell_price|margin_pct:product.cost_price }}%
+              </div>
+            </div>
+          </div>
+        </div>
+        {% endif %}
         <div style="margin-top:14px">
           <div class="inv-detail-row">
             <span class="inv-detail-label">Reorder at</span>
@@ -81,7 +115,7 @@
         </div>
       </div>
 
-      {% if product.preferred_supplier %}
+      {% if product.preferred_supplier and request.user|can_manage:"products" %}
       <div class="inv-card">
         <h3 class="inv-card-title" style="margin-bottom:10px">Preferred supplier</h3>
         <div style="font-weight:700;color:#0f172a;margin-bottom:6px">{{ product.preferred_supplier.name }}</div>

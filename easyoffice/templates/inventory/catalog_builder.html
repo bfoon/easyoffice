@@ -1,0 +1,275 @@
+{% extends "inventory/inventory_base.html" %}
+{% load humanize %}
+{% block title %}Catalog Builder — Inventory{% endblock %}
+{% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / Catalog{% endblock %}
+
+{% block extra_css %}
+{{ block.super }}
+<style>
+  .cb-shell { display: grid; grid-template-columns: 320px 1fr; gap: 18px; }
+  @media (max-width: 992px) { .cb-shell { grid-template-columns: 1fr; } }
+
+  .cb-section { padding: 14px; border-bottom: 1px solid #f1f5f9; }
+  .cb-section:last-child { border-bottom: 0; }
+  .cb-section h4 {
+    font-size: .68rem; letter-spacing: .14em; text-transform: uppercase;
+    color: #94a3b8; font-weight: 800; margin: 0 0 10px;
+  }
+
+  .cb-template-grid, .cb-theme-grid {
+    display: grid; gap: 8px;
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .cb-template-grid label, .cb-theme-grid label {
+    display: block;
+    cursor: pointer;
+    border: 2px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 10px;
+    font-size: .82rem;
+    transition: all .12s ease;
+    background: #fff;
+  }
+  .cb-template-grid label:hover, .cb-theme-grid label:hover {
+    border-color: #cbd5e1;
+  }
+  .cb-template-grid input:checked + .cb-card-inner,
+  .cb-theme-grid input:checked + .cb-card-inner {
+    /* CSS hack: the radio is inside the label so we can't use sibling combinator
+       here. Use the parent label.is-active style applied by JS instead. */
+  }
+  .cb-template-grid label.is-active, .cb-theme-grid label.is-active {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .14);
+  }
+  .cb-template-grid input, .cb-theme-grid input { display: none; }
+  .cb-template-grid label .name { font-weight: 700; color: #0f172a; }
+  .cb-template-grid label .desc { font-size: .7rem; color: #64748b; margin-top: 2px; }
+
+  .cb-theme-grid label { display: flex; align-items: center; gap: 8px; }
+  .cb-theme-swatch {
+    width: 20px; height: 20px; border-radius: 6px; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--p, #0f172a), var(--a, #2563eb));
+  }
+
+  .cb-form-row { margin-bottom: 10px; }
+  .cb-form-row label.cb-label {
+    display: block; font-size: .68rem; text-transform: uppercase;
+    letter-spacing: .06em; color: #64748b; font-weight: 700; margin-bottom: 4px;
+  }
+  .cb-toggle {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    transition: background .12s;
+  }
+  .cb-toggle:hover { background: #f8fafc; }
+  .cb-toggle input { margin: 0; }
+
+  .cb-preview-shell {
+    background: #f1f5f9; border-radius: 14px; padding: 18px;
+    height: calc(100vh - 240px); min-height: 600px;
+    display: flex; flex-direction: column;
+  }
+  .cb-preview-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 12px;
+  }
+  .cb-preview-frame {
+    flex: 1; width: 100%; border: 0; border-radius: 10px;
+    background: #fff; box-shadow: 0 4px 14px rgba(15, 23, 42, .08);
+  }
+</style>
+{% endblock %}
+
+{% block inv_content %}
+
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Marketing</div>
+      <h1 class="inv-page-title">Catalog Builder</h1>
+      <p class="inv-page-subtitle">
+        Create branded product catalogs to share with customers — pick a template, customize the look, then download or print.
+      </p>
+    </div>
+    <div class="inv-page-actions">
+      <a href="{% url 'inventory:best_sellers' %}" class="inv-btn">
+        <i class="bi bi-stars"></i> Best sellers card
+      </a>
+    </div>
+  </div>
+
+  <div class="cb-shell">
+    {# ── Sidebar: controls ────────────────────────────────────── #}
+    <div class="inv-card inv-card-pad-0">
+
+      <div class="cb-section">
+        <h4>Template</h4>
+        <div class="cb-template-grid" id="cbTemplate">
+          {% for t in templates %}
+          <label class="{% if forloop.first %}is-active{% endif %}">
+            <input type="radio" name="template" value="{{ t.key }}" {% if forloop.first %}checked{% endif %}>
+            <div class="name">{{ t.name }}</div>
+            <div class="desc">{{ t.description }}</div>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="cb-section">
+        <h4>Theme</h4>
+        <div class="cb-theme-grid" id="cbTheme">
+          {% for t in themes %}
+          <label class="{% if forloop.first %}is-active{% endif %}" style="--p:{{ t.primary }};--a:{{ t.accent }}">
+            <input type="radio" name="theme" value="{{ t.key }}" {% if forloop.first %}checked{% endif %}>
+            <span class="cb-theme-swatch"></span>
+            <span>{{ t.name }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="cb-section">
+        <h4>Cover</h4>
+        <div class="cb-form-row">
+          <label class="cb-label">Title</label>
+          <input type="text" class="inv-input" id="cbTitle" value="Product Catalog" maxlength="80">
+        </div>
+        <div class="cb-form-row">
+          <label class="cb-label">Subtitle</label>
+          <input type="text" class="inv-input" id="cbSubtitle" value="Curated for you" maxlength="120">
+        </div>
+        <div class="cb-form-row">
+          <label class="cb-label">Footer / contact</label>
+          <input type="text" class="inv-input" id="cbFooter" placeholder="e.g. info@yourbrand.com" maxlength="200">
+        </div>
+      </div>
+
+      <div class="cb-section">
+        <h4>Filters</h4>
+        <div class="cb-form-row">
+          <label class="cb-label">Category</label>
+          <select class="inv-select" id="cbCategory">
+            <option value="">All categories</option>
+            {% for c in categories %}<option value="{{ c.pk }}">{{ c.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="cb-form-row">
+          <label class="cb-label">Top sellers only</label>
+          <select class="inv-select" id="cbTop">
+            <option value="">No — show all</option>
+            <option value="10">Top 10 sellers</option>
+            <option value="20">Top 20 sellers</option>
+            <option value="50">Top 50 sellers</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="cb-section">
+        <h4>Columns</h4>
+        <label class="cb-toggle"><input type="checkbox" id="cbShowSku" checked> SKU</label>
+        <label class="cb-toggle"><input type="checkbox" id="cbShowPrice" checked> Sell price</label>
+        <label class="cb-toggle"><input type="checkbox" id="cbShowStock"> Stock available</label>
+        {% if request.user.is_superuser or request.user.is_staff %}
+        <label class="cb-toggle"><input type="checkbox" id="cbShowCost"> Cost price (internal only)</label>
+        {% endif %}
+      </div>
+
+      <div class="cb-section" style="border-bottom:0">
+        <button class="inv-btn inv-btn-primary" style="width:100%" id="cbRefresh">
+          <i class="bi bi-arrow-clockwise"></i> Refresh preview
+        </button>
+      </div>
+    </div>
+
+    {# ── Preview pane ─────────────────────────────────────────── #}
+    <div>
+      <div class="cb-preview-shell">
+        <div class="cb-preview-bar">
+          <div style="font-size:.84rem;color:#64748b">
+            <i class="bi bi-eye"></i> Live preview
+          </div>
+          <div style="display:flex;gap:6px">
+            <button id="cbPrint" class="inv-btn inv-btn-sm">
+              <i class="bi bi-printer"></i> Print / save PDF
+            </button>
+            <a id="cbOpen" class="inv-btn inv-btn-sm" target="_blank" href="#">
+              <i class="bi bi-box-arrow-up-right"></i> Open
+            </a>
+          </div>
+        </div>
+        <iframe id="cbPreview" class="cb-preview-frame"></iframe>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const RENDER = "{% url 'inventory:catalog_render' %}";
+  const frame  = document.getElementById('cbPreview');
+  const open   = document.getElementById('cbOpen');
+
+  function syncRadioGroup(containerId, name) {
+    const c = document.getElementById(containerId);
+    c.addEventListener('change', () => {
+      c.querySelectorAll('label').forEach(l => l.classList.remove('is-active'));
+      const checked = c.querySelector('input:checked');
+      if (checked) checked.closest('label').classList.add('is-active');
+      refresh();
+    });
+  }
+  syncRadioGroup('cbTemplate', 'template');
+  syncRadioGroup('cbTheme', 'theme');
+
+  function val(id) { const el = document.getElementById(id); return el ? el.value : ''; }
+  function checked(id) { const el = document.getElementById(id); return el && el.checked; }
+  function radio(name) {
+    const r = document.querySelector('input[name="'+name+'"]:checked');
+    return r ? r.value : '';
+  }
+
+  function buildUrl() {
+    const params = new URLSearchParams({
+      template:   radio('template')   || 'grid',
+      theme:      radio('theme')      || 'midnight',
+      title:      val('cbTitle'),
+      subtitle:   val('cbSubtitle'),
+      footer:     val('cbFooter'),
+      category:   val('cbCategory'),
+      top:        val('cbTop'),
+      show_sku:   checked('cbShowSku')   ? '1' : '0',
+      show_price: checked('cbShowPrice') ? '1' : '0',
+      show_stock: checked('cbShowStock') ? '1' : '0',
+    });
+    if (document.getElementById('cbShowCost') && checked('cbShowCost')) {
+      params.set('show_cost', '1');
+    }
+    return RENDER + '?' + params.toString();
+  }
+
+  let refreshTimer = null;
+  function refresh(immediate) {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      const url = buildUrl();
+      frame.src = url;
+      open.href = url;
+    }, immediate ? 0 : 350);
+  }
+
+  // Wire all live inputs
+  ['cbTitle','cbSubtitle','cbFooter','cbCategory','cbTop',
+   'cbShowSku','cbShowPrice','cbShowStock','cbShowCost'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', () => refresh());
+  });
+
+  document.getElementById('cbRefresh').addEventListener('click', () => refresh(true));
+  document.getElementById('cbPrint').addEventListener('click', () => {
+    if (frame.contentWindow) frame.contentWindow.print();
+  });
+
+  // Initial render
+  refresh(true);
+})();
+</script>
+{% endblock %}

@@ -51,6 +51,70 @@
   }
   .inv-subnav-link i { font-size: .92rem; }
 
+  /* Locked state — link is visible but click intercepted */
+  .inv-subnav-link.is-locked {
+    color: #cbd5e1 !important;
+    cursor: not-allowed;
+    position: relative;
+  }
+  .inv-subnav-link.is-locked:hover {
+    background: transparent;
+    color: #cbd5e1 !important;
+  }
+  .inv-subnav-link.is-locked::after {
+    content: '\F47A'; /* bi-lock-fill */
+    font-family: 'bootstrap-icons';
+    position: absolute;
+    top: 4px; right: 2px;
+    font-size: .55rem;
+    color: #cbd5e1;
+  }
+  .dropdown-item.is-locked {
+    color: #cbd5e1 !important;
+    cursor: not-allowed;
+    pointer-events: auto;
+  }
+  .dropdown-item.is-locked:hover { background: transparent; }
+  .dropdown-item.is-locked i {
+    background: #f1f5f9 !important;
+    color: #cbd5e1 !important;
+  }
+
+  /* Toast — slides in from bottom-right when a locked link is clicked */
+  .inv-toast-host {
+    position: fixed;
+    bottom: 20px; right: 20px;
+    z-index: 9999;
+    display: flex; flex-direction: column; gap: 10px;
+    pointer-events: none;
+  }
+  .inv-toast {
+    pointer-events: auto;
+    background: #0f172a;
+    color: #fff;
+    padding: 12px 16px;
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, .25);
+    display: flex; align-items: center; gap: 10px;
+    font-size: .86rem;
+    max-width: 360px;
+    opacity: 0;
+    transform: translateX(20px);
+    transition: opacity .2s ease, transform .2s ease;
+  }
+  .inv-toast.show {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  .inv-toast i {
+    width: 28px; height: 28px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(239, 68, 68, .18);
+    color: #fca5a5;
+    border-radius: 8px;
+    flex-shrink: 0;
+  }
+
   /* Quick-add dropdown trigger */
   .inv-add-btn {
     display: inline-flex; align-items: center; gap: 6px;
@@ -379,60 +443,61 @@
          class="inv-subnav-link {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
         <i class="bi bi-speedometer2"></i><span>Overview</span>
       </a>
-      {% if request.user|can_view:"products" %}
-      <a href="{% url 'inventory:product_list' %}"
-         class="inv-subnav-link {% if 'product' in request.resolver_match.url_name %}active{% endif %}">
+      <a href="{% if request.user|can_view:'products' %}{% url 'inventory:product_list' %}{% else %}#{% endif %}"
+         class="inv-subnav-link {% if 'product' in request.resolver_match.url_name %}active{% endif %} {% if not request.user|can_view:'products' %}is-locked{% endif %}"
+         {% if not request.user|can_view:'products' %}data-locked-msg="You don't have access to Products"{% endif %}>
         <i class="bi bi-box-seam"></i><span>Products</span>
       </a>
-      {% endif %}
-      {% if request.user|can_view:"assets" %}
-      <a href="{% url 'inventory:asset_list' %}"
-         class="inv-subnav-link {% if 'asset' in request.resolver_match.url_name %}active{% endif %}">
+      <a href="{% if request.user|can_view:'assets' %}{% url 'inventory:asset_list' %}{% else %}#{% endif %}"
+         class="inv-subnav-link {% if 'asset' in request.resolver_match.url_name %}active{% endif %} {% if not request.user|can_view:'assets' %}is-locked{% endif %}"
+         {% if not request.user|can_view:'assets' %}data-locked-msg="You don't have access to Assets"{% endif %}>
         <i class="bi bi-laptop"></i><span>Assets</span>
       </a>
-      {% endif %}
-      {% if request.user|can_view:"locations" %}
-      <a href="{% url 'inventory:location_list' %}"
-         class="inv-subnav-link {% if 'location' in request.resolver_match.url_name %}active{% endif %}">
+      <a href="{% if request.user|can_view:'locations' %}{% url 'inventory:location_list' %}{% else %}#{% endif %}"
+         class="inv-subnav-link {% if 'location' in request.resolver_match.url_name %}active{% endif %} {% if not request.user|can_view:'locations' %}is-locked{% endif %}"
+         {% if not request.user|can_view:'locations' %}data-locked-msg="You don't have access to Locations"{% endif %}>
         <i class="bi bi-geo-alt"></i><span>Locations</span>
       </a>
-      {% endif %}
-      {% if request.user|can_view:"suppliers" %}
-      <a href="{% url 'inventory:supplier_list' %}"
-         class="inv-subnav-link {% if 'supplier' in request.resolver_match.url_name %}active{% endif %}">
+      <a href="{% if request.user|can_view:'suppliers' %}{% url 'inventory:supplier_list' %}{% else %}#{% endif %}"
+         class="inv-subnav-link {% if 'supplier' in request.resolver_match.url_name %}active{% endif %} {% if not request.user|can_view:'suppliers' %}is-locked{% endif %}"
+         {% if not request.user|can_view:'suppliers' %}data-locked-msg="You don't have access to Suppliers"{% endif %}>
         <i class="bi bi-truck"></i><span>Suppliers</span>
       </a>
-      {% endif %}
-      {% if request.user|can_view:"categories" %}
-      <a href="{% url 'inventory:category_list' %}"
-         class="inv-subnav-link {% if 'category' in request.resolver_match.url_name %}active{% endif %}">
+      <a href="{% if request.user|can_view:'categories' %}{% url 'inventory:category_list' %}{% else %}#{% endif %}"
+         class="inv-subnav-link {% if 'category' in request.resolver_match.url_name %}active{% endif %} {% if not request.user|can_view:'categories' %}is-locked{% endif %}"
+         {% if not request.user|can_view:'categories' %}data-locked-msg="You don't have access to Categories"{% endif %}>
         <i class="bi bi-tags"></i><span>Categories</span>
       </a>
-      {% endif %}
-      {% if request.user|can_view:"movements" %}
-      <a href="{% url 'inventory:movement_list' %}"
-         class="inv-subnav-link {% if 'movement' in request.resolver_match.url_name %}active{% endif %}">
+      <a href="{% if request.user|can_view:'movements' %}{% url 'inventory:movement_list' %}{% else %}#{% endif %}"
+         class="inv-subnav-link {% if 'movement' in request.resolver_match.url_name %}active{% endif %} {% if not request.user|can_view:'movements' %}is-locked{% endif %}"
+         {% if not request.user|can_view:'movements' %}data-locked-msg="You don't have access to Movements"{% endif %}>
         <i class="bi bi-arrow-left-right"></i><span>Movements</span>
       </a>
-      {% endif %}
-      {% if request.user|can_view:"requests" %}
-      <a href="{% url 'inventory:stock_request_list' %}"
-         class="inv-subnav-link {% if 'request' in request.resolver_match.url_name %}active{% endif %}">
+      <a href="{% if request.user|can_view:'requests' %}{% url 'inventory:stock_request_list' %}{% else %}#{% endif %}"
+         class="inv-subnav-link {% if 'request' in request.resolver_match.url_name %}active{% endif %} {% if not request.user|can_view:'requests' %}is-locked{% endif %}"
+         {% if not request.user|can_view:'requests' %}data-locked-msg="You don't have access to Stock Requests"{% endif %}>
         <i class="bi bi-clipboard2-check"></i><span>Requests</span>
       </a>
-      {% endif %}
-      {% if request.user|can_view:"stocktake" %}
-      <a href="{% url 'inventory:stocktake_list' %}"
-         class="inv-subnav-link {% if 'stocktake' in request.resolver_match.url_name %}active{% endif %}">
+      <a href="{% if request.user|can_view:'stocktake' %}{% url 'inventory:stocktake_list' %}{% else %}#{% endif %}"
+         class="inv-subnav-link {% if 'stocktake' in request.resolver_match.url_name %}active{% endif %} {% if not request.user|can_view:'stocktake' %}is-locked{% endif %}"
+         {% if not request.user|can_view:'stocktake' %}data-locked-msg="You don't have access to Cycle Counts"{% endif %}>
         <i class="bi bi-ui-checks"></i><span>Cycle Counts</span>
       </a>
-      {% endif %}
-      {% if request.user|can_view:"reports" %}
-      <a href="{% url 'inventory:report_stock' %}"
-         class="inv-subnav-link {% if 'report' in request.resolver_match.url_name %}active{% endif %}">
+      <a href="{% if request.user|can_view:'reports' %}{% url 'inventory:report_stock' %}{% else %}#{% endif %}"
+         class="inv-subnav-link {% if 'report' in request.resolver_match.url_name %}active{% endif %} {% if not request.user|can_view:'reports' %}is-locked{% endif %}"
+         {% if not request.user|can_view:'reports' %}data-locked-msg="You don't have access to Reports"{% endif %}>
         <i class="bi bi-graph-up"></i><span>Reports</span>
       </a>
-      {% endif %}
+      <a href="{% if request.user|can_view:'products' %}{% url 'inventory:catalog_builder' %}{% else %}#{% endif %}"
+         class="inv-subnav-link {% if 'catalog' in request.resolver_match.url_name %}active{% endif %} {% if not request.user|can_view:'products' %}is-locked{% endif %}"
+         {% if not request.user|can_view:'products' %}data-locked-msg="You don't have access to the catalog"{% endif %}>
+        <i class="bi bi-grid-3x3-gap"></i><span>Catalog</span>
+      </a>
+      <a href="{% if request.user|can_view:'products' %}{% url 'inventory:best_sellers' %}{% else %}#{% endif %}"
+         class="inv-subnav-link {% if 'best_sellers' in request.resolver_match.url_name %}active{% endif %} {% if not request.user|can_view:'products' %}is-locked{% endif %}"
+         {% if not request.user|can_view:'products' %}data-locked-msg="You don't have access to best sellers"{% endif %}>
+        <i class="bi bi-stars"></i><span>Best Sellers</span>
+      </a>
       {% if request.user|can_manage:"admin" or request.user.is_superuser %}
       <a href="{% url 'inventory:access_list' %}"
          class="inv-subnav-link {% if 'access' in request.resolver_match.url_name %}active{% endif %}">
@@ -441,11 +506,12 @@
       {% endif %}
     </div>
 
-    {% if request.user|can_view:"scan" %}
-    <a href="{% url 'inventory:scan' %}" class="inv-subnav-link" title="Scan a QR code" style="flex-shrink:0">
+    <a href="{% if request.user|can_view:'scan' %}{% url 'inventory:scan' %}{% else %}#{% endif %}"
+       class="inv-subnav-link {% if not request.user|can_view:'scan' %}is-locked{% endif %}"
+       {% if not request.user|can_view:'scan' %}data-locked-msg="You don't have access to the QR scanner"{% endif %}
+       title="Scan a QR code" style="flex-shrink:0">
       <i class="bi bi-qr-code-scan"></i>
     </a>
-    {% endif %}
 
     <div class="dropdown" style="flex-shrink:0">
       <button class="inv-add-btn" type="button" data-bs-toggle="dropdown" aria-expanded="false" data-bs-display="static">
@@ -454,108 +520,106 @@
         <i class="bi bi-chevron-down caret"></i>
       </button>
       <ul class="dropdown-menu dropdown-menu-end inv-add-menu">
-        {% if request.user|can_operate:"products" or request.user|can_operate:"assets" or request.user|can_operate:"categories" %}
         <li class="dropdown-header">Catalog</li>
-        {% if request.user|can_operate:"products" %}
-        <li><a class="dropdown-item" href="{% url 'inventory:product_create' %}">
+        <li><a class="dropdown-item {% if not request.user|can_operate:'products' %}is-locked{% endif %}"
+               href="{% if request.user|can_operate:'products' %}{% url 'inventory:product_create' %}{% else %}#{% endif %}"
+               {% if not request.user|can_operate:'products' %}data-locked-msg="You can't create products"{% endif %}>
           <i class="bi bi-box-seam" style="background:#dbeafe;color:#1d4ed8"></i>
           <div>
             <div>New product</div>
             <small style="color:#64748b;font-weight:400">Add an item to the catalog</small>
           </div>
         </a></li>
-        {% endif %}
-        {% if request.user|can_operate:"assets" %}
-        <li><a class="dropdown-item" href="{% url 'inventory:asset_create' %}">
+        <li><a class="dropdown-item {% if not request.user|can_operate:'assets' %}is-locked{% endif %}"
+               href="{% if request.user|can_operate:'assets' %}{% url 'inventory:asset_create' %}{% else %}#{% endif %}"
+               {% if not request.user|can_operate:'assets' %}data-locked-msg="You can't create assets"{% endif %}>
           <i class="bi bi-laptop" style="background:#fef3c7;color:#b45309"></i>
           <div>
             <div>New asset</div>
             <small style="color:#64748b;font-weight:400">Register a trackable unit</small>
           </div>
         </a></li>
-        {% endif %}
-        {% if request.user|can_operate:"categories" %}
-        <li><a class="dropdown-item" href="{% url 'inventory:category_create' %}">
+        <li><a class="dropdown-item {% if not request.user|can_operate:'categories' %}is-locked{% endif %}"
+               href="{% if request.user|can_operate:'categories' %}{% url 'inventory:category_create' %}{% else %}#{% endif %}"
+               {% if not request.user|can_operate:'categories' %}data-locked-msg="You can't create categories"{% endif %}>
           <i class="bi bi-tags" style="background:#ede9fe;color:#6d28d9"></i>
           <div>
             <div>New category</div>
             <small style="color:#64748b;font-weight:400">Group products and assets</small>
           </div>
         </a></li>
-        {% endif %}
-        {% endif %}
 
-        {% if request.user|can_operate:"locations" or request.user|can_operate:"suppliers" %}
         <li><hr class="dropdown-divider"></li>
         <li class="dropdown-header">Network</li>
-        {% if request.user|can_operate:"locations" %}
-        <li><a class="dropdown-item" href="{% url 'inventory:location_create' %}">
+        <li><a class="dropdown-item {% if not request.user|can_operate:'locations' %}is-locked{% endif %}"
+               href="{% if request.user|can_operate:'locations' %}{% url 'inventory:location_create' %}{% else %}#{% endif %}"
+               {% if not request.user|can_operate:'locations' %}data-locked-msg="You can't create locations"{% endif %}>
           <i class="bi bi-geo-alt" style="background:#d1fae5;color:#047857"></i>
           <div>
             <div>New location</div>
             <small style="color:#64748b;font-weight:400">Shop, warehouse, or office</small>
           </div>
         </a></li>
-        {% endif %}
-        {% if request.user|can_operate:"suppliers" %}
-        <li><a class="dropdown-item" href="{% url 'inventory:supplier_create' %}">
+        <li><a class="dropdown-item {% if not request.user|can_operate:'suppliers' %}is-locked{% endif %}"
+               href="{% if request.user|can_operate:'suppliers' %}{% url 'inventory:supplier_create' %}{% else %}#{% endif %}"
+               {% if not request.user|can_operate:'suppliers' %}data-locked-msg="You can't create suppliers"{% endif %}>
           <i class="bi bi-truck" style="background:#ffedd5;color:#c2410c"></i>
           <div>
             <div>New supplier</div>
             <small style="color:#64748b;font-weight:400">A vendor you buy from</small>
           </div>
         </a></li>
-        {% endif %}
-        {% endif %}
 
-        {% if request.user|can_operate:"movements" %}
         <li><hr class="dropdown-divider"></li>
         <li class="dropdown-header">Stock movements</li>
-        <li><a class="dropdown-item" href="{% url 'inventory:stock_receive' %}">
+        <li><a class="dropdown-item {% if not request.user|can_operate:'movements' %}is-locked{% endif %}"
+               href="{% if request.user|can_operate:'movements' %}{% url 'inventory:stock_receive' %}{% else %}#{% endif %}"
+               {% if not request.user|can_operate:'movements' %}data-locked-msg="You can't move stock"{% endif %}>
           <i class="bi bi-box-arrow-in-down" style="background:#d1fae5;color:#047857"></i>
           <div>
             <div>Receive stock</div>
             <small style="color:#64748b;font-weight:400">Record incoming goods</small>
           </div>
         </a></li>
-        <li><a class="dropdown-item" href="{% url 'inventory:stock_issue' %}">
+        <li><a class="dropdown-item {% if not request.user|can_operate:'movements' %}is-locked{% endif %}"
+               href="{% if request.user|can_operate:'movements' %}{% url 'inventory:stock_issue' %}{% else %}#{% endif %}"
+               {% if not request.user|can_operate:'movements' %}data-locked-msg="You can't move stock"{% endif %}>
           <i class="bi bi-box-arrow-up" style="background:#ffe4e6;color:#be123c"></i>
           <div>
             <div>Issue stock</div>
             <small style="color:#64748b;font-weight:400">Sales, internal use, returns</small>
           </div>
         </a></li>
-        <li><a class="dropdown-item" href="{% url 'inventory:stock_transfer' %}">
+        <li><a class="dropdown-item {% if not request.user|can_operate:'movements' %}is-locked{% endif %}"
+               href="{% if request.user|can_operate:'movements' %}{% url 'inventory:stock_transfer' %}{% else %}#{% endif %}"
+               {% if not request.user|can_operate:'movements' %}data-locked-msg="You can't move stock"{% endif %}>
           <i class="bi bi-arrow-left-right" style="background:#dbeafe;color:#1d4ed8"></i>
           <div>
             <div>Transfer stock</div>
             <small style="color:#64748b;font-weight:400">Between locations</small>
           </div>
         </a></li>
-        {% endif %}
 
-        {% if request.user|can_operate:"requests" or request.user|can_operate:"stocktake" %}
         <li><hr class="dropdown-divider"></li>
         <li class="dropdown-header">Workflows</li>
-        {% if request.user|can_operate:"requests" %}
-        <li><a class="dropdown-item" href="{% url 'inventory:stock_request_create' %}">
+        <li><a class="dropdown-item {% if not request.user|can_operate:'requests' %}is-locked{% endif %}"
+               href="{% if request.user|can_operate:'requests' %}{% url 'inventory:stock_request_create' %}{% else %}#{% endif %}"
+               {% if not request.user|can_operate:'requests' %}data-locked-msg="You can't create stock requests"{% endif %}>
           <i class="bi bi-clipboard2-plus" style="background:#fef3c7;color:#b45309"></i>
           <div>
             <div>New stock request</div>
             <small style="color:#64748b;font-weight:400">Internal request for items</small>
           </div>
         </a></li>
-        {% endif %}
-        {% if request.user|can_operate:"stocktake" %}
-        <li><a class="dropdown-item" href="{% url 'inventory:stocktake_create' %}">
+        <li><a class="dropdown-item {% if not request.user|can_operate:'stocktake' %}is-locked{% endif %}"
+               href="{% if request.user|can_operate:'stocktake' %}{% url 'inventory:stocktake_create' %}{% else %}#{% endif %}"
+               {% if not request.user|can_operate:'stocktake' %}data-locked-msg="You can't create cycle counts"{% endif %}>
           <i class="bi bi-ui-checks" style="background:#ede9fe;color:#6d28d9"></i>
           <div>
             <div>New cycle count</div>
             <small style="color:#64748b;font-weight:400">Reconcile a location</small>
           </div>
         </a></li>
-        {% endif %}
-        {% endif %}
       </ul>
     </div>
   </div>
@@ -564,4 +628,39 @@
   {% block inv_content %}{% endblock %}
 
 </div>
+
+{# Toast host — populated by JS when a locked link is clicked #}
+<div class="inv-toast-host" id="invToastHost" aria-live="polite"></div>
+
+<script>
+(function(){
+  // Show a transient toast at bottom-right.
+  window.invToast = function(message, opts) {
+    const host = document.getElementById('invToastHost');
+    if (!host) return;
+    const t = document.createElement('div');
+    t.className = 'inv-toast';
+    t.innerHTML = '<i class="bi bi-lock-fill"></i><span></span>';
+    t.querySelector('span').textContent = message;
+    host.appendChild(t);
+    requestAnimationFrame(() => t.classList.add('show'));
+    setTimeout(() => {
+      t.classList.remove('show');
+      setTimeout(() => t.remove(), 250);
+    }, (opts && opts.duration) || 3200);
+  };
+
+  // Intercept clicks on any locked link or dropdown item.
+  document.addEventListener('click', function(e){
+    const el = e.target.closest('.is-locked');
+    if (!el) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const msg = el.dataset.lockedMsg
+             || el.getAttribute('aria-label')
+             || "You don't have access to this section";
+    window.invToast(msg);
+  }, true);
+})();
+</script>
 {% endblock %}

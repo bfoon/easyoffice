@@ -1,0 +1,243 @@
+{% extends "inventory/inventory_base.html" %}
+{% load humanize %}
+{% block title %}Best Sellers — Inventory{% endblock %}
+{% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / Best sellers{% endblock %}
+
+{% block extra_css %}
+{{ block.super }}
+<style>
+  .bs-shell { display: grid; grid-template-columns: 320px 1fr; gap: 18px; }
+  @media (max-width: 992px) { .bs-shell { grid-template-columns: 1fr; } }
+
+  .bs-section { padding: 14px; border-bottom: 1px solid #f1f5f9; }
+  .bs-section:last-child { border-bottom: 0; }
+  .bs-section h4 {
+    font-size: .68rem; letter-spacing: .14em; text-transform: uppercase;
+    color: #94a3b8; font-weight: 800; margin: 0 0 10px;
+  }
+
+  .bs-theme-grid {
+    display: grid; gap: 8px; grid-template-columns: repeat(2, 1fr);
+  }
+  .bs-theme-grid label {
+    display: flex; align-items: center; gap: 8px;
+    cursor: pointer; border: 2px solid #e5e7eb; border-radius: 10px;
+    padding: 10px; font-size: .82rem; transition: all .12s;
+  }
+  .bs-theme-grid label:hover { border-color: #cbd5e1; }
+  .bs-theme-grid label.is-active {
+    border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, .14);
+  }
+  .bs-theme-grid input { display: none; }
+  .bs-theme-swatch {
+    width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--p, #0f172a), var(--a, #2563eb));
+  }
+
+  .bs-form-row { margin-bottom: 10px; }
+  .bs-label {
+    display: block; font-size: .68rem; text-transform: uppercase;
+    letter-spacing: .06em; color: #64748b; font-weight: 700; margin-bottom: 4px;
+  }
+
+  .bs-preview-shell {
+    background: #f1f5f9; border-radius: 14px; padding: 18px;
+    height: calc(100vh - 240px); min-height: 600px;
+    display: flex; flex-direction: column;
+  }
+  .bs-preview-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 12px;
+  }
+  .bs-preview-frame {
+    flex: 1; width: 100%; border: 0; border-radius: 10px;
+    background: transparent;
+  }
+</style>
+{% endblock %}
+
+{% block inv_content %}
+
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Marketing</div>
+      <h1 class="inv-page-title">Best Sellers Card</h1>
+      <p class="inv-page-subtitle">
+        Generate a beautiful shareable card of your top sellers — perfect for social media and customer newsletters.
+      </p>
+    </div>
+    <div class="inv-page-actions">
+      <a href="{% url 'inventory:catalog_builder' %}" class="inv-btn">
+        <i class="bi bi-grid-3x3-gap"></i> Catalog builder
+      </a>
+    </div>
+  </div>
+
+  {# ── Top sellers data table ───────────────────────────── #}
+  <div class="inv-card inv-card-pad-0">
+    <div class="inv-card-header">
+      <div>
+        <h2 class="inv-card-title">Top sellers · last {{ period_days }} days</h2>
+        <div class="inv-card-subtitle">Computed from fulfilled orders</div>
+      </div>
+      <span class="inv-chip inv-chip-slate">{{ rows|length }}</span>
+    </div>
+    {% if rows %}
+    <table class="inv-table">
+      <thead><tr>
+        <th>#</th><th>Product</th><th>SKU</th>
+        <th class="inv-table-num">Sold</th>
+        <th class="inv-table-num">Revenue</th>
+      </tr></thead>
+      <tbody>
+        {% for p in rows %}
+        <tr>
+          <td><strong style="color:#94a3b8">{{ forloop.counter }}</strong></td>
+          <td><strong>{{ p.name }}</strong></td>
+          <td><span class="inv-table-mono">{{ p.sku }}</span></td>
+          <td class="inv-table-num"><strong>{{ p.sold|floatformat:0|intcomma }}</strong></td>
+          <td class="inv-table-num">
+            {% if p.revenue %}<small style="color:#64748b">{{ p.currency }}</small> {{ p.revenue|floatformat:2|intcomma }}{% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="inv-empty">
+      <div class="inv-empty-icon"><i class="bi bi-stars"></i></div>
+      <div class="inv-empty-title">No best-seller data yet</div>
+      <div class="inv-empty-msg">Once you have fulfilled orders, the top performers will appear here.</div>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if rows %}
+  <div class="bs-shell">
+    {# ── Sidebar ────────────────────────────────────────── #}
+    <div class="inv-card inv-card-pad-0">
+
+      <div class="bs-section">
+        <h4>Theme</h4>
+        <div class="bs-theme-grid" id="bsTheme">
+          {% for t in themes %}
+          <label class="{% if forloop.first %}is-active{% endif %}" style="--p:{{ t.primary }};--a:{{ t.accent }}">
+            <input type="radio" name="theme" value="{{ t.key }}" {% if forloop.first %}checked{% endif %}>
+            <span class="bs-theme-swatch"></span>
+            <span>{{ t.name }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="bs-section">
+        <h4>Card content</h4>
+        <div class="bs-form-row">
+          <label class="bs-label">Title</label>
+          <input type="text" class="inv-input" id="bsTitle" value="Top Sellers" maxlength="60">
+        </div>
+        <div class="bs-form-row">
+          <label class="bs-label">Subtitle</label>
+          <input type="text" class="inv-input" id="bsSubtitle" value="Last {{ period_days }} days" maxlength="80">
+        </div>
+        <div class="bs-form-row">
+          <label class="bs-label">Footer</label>
+          <input type="text" class="inv-input" id="bsFooter" placeholder="@yourbrand · website.com" maxlength="80">
+        </div>
+        <div class="bs-form-row">
+          <label class="bs-label">Show top</label>
+          <select class="inv-select" id="bsTop">
+            <option value="3">Top 3</option>
+            <option value="5" selected>Top 5</option>
+            <option value="7">Top 7</option>
+            <option value="10">Top 10</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="bs-section" style="border-bottom:0">
+        <button class="inv-btn inv-btn-primary" style="width:100%" id="bsRefresh">
+          <i class="bi bi-arrow-clockwise"></i> Refresh
+        </button>
+      </div>
+    </div>
+
+    {# ── Preview ───────────────────────────────────────── #}
+    <div>
+      <div class="bs-preview-shell">
+        <div class="bs-preview-bar">
+          <div style="font-size:.84rem;color:#64748b">
+            <i class="bi bi-eye"></i> Live preview · 110×110mm shareable card
+          </div>
+          <div style="display:flex;gap:6px">
+            <button id="bsDownload" class="inv-btn inv-btn-sm inv-btn-primary">
+              <i class="bi bi-download"></i> Download PNG
+            </button>
+            <a id="bsOpen" class="inv-btn inv-btn-sm" target="_blank" href="#">
+              <i class="bi bi-box-arrow-up-right"></i> Open
+            </a>
+          </div>
+        </div>
+        <iframe id="bsPreview" class="bs-preview-frame"></iframe>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const RENDER = "{% url 'inventory:best_sellers_card' %}";
+  const frame  = document.getElementById('bsPreview');
+  const open   = document.getElementById('bsOpen');
+
+  const themeBox = document.getElementById('bsTheme');
+  themeBox.addEventListener('change', () => {
+    themeBox.querySelectorAll('label').forEach(l => l.classList.remove('is-active'));
+    const c = themeBox.querySelector('input:checked');
+    if (c) c.closest('label').classList.add('is-active');
+    refresh();
+  });
+
+  function val(id) { return document.getElementById(id).value; }
+  function radio(name) {
+    const r = document.querySelector('input[name="'+name+'"]:checked');
+    return r ? r.value : '';
+  }
+  function buildUrl() {
+    const params = new URLSearchParams({
+      theme: radio('theme') || 'midnight',
+      title: val('bsTitle'),
+      subtitle: val('bsSubtitle'),
+      footer: val('bsFooter'),
+      top: val('bsTop'),
+    });
+    return RENDER + '?' + params.toString();
+  }
+  let timer;
+  function refresh(immediate) {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const u = buildUrl();
+      frame.src = u; open.href = u;
+    }, immediate ? 0 : 350);
+  }
+  ['bsTitle','bsSubtitle','bsFooter','bsTop'].forEach(id => {
+    document.getElementById(id).addEventListener('input', () => refresh());
+  });
+  document.getElementById('bsRefresh').addEventListener('click', () => refresh(true));
+
+  document.getElementById('bsDownload').addEventListener('click', () => {
+    // Trigger the in-iframe download function
+    if (frame.contentWindow && frame.contentWindow.downloadPng) {
+      frame.contentWindow.downloadPng();
+    } else {
+      window.invToast && window.invToast('Preview not ready — try again in a second.');
+    }
+  });
+
+  refresh(true);
+})();
+</script>
+
+  {% endif %}
+
+{% endblock %}

@@ -1,0 +1,197 @@
+{% load humanize %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ opts.title }}</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: #0f172a;
+    background: #f3f4f6;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .page {
+    width: 210mm; min-height: 297mm; margin: 12px auto;
+    background: #fff; padding: 16mm 14mm;
+    page-break-after: always;
+    box-shadow: 0 1px 3px rgba(15,23,42,.08);
+  }
+  .page:last-child { page-break-after: auto; }
+
+  /* Cover */
+  .cover {
+    background: linear-gradient(135deg, {{ theme.primary }} 0%, {{ theme.accent }} 100%);
+    color: #fff;
+    padding: 30mm 14mm;
+    margin: 0; min-height: 297mm;
+    display: flex; flex-direction: column; justify-content: space-between;
+    page-break-after: always;
+  }
+  .cover-eyebrow {
+    text-transform: uppercase; letter-spacing: .3em; font-size: 9pt;
+    opacity: .7; font-weight: 700;
+  }
+  .cover-title {
+    font-size: 56pt; font-weight: 800; line-height: 1; letter-spacing: -.03em;
+    margin: 8mm 0;
+  }
+  .cover-subtitle {
+    font-size: 18pt; opacity: .85; max-width: 130mm; line-height: 1.3;
+    margin: 0;
+  }
+  .cover-footer {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-top: 1px solid rgba(255,255,255,.25); padding-top: 12mm;
+    font-size: 9pt; opacity: .7;
+  }
+
+  /* Section header */
+  .section {
+    margin-bottom: 8mm;
+    border-bottom: 2px solid {{ theme.accent }};
+    padding-bottom: 4mm;
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .section h2 {
+    font-size: 24pt; font-weight: 800; letter-spacing: -.02em;
+    margin: 0; color: {{ theme.primary }};
+  }
+  .section .meta {
+    font-size: 8pt; text-transform: uppercase; letter-spacing: .12em;
+    color: #6b7280; font-weight: 700;
+  }
+
+  /* Product grid */
+  .grid {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 8mm;
+  }
+  .card {
+    border: 1px solid #e5e7eb; border-radius: 4mm; padding: 5mm;
+    page-break-inside: avoid;
+    display: flex; flex-direction: column; gap: 3mm;
+  }
+  .card .photo {
+    aspect-ratio: 4/3; border-radius: 3mm; background: #f8fafc;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; color: #cbd5e1; font-size: 32pt;
+  }
+  .card .photo img { width: 100%; height: 100%; object-fit: cover; }
+  .card .name { font-size: 13pt; font-weight: 700; color: #0f172a; line-height: 1.2; }
+  .card .meta-row {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-top: 1px solid #f1f5f9; padding-top: 3mm; margin-top: auto;
+  }
+  .card .sku {
+    font-family: 'JetBrains Mono', monospace; font-size: 7pt;
+    color: #6b7280; letter-spacing: .04em;
+  }
+  .card .price {
+    font-size: 16pt; font-weight: 800; color: {{ theme.accent }};
+    letter-spacing: -.02em;
+  }
+  .card .price .currency { font-size: 8pt; color: #6b7280; font-weight: 600; margin-right: 2pt; }
+  .card .badges { display: flex; flex-wrap: wrap; gap: 4pt; margin-top: 2mm; }
+  .card .badge {
+    font-size: 7pt; padding: 1pt 6pt; border-radius: 999px;
+    background: #f3f4f6; color: #4b5563; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  .card .badge.cost { background: #fef3c7; color: #92400e; }
+  .card .badge.stock { background: #dcfce7; color: #166534; }
+  .card .badge.lowstock { background: #fee2e2; color: #991b1b; }
+
+  .footer-bar {
+    margin-top: 10mm; padding-top: 4mm;
+    border-top: 1px solid #e5e7eb;
+    display: flex; justify-content: space-between;
+    font-size: 8pt; color: #6b7280;
+  }
+
+  /* Print-only — hide the screen-only buttons */
+  .print-bar {
+    position: fixed; top: 14px; right: 14px; z-index: 9999;
+    display: flex; gap: 8px;
+  }
+  .print-bar button {
+    padding: 8px 14px; background: {{ theme.primary }}; color: #fff;
+    border: 0; border-radius: 8px; cursor: pointer; font-weight: 700;
+    box-shadow: 0 4px 12px rgba(15,23,42,.18);
+  }
+  @media print {
+    .print-bar { display: none; }
+    body { background: #fff; }
+    .page { margin: 0; box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="print-bar">
+  <button onclick="window.print()">🖨 Print / save PDF</button>
+</div>
+
+{# ── Cover page ─────────────────────────────────────────────────────── #}
+<div class="cover">
+  <div>
+    <div class="cover-eyebrow">Catalog · {{ now|date:"F Y" }}</div>
+    <h1 class="cover-title">{{ opts.title }}</h1>
+    {% if opts.subtitle %}<p class="cover-subtitle">{{ opts.subtitle }}</p>{% endif %}
+  </div>
+  <div class="cover-footer">
+    <span>{{ products|length }} product{{ products|length|pluralize }}</span>
+    {% if opts.footer %}<span>{{ opts.footer }}</span>{% endif %}
+  </div>
+</div>
+
+{# ── Product pages ──────────────────────────────────────────────────── #}
+<div class="page">
+  <div class="section">
+    <h2>{{ opts.title }}</h2>
+    <span class="meta">{{ products|length }} item{{ products|length|pluralize }}</span>
+  </div>
+
+  <div class="grid">
+    {% for p in products %}
+    <div class="card">
+      <div class="photo">
+        {% if p.image %}<img src="{{ site_url }}{{ p.image.url }}" alt="">
+        {% else %}<i style="font-style:normal">⬚</i>{% endif %}
+      </div>
+      <div class="name">{{ p.name }}</div>
+      {% if p.description %}
+        <div style="font-size:9pt;color:#6b7280;line-height:1.4">{{ p.description|truncatewords:18 }}</div>
+      {% endif %}
+      <div class="meta-row">
+        <div>
+          {% if opts.show_sku %}<div class="sku">{{ p.sku }}</div>{% endif %}
+          {% if p.category %}<div style="font-size:7pt;color:#94a3b8;margin-top:1pt">{{ p.category.name }}</div>{% endif %}
+        </div>
+        {% if opts.show_price and p.sell_price %}
+        <div class="price"><span class="currency">{{ p.currency }}</span>{{ p.sell_price|floatformat:2|intcomma }}</div>
+        {% endif %}
+      </div>
+      <div class="badges">
+        {% if opts.show_stock %}
+          {% if p.total_available > 0 %}<span class="badge stock">{{ p.total_available|floatformat:0 }} {{ p.unit_label }} in stock</span>
+          {% else %}<span class="badge lowstock">Out of stock</span>{% endif %}
+        {% endif %}
+        {% if opts.show_cost and p.cost_price %}<span class="badge cost">Cost: {{ p.currency }} {{ p.cost_price|floatformat:2|intcomma }}</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if opts.footer %}
+  <div class="footer-bar">
+    <span>{{ opts.footer }}</span>
+    <span>Generated {{ now|date:"d M Y" }}</span>
+  </div>
+  {% endif %}
+</div>
+
+</body>
+</html>

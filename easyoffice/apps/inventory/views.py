@@ -9,6 +9,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
@@ -1069,3 +1070,194 @@ class AccessControlRevokeView(_AdminMixin, View):
         grant.save(update_fields=['is_active', 'updated_at'])
         messages.success(request, f'Revoked: {grant}')
         return redirect('inventory:access_list')
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Catalog generator + best sellers
+# ════════════════════════════════════════════════════════════════════════════
+
+class CatalogBuilderView(_InventoryContextMixin, InventoryAccessMixin, TemplateView):
+    """
+    GET /inventory/catalog/
+        Renders the builder page — pick template, columns, theme — and a
+        live preview iframe.
+    """
+    template_name = 'inventory/catalog_builder.html'
+
+    TEMPLATES = [
+        {'key': 'grid',     'name': 'Grid',
+         'description': 'Photo cards with name, SKU, and price — best for product showcases.'},
+        {'key': 'magazine', 'name': 'Magazine',
+         'description': 'Editorial layout with hero image and side columns. Great for premium products.'},
+        {'key': 'pricelist','name': 'Price list',
+         'description': 'Compact table — many items per page, ideal for B2B handouts.'},
+    ]
+
+    THEMES = [
+        {'key': 'midnight', 'name': 'Midnight',  'primary': '#0f172a', 'accent': '#2563eb'},
+        {'key': 'emerald',  'name': 'Emerald',   'primary': '#064e3b', 'accent': '#10b981'},
+        {'key': 'sunset',   'name': 'Sunset',    'primary': '#7c2d12', 'accent': '#f59e0b'},
+        {'key': 'rose',     'name': 'Rose',      'primary': '#831843', 'accent': '#e11d48'},
+        {'key': 'mono',     'name': 'Mono',      'primary': '#111827', 'accent': '#374151'},
+    ]
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['templates'] = self.TEMPLATES
+        ctx['themes']    = self.THEMES
+        ctx['categories'] = Category.objects.filter(is_active=True).order_by('name')
+        return ctx
+
+
+class CatalogRenderView(_InventoryContextMixin, InventoryAccessMixin, View):
+    """
+    GET /inventory/catalog/render/?template=grid&theme=midnight&...
+        Renders the catalog as standalone HTML — used both as the iframe
+        preview and as the printable / shareable artifact.
+
+    Query parameters:
+        template  : grid | magazine | pricelist  (default: grid)
+        theme     : midnight | emerald | sunset | rose | mono (default: midnight)
+        title     : cover title (default: "Product Catalog")
+        subtitle  : cover subtitle / tagline
+        footer    : footer line (e.g. company contact info)
+        category  : limit to a single category (UUID or empty for all)
+        show_sku  : 1 | 0
+        show_price: 1 | 0
+        show_stock: 1 | 0
+        show_cost : 1 | 0  (manager-only)
+        currency  : override currency display
+    """
+    def get(self, request):
+        template_key = request.GET.get('template', 'grid')
+        if template_key not in {'grid', 'magazine', 'pricelist'}:
+            template_key = 'grid'
+        theme_key = request.GET.get('theme', 'midnight')
+
+        theme = next((t for t in CatalogBuilderView.THEMES
+                      if t['key'] == theme_key),
+                     CatalogBuilderView.THEMES[0])
+
+        # Filter products: sellable only by default
+        qs = (Product.objects
+              .filter(is_active=True, is_sellable=True)
+              .select_related('category')
+              .order_by('category__name', 'name'))
+
+        category_id = (request.GET.get('category') or '').strip()
+        if category_id:
+            qs = qs.filter(category_id=category_id)
+
+        # Optional: top N best sellers
+        top_n = (request.GET.get('top') or '').strip()
+        if top_n.isdigit():
+            qs = self._sort_by_sales(qs)[:int(top_n)]
+
+        # Field-level access — non-managers can never see cost in catalog
+        from .access import can_manage as _cm
+        is_manager = _cm(request.user, 'products')
+
+        opts = {
+            'title':      request.GET.get('title') or 'Product Catalog',
+            'subtitle':   request.GET.get('subtitle') or '',
+            'footer':     request.GET.get('footer') or '',
+            'show_sku':   request.GET.get('show_sku',   '1') == '1',
+            'show_price': request.GET.get('show_price', '1') == '1',
+            'show_stock': request.GET.get('show_stock', '0') == '1',
+            'show_cost':  is_manager and request.GET.get('show_cost', '0') == '1',
+            'currency':   request.GET.get('currency', 'GMD'),
+        }
+
+        ctx = {
+            'products': list(qs),
+            'theme':    theme,
+            'opts':     opts,
+            'site_url': getattr(settings, 'SITE_URL', '').rstrip('/'),
+            'now':      timezone.now(),
+        }
+        return render(request, f'inventory/catalog/_{template_key}.html', ctx)
+
+    def _sort_by_sales(self, qs):
+        """Order products by total quantity sold over the last 90 days."""
+        from datetime import timedelta
+        cutoff = timezone.now() - timedelta(days=90)
+        return qs.annotate(
+            sold=Sum(
+                'order_lines__quantity',
+                filter=Q(order_lines__order__status='fulfilled',
+                         order_lines__order__fulfilled_at__gte=cutoff),
+            )
+        ).order_by(F('sold').desc(nulls_last=True), 'name')
+
+
+class BestSellersView(_InventoryContextMixin, InventoryAccessMixin, TemplateView):
+    """
+    GET /inventory/best-sellers/
+        Builder for downloadable best-sellers card.
+    """
+    template_name = 'inventory/best_sellers.html'
+
+    def get_context_data(self, **kwargs):
+        from datetime import timedelta
+        ctx = super().get_context_data(**kwargs)
+        cutoff = timezone.now() - timedelta(days=90)
+
+        rows = (Product.objects
+                .filter(is_active=True, is_sellable=True)
+                .annotate(
+                    sold=Sum(
+                        'order_lines__quantity',
+                        filter=Q(order_lines__order__status='fulfilled',
+                                 order_lines__order__fulfilled_at__gte=cutoff),
+                    ),
+                    revenue=Sum(
+                        F('order_lines__quantity') * F('order_lines__unit_price'),
+                        filter=Q(order_lines__order__status='fulfilled',
+                                 order_lines__order__fulfilled_at__gte=cutoff),
+                    ),
+                )
+                .filter(sold__gt=0)
+                .order_by('-sold')[:10])
+        ctx['rows'] = rows
+        ctx['period_days'] = 90
+        ctx['themes'] = CatalogBuilderView.THEMES
+        return ctx
+
+
+class BestSellersCardView(_InventoryContextMixin, InventoryAccessMixin, View):
+    """
+    GET /inventory/best-sellers/card/?theme=midnight&top=5
+        Renders the standalone shareable card (HTML — user prints to PDF
+        or uses html2canvas to save as PNG client-side).
+    """
+    def get(self, request):
+        from datetime import timedelta
+        theme_key = request.GET.get('theme', 'midnight')
+        top = int(request.GET.get('top', '5') or '5')
+        top = max(3, min(top, 10))
+
+        theme = next((t for t in CatalogBuilderView.THEMES
+                      if t['key'] == theme_key),
+                     CatalogBuilderView.THEMES[0])
+
+        cutoff = timezone.now() - timedelta(days=90)
+        rows = (Product.objects
+                .filter(is_active=True, is_sellable=True)
+                .annotate(
+                    sold=Sum(
+                        'order_lines__quantity',
+                        filter=Q(order_lines__order__status='fulfilled',
+                                 order_lines__order__fulfilled_at__gte=cutoff),
+                    ),
+                )
+                .filter(sold__gt=0)
+                .order_by('-sold')[:top])
+
+        return render(request, 'inventory/catalog/_bestseller_card.html', {
+            'rows':  rows,
+            'theme': theme,
+            'title': request.GET.get('title') or 'Top Sellers',
+            'subtitle': request.GET.get('subtitle') or 'Last 90 days',
+            'footer': request.GET.get('footer') or '',
+            'now':    timezone.now(),
+        })

@@ -1,23 +1,24 @@
 """
 apps/finance/contract_invoice_service.py
-========================================
+=========================================
 
-Generates invoices for contracts, using the invoice app's template engine.
+Generates invoices for contracts using the invoice app's template engine.
 
-Flow:
-    1. Pick a template (override > contract.default_invoice_template > error).
-    2. Build a draft InvoiceDocument from the template (invoice app does this).
-    3. Pre-fill client info from the contract counterparty.
-    4. Replace the seed line item with a contract-derived one.
-    5. Compute the billing period covered by this invoice.
-    6. Set invoice_date = today, due_date based on payment terms.
-    7. Finalize the invoice — invoice app allocates the number + saves the PDF.
-    8. Create a ContractInvoiceLink for the audit trail.
-    9. Bump contract.last_invoice_generated_at + advance contract.next_invoice_date.
+Key behaviours
+--------------
+* generate_invoice_for_contract()  – create ONE invoice for a contract
+  (manual or scheduled).  Email is NOT sent here; sending is handled
+  separately by send_due_invoice_emails() so the due-date trigger works.
 
-Email sending honors `contract.auto_send_invoice` for the scheduled path; the
-manual path leaves sending to the user (they can re-use the invoice app's
-detail page).
+* run_scheduled_generation()  – called by Celery Beat (daily at 6 am).
+  Walks every active contract whose next_invoice_date <= today, generates
+  the invoice and advances next_invoice_date.
+
+* send_due_invoice_emails()  – called by a SEPARATE Celery Beat task (daily,
+  same or slightly later time).  Walks every ContractInvoiceLink whose
+  invoice.due_date == today and auto_send_invoice is True, and emails the PDF.
+
+* find_contracts_due() / find_invoices_due_today()  – querysets.
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Optional
 
-from dateutil.relativedelta import relativedelta  # add to requirements if missing
+from dateutil.relativedelta import relativedelta
 from django.db import transaction
 from django.utils import timezone
 
@@ -47,8 +48,8 @@ class ContractInvoiceError(Exception):
 
 def _advance_date(start: date, billing_cycle: str) -> Optional[date]:
     """
-    Given a start date and a billing cycle, return the NEXT period's start.
-    Returns None for one-off contracts (no further invoices).
+    Given a start date and billing cycle, return the next period's start date.
+    Returns None for one-off contracts.
     """
     if not start:
         return None
@@ -65,9 +66,7 @@ def _advance_date(start: date, billing_cycle: str) -> Optional[date]:
         return start + timedelta(weeks=1)
     if cycle in ('biweekly', 'fortnightly'):
         return start + timedelta(weeks=2)
-    if cycle in ('one_off', 'oneoff', 'one-off', ''):
-        return None
-    # Unknown cycle → treat like one-off so we don't loop forever
+    # one_off or unknown → no further invoices
     return None
 
 
@@ -75,17 +74,13 @@ def _period_for(contract, period_start: date) -> tuple[date, date]:
     """Return (start, end_inclusive) for the billing period beginning at start."""
     next_start = _advance_date(period_start, contract.billing_cycle)
     if next_start is None:
-        # one-off — period is just a single day, or the full contract span
         end = contract.end_date or period_start
         return period_start, end
     return period_start, next_start - timedelta(days=1)
 
 
 def _parse_payment_terms_days(terms: str) -> int:
-    """
-    Best-effort parse of 'Net 30', 'Net 14', 'Net60' → integer days.
-    Falls back to 30 if it can't tell.
-    """
+    """Parse 'Net 30', 'Net 14', 'Net60' → int days. Falls back to 30."""
     if not terms:
         return 30
     digits = ''.join(ch for ch in terms if ch.isdigit())
@@ -100,7 +95,7 @@ def _parse_payment_terms_days(terms: str) -> int:
 @dataclass
 class GenerationResult:
     invoice: InvoiceDocument
-    link: 'ContractInvoiceLink'  # noqa
+    link: 'ContractInvoiceLink'
     was_finalized: bool
 
 
@@ -118,27 +113,27 @@ def generate_invoice_for_contract(
     Generate one invoice for a contract.
 
     Args:
-        contract: the finance.Contract instance.
-        actor:    the user triggering the generation (or a system user
-                  for scheduled runs).
-        template: override template. If None, uses contract.default_invoice_template.
-        finalize: if True, allocate number + build PDF + save. If False,
-                  leave as DRAFT for the user to review.
-        period_start: start date of the billing period this invoice covers.
-                      Defaults to contract.next_invoice_date or today.
-        source: 'manual' or 'scheduled' — recorded on the link.
+        contract:      finance.Contract instance.
+        actor:         user triggering generation (or system user for scheduled).
+        template:      override template; defaults to contract.default_invoice_template.
+        finalize:      if True, allocate number + build PDF. If False, leave as DRAFT.
+        period_start:  start of the billing period; defaults to contract.next_invoice_date.
+        source:        'manual' or 'scheduled'.
 
     Returns:
-        GenerationResult(invoice, link, was_finalized).
+        GenerationResult(invoice, link, was_finalized)
 
     Raises:
-        ContractInvoiceError on any pre-condition failure.
+        ContractInvoiceError on pre-condition failure.
+
+    Note:
+        This function does NOT send email — call send_due_invoice_emails()
+        (or _send_invoice_email() directly) if you want to send immediately.
+        For the scheduled path, sending is triggered on due_date by a separate task.
     """
-    # local import to avoid circular: this module sits in finance, the link
-    # model sits in finance/models.py too.
     from apps.finance.models import ContractInvoiceLink
 
-    # Re-fetch with a row lock so two simultaneous generations can't race.
+    # Row-lock the contract to prevent race conditions
     contract = (
         contract.__class__.objects
         .select_for_update()
@@ -149,13 +144,14 @@ def generate_invoice_for_contract(
     tmpl = template or contract.default_invoice_template
     if tmpl is None:
         raise ContractInvoiceError(
-            'No invoice template selected. Set a default on the contract or pick one when generating.'
+            'No invoice template is attached to this contract. '
+            'Go to Edit Contract and select a Default Invoice Template first.'
         )
 
     # ── 2. Build draft from template ────────────────────────────────────────
     invoice = create_invoice_from_template(tmpl, actor)
 
-    # ── 3. Pre-fill client info from the contract counterparty ──────────────
+    # ── 3. Pre-fill client info from counterparty ───────────────────────────
     invoice.client_name = (
         contract.counterparty_name
         or contract.vendor_name
@@ -167,8 +163,6 @@ def generate_invoice_for_contract(
     )[:254]
     invoice.client_address = (contract.vendor_address or '')
 
-    # If the contract carries its own currency / payment terms, prefer them
-    # over the template defaults.
     if contract.currency:
         invoice.currency = contract.currency
 
@@ -178,10 +172,11 @@ def generate_invoice_for_contract(
     p_start, p_end = _period_for(contract, period_start)
 
     invoice.invoice_date = today
-    invoice.due_date     = today + timedelta(days=_parse_payment_terms_days(invoice.payment_terms))
+    terms_days = _parse_payment_terms_days(invoice.payment_terms)
+    invoice.due_date = today + timedelta(days=terms_days)
     invoice.po_reference = (contract.reference or '')[:100]
 
-    # ── 5. Replace the seed line item with a contract-derived one ──────────
+    # ── 5. Replace seed line item with a contract-derived one ───────────────
     invoice.items.all().delete()
     line_desc = (
         f'{contract.title} — {contract.get_billing_cycle_display()} '
@@ -198,7 +193,7 @@ def generate_invoice_for_contract(
     invoice.save()
     invoice.recalculate_totals(save=True)
 
-    # ── 6. Finalize if asked (allocates number + writes PDF) ───────────────
+    # ── 6. Finalize (allocates number + writes PDF) ─────────────────────────
     was_finalized = False
     if finalize:
         invoice = finalize_invoice(invoice, actor)
@@ -214,35 +209,37 @@ def generate_invoice_for_contract(
         generated_by=actor,
     )
 
-    # ── 8. Bump bookkeeping on the contract ────────────────────────────────
-    contract.last_invoice_generated_at = timezone.now()
+    # ── 8. Bump contract bookkeeping ────────────────────────────────────────
+    # The Contract model uses `last_invoice_date` (DateField), not
+    # `last_invoice_generated_at`.  Store today's date, not a datetime.
+    contract.last_invoice_date = today
     next_period = _advance_date(period_start, contract.billing_cycle)
     if next_period:
         contract.next_invoice_date = next_period
     else:
-        # one-off — clear next_invoice_date so we don't keep generating
-        contract.next_invoice_date = None
-    contract.save(update_fields=[
-        'last_invoice_generated_at', 'next_invoice_date', 'updated_at'
-    ] if hasattr(contract, 'updated_at') else [
-        'last_invoice_generated_at', 'next_invoice_date'
-    ])
+        contract.next_invoice_date = None  # one-off — stop scheduling
+
+    save_fields = ['last_invoice_date', 'next_invoice_date']
+    if hasattr(contract, 'updated_at'):
+        save_fields.append('updated_at')
+    contract.save(update_fields=save_fields)
 
     return GenerationResult(invoice=invoice, link=link, was_finalized=was_finalized)
 
 
-# ── Scheduled runner ────────────────────────────────────────────────────────
+# ── Scheduled generation runner ─────────────────────────────────────────────
 
 def find_contracts_due(today: Optional[date] = None):
     """
-    Yield contracts that are eligible for auto-generation today:
-        - status is active
-        - auto_generate_invoice is True
-        - has a default_invoice_template
-        - next_invoice_date is set and <= today
-        - end_date hasn't passed (we don't bill after expiry)
+    Return a queryset of contracts eligible for auto-invoice generation today:
+      - status == 'active'
+      - auto_generate_invoice is True
+      - default_invoice_template is set
+      - next_invoice_date is set and <= today
+      - end_date hasn't passed
     """
-    from apps.finance.models import Contract  # local import — avoids circular
+    from apps.finance.models import Contract
+    from django.db.models import Q
     today = today or timezone.localdate()
 
     qs = Contract.objects.filter(
@@ -253,36 +250,29 @@ def find_contracts_due(today: Optional[date] = None):
         next_invoice_date__lte=today,
     )
     # Exclude contracts whose end_date has already passed
-    qs = qs.filter(models_q_end_or_open(today))
+    qs = qs.filter(Q(end_date__isnull=True) | Q(end_date__gte=today))
     return qs
 
 
-def models_q_end_or_open(today):
-    """end_date is null OR end_date >= today"""
-    from django.db.models import Q
-    return Q(end_date__isnull=True) | Q(end_date__gte=today)
-
-
-def run_scheduled_generation(today: Optional[date] = None, *, system_actor=None):
+def run_scheduled_generation(today: Optional[date] = None, *, system_actor=None) -> dict:
     """
-    Walk every due contract and generate an invoice for it. Designed to be
-    safe to call repeatedly (idempotent for a given period because we
-    advance next_invoice_date after each successful generation).
+    Walk every due contract and generate an invoice. Safe to call repeatedly
+    (idempotent per period because next_invoice_date advances after each run).
 
-    Returns a summary dict — useful for logging in the management command
-    or Celery task.
+    Does NOT send emails — use send_due_invoice_emails() for that.
+
+    Returns a summary dict for logging.
     """
-    from apps.finance.models import Contract  # noqa
     today = today or timezone.localdate()
     actor = system_actor or _get_system_user()
 
     summary = {
-        'date': today.isoformat(),
+        'date':      today.isoformat(),
         'attempted': 0,
         'succeeded': 0,
-        'failed': 0,
-        'errors': [],   # list of (contract_id, str)
-        'invoices': [], # list of (contract_id, invoice_number)
+        'failed':    0,
+        'errors':    [],   # [(contract_id, str)]
+        'invoices':  [],   # [(contract_id, invoice_number)]
     }
 
     for contract in find_contracts_due(today):
@@ -291,21 +281,13 @@ def run_scheduled_generation(today: Optional[date] = None, *, system_actor=None)
             result = generate_invoice_for_contract(
                 contract,
                 actor=actor,
-                template=None,                      # use contract default
-                finalize=True,                       # auto-finalize per spec
+                template=None,          # use contract.default_invoice_template
+                finalize=True,
                 period_start=contract.next_invoice_date,
                 source='scheduled',
             )
             summary['succeeded'] += 1
             summary['invoices'].append((str(contract.pk), result.invoice.number))
-
-            # Send email if the contract opted in
-            if contract.auto_send_invoice and result.invoice.client_email:
-                try:
-                    _send_invoice_email(result.invoice, contract)
-                except Exception as e:
-                    # Don't fail the whole generation just because email broke
-                    summary['errors'].append((str(contract.pk), f'email failed: {e}'))
         except Exception as e:
             summary['failed'] += 1
             summary['errors'].append((str(contract.pk), str(e)))
@@ -313,11 +295,65 @@ def run_scheduled_generation(today: Optional[date] = None, *, system_actor=None)
     return summary
 
 
+# ── Due-date email sender ────────────────────────────────────────────────────
+
+def find_invoices_due_today(today: Optional[date] = None):
+    """
+    Return ContractInvoiceLink rows whose invoice.due_date == today AND whose
+    contract has auto_send_invoice=True AND invoice has a client_email.
+
+    Called by the separate send_due_invoice_emails Celery task.
+    """
+    from apps.finance.models import ContractInvoiceLink
+    from apps.invoices.models import InvoiceDocument
+    today = today or timezone.localdate()
+
+    return (
+        ContractInvoiceLink.objects
+        .filter(
+            contract__auto_send_invoice=True,
+            invoice__due_date=today,
+            invoice__status=InvoiceDocument.Status.FINALIZED,
+        )
+        .exclude(invoice__client_email='')
+        .select_related('contract', 'invoice', 'invoice__generated_pdf')
+    )
+
+
+def send_due_invoice_emails(today: Optional[date] = None) -> dict:
+    """
+    Send invoice PDFs to counterparties for every contract invoice whose
+    due_date is today and whose contract has auto_send_invoice=True.
+
+    Safe to call multiple times — tracking whether an email was already sent
+    should be added if needed (e.g. add a `sent_at` field to ContractInvoiceLink).
+
+    Returns a summary dict.
+    """
+    today = today or timezone.localdate()
+    summary = {
+        'date':      today.isoformat(),
+        'attempted': 0,
+        'sent':      0,
+        'failed':    0,
+        'errors':    [],
+    }
+
+    for link in find_invoices_due_today(today):
+        summary['attempted'] += 1
+        try:
+            _send_invoice_email(link.invoice, link.contract)
+            summary['sent'] += 1
+        except Exception as e:
+            summary['failed'] += 1
+            summary['errors'].append((str(link.invoice.pk), str(e)))
+
+    return summary
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
 def _get_system_user():
-    """
-    Return a user to attribute scheduled generations to. Falls back to the
-    first superuser if no dedicated 'system' account exists.
-    """
     from django.contrib.auth import get_user_model
     User = get_user_model()
     user = (
@@ -331,27 +367,27 @@ def _get_system_user():
     return user
 
 
-def _send_invoice_email(invoice: InvoiceDocument, contract):
+def _send_invoice_email(invoice: InvoiceDocument, contract) -> None:
     """
-    Email the finalized invoice PDF to the contract's counterparty.
-    Lightweight — uses Django's mail layer + the SharedFile bytes.
+    Email the finalized invoice PDF to the contract counterparty.
+    Raises on failure — caller decides whether to swallow or propagate.
     """
     from django.core.mail import EmailMessage
     from django.conf import settings
 
     if not invoice.client_email:
-        return
+        raise ValueError('No client email on invoice.')
     if not invoice.generated_pdf:
-        return  # nothing to attach
+        raise ValueError('Invoice has no generated PDF.')
 
-    subject = f'{invoice.get_doc_type_display()} {invoice.number}'
+    subject = f'{invoice.get_doc_type_display()} {invoice.number} — {contract.title}'
     body = (
         f'Dear {invoice.client_name or "Customer"},\n\n'
         f'Please find attached {invoice.get_doc_type_display().lower()} '
         f'{invoice.number} for {contract.title}.\n\n'
         f'Total: {invoice.currency} {invoice.total}\n'
-        f'Due: {invoice.due_date:%B %d, %Y}\n\n'
-        f'Thank you.'
+        f'Due:   {invoice.due_date:%B %d, %Y}\n\n'
+        f'Thank you for your business.'
     )
     msg = EmailMessage(
         subject=subject,

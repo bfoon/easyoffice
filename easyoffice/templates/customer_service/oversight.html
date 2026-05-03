@@ -1,0 +1,318 @@
+{% extends "base.html" %}
+{% block title %}Customer Service · Oversight{% endblock %}
+{% block breadcrumb %}<a href="{% url 'customer_service_dashboard' %}">Customer Service</a> / Oversight{% endblock %}
+{% block content %}
+<style>
+  :root {
+    --cs-primary: #2563eb;
+    --cs-success: #10b981;
+    --cs-warning: #f59e0b;
+    --cs-danger: #ef4444;
+    --cs-purple: #8b5cf6;
+  }
+  .cs-hero {
+    background: linear-gradient(135deg, #1e3a8a 0%, #4c1d95 100%);
+    color:#fff; border-radius:16px; padding:20px 24px; margin-bottom:18px;
+    box-shadow:0 10px 30px rgba(30,58,138,.25);
+    display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+  }
+  .cs-hero h1 { font-size:1.4rem; margin:0; font-weight:700; }
+  .cs-hero .role-badge {
+    background: rgba(255,255,255,.18); padding:5px 12px;
+    border-radius:999px; font-size:.78rem; font-weight:600;
+    letter-spacing:.04em; text-transform:uppercase;
+  }
+  .cs-hero .actions { margin-left:auto; display:flex; gap:8px; flex-wrap:wrap; }
+  .cs-hero .actions a {
+    background:rgba(255,255,255,.18); color:#fff; text-decoration:none;
+    padding:8px 14px; border-radius:10px; font-size:.85rem; font-weight:600;
+    border:1px solid rgba(255,255,255,.25);
+  }
+  .cs-hero .actions a:hover { background: rgba(255,255,255,.28); }
+
+  .cs-stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:18px; }
+  .cs-stat {
+    background:#fff; border:1px solid #e5e7eb; border-radius:14px;
+    padding:14px; box-shadow:0 4px 14px rgba(15,23,42,.03);
+  }
+  .cs-stat-label { font-size:.72rem; font-weight:700; color:#64748b;
+                    text-transform:uppercase; letter-spacing:.06em; }
+  .cs-stat-value { font-size:1.7rem; font-weight:800; color:#0f172a; margin-top:4px; }
+  .cs-stat.danger .cs-stat-value { color: var(--cs-danger); }
+  .cs-stat.warn .cs-stat-value   { color: var(--cs-warning); }
+  .cs-stat.ok .cs-stat-value     { color: var(--cs-success); }
+
+  .cs-card { background:#fff; border:1px solid #e5e7eb; border-radius:14px;
+             padding:16px; margin-bottom:14px;
+             box-shadow:0 4px 14px rgba(15,23,42,.03); }
+  .cs-card-title { font-size:.95rem; font-weight:700; margin:0 0 12px 0;
+                    display:flex; align-items:center; gap:8px; }
+  .cs-card-title i { color: var(--cs-primary); }
+
+  .cs-table { width:100%; font-size:.85rem; border-collapse:collapse; }
+  .cs-table th { text-align:left; font-size:.7rem; text-transform:uppercase;
+                  letter-spacing:.05em; color:#64748b; padding:8px 10px;
+                  border-bottom:1px solid #e5e7eb; }
+  .cs-table td { padding:8px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
+  .cs-table tr:hover td { background:#f8fafc; }
+
+  .cs-pill { display:inline-block; padding:2px 8px; border-radius:999px;
+              font-size:.7rem; font-weight:700; text-transform:uppercase; }
+  .cs-pill-danger { background:#fee2e2; color:#991b1b; }
+  .cs-pill-warn   { background:#fef3c7; color:#92400e; }
+  .cs-pill-ok     { background:#d1fae5; color:#065f46; }
+  .cs-pill-info   { background:#dbeafe; color:#1e40af; }
+  .cs-pill-muted  { background:#f1f5f9; color:#475569; }
+
+  .cs-rating-row { display:flex; gap:18px; flex-wrap:wrap; }
+  .cs-rating {
+    flex:1; min-width:120px; text-align:center;
+    background:#f8fafc; border-radius:10px; padding:10px;
+  }
+  .cs-rating-label { font-size:.7rem; color:#64748b; font-weight:700;
+                      text-transform:uppercase; letter-spacing:.05em; }
+  .cs-rating-value { font-size:1.4rem; font-weight:800; color:var(--cs-primary); margin-top:4px; }
+
+  .cs-empty { text-align:center; color:#94a3b8; padding:20px 0; }
+  .cs-empty i { font-size:1.6rem; }
+</style>
+
+<div class="cs-hero">
+  <i class="bi bi-shield-check" style="font-size:1.6rem"></i>
+  <div>
+    <h1>Oversight Dashboard</h1>
+    <div class="mt-1 d-flex gap-2 flex-wrap">
+      {% if is_cs_head %}<span class="role-badge"><i class="bi bi-headset"></i> Head of CS</span>{% endif %}
+      {% if is_sales_head %}<span class="role-badge"><i class="bi bi-cart-check"></i> Head of Sales</span>{% endif %}
+    </div>
+  </div>
+  <div class="actions">
+    <a href="{% url 'customer_service_oversight_report_csv' %}">
+      <i class="bi bi-download"></i> Download CSV report
+    </a>
+    <a href="{% url 'customer_service_dashboard' %}">
+      <i class="bi bi-arrow-left"></i> Back to CS
+    </a>
+  </div>
+</div>
+
+<!-- Top-line stats -->
+<div class="cs-stat-grid">
+  <div class="cs-stat">
+    <div class="cs-stat-label">Open Tickets</div>
+    <div class="cs-stat-value">{{ totals.open }}</div>
+  </div>
+  <div class="cs-stat danger">
+    <div class="cs-stat-label">Overdue</div>
+    <div class="cs-stat-value">{{ totals.overdue }}</div>
+  </div>
+  <div class="cs-stat ok">
+    <div class="cs-stat-label">Resolved (30d)</div>
+    <div class="cs-stat-value">{{ totals.resolved_30d }}</div>
+  </div>
+  <div class="cs-stat warn">
+    <div class="cs-stat-label">Cancelled (30d)</div>
+    <div class="cs-stat-value">{{ totals.cancelled_30d }}</div>
+  </div>
+  {% if is_cs_head %}
+  <div class="cs-stat">
+    <div class="cs-stat-label">Calls (30d)</div>
+    <div class="cs-stat-value">{{ totals.calls_30d }}</div>
+  </div>
+  <div class="cs-stat">
+    <div class="cs-stat-label">Customers</div>
+    <div class="cs-stat-value">{{ totals.customers }}</div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <!-- Overdue tickets -->
+    <div class="cs-card">
+      <h3 class="cs-card-title">
+        <i class="bi bi-alarm"></i> Overdue Tickets
+        <span class="ms-auto small text-muted" style="font-weight:500">{{ overdue_tickets|length }} shown</span>
+      </h3>
+      {% if overdue_tickets %}
+      <table class="cs-table">
+        <thead>
+          <tr>
+            <th>Ticket</th>
+            <th>Customer</th>
+            <th>Department</th>
+            <th>Owner</th>
+            <th>Due</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for t in overdue_tickets %}
+          <tr>
+            <td>
+              <a href="{% url 'customer_service_ticket_detail' t.pk %}" style="font-weight:600">{{ t.ticket_no }}</a>
+              <div class="small text-muted text-truncate" style="max-width:240px">{{ t.subject }}</div>
+            </td>
+            <td>{{ t.customer.display_name|default:"—" }}</td>
+            <td>{{ t.department.name|default:"—" }}</td>
+            <td>{{ t.current_owner.get_full_name|default:"—" }}</td>
+            <td><span class="cs-pill cs-pill-danger">{{ t.resolution_due_at|date:"M j, H:i" }}</span></td>
+            <td><span class="cs-pill cs-pill-warn">{{ t.get_status_display }}</span></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="cs-empty">
+        <i class="bi bi-check-circle"></i>
+        <div class="mt-2">No overdue tickets. Nice.</div>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Stale assignments -->
+    <div class="cs-card">
+      <h3 class="cs-card-title">
+        <i class="bi bi-hourglass-split"></i> Stale Assignments
+      </h3>
+      {% if stale_assignments %}
+      <table class="cs-table">
+        <thead>
+          <tr><th>Ticket</th><th>Department</th><th>Assignee</th><th>SLA Due</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+        {% for a in stale_assignments %}
+          <tr>
+            <td><a href="{% url 'customer_service_ticket_detail' a.ticket.pk %}">{{ a.ticket.ticket_no }}</a></td>
+            <td>{{ a.department.name|default:"—" }}</td>
+            <td>{{ a.assigned_to.get_full_name|default:"— (dept-wide)" }}</td>
+            <td><span class="cs-pill cs-pill-danger">{{ a.sla_due_at|date:"M j, H:i" }}</span></td>
+            <td><span class="cs-pill cs-pill-info">{{ a.get_status_display }}</span></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="cs-empty">
+        <i class="bi bi-check-circle"></i>
+        <div class="mt-2">No assignments past SLA.</div>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- By department -->
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-diagram-3"></i> Open Tickets by Department</h3>
+      {% if by_department %}
+      <table class="cs-table">
+        <thead><tr><th>Department</th><th>Open</th><th>Overdue</th></tr></thead>
+        <tbody>
+        {% for row in by_department %}
+          <tr>
+            <td>{{ row.department__name|default:"— Unassigned —" }}</td>
+            <td>{{ row.n }}</td>
+            <td>
+              {% if row.overdue %}
+                <span class="cs-pill cs-pill-danger">{{ row.overdue }}</span>
+              {% else %}
+                <span class="cs-pill cs-pill-ok">0</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="cs-empty"><i class="bi bi-inbox"></i><div class="mt-2">No open tickets.</div></div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <!-- Ratings (CS head only) -->
+    {% if is_cs_head and ratings_summary %}
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-star-fill" style="color:#f59e0b"></i> Customer Satisfaction (30d)</h3>
+      {% if ratings_summary.count %}
+      <div class="cs-rating-row">
+        <div class="cs-rating">
+          <div class="cs-rating-label">Service</div>
+          <div class="cs-rating-value">{{ ratings_summary.avg_service|floatformat:1|default:"—" }}</div>
+        </div>
+        <div class="cs-rating">
+          <div class="cs-rating-label">Product</div>
+          <div class="cs-rating-value">{{ ratings_summary.avg_product|floatformat:1|default:"—" }}</div>
+        </div>
+        <div class="cs-rating">
+          <div class="cs-rating-label">Response</div>
+          <div class="cs-rating-value">{{ ratings_summary.avg_response|floatformat:1|default:"—" }}</div>
+        </div>
+        <div class="cs-rating">
+          <div class="cs-rating-label">Pro</div>
+          <div class="cs-rating-value">{{ ratings_summary.avg_professionalism|floatformat:1|default:"—" }}</div>
+        </div>
+      </div>
+      <small class="text-muted d-block mt-2">{{ ratings_summary.count }} rating{{ ratings_summary.count|pluralize }} received.</small>
+      {% else %}
+      <div class="cs-empty"><i class="bi bi-stars"></i><div class="mt-2">No ratings in the last 30 days.</div></div>
+      {% endif %}
+    </div>
+
+    {% if recent_ratings %}
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-chat-square-quote"></i> Recent Customer Comments</h3>
+      {% for r in recent_ratings %}
+        <div class="border-bottom pb-2 mb-2">
+          <div class="small">
+            <strong>{{ r.customer.display_name }}</strong>
+            <span class="text-muted"> · {{ r.created_at|date:"M j" }}</span>
+            <span class="ms-2 cs-pill cs-pill-ok">★ {{ r.service_quality }}/5</span>
+          </div>
+          {% if r.comment %}
+          <div class="small mt-1" style="white-space:pre-wrap">{{ r.comment|truncatechars:160 }}</div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% endif %}
+
+    <!-- Recent tickets -->
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-ticket-detailed"></i> Recent Tickets</h3>
+      {% for t in recent_tickets %}
+        <div class="d-flex align-items-start gap-2 py-2 border-bottom">
+          <span class="cs-pill cs-pill-info">{{ t.get_priority_display }}</span>
+          <div class="flex-fill" style="min-width:0">
+            <a href="{% url 'customer_service_ticket_detail' t.pk %}" class="fw-bold small">{{ t.ticket_no }}</a>
+            <div class="small text-muted text-truncate">{{ t.subject }}</div>
+          </div>
+          <small class="text-muted">{{ t.created_at|date:"M j" }}</small>
+        </div>
+      {% empty %}
+        <div class="cs-empty"><i class="bi bi-inbox"></i><div class="mt-2">No tickets yet.</div></div>
+      {% endfor %}
+    </div>
+
+    <!-- Recent calls (CS head) -->
+    {% if is_cs_head %}
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-telephone"></i> Recent Calls</h3>
+      {% for c in recent_calls %}
+        <div class="d-flex align-items-start gap-2 py-2 border-bottom">
+          <i class="bi bi-{% if c.direction == 'inbound' %}telephone-inbound{% else %}telephone-outbound{% endif %}"
+             style="color: var(--cs-primary)"></i>
+          <div class="flex-fill" style="min-width:0">
+            <div class="small fw-bold">{{ c.customer.display_name|default:c.phone_number }}</div>
+            <div class="small text-muted text-truncate">{{ c.subject }}</div>
+          </div>
+          <small class="text-muted">{{ c.started_at|date:"M j H:i" }}</small>
+        </div>
+      {% empty %}
+        <div class="cs-empty"><i class="bi bi-telephone-x"></i><div class="mt-2">No recent calls.</div></div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,202 @@
+{# ─────────────────────────────────────────────────────────────────── #}
+{#  apps/customer_service/templates/customer_service/_ticket_detail_snippets.html #}
+{#                                                                     #}
+{#  This file is a REFERENCE — paste the marked blocks into your       #}
+{#  existing ticket_detail.html. They wire up:                         #}
+{#                                                                     #}
+{#    A. "Confirm & Close" panel for the ticket owner                  #}
+{#    B. "Create Order" panel from a ticket / call                     #}
+{#    C. "Mark assignment complete" button on each assignment row      #}
+{#                                                                     #}
+{# ─────────────────────────────────────────────────────────────────── #}
+
+
+{# ════════════════════════════════════════════════════════════════════ #}
+{#  A) CONFIRM & CLOSE                                                  #}
+{#                                                                      #}
+{#  Add to the action-tabs list in ticket_detail.html, after the        #}
+{#  "Resolve" tab. Wrap in {% if can_close_ticket %} ... {% endif %}    #}
+{#  using a context flag from your TicketDetailView.                    #}
+{# ════════════════════════════════════════════════════════════════════ #}
+
+{% comment %}
+Context to add in TicketDetailView.get_context_data:
+
+    from .permissions import can_close_ticket
+    ctx['can_close_ticket'] = can_close_ticket(self.request.user, self.object)
+    ctx['has_open_assignments'] = self.object.assignments.exclude(
+        status__in=('resolved', 'closed')
+    ).exists()
+{% endcomment %}
+
+{# In the .cs-action-tabs row, add: #}
+{% comment %}
+{% if can_close_ticket %}
+<button type="button" class="cs-action-tab" data-tab="confirm-close">
+  <i class="bi bi-check2-all"></i> Confirm & Close
+</button>
+{% endif %}
+{% endcomment %}
+
+{# In the panels area, add: #}
+{% comment %}
+<div class="cs-action-panel" data-panel="confirm-close" style="display:none">
+  {% if has_open_assignments %}
+    <div class="alert alert-warning small">
+      <i class="bi bi-exclamation-triangle"></i>
+      <strong>Some assignments are still open.</strong>
+      Wait for the department to mark them complete, or check "Force close" if you're a supervisor.
+    </div>
+  {% endif %}
+  <form method="post" action="{% url 'customer_service_confirm_close_ticket' ticket.pk %}">
+    {% csrf_token %}
+    <label class="eo-form-label">Confirmation note</label>
+    <textarea name="confirmation_note" rows="3" class="eo-form-control mb-2"
+              placeholder="Spoke with customer — they confirmed everything is sorted."></textarea>
+    {% if user.is_superuser or is_cs_head %}
+      <label class="eo-form-check small mb-2">
+        <input type="checkbox" name="force" class="eo-form-check-input">
+        <span class="eo-form-check-label">Force close even with open assignments (supervisor)</span>
+      </label>
+    {% endif %}
+    <button class="eo-btn eo-btn-primary w-100" style="background:#10b981;border-color:#10b981">
+      <i class="bi bi-check2-all"></i> Confirm & Close Ticket
+    </button>
+  </form>
+</div>
+{% endcomment %}
+
+
+{# ════════════════════════════════════════════════════════════════════ #}
+{#  B) CREATE ORDER FROM TICKET                                         #}
+{#                                                                      #}
+{#  Add as a new tab; only show for sales / general / product tickets.  #}
+{# ════════════════════════════════════════════════════════════════════ #}
+
+{# In .cs-action-tabs: #}
+{% comment %}
+<button type="button" class="cs-action-tab" data-tab="create-order">
+  <i class="bi bi-bag-plus"></i> Create Order
+</button>
+{% endcomment %}
+
+{# In the panels area: #}
+{% comment %}
+<div class="cs-action-panel" data-panel="create-order" style="display:none">
+  <form method="post" action="{% url 'customer_service_create_order_from_ticket' ticket.pk %}" id="csOrderForm">
+    {% csrf_token %}
+
+    <div class="mb-2 small text-muted">
+      Items will be invoiced to <strong>{{ ticket.customer.display_name }}</strong>.
+    </div>
+
+    <table class="table table-sm mb-2" id="csOrderItems">
+      <thead>
+        <tr>
+          <th>Description</th>
+          <th style="width:80px">Qty</th>
+          <th style="width:110px">Unit Price</th>
+          <th style="width:30px"></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><input type="text" name="item_description" class="eo-form-control" placeholder="Item description" required></td>
+          <td><input type="number" name="item_quantity" step="0.01" min="0" class="eo-form-control" value="1"></td>
+          <td><input type="number" name="item_unit_price" step="0.01" min="0" class="eo-form-control" value="0"></td>
+          <td><button type="button" class="btn btn-link p-0 text-danger" onclick="this.closest('tr').remove()">×</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <button type="button" class="btn btn-sm btn-outline-secondary mb-2" id="csAddOrderItem">
+      <i class="bi bi-plus"></i> Add line
+    </button>
+
+    <div class="row g-2">
+      <div class="col-4">
+        <label class="eo-form-label small">Currency</label>
+        <input type="text" name="currency" class="eo-form-control" value="GMD" maxlength="3">
+      </div>
+      <div class="col-4">
+        <label class="eo-form-label small">Tax rate %</label>
+        <input type="number" step="0.01" min="0" name="tax_rate" class="eo-form-control" value="0">
+      </div>
+      <div class="col-4">
+        <label class="eo-form-label small">Discount</label>
+        <input type="number" step="0.01" min="0" name="discount_amount" class="eo-form-control" value="0">
+      </div>
+    </div>
+
+    <label class="eo-form-label small mt-2">Delivery address</label>
+    <textarea name="delivery_address" rows="2" class="eo-form-control mb-2">{{ ticket.customer.address }}</textarea>
+
+    <label class="eo-form-label small">Notes</label>
+    <textarea name="notes" rows="2" class="eo-form-control mb-2"></textarea>
+
+    <button class="eo-btn eo-btn-primary w-100">
+      <i class="bi bi-bag-check"></i> Create Sales Order
+    </button>
+  </form>
+</div>
+
+<script>
+document.getElementById('csAddOrderItem')?.addEventListener('click', function() {
+  const tbody = document.querySelector('#csOrderItems tbody');
+  const row = tbody.firstElementChild.cloneNode(true);
+  row.querySelectorAll('input').forEach(i => {
+    if (i.name === 'item_quantity') i.value = '1';
+    else if (i.name === 'item_unit_price') i.value = '0';
+    else i.value = '';
+  });
+  tbody.appendChild(row);
+});
+</script>
+{% endcomment %}
+
+
+{# ════════════════════════════════════════════════════════════════════ #}
+{#  C) "MARK COMPLETE" BUTTON ON EACH ASSIGNMENT                        #}
+{#                                                                      #}
+{#  Add to the assignments loop in your existing template.              #}
+{# ════════════════════════════════════════════════════════════════════ #}
+
+{% comment %}
+{% for assignment in assignments %}
+  ... existing assignment card ...
+  {% if assignment.status not in 'resolved closed'|split %}
+    {% if user.is_superuser or assignment.assigned_to_id == user.id or user_in_assignment_dept %}
+    <form method="post" action="{% url 'customer_service_complete_assignment' assignment.pk %}" class="mt-2">
+      {% csrf_token %}
+      <textarea name="resolution_note" rows="2" class="eo-form-control mb-2 small"
+                placeholder="What was done? (optional)"></textarea>
+      <button class="eo-btn eo-btn-primary eo-btn-sm" style="background:#10b981;border-color:#10b981">
+        <i class="bi bi-check2"></i> Mark Assignment Complete
+      </button>
+    </form>
+    {% endif %}
+  {% endif %}
+{% endfor %}
+{% endcomment %}
+
+
+{# ════════════════════════════════════════════════════════════════════ #}
+{#  D) DASHBOARD LINK (for Heads of CS / Sales)                         #}
+{#                                                                      #}
+{#  Add to dashboard.html quick-actions so heads see the entry point.   #}
+{# ════════════════════════════════════════════════════════════════════ #}
+
+{% comment %}
+Pass `is_cs_head` and `is_sales_head` to the dashboard context using:
+
+    from .permissions import is_head_of_customer_service, is_head_of_sales
+    ctx['is_cs_head']    = is_head_of_customer_service(self.request.user)
+    ctx['is_sales_head'] = is_head_of_sales(self.request.user)
+
+Then in the template:
+
+    {% if is_cs_head or is_sales_head or user.is_superuser %}
+    <a href="{% url 'customer_service_oversight' %}" class="eo-btn eo-btn-secondary text-start">
+      <i class="bi bi-shield-check"></i> Oversight Dashboard
+    </a>
+    {% endif %}
+{% endcomment %}

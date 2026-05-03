@@ -30,6 +30,14 @@ from .models import (
     normalize_phone,
 )
 
+from .permissions import (
+    CustomerServiceAccessMixin, can_close_ticket,
+    is_head_of_customer_service,
+)
+from . import services as cs_services
+from . import notifications as cs_notifications
+
+
 
 # ── Role helpers ───────────────────────────────────────────────────────────
 
@@ -758,69 +766,186 @@ class TicketDetailView(LoginRequiredMixin, DetailView):
         return ctx
 
 
-class TicketActionView(View):
+class TicketActionView(CustomerServiceAccessMixin, View):
+    """
+    Single endpoint for every action button on ticket_detail.html.
+    Reads the hidden `action` field and dispatches to the right handler.
+    """
+    http_method_names = ['post']
+
     def post(self, request, pk):
         ticket = get_object_or_404(ServiceTicket, pk=pk)
-        action = request.POST.get("action")
+        action = (request.POST.get('action') or '').strip().lower()
 
-        if action == "assign":
-            department = None
-            assigned_to = None
+        handler = {
+            'add_note': self._add_note,
+            'resolve': self._resolve,
+            'close': self._close,
+            'assign': self._assign,
+            'route': self._route,
+            'escalate': self._escalate,
+            'send_feedback': self._send_feedback,
+        }.get(action)
 
-            department_id = request.POST.get("department")
-            assigned_to_id = request.POST.get("assigned_to")
+        if handler is None:
+            messages.error(
+                request,
+                f"Unknown action '{action}'. If you just added a new button "
+                f"to the ticket page, add a matching handler in TicketActionView.",
+            )
+            return redirect('customer_service_ticket_detail', pk=ticket.pk)
 
-            # get department from POST first
-            if department_id:
-                from apps.organization.models import Department
-                department = Department.objects.filter(pk=department_id).first()
+        try:
+            handler(request, ticket)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        except Exception as exc:
+            messages.error(request, f'Action failed: {exc}')
 
-            # fallback to ticket.department
-            if not department:
-                department = ticket.department
+        return redirect('customer_service_ticket_detail', pk=ticket.pk)
 
-            # hard stop instead of IntegrityError
-            if not department:
-                messages.error(request, "Please select a department before assigning this ticket.")
-                return redirect("customer_service_ticket_detail", pk=ticket.pk)
+    # ── Handlers ────────────────────────────────────────────────────────
 
-            if assigned_to_id:
-                from django.contrib.auth import get_user_model
-                User = get_user_model()
-                assigned_to = User.objects.filter(pk=assigned_to_id).first()
+    def _add_note(self, request, ticket):
+        body = (request.POST.get('body') or '').strip()
+        if not body:
+            raise ValueError('Note cannot be empty.')
+        ServiceTicketUpdate.objects.create(
+            ticket=ticket, user=request.user, update_type='note', body=body,
+        )
+        messages.success(request, 'Note added.')
 
-            with transaction.atomic():
-                # keep ticket and assignment aligned
-                ticket.department = department
-                ticket.current_owner = assigned_to or ticket.current_owner
-                ticket.status = "assigned"
-                ticket.save()
+    def _resolve(self, request, ticket):
+        note = (request.POST.get('resolution_note') or '').strip()
+        if not note:
+            raise ValueError('Add a resolution note before resolving.')
 
-                ServiceTicketAssignment.objects.create(
-                    ticket=ticket,
-                    department=department,
-                    assigned_by=request.user,
-                    assigned_to=assigned_to,
-                    title=f"{ticket.ticket_no} - {ticket.subject}",
-                    instructions=ticket.description or "",
-                    status="assigned",
-                    sla_due_at=ticket.resolution_due_at,
-                )
+        ticket.status = 'resolved'
+        ticket.resolved_at = timezone.now()
+        if not ticket.resolved_by_id:
+            ticket.resolved_by = request.user
+        ticket.save(update_fields=['status', 'resolved_at', 'resolved_by', 'updated_at'])
 
-                ServiceTicketUpdate.objects.create(
-                    ticket=ticket,
-                    user=request.user,
-                    update_type="status_change",
-                    body=f"Ticket assigned to {department}" + (
-                        f" and {assigned_to}" if assigned_to else ""
-                    ),
-                )
+        ServiceTicketUpdate.objects.create(
+            ticket=ticket, user=request.user, update_type='resolution', body=note,
+        )
+        messages.success(request, f'Ticket {ticket.ticket_no} marked resolved.')
 
-            messages.success(request, "Ticket assigned successfully.")
-            return redirect("customer_service_ticket_detail", pk=ticket.pk)
+    def _close(self, request, ticket):
+        if not can_close_ticket(request.user, ticket):
+            raise ValueError('You are not allowed to close this ticket.')
 
-        messages.error(request, "Invalid action.")
-        return redirect("customer_service_ticket_detail", pk=ticket.pk)
+        force = (request.user.is_superuser or
+                 is_head_of_customer_service(request.user))
+
+        cs_services.confirm_and_close_ticket(
+            ticket,
+            actor=request.user,
+            confirmation_note='Closed from ticket actions panel.',
+            force=force,
+        )
+        messages.success(request, f'Ticket {ticket.ticket_no} closed.')
+
+    def _assign(self, request, ticket):
+        user_id = request.POST.get('assigned_to')
+        if not user_id:
+            raise ValueError('Pick a staff member to assign to.')
+
+        assigned_to = User.objects.filter(pk=user_id, is_active=True).first()
+        if not assigned_to:
+            raise ValueError('Selected user not found or inactive.')
+
+        cs_services.assign_ticket_to_user(
+            ticket,
+            assigned_to=assigned_to,
+            actor=request.user,
+            instructions=(request.POST.get('instructions') or '').strip(),
+        )
+        messages.success(
+            request,
+            f'Assigned to {assigned_to.get_full_name() or assigned_to.username}. '
+            f'They have been notified by email and in-app.',
+        )
+
+    def _route(self, request, ticket):
+        from apps.organization.models import Department
+
+        dept_id = request.POST.get('department')
+        if not dept_id:
+            raise ValueError('Pick a department to route to.')
+
+        dept = Department.objects.filter(pk=dept_id).first()
+        if not dept:
+            raise ValueError('Selected department not found.')
+
+        cs_services.route_ticket_to_department(
+            ticket,
+            to_department=dept,
+            actor=request.user,
+            note=(request.POST.get('note') or '').strip(),
+        )
+        messages.success(
+            request,
+            f'Routed to {dept.name}. Everyone in the department has been notified.',
+        )
+
+    def _escalate(self, request, ticket):
+        reason = (request.POST.get('reason') or '').strip()
+        if not reason:
+            raise ValueError('Add an escalation reason.')
+
+        ticket.status = 'escalated'
+        ticket.escalated_at = timezone.now()
+        ticket.save(update_fields=['status', 'escalated_at', 'updated_at'])
+
+        ServiceTicketUpdate.objects.create(
+            ticket=ticket, user=request.user,
+            update_type='escalation', body=reason,
+        )
+
+        # Notify heads via the notifications module
+        try:
+            cs_notifications._notify_users(
+                cs_notifications.heads_of_customer_service(),
+                title=f'Ticket escalated — {ticket.ticket_no}',
+                body=(
+                    f'{cs_notifications._user_full_name(request.user)} escalated '
+                    f'ticket {ticket.ticket_no}.\n\nReason: {reason}'
+                ),
+                url=cs_notifications._ticket_url(ticket),
+                kind='cs.ticket.escalated',
+                email_subject=f'[Escalated] Ticket {ticket.ticket_no}',
+                email_template='customer_service/email/ticket_overdue.html',
+                email_context={'ticket': ticket,
+                               'ticket_url': cs_notifications._ticket_url(ticket)},
+            )
+        except Exception:
+            pass
+
+        messages.warning(request, f'Ticket {ticket.ticket_no} escalated.')
+
+    def _send_feedback(self, request, ticket):
+        # Build or reuse a FeedbackRequest, then dispatch via your existing
+        # email pipeline. If you already have a helper for this, call it here
+        # instead of the inline create.
+        feedback, created = FeedbackRequest.objects.get_or_create(
+            ticket=ticket,
+            defaults={
+                'customer': ticket.customer,
+                'channel': 'email' if (ticket.customer.email or ticket.callback_email) else 'sms',
+                'sent_to': ticket.customer.email or ticket.callback_email or '',
+            },
+        )
+        if not created and feedback.completed_at:
+            raise ValueError('Customer has already submitted feedback.')
+
+        feedback.sent_at = timezone.now()
+        feedback.save(update_fields=['sent_at'])
+
+        # If you have a dedicated email function for feedback, call it here.
+        # Otherwise the request is recorded and the customer can use the
+        # token URL: /customer-service/feedback/<token>/
+        messages.success(request, 'Feedback request recorded.')
 
 
 # ── Department queue ──────────────────────────────────────────────────────

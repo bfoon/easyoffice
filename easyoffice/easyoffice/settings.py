@@ -59,6 +59,7 @@ LOCAL_APPS = [
     'apps.user_admin',
     'apps.orders',
     'apps.inventory',
+    'apps.admin_security.apps.AdminSecurityConfig',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -70,6 +71,8 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'apps.admin_security.middleware.AdminKillSwitchMiddleware',
+    'apps.admin_security.middleware.AdminOTPGateMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'apps.core.middleware.ActiveUserMiddleware',

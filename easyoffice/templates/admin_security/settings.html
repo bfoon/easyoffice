@@ -1,0 +1,142 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin Access Settings</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; font-family:-apple-system,Segoe UI,Roboto,sans-serif;
+         color:#0f172a; background:#f8fafc; padding:32px 20px; }
+  .wrap { max-width:680px; margin:0 auto; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; }
+  .topbar a { color:#64748b; text-decoration:none; font-size:.88rem; }
+  .topbar a:hover { color:#0f172a; }
+  .card { background:#fff; border-radius:14px; padding:32px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  h1 { margin:0 0 6px; font-size:1.5rem; }
+  .sub { color:#64748b; margin:0 0 28px; font-size:.92rem; }
+  .row { display:flex; gap:16px; align-items:flex-start; padding:18px 0; border-top:1px solid #e2e8f0; }
+  .row:first-of-type { border-top:0; padding-top:0; }
+  .row-text { flex:1; }
+  .row-text label { font-weight:600; display:block; margin-bottom:4px; cursor:pointer; }
+  .row-text .help { color:#64748b; font-size:.86rem; line-height:1.5; }
+  .toggle { position:relative; width:46px; height:26px; flex-shrink:0; }
+  .toggle input { opacity:0; width:0; height:0; }
+  .slider { position:absolute; inset:0; background:#cbd5e1; border-radius:999px;
+            cursor:pointer; transition:.2s; }
+  .slider::before { content:""; position:absolute; left:3px; top:3px; width:20px; height:20px;
+                    background:#fff; border-radius:50%; transition:.2s;
+                    box-shadow:0 1px 2px rgba(0,0,0,.2); }
+  .toggle input:checked + .slider { background:#16a34a; }
+  .toggle input:checked + .slider::before { transform:translateX(20px); }
+  .number-row { padding:18px 0; border-top:1px solid #e2e8f0; }
+  .number-row label { font-weight:600; display:block; margin-bottom:6px; }
+  .number-row input { width:90px; padding:8px 12px; border:1px solid #cbd5e1;
+                      border-radius:8px; font-size:.95rem; }
+  .number-row .help { color:#64748b; font-size:.86rem; margin-top:6px; }
+  .actions { margin-top:26px; display:flex; gap:10px; align-items:center; }
+  .btn { padding:10px 22px; border-radius:8px; font-weight:600; text-decoration:none;
+         border:0; cursor:pointer; font-size:.95rem; }
+  .btn-primary { background:#2563eb; color:#fff; }
+  .btn-primary:hover { background:#1d4ed8; }
+  .btn-secondary { background:#f1f5f9; color:#334155; }
+  .messages { margin:0 0 18px; padding:0; list-style:none; }
+  .messages li { padding:10px 14px; border-radius:8px; font-size:.9rem; margin-bottom:8px; }
+  .messages li.success { background:#dcfce7; color:#166534; }
+  .messages li.error { background:#fee2e2; color:#991b1b; }
+  .badge { display:inline-block; padding:2px 10px; font-size:.72rem; font-weight:700;
+           border-radius:999px; background:#fef3c7; color:#92400e; margin-left:8px; }
+  .badge.on { background:#dcfce7; color:#166534; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <a href="/admin/">← Back to admin</a>
+    <span style="color:#94a3b8;font-size:.82rem">Signed in as <strong>{{ request.user }}</strong></span>
+  </div>
+
+  <div class="card">
+    <h1>Admin access settings</h1>
+    <p class="sub">
+      Master controls for who can reach the Django admin and how. Only superusers
+      can change these.
+    </p>
+
+    {% if messages %}
+      <ul class="messages">
+        {% for m in messages %}<li class="{{ m.tags }}">{{ m }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+
+    <form method="post" novalidate>
+      {% csrf_token %}
+
+      <div class="row">
+        <div class="row-text">
+          <label for="id_is_admin_enabled">
+            Admin portal enabled
+            {% if setting.is_admin_enabled %}
+              <span class="badge on">ACTIVE</span>
+            {% else %}
+              <span class="badge">DISABLED</span>
+            {% endif %}
+          </label>
+          <div class="help">
+            When off, /admin/ is closed to everyone. The superuser who turned it
+            off can still re-enable it from this page.
+          </div>
+        </div>
+        <label class="toggle">
+          {{ form.is_admin_enabled }}
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <div class="row-text">
+          <label for="id_require_otp_for_admin">
+            Require email OTP at login
+            {% if setting.require_otp_for_admin %}
+              <span class="badge on">ON</span>
+            {% else %}
+              <span class="badge">OFF</span>
+            {% endif %}
+          </label>
+          <div class="help">
+            After entering their password, every admin user gets a 6-digit code
+            emailed to them. They can't reach the admin until the code is verified.
+          </div>
+        </div>
+        <label class="toggle">
+          {{ form.require_otp_for_admin }}
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="number-row">
+        <label for="id_otp_validity_minutes">Code validity (minutes)</label>
+        {{ form.otp_validity_minutes }}
+        <div class="help">How long an emailed code stays valid before it expires. Default 10.</div>
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="btn btn-primary">Save changes</button>
+        <a class="btn btn-secondary" href="/admin/">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  // Style the bound checkboxes as the visual sliders. Django renders them as
+  // standard <input type="checkbox">, the CSS handles the rest.
+  document.querySelectorAll('.toggle input[type=checkbox]').forEach(el => {
+    el.style.opacity = 0;
+    el.style.width = '0';
+    el.style.height = '0';
+  });
+</script>
+</body>
+</html>

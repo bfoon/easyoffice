@@ -54,6 +54,15 @@ class Task(models.Model):
     is_private = models.BooleanField(default=False)
     is_recurring = models.BooleanField(default=False)
     recurrence_rule = models.JSONField(null=True, blank=True)
+    on_site_at = models.DateTimeField(null=True, blank=True)
+    on_site_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='tasks_marked_on_site',
+    )
+    customer_visible = models.BooleanField(default=False)
+    awaiting_cs_verification = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -72,6 +81,53 @@ class Task(models.Model):
         from django.utils import timezone
         return self.due_date and self.due_date < timezone.now() and self.status not in ('done', 'cancelled')
 
+    def mark_on_site(self, *, by_user, gps=None, note=''):
+        """
+        Record that a technician arrived on site. Idempotent: if already
+        on site, this is a no-op (we don't overwrite the original
+        timestamp — first-arrive wins).
+
+        Side-effects (notifications, OnSiteEvent row) are NOT done here
+        — they're done by the calling view, after this method commits,
+        so model code stays free of side effects.
+        """
+        from django.utils import timezone
+        if self.on_site_at:
+            return False  # already on site
+        self.on_site_at = timezone.now()
+        self.on_site_by = by_user
+        self.save(update_fields=['on_site_at', 'on_site_by', 'updated_at'])
+        return True
+
+    def clear_on_site(self):
+        """Technician taps 'I've left site'. Doesn't delete the OnSiteEvent
+        row — that history stays. Just clears the live flag."""
+        if not self.on_site_at:
+            return False
+        self.on_site_at = None
+        self.on_site_by = None
+        self.save(update_fields=['on_site_at', 'on_site_by', 'updated_at'])
+        return True
+
+    def mark_done_pending_verify(self):
+        """
+        Used INSTEAD of setting status='done' directly when:
+          - the task has a linked customer-service assignment, or
+          - the task is customer_visible.
+
+        This flips the task to status='review' and sets
+        awaiting_cs_verification=True. The CS owner then confirms with
+        the customer and closes the ticket the normal way.
+        """
+        from django.utils import timezone
+        self.status = self.Status.REVIEW
+        self.awaiting_cs_verification = True
+        self.completed_at = timezone.now()
+        self.progress_pct = 100
+        self.save(update_fields=[
+            'status', 'awaiting_cs_verification',
+            'completed_at', 'progress_pct', 'updated_at',
+        ])
 
 class TaskComment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

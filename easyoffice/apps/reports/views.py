@@ -10,12 +10,13 @@ extra method per class — cheaper than a security incident.
 """
 
 import json
+from statistics import median
 from datetime import timedelta
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import HttpResponseForbidden
 from django.views.generic import TemplateView
 from django.utils import timezone
-from django.db.models import Count, Avg, Q, Sum
+from django.db.models import Count, Avg, Q, Sum, F, Max, Min
 from django.db.models.functions import TruncDate, TruncMonth
 
 # Re-use the role helpers already defined in apps/finance/views.py so we
@@ -299,6 +300,30 @@ class ReportsDashboardView(_ReportsAccessMixin, TemplateView):
             except Exception:
                 ctx['sig_quick_signed'] = 0
 
+        try:
+            from apps.customer_service.models import (
+                ServiceTicket as _CS_Ticket,
+                CallRecord as _CS_Call,
+            )
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            open_statuses = ['new', 'open', 'pending', 'assigned', 'in_progress',
+                             'awaiting_customer', 'escalated']
+
+            ctx['cs_calls_today'] = _CS_Call.objects.filter(
+                started_at__gte=today_start
+            ).count()
+            ctx['cs_open_tickets'] = _CS_Ticket.objects.filter(
+                status__in=open_statuses
+            ).count()
+            ctx['cs_overdue_tickets'] = _CS_Ticket.objects.filter(
+                status__in=open_statuses,
+                resolution_due_at__lt=now,
+            ).count()
+        except Exception:
+            ctx['cs_calls_today'] = 0
+            ctx['cs_open_tickets'] = 0
+            ctx['cs_overdue_tickets'] = 0
+
         return ctx
 
 
@@ -419,10 +444,12 @@ class SecurityReportView(_ReportsAccessMixin, TemplateView):
       • Login success vs failed (30d)     — trust signal
       • Top users with failed logins      — accounts under attack
       • Geo / untrusted alerts (table)    — incidents to investigate
+      • Tokenised link usage (NEW)        — how many times each public
+                                            link was opened, from where,
+                                            and on what device.
     """
     template_name = 'reports/security_report.html'
 
-    # Anything in this set is treated as a "concerning" signal in the KPIs.
     ALERT_TYPES = (
         'login_failed', 'otp_failed', 'otp_expired',
         'account_locked', 'untrusted_attempt', 'geo_alert',
@@ -434,18 +461,18 @@ class SecurityReportView(_ReportsAccessMixin, TemplateView):
 
         now = timezone.now()
         since_24h = now - timedelta(hours=24)
-        since_7d  = now - timedelta(days=7)
+        since_7d = now - timedelta(days=7)
         since_30d = now - timedelta(days=30)
 
         # ── Top-line KPIs ────────────────────────────────────────────────
-        ctx['total_events_30d']    = SecurityEvent.objects.filter(created_at__gte=since_30d).count()
-        ctx['failed_logins_24h']   = SecurityEvent.objects.filter(
+        ctx['total_events_30d'] = SecurityEvent.objects.filter(created_at__gte=since_30d).count()
+        ctx['failed_logins_24h'] = SecurityEvent.objects.filter(
             created_at__gte=since_24h, event_type='login_failed'
         ).count()
         ctx['locked_accounts_30d'] = SecurityEvent.objects.filter(
             created_at__gte=since_30d, event_type='account_locked'
         ).count()
-        ctx['geo_alerts_30d']      = SecurityEvent.objects.filter(
+        ctx['geo_alerts_30d'] = SecurityEvent.objects.filter(
             created_at__gte=since_30d, event_type='geo_alert'
         ).count()
         ctx['untrusted_attempts_30d'] = SecurityEvent.objects.filter(
@@ -455,21 +482,18 @@ class SecurityReportView(_ReportsAccessMixin, TemplateView):
             created_at__gte=since_30d, event_type='login_success'
         ).count()
 
-        # ── Events by type (last 30d) — donut chart data ────────────────
+        # ── Events by type donut ────────────────────────────────────────
         events_by_type = list(
             SecurityEvent.objects.filter(created_at__gte=since_30d)
             .values('event_type').annotate(count=Count('id')).order_by('-count')
         )
-        # Friendly labels mirroring SecurityEvent.EventType.choices.
-        # Cast to str() — choices use gettext_lazy and the proxies are not
-        # JSON-serialisable.
         type_labels = {k: str(v) for k, v in SecurityEvent.EventType.choices}
         for row in events_by_type:
             row['label'] = type_labels.get(row['event_type'], row['event_type'])
         ctx['events_by_type'] = events_by_type
         ctx['events_by_type_json'] = json.dumps(events_by_type)
 
-        # ── Daily login success vs failed (last 30d) — line chart ───────
+        # ── Daily login success vs failed (30d) ─────────────────────────
         daily_qs = (
             SecurityEvent.objects
             .filter(created_at__gte=since_30d, event_type__in=['login_success', 'login_failed'])
@@ -478,7 +502,6 @@ class SecurityReportView(_ReportsAccessMixin, TemplateView):
             .annotate(c=Count('id'))
             .order_by('d')
         )
-        # Pivot into {date -> {success: n, failed: n}}
         bucket = {}
         for row in daily_qs:
             day = row['d'].isoformat() if row['d'] else 'unknown'
@@ -491,8 +514,8 @@ class SecurityReportView(_ReportsAccessMixin, TemplateView):
         ]
         ctx['login_trend_json'] = json.dumps(login_trend)
 
-        # ── Top users with failed logins (last 30d) ─────────────────────
-        top_failed = list(
+        # ── Top failed-login users (30d) ────────────────────────────────
+        ctx['top_failed_users'] = list(
             SecurityEvent.objects.filter(
                 created_at__gte=since_30d, event_type='login_failed'
             )
@@ -500,9 +523,8 @@ class SecurityReportView(_ReportsAccessMixin, TemplateView):
             .annotate(count=Count('id'))
             .order_by('-count')[:10]
         )
-        ctx['top_failed_users'] = top_failed
 
-        # ── Recent alert events for the table (last 7d, top 25) ─────────
+        # ── Recent alert events (7d, top 25) ────────────────────────────
         ctx['recent_alerts'] = (
             SecurityEvent.objects
             .filter(created_at__gte=since_7d, event_type__in=self.ALERT_TYPES)
@@ -510,13 +532,150 @@ class SecurityReportView(_ReportsAccessMixin, TemplateView):
             .order_by('-created_at')[:25]
         )
 
-        # ── Top countries by event volume (last 30d) ────────────────────
+        # ── Top countries by event volume (30d) ─────────────────────────
         ctx['top_countries'] = list(
             SecurityEvent.objects.filter(
                 created_at__gte=since_30d
             ).exclude(country='')
             .values('country').annotate(count=Count('id'))
             .order_by('-count')[:8]
+        )
+
+        # ─────────────────────────────────────────────────────────────────
+        # NEW: Tokenised public link usage
+        # ─────────────────────────────────────────────────────────────────
+        # We aggregate access events for THREE token-backed flows:
+        #   1. apps.files.SignatureRequest   (sent to signers)
+        #   2. apps.meetings.MeetingMinutesExternalReview (external review)
+        #   3. apps.files.FilePublicToken    (30-day public download)
+        #
+        # Each is wrapped in try/except — if a tenant never deployed
+        # the meetings module, that section just shows zero rows
+        # instead of 500-ing the page.
+        # ─────────────────────────────────────────────────────────────────
+        token_usage_summary = {
+            'signature_links': {'count': 0, 'opens': 0, 'unique_ips': 0},
+            'meeting_links': {'count': 0, 'opens': 0, 'unique_ips': 0},
+            'file_links': {'count': 0, 'opens': 0, 'unique_ips': 0},
+        }
+        token_link_rows = []  # most-recently-issued links across all types
+
+        # 1. Signature request public links
+        try:
+            from apps.files.models import SignatureRequestSigner
+            sig_signers = SignatureRequestSigner.objects.filter(
+                request__created_at__gte=since_30d,
+            ).select_related('request')
+            for s in sig_signers[:200]:
+                token_link_rows.append({
+                    'kind': 'Signature',
+                    'subject': getattr(s.request, 'subject', '') or
+                               getattr(s.request, 'document_name', '') or
+                               f'Request #{s.request_id}',
+                    'recipient': getattr(s, 'email', '') or getattr(s, 'name', ''),
+                    'open_count': getattr(s, 'view_count', 0) or 0,
+                    'last_ip': getattr(s, 'last_ip', '') or getattr(s, 'ip_address', ''),
+                    'last_device': getattr(s, 'last_user_agent', '') or
+                                   getattr(s, 'device_name', ''),
+                    'issued_at': getattr(s.request, 'created_at', None),
+                    'expires_at': getattr(s.request, 'expires_at', None) or
+                                  getattr(s, 'expires_at', None),
+                    'status': getattr(s, 'status', '') or 'sent',
+                })
+            agg = sig_signers.aggregate(
+                opens=Sum('view_count'),
+            )
+            token_usage_summary['signature_links']['count'] = sig_signers.count()
+            token_usage_summary['signature_links']['opens'] = agg.get('opens') or 0
+            token_usage_summary['signature_links']['unique_ips'] = (
+                sig_signers.exclude(last_ip__isnull=True).exclude(last_ip='')
+                .values('last_ip').distinct().count()
+            )
+        except Exception:
+            pass
+
+        # 2. Meeting minutes external review links
+        try:
+            from apps.meetings.models import MeetingMinutesExternalReview
+            ext = MeetingMinutesExternalReview.objects.filter(
+                created_at__gte=since_30d,
+            ).select_related('minutes')
+            for r in ext[:200]:
+                token_link_rows.append({
+                    'kind': 'Meeting Minutes',
+                    'subject': getattr(r.minutes, 'subject', '') or
+                               getattr(r.minutes, 'title', '') or
+                               f'Minutes #{r.minutes_id}',
+                    'recipient': getattr(r, 'email', '') or getattr(r, 'reviewer_email', ''),
+                    'open_count': getattr(r, 'view_count', 0) or 0,
+                    'last_ip': getattr(r, 'last_ip', '') or getattr(r, 'ip_address', ''),
+                    'last_device': getattr(r, 'last_user_agent', '') or '',
+                    'issued_at': getattr(r, 'created_at', None),
+                    'expires_at': getattr(r, 'expires_at', None),
+                    'status': (
+                        'used' if getattr(r, 'completed_at', None)
+                        else ('expired' if getattr(r, 'expires_at', None)
+                                           and r.expires_at < now else 'pending')
+                    ),
+                })
+            agg = ext.aggregate(opens=Sum('view_count'))
+            token_usage_summary['meeting_links']['count'] = ext.count()
+            token_usage_summary['meeting_links']['opens'] = agg.get('opens') or 0
+            token_usage_summary['meeting_links']['unique_ips'] = (
+                ext.exclude(last_ip__isnull=True).exclude(last_ip='')
+                .values('last_ip').distinct().count()
+            )
+        except Exception:
+            pass
+
+        # 3. File public tokens
+        try:
+            from apps.files.models import FilePublicToken
+            fpt = FilePublicToken.objects.filter(
+                created_at__gte=since_30d,
+            ).select_related('file')
+            for t in fpt[:200]:
+                token_link_rows.append({
+                    'kind': 'File Download',
+                    'subject': getattr(t.file, 'name', '') or f'File #{t.file_id}',
+                    'recipient': getattr(t, 'recipient_email', '') or '',
+                    'open_count': getattr(t, 'access_count', 0) or
+                                  getattr(t, 'view_count', 0) or 0,
+                    'last_ip': getattr(t, 'last_ip', '') or '',
+                    'last_device': getattr(t, 'last_user_agent', '') or '',
+                    'issued_at': getattr(t, 'created_at', None),
+                    'expires_at': getattr(t, 'expires_at', None),
+                    'status': (
+                        'expired' if getattr(t, 'expires_at', None)
+                                     and t.expires_at < now else 'active'
+                    ),
+                })
+            token_usage_summary['file_links']['count'] = fpt.count()
+            token_usage_summary['file_links']['opens'] = (
+                    fpt.aggregate(opens=Sum('access_count')).get('opens') or 0
+            )
+            token_usage_summary['file_links']['unique_ips'] = (
+                fpt.exclude(last_ip__isnull=True).exclude(last_ip='')
+                .values('last_ip').distinct().count()
+            )
+        except Exception:
+            pass
+
+        # Sort by issued_at desc, take top 30. Push entries with no
+        # issued_at to the very end so they don't break the sort.
+        token_link_rows.sort(
+            key=lambda r: r['issued_at'] or timezone.make_aware(
+                timezone.datetime(1970, 1, 1)
+            ),
+            reverse=True,
+        )
+        ctx['token_links'] = token_link_rows[:30]
+        ctx['token_summary'] = token_usage_summary
+        ctx['token_total_opens'] = sum(
+            v['opens'] for v in token_usage_summary.values()
+        )
+        ctx['token_total_links'] = sum(
+            v['count'] for v in token_usage_summary.values()
         )
 
         return ctx
@@ -1348,4 +1507,417 @@ class OrdersReportView(_SupervisorReportsAccessMixin, TemplateView):
         )
 
         ctx['currency'] = 'GMD'
+        return ctx
+
+
+# =============================================================================
+# 2) NEW: CustomerServiceReportView  —  call centre + ticket analytics
+# =============================================================================
+
+class CustomerServiceReportView(_ReportsAccessMixin, TemplateView):
+    """
+    Customer Service operational report.
+
+    Pulls from apps.customer_service models:
+      • Customer / CustomerPhone — install base
+      • CallRecord              — switchboard activity
+      • ServiceTicket           — case volume + SLA
+      • ServiceRating           — CSAT
+      • FeedbackRequest         — feedback funnel
+
+    Designed to answer the questions a customer-service manager
+    actually walks into the office with:
+        - "How many calls did we field this week?"
+        - "What % of tickets are we resolving on time?"
+        - "Who handled the most tickets and how fast?"
+        - "What's our customer satisfaction trend?"
+        - "Where is the call volume coming from?"
+    """
+    template_name = 'reports/customer_service_report.html'
+
+    OPEN_TICKET_STATUSES = (
+        'new', 'open', 'pending', 'assigned', 'in_progress',
+        'awaiting_customer', 'escalated',
+    )
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        since_24h = now - timedelta(hours=24)
+        since_7d = now - timedelta(days=7)
+        since_30d = now - timedelta(days=30)
+        twelve_months_ago = (now.replace(day=1) - timedelta(days=365)).replace(day=1)
+
+        # Defaults so the template never breaks even if every model is missing
+        defaults = {
+            'total_customers': 0, 'new_customers_30d': 0,
+            'calls_today': 0, 'calls_7d': 0, 'calls_30d': 0,
+            'avg_call_duration_human': '—', 'avg_call_duration_sec': 0,
+            'open_tickets': 0, 'overdue_tickets': 0, 'escalated_tickets': 0,
+            'tickets_30d': 0, 'resolved_30d': 0, 'resolution_rate': 0,
+            'sla_met_pct': 0, 'median_resolution_human': '—',
+            'avg_csat': 0, 'csat_responses_30d': 0, 'feedback_response_rate': 0,
+            'callback_pending': 0,
+            # JSON blobs for charts
+            'calls_by_type_json': '[]',
+            'calls_hourly_json': '[]',
+            'tickets_status_json': '[]',
+            'tickets_priority_json': '[]',
+            'daily_volume_json': '[]',
+            'resolution_funnel_json': '[]',
+            'csat_trend_json': '[]',
+            'rating_breakdown_json': '[]',
+            # Tables
+            'top_agents': [], 'recent_tickets': [], 'top_complaint_customers': [],
+            'department_load': [], 'recent_callbacks': [],
+        }
+        ctx.update(defaults)
+
+        try:
+            from apps.customer_service.models import (
+                Customer, CallRecord, ServiceTicket,
+                ServiceRating, FeedbackRequest,
+            )
+        except Exception:
+            # Whole module missing — show empty page.
+            return ctx
+
+        # ── Customer base ────────────────────────────────────────────────
+        ctx['total_customers'] = Customer.objects.count()
+        ctx['new_customers_30d'] = Customer.objects.filter(
+            created_at__gte=since_30d
+        ).count()
+
+        # ── Call volume KPIs ─────────────────────────────────────────────
+        calls_qs = CallRecord.objects.all()
+        ctx['calls_today'] = calls_qs.filter(started_at__gte=today_start).count()
+        ctx['calls_7d'] = calls_qs.filter(started_at__gte=since_7d).count()
+        ctx['calls_30d'] = calls_qs.filter(started_at__gte=since_30d).count()
+
+        avg_dur = calls_qs.filter(
+            started_at__gte=since_30d, duration_seconds__gt=0,
+        ).aggregate(a=Avg('duration_seconds'))['a'] or 0
+        ctx['avg_call_duration_sec'] = int(avg_dur)
+        ctx['avg_call_duration_human'] = _humanise_duration(avg_dur)
+
+        # ── Ticket KPIs ──────────────────────────────────────────────────
+        ticket_qs = ServiceTicket.objects.all()
+        ctx['open_tickets'] = ticket_qs.filter(
+            status__in=self.OPEN_TICKET_STATUSES
+        ).count()
+        ctx['overdue_tickets'] = ticket_qs.filter(
+            status__in=self.OPEN_TICKET_STATUSES,
+            resolution_due_at__lt=now,
+        ).count()
+        ctx['escalated_tickets'] = ticket_qs.filter(status='escalated').count()
+        ctx['tickets_30d'] = ticket_qs.filter(created_at__gte=since_30d).count()
+        ctx['resolved_30d'] = ticket_qs.filter(
+            resolved_at__gte=since_30d, status__in=['resolved', 'closed'],
+        ).count()
+        ctx['resolution_rate'] = (
+            round(ctx['resolved_30d'] / ctx['tickets_30d'] * 100, 1)
+            if ctx['tickets_30d'] else 0
+        )
+
+        # SLA met % — of tickets resolved in the last 30 days,
+        # how many were resolved before the resolution_due_at deadline?
+        resolved_with_due = ticket_qs.filter(
+            resolved_at__gte=since_30d,
+            resolution_due_at__isnull=False,
+            status__in=['resolved', 'closed'],
+        )
+        sla_total = resolved_with_due.count()
+        sla_met = resolved_with_due.filter(
+            resolved_at__lte=F('resolution_due_at')
+        ).count()
+        ctx['sla_met_pct'] = round(sla_met / sla_total * 100, 1) if sla_total else 0
+
+        # Median resolution time (last 30d) in seconds → humanised
+        durs = []
+        for ca, ra in resolved_with_due.values_list('created_at', 'resolved_at'):
+            if ca and ra:
+                durs.append((ra - ca).total_seconds())
+        if durs:
+            durs.sort()
+            mid = len(durs) // 2
+            med = durs[mid] if len(durs) % 2 else (durs[mid - 1] + durs[mid]) / 2
+            ctx['median_resolution_human'] = _humanise_duration(med)
+        # else stays '—'
+
+        # Pending callbacks — tickets needing a return call
+        ctx['callback_pending'] = ticket_qs.filter(
+            callback_required=True, status__in=self.OPEN_TICKET_STATUSES,
+        ).count()
+
+        # ── CSAT (Customer Satisfaction) ─────────────────────────────────
+        ratings_qs = ServiceRating.objects.filter(created_at__gte=since_30d)
+        ctx['csat_responses_30d'] = ratings_qs.count()
+        if ratings_qs.exists():
+            agg = ratings_qs.aggregate(
+                sq=Avg('service_quality'),
+                pq=Avg('product_quality'),
+                rt=Avg('response_time'),
+                pr=Avg('professionalism'),
+            )
+            scores = [v for v in agg.values() if v is not None]
+            ctx['avg_csat'] = round(sum(scores) / len(scores), 2) if scores else 0
+            ctx['csat_breakdown'] = {
+                'service_quality': round(agg['sq'] or 0, 2),
+                'product_quality': round(agg['pq'] or 0, 2),
+                'response_time': round(agg['rt'] or 0, 2),
+                'professionalism': round(agg['pr'] or 0, 2),
+            }
+        else:
+            ctx['csat_breakdown'] = {
+                'service_quality': 0, 'product_quality': 0,
+                'response_time': 0, 'professionalism': 0,
+            }
+
+        # Feedback request response rate (last 30d)
+        try:
+            fb_total = FeedbackRequest.objects.filter(
+                created_at__gte=since_30d
+            ).count()
+            fb_completed = FeedbackRequest.objects.filter(
+                created_at__gte=since_30d, completed_at__isnull=False
+            ).count()
+            ctx['feedback_response_rate'] = (
+                round(fb_completed / fb_total * 100, 1) if fb_total else 0
+            )
+        except Exception:
+            ctx['feedback_response_rate'] = 0
+
+        # ── Calls by type donut (30d) ────────────────────────────────────
+        type_choices = dict(CallRecord.CALL_TYPES)
+        calls_by_type = list(
+            calls_qs.filter(started_at__gte=since_30d)
+            .values('call_type').annotate(count=Count('id')).order_by('-count')
+        )
+        for r in calls_by_type:
+            r['label'] = type_choices.get(r['call_type'], r['call_type'])
+        ctx['calls_by_type_json'] = json.dumps(calls_by_type)
+
+        # ── Hourly call distribution heatmap data (last 7d) ──────────────
+        # Pattern of when calls come in by hour-of-day. Plotted as a
+        # radial / polar bar chart — visually distinctive and the right
+        # shape for cyclical data (a clock face).
+        hourly_counts = [0] * 24
+        for c in calls_qs.filter(
+                started_at__gte=since_7d
+        ).values_list('started_at', flat=True):
+            if c:
+                hourly_counts[c.hour] += 1
+        calls_hourly = [
+            {'hour': h, 'label': f'{h:02d}:00', 'count': n}
+            for h, n in enumerate(hourly_counts)
+        ]
+        ctx['calls_hourly_json'] = json.dumps(calls_hourly)
+        ctx['peak_hour'] = (
+            max(range(24), key=lambda h: hourly_counts[h])
+            if any(hourly_counts) else None
+        )
+        ctx['peak_hour_count'] = max(hourly_counts) if any(hourly_counts) else 0
+
+        # ── Ticket status mix (donut) ────────────────────────────────────
+        status_choices = dict(ServiceTicket.STATUSES)
+        tickets_by_status = list(
+            ticket_qs.values('status')
+            .annotate(count=Count('id')).order_by('-count')
+        )
+        for r in tickets_by_status:
+            r['label'] = status_choices.get(r['status'], r['status'])
+        ctx['tickets_status_json'] = json.dumps(tickets_by_status)
+
+        # ── Ticket priority mix (donut) ──────────────────────────────────
+        priority_choices = dict(ServiceTicket.PRIORITIES)
+        tickets_by_priority = list(
+            ticket_qs.filter(status__in=self.OPEN_TICKET_STATUSES)
+            .values('priority').annotate(count=Count('id'))
+            .order_by('priority')
+        )
+        for r in tickets_by_priority:
+            r['label'] = priority_choices.get(r['priority'], r['priority'])
+        ctx['tickets_priority_json'] = json.dumps(tickets_by_priority)
+
+        # ── Daily volume — calls vs tickets vs resolved (30d) ────────────
+        # A single overlaid line chart so a manager can eyeball whether
+        # we're keeping up with inbound volume.
+        daily_calls = {
+            r['d'].isoformat(): r['c']
+            for r in calls_qs.filter(started_at__gte=since_30d)
+            .annotate(d=TruncDate('started_at'))
+            .values('d').annotate(c=Count('id')).order_by('d')
+            if r['d']
+        }
+        daily_tickets_in = {
+            r['d'].isoformat(): r['c']
+            for r in ticket_qs.filter(created_at__gte=since_30d)
+            .annotate(d=TruncDate('created_at'))
+            .values('d').annotate(c=Count('id')).order_by('d')
+            if r['d']
+        }
+        daily_resolved = {
+            r['d'].isoformat(): r['c']
+            for r in ticket_qs.filter(
+                resolved_at__gte=since_30d,
+                status__in=['resolved', 'closed'],
+            ).annotate(d=TruncDate('resolved_at'))
+            .values('d').annotate(c=Count('id')).order_by('d')
+            if r['d']
+        }
+        all_dates = sorted(
+            set(daily_calls) | set(daily_tickets_in) | set(daily_resolved)
+        )
+        ctx['daily_volume_json'] = json.dumps([
+            {
+                'date': d,
+                'calls': daily_calls.get(d, 0),
+                'tickets': daily_tickets_in.get(d, 0),
+                'resolved': daily_resolved.get(d, 0),
+            } for d in all_dates
+        ])
+
+        # ── Resolution funnel (30d) — bar chart ──────────────────────────
+        # Inbound → triaged → resolved → closed. Shows where cases drop.
+        funnel = [
+            {'stage': 'Created', 'count': ctx['tickets_30d']},
+            {'stage': 'Assigned', 'count': ticket_qs.filter(
+                created_at__gte=since_30d,
+                current_owner__isnull=False,
+            ).count()},
+            {'stage': 'In Progress', 'count': ticket_qs.filter(
+                created_at__gte=since_30d,
+                status__in=['in_progress', 'assigned', 'awaiting_customer',
+                            'resolved', 'closed'],
+            ).count()},
+            {'stage': 'Resolved', 'count': ctx['resolved_30d']},
+            {'stage': 'Closed', 'count': ticket_qs.filter(
+                closed_at__gte=since_30d,
+            ).count()},
+        ]
+        ctx['resolution_funnel_json'] = json.dumps(funnel)
+
+        # ── CSAT trend (last 12 months) ──────────────────────────────────
+        csat_trend = []
+        for r in (
+                ServiceRating.objects.filter(created_at__gte=twelve_months_ago)
+                        .annotate(m=TruncMonth('created_at'))
+                        .values('m')
+                        .annotate(
+                    sq=Avg('service_quality'),
+                    pq=Avg('product_quality'),
+                    rt=Avg('response_time'),
+                    pr=Avg('professionalism'),
+                    n=Count('id'),
+                )
+                        .order_by('m')
+        ):
+            scores = [
+                v for v in (r['sq'], r['pq'], r['rt'], r['pr'])
+                if v is not None
+            ]
+            csat_trend.append({
+                'month': r['m'].strftime('%b %Y') if r['m'] else '',
+                'avg': round(sum(scores) / len(scores), 2) if scores else 0,
+                'n': r['n'],
+            })
+        ctx['csat_trend_json'] = json.dumps(csat_trend)
+
+        # ── Rating breakdown (radar) ─────────────────────────────────────
+        rb = ctx['csat_breakdown']
+        ctx['rating_breakdown_json'] = json.dumps([
+            {'dim': 'Service Quality', 'score': rb['service_quality']},
+            {'dim': 'Product Quality', 'score': rb['product_quality']},
+            {'dim': 'Response Time', 'score': rb['response_time']},
+            {'dim': 'Professionalism', 'score': rb['professionalism']},
+        ])
+
+        # ── Top agents — handler leaderboard (30d) ──────────────────────
+        top_agents = list(
+            ticket_qs.filter(
+                resolved_at__gte=since_30d,
+                resolved_by__isnull=False,
+            )
+            .values(
+                'resolved_by__id',
+                'resolved_by__email',
+                'resolved_by__first_name',
+                'resolved_by__last_name',
+            )
+            .annotate(
+                resolved=Count('id'),
+                avg_resolution_sec=Avg(
+                    F('resolved_at') - F('created_at')
+                ),
+            )
+            .order_by('-resolved')[:10]
+        )
+        # Annotate average resolution time as human-readable
+        for a in top_agents:
+            ar = a.get('avg_resolution_sec')
+            if ar:
+                # Avg of timedelta returns timedelta; convert to seconds
+                try:
+                    a['avg_resolution_human'] = _humanise_duration(
+                        ar.total_seconds()
+                    )
+                except AttributeError:
+                    a['avg_resolution_human'] = '—'
+            else:
+                a['avg_resolution_human'] = '—'
+        ctx['top_agents'] = top_agents
+
+        # ── Department load — open tickets per department ───────────────
+        try:
+            ctx['department_load'] = list(
+                ticket_qs.filter(status__in=self.OPEN_TICKET_STATUSES)
+                .exclude(department__isnull=True)
+                .values('department__id', 'department__name')
+                .annotate(
+                    open_count=Count('id'),
+                    overdue=Count('id', filter=Q(resolution_due_at__lt=now)),
+                )
+                .order_by('-open_count')[:10]
+            )
+        except Exception:
+            ctx['department_load'] = []
+
+        # ── Recent tickets table (last 15) ───────────────────────────────
+        ctx['recent_tickets'] = (
+            ticket_qs.select_related('customer', 'department', 'current_owner')
+            .order_by('-created_at')[:15]
+        )
+
+        # ── Top customers by complaint volume (30d) ──────────────────────
+        ctx['top_complaint_customers'] = list(
+            ticket_qs.filter(
+                created_at__gte=since_30d,
+                ticket_type__in=['complaint', 'support', 'maintenance'],
+            )
+            .values(
+                'customer__id',
+                'customer__full_name',
+                'customer__company_name',
+            )
+            .annotate(
+                ticket_count=Count('id'),
+                open_count=Count(
+                    'id', filter=Q(status__in=self.OPEN_TICKET_STATUSES)
+                ),
+            )
+            .order_by('-ticket_count')[:8]
+        )
+
+        # ── Recent callbacks needing attention ──────────────────────────
+        ctx['recent_callbacks'] = (
+            ticket_qs.filter(
+                callback_required=True,
+                status__in=self.OPEN_TICKET_STATUSES,
+            )
+            .select_related('customer', 'current_owner')
+            .order_by('-created_at')[:10]
+        )
+
         return ctx

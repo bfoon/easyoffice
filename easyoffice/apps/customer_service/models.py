@@ -279,6 +279,12 @@ class ServiceTicket(TimeStampedModel):
     callback_email = models.EmailField(blank=True)
     forwarded_call = models.BooleanField(default=False)
     requires_feedback = models.BooleanField(default=True)
+    contract = models.ForeignKey(
+        'finance.Contract',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='service_tickets',
+    )
 
     class Meta:
         ordering = ["-created_at"]

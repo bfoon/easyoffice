@@ -49,6 +49,8 @@ urlpatterns = [
     path('orders/',     include('apps.orders.urls')),
     path('api/',        include('apps.orders.api.urls')),
 
+    path('portal/', include('apps.customer_portal.urls')),
+
     # API
     path('api/v1/', include('apps.core.urls.api')),
     path('letterhead/', include('apps.letterhead.urls')),
@@ -56,6 +58,7 @@ urlpatterns = [
         'invoices/',
         include(('apps.invoices.urls', 'invoices'), namespace='invoices')
     ),
+    path('api/mobile/v1/', include('apps.mobile_api.urls')),
     path('opportunities/', include('apps.opportunities.urls')),
     path('customer-service/', include('apps.customer_service.urls')),
     path('users/', include('apps.user_admin.urls', namespace='user_admin')),

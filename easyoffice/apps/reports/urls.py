@@ -14,4 +14,10 @@ urlpatterns = [
     path('invoicing/', views.InvoicingReportView.as_view(), name='invoicing_report'),
     path('signatures/', views.SignatureReportView.as_view(), name='signature_report'),
     path('orders/', views.OrdersReportView.as_view(), name='orders_report'),
+    # NEW — Customer Service (CEO / Superuser tier)
+    path(
+        'customer-service/',
+        views.CustomerServiceReportView.as_view(),
+        name='customer_service_report',
+    ),
 ]

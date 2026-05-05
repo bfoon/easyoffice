@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% load humanize %}
+{% load customer_portal_tags %}
 {% block title %}{{ contract.title }}{% endblock %}
 {% block breadcrumb %}
   <a href="{% url 'contract_dashboard' %}">Contracts</a> /
@@ -560,6 +561,242 @@
           {% endif %}
         </div>
       </section>
+
+      <section class="cdetail-card">
+        <div class="cdetail-card-head">
+          <div>
+            <h2 class="cdetail-card-title">Service Tickets</h2>
+            <p class="cdetail-card-subtitle">Customer-service tickets linked to this contract</p>
+          </div>
+        </div>
+
+        <div class="cdetail-card-body">
+          {% tickets_for contract 12 as tickets %}
+          {% tickets_count_for contract as ticket_total %}
+          {% if tickets %}
+          <div class="cdetail-ticket-list" style="display:flex;flex-direction:column;gap:.75rem">
+            {% for t in tickets %}
+            <div class="cdetail-ticket-item"
+                 style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;
+                        padding:.85rem 1rem;border-radius:14px;
+                        background:var(--eo-surface-2,#f8fafc);
+                        border:1px solid var(--eo-border,#e2e8f0)">
+              <div style="min-width:0;flex:1">
+                <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+                  <span style="font-family:var(--eo-font-mono,ui-monospace,monospace);
+                               font-size:.75rem;font-weight:700;color:var(--eo-text-muted,#64748b);
+                               letter-spacing:.04em">
+                    {{ t.ticket_no }}
+                  </span>
+                  <span style="font-size:.7rem;font-weight:700;text-transform:uppercase;
+                               letter-spacing:.06em;padding:.15rem .5rem;border-radius:6px;
+                               {% if t.priority == 'critical' %}background:#fee2e2;color:#991b1b
+                               {% elif t.priority == 'high' %}background:#fef3c7;color:#92400e
+                               {% elif t.priority == 'medium' %}background:#dbeafe;color:#1e40af
+                               {% else %}background:#e2e8f0;color:#475569{% endif %}">
+                    {{ t.get_priority_display }}
+                  </span>
+                  <span style="font-size:.7rem;font-weight:600;padding:.15rem .5rem;border-radius:6px;
+                               {% if t.status == 'closed' or t.status == 'resolved' %}background:#dcfce7;color:#166534
+                               {% elif t.status == 'escalated' %}background:#fee2e2;color:#991b1b
+                               {% elif t.status == 'in_progress' or t.status == 'assigned' %}background:#dbeafe;color:#1e40af
+                               {% else %}background:#f1f5f9;color:#475569{% endif %}">
+                    {{ t.get_status_display }}
+                  </span>
+                  {% if t.is_overdue %}
+                  <span style="font-size:.7rem;font-weight:700;padding:.15rem .5rem;border-radius:6px;
+                               background:#fee2e2;color:#991b1b">
+                    <i class="bi bi-exclamation-triangle-fill"></i> Overdue
+                  </span>
+                  {% endif %}
+                </div>
+                <div style="margin-top:.3rem;font-weight:600;color:var(--eo-text);
+                            white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                  {{ t.subject }}
+                </div>
+                <div style="margin-top:.15rem;font-size:.78rem;color:var(--eo-text-muted,#64748b)">
+                  {{ t.get_ticket_type_display }}
+                  &nbsp;·&nbsp; opened {{ t.created_at|naturaltime }}
+                  {% if t.current_owner %}
+                  &nbsp;·&nbsp; owner: {{ t.current_owner.get_full_name|default:t.current_owner.username }}
+                  {% endif %}
+                </div>
+              </div>
+              <a href="{% url 'customer_service_ticket_detail' t.pk %}"
+                 class="eo-btn eo-btn-ghost eo-btn-sm"
+                 style="white-space:nowrap">
+                Open <i class="bi bi-arrow-right-short"></i>
+              </a>
+            </div>
+            {% endfor %}
+          </div>
+          {% if ticket_total > 12 %}
+          <div style="margin-top:.85rem;font-size:.82rem;color:var(--eo-text-muted,#64748b);text-align:center">
+            Showing 12 of {{ ticket_total }} tickets.
+          </div>
+          {% endif %}
+          {% else %}
+          <div class="cdetail-empty">
+            <i class="bi bi-headset"></i>
+            No service tickets have been linked to this contract yet.
+          </div>
+          {% endif %}
+        </div>
+      </section>
+
+      {# ── Customer Portal Access ────────────────────────────────────────── #}
+      {% portal_token_for contract as cp_token %}
+      <section class="cdetail-card">
+        <div class="cdetail-card-head">
+          <div>
+            <h2 class="cdetail-card-title">Customer Portal Access</h2>
+            <p class="cdetail-card-subtitle">Token link the customer uses to view their support visits</p>
+          </div>
+          {% portal_token_status cp_token as cp_status %}
+          {% if cp_status == 'active' %}
+            <span style="font-size:.72rem;font-weight:700;letter-spacing:.04em;
+                         padding:.25rem .55rem;border-radius:8px;
+                         background:#dcfce7;color:#166534">
+              <i class="bi bi-check-circle-fill"></i> ACTIVE
+            </span>
+          {% elif cp_status == 'expiring' %}
+            <span style="font-size:.72rem;font-weight:700;letter-spacing:.04em;
+                         padding:.25rem .55rem;border-radius:8px;
+                         background:#fef3c7;color:#92400e">
+              <i class="bi bi-clock-history"></i> EXPIRING SOON
+            </span>
+          {% elif cp_status == 'expired' %}
+            <span style="font-size:.72rem;font-weight:700;letter-spacing:.04em;
+                         padding:.25rem .55rem;border-radius:8px;
+                         background:#fee2e2;color:#991b1b">
+              <i class="bi bi-x-circle-fill"></i> EXPIRED
+            </span>
+          {% else %}
+            <span style="font-size:.72rem;font-weight:700;letter-spacing:.04em;
+                         padding:.25rem .55rem;border-radius:8px;
+                         background:#e2e8f0;color:#475569">
+              NO TOKEN
+            </span>
+          {% endif %}
+        </div>
+
+        <div class="cdetail-card-body">
+          {% if cp_token %}
+            {% portal_url_for cp_token as cp_url %}
+            <div style="display:flex;flex-direction:column;gap:.85rem">
+
+              <div style="display:flex;align-items:stretch;gap:.5rem">
+                <input type="text"
+                       id="cp-portal-url"
+                       value="{{ cp_url }}"
+                       readonly
+                       onclick="this.select()"
+                       style="flex:1;font-family:var(--eo-font-mono,ui-monospace,monospace);
+                              font-size:.82rem;padding:.65rem .85rem;
+                              border:1px solid var(--eo-border,#e2e8f0);border-radius:10px;
+                              background:#fff;color:var(--eo-text);min-width:0">
+                <button type="button"
+                        class="eo-btn eo-btn-primary eo-btn-sm"
+                        onclick="(function(btn){
+                          var i=document.getElementById('cp-portal-url');
+                          i.select(); i.setSelectionRange(0,99999);
+                          var done=function(){
+                            var prev=btn.innerHTML;
+                            btn.innerHTML='<i class=&quot;bi bi-check-lg&quot;></i> Copied';
+                            setTimeout(function(){btn.innerHTML=prev;},1800);
+                          };
+                          if(navigator.clipboard&&navigator.clipboard.writeText){
+                            navigator.clipboard.writeText(i.value).then(done,function(){
+                              try{document.execCommand('copy');done();}catch(e){}
+                            });
+                          }else{
+                            try{document.execCommand('copy');done();}catch(e){}
+                          }
+                        })(this)"
+                        style="white-space:nowrap">
+                  <i class="bi bi-clipboard"></i> Copy link
+                </button>
+              </div>
+
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.6rem .9rem;
+                          font-size:.82rem">
+                <div>
+                  <div style="color:var(--eo-text-muted,#64748b);font-size:.72rem;
+                              text-transform:uppercase;letter-spacing:.05em;margin-bottom:.15rem">
+                    Issued to
+                  </div>
+                  <div style="color:var(--eo-text);font-weight:600;
+                              white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                    {% if cp_token.contact %}
+                      {{ cp_token.contact.full_name|default:cp_token.contact.email }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                  {% if cp_token.contact and cp_token.contact.email %}
+                  <div style="color:var(--eo-text-muted,#64748b);font-size:.78rem;
+                              white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                    {{ cp_token.contact.email }}
+                  </div>
+                  {% endif %}
+                </div>
+
+                <div>
+                  <div style="color:var(--eo-text-muted,#64748b);font-size:.72rem;
+                              text-transform:uppercase;letter-spacing:.05em;margin-bottom:.15rem">
+                    Issued
+                  </div>
+                  <div style="color:var(--eo-text);font-weight:600">
+                    {{ cp_token.issued_at|date:"M j, Y" }}
+                  </div>
+                  <div style="color:var(--eo-text-muted,#64748b);font-size:.78rem">
+                    {{ cp_token.issued_at|naturaltime }}
+                  </div>
+                </div>
+
+                <div>
+                  <div style="color:var(--eo-text-muted,#64748b);font-size:.72rem;
+                              text-transform:uppercase;letter-spacing:.05em;margin-bottom:.15rem">
+                    Valid until
+                  </div>
+                  <div style="color:var(--eo-text);font-weight:600">
+                    {{ cp_token.valid_until|date:"M j, Y" }}
+                  </div>
+                  <div style="color:var(--eo-text-muted,#64748b);font-size:.78rem">
+                    {% if cp_status == 'expired' %}expired {{ cp_token.valid_until|naturaltime }}
+                    {% else %}{{ cp_token.valid_until|naturaltime }}{% endif %}
+                  </div>
+                </div>
+              </div>
+
+              <div style="font-size:.78rem;color:var(--eo-text-muted,#64748b);
+                          padding:.6rem .8rem;background:var(--eo-surface-2,#f8fafc);
+                          border:1px dashed var(--eo-border,#e2e8f0);border-radius:10px;
+                          line-height:1.5">
+                <i class="bi bi-shield-lock"></i>
+                Anyone with this link can view this contract's support visits and dispute on-site events.
+                Treat it like a password — only share with the named contact above.
+              </div>
+            </div>
+          {% else %}
+            <div class="cdetail-empty">
+              <i class="bi bi-key"></i>
+              No active portal token for this contract.
+              {% if not contract.end_date %}
+              <div style="margin-top:.5rem;font-size:.82rem;color:var(--eo-text-muted)">
+                A token is issued automatically once the contract has an end date.
+              </div>
+              {% else %}
+              <div style="margin-top:.5rem;font-size:.82rem;color:var(--eo-text-muted)">
+                Tokens are issued automatically on contract creation. If you expected one to be here,
+                check the customer-portal logs or save the contract again to retrigger issuance.
+              </div>
+              {% endif %}
+            </div>
+          {% endif %}
+        </div>
+      </section>
+
     </div>
 
     <div class="col-lg-4">

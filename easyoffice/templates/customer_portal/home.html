@@ -1,0 +1,197 @@
+{% extends "customer_portal/_base.html" %}
+{% block title %}Support Portal — {{ contract.title }}{% endblock %}
+
+{% block content %}
+
+{# ── Hero greeting ─────────────────────────────────────────────────── #}
+<div class="p-card" style="background: linear-gradient(135deg, #1a1714 0%, #2e2925 100%); border-color: transparent; color: #fff; padding: 36px 34px;">
+  <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+    <div>
+      <p style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:rgba(255,255,255,.45); margin:0 0 6px;">Welcome back</p>
+      <h1 style="font-family:'DM Serif Display',serif; font-size:32px; letter-spacing:-.03em; margin:0 0 10px; color:#fff;">{{ contact.full_name }}</h1>
+      <p style="color:rgba(255,255,255,.6); margin:0; font-size:14px; max-width:440px;">
+        You're viewing the support portal for <strong style="color:rgba(255,255,255,.85);">{{ contract.title }}</strong>.
+        Track open work, review upcoming visits, and submit new requests below.
+      </p>
+    </div>
+    <a href="{% url 'customer_portal_new_request' token=token.token %}" class="p-btn p-btn-primary" style="flex-shrink:0; margin-top:4px;">
+      <i class="bi bi-plus-lg"></i> New request
+    </a>
+  </div>
+</div>
+
+
+{# ── Open requests ─────────────────────────────────────────────────── #}
+<div class="p-card">
+  <div class="p-card-header">
+    <h2 class="p-card-title"><i class="bi bi-inbox me-1"></i> Open requests</h2>
+    {% if open_requests %}
+      <span style="font-size:12px; background:var(--rule-light); color:var(--ink-soft); padding:2px 10px; border-radius:999px; font-weight:500;">
+        {{ open_requests|length }}
+      </span>
+    {% endif %}
+  </div>
+
+  {% if open_requests %}
+    <ul class="list-unstyled mb-0">
+    {% for req in open_requests %}
+      <li class="tl-item">
+        <div class="tl-time">{{ req.created_at|date:"d M Y" }}</div>
+        <div class="tl-body">
+          <strong>{{ req.subject }}</strong>
+          <br>
+          <small>
+            {{ req.get_kind_display }}
+            <span style="color:var(--rule); padding:0 4px;">·</span>
+            {{ req.get_priority_display }}
+            {% if req.service_ticket %}
+              <span style="color:var(--rule); padding:0 4px;">·</span>
+              Ticket {{ req.service_ticket.ticket_no }}
+              <span class="s-pill s-{{ req.service_ticket.status }}" style="margin-left:4px;">
+                {{ req.service_ticket.get_status_display }}
+              </span>
+            {% else %}
+              <span class="s-pill s-new" style="margin-left:4px;">Pending review</span>
+            {% endif %}
+          </small>
+        </div>
+      </li>
+    {% endfor %}
+    </ul>
+  {% else %}
+    <div style="text-align:center; padding:32px 16px; color:var(--ink-muted);">
+      <i class="bi bi-check-circle" style="font-size:28px; display:block; margin-bottom:10px; color:var(--rule);"></i>
+      <p style="margin:0; font-size:14px;">No open requests — all clear.</p>
+    </div>
+  {% endif %}
+</div>
+
+
+{# ── Maintenance schedule ──────────────────────────────────────────── #}
+{% if pm_schedule %}
+<div class="p-card">
+  <div class="p-card-header">
+    <h2 class="p-card-title"><i class="bi bi-tools me-1"></i> Preventive maintenance</h2>
+  </div>
+
+  <div class="row g-0" style="margin-bottom:16px;">
+    <div class="col-md-4" style="padding:0 20px 0 0;">
+      <p style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-muted); margin:0 0 3px;">Cadence</p>
+      <p style="font-size:15px; font-weight:500; margin:0;">{{ pm_schedule.get_cadence_display }}</p>
+    </div>
+    <div class="col-md-4" style="padding:0 20px; border-left:1px solid var(--rule-light);">
+      <p style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-muted); margin:0 0 3px;">Next visit due</p>
+      <p style="font-size:15px; font-weight:500; margin:0; color:var(--accent);">
+        {% if pm_schedule.next_due_date %}{{ pm_schedule.next_due_date|date:"D j M Y" }}{% else %}—{% endif %}
+      </p>
+    </div>
+    <div class="col-md-4" style="padding:0 0 0 20px; border-left:1px solid var(--rule-light);">
+      <p style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-muted); margin:0 0 3px;">Last completed</p>
+      <p style="font-size:15px; font-weight:500; margin:0;">
+        {% if pm_schedule.last_completed_date %}{{ pm_schedule.last_completed_date|date:"D j M Y" }}{% else %}—{% endif %}
+      </p>
+    </div>
+  </div>
+
+  {% if pm_schedule.has_on_call %}
+    <div class="p-alert p-alert-info" style="margin:0;">
+      <i class="bi bi-telephone-fill"></i>
+      <span>Your contract includes <strong>on-call support</strong> — submit a request any time and we'll dispatch a technician.</span>
+    </div>
+  {% endif %}
+</div>
+{% endif %}
+
+
+{# ── Upcoming visits ──────────────────────────────────────────────── #}
+{% if upcoming_visits %}
+<div class="p-card">
+  <div class="p-card-header">
+    <h2 class="p-card-title"><i class="bi bi-calendar-event me-1"></i> Upcoming visits</h2>
+  </div>
+  <ul class="list-unstyled mb-0">
+  {% for v in upcoming_visits %}
+    <li class="tl-item">
+      <div class="tl-time">
+        {% if v.scheduled_for %}{{ v.scheduled_for|date:"d M, H:i" }}{% else %}<em>TBD</em>{% endif %}
+      </div>
+      <div class="tl-body">
+        <strong>{{ v.summary|default:v.get_kind_display }}</strong>
+        <span class="s-pill s-{{ v.status }}" style="margin-left:6px;">{{ v.get_status_display }}</span>
+        {% if v.technician %}
+          <br><small>Technician: {{ v.technician.full_name }}</small>
+        {% endif %}
+        {% if v.customer_visible_notes %}
+          <br><small style="color:var(--ink-soft);">{{ v.customer_visible_notes }}</small>
+        {% endif %}
+      </div>
+    </li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+
+{# ── On-site activity ─────────────────────────────────────────────── #}
+{% if on_site_events %}
+<div class="p-card">
+  <div class="p-card-header">
+    <h2 class="p-card-title"><i class="bi bi-geo-alt me-1"></i> Site activity</h2>
+  </div>
+  <ul class="list-unstyled mb-0">
+  {% for ev in on_site_events %}
+    <li class="tl-item">
+      <div class="tl-time">{{ ev.created_at|date:"d M H:i" }}</div>
+      <div class="tl-body">
+        {% if ev.event_type == 'arrive' %}
+          <span style="color:var(--go);"><i class="bi bi-geo-alt-fill"></i></span>
+          <strong>{{ ev.actor_user.full_name|default:"Technician" }}</strong> reported on site
+          {% if ev.task %}<span style="color:var(--ink-muted);">for {{ ev.task.title }}</span>{% endif %}
+          &ensp;
+          <form method="post" action="{% url 'customer_portal_dispute' token=token.token event_id=ev.pk %}"
+                style="display:inline;"
+                onsubmit="return confirm('Are you sure the technician did NOT show up?');">
+            {% csrf_token %}
+            <button type="submit" style="background:none; border:none; color:var(--accent); font-size:12px; padding:0; cursor:pointer; text-decoration:underline; text-underline-offset:2px; font-family:inherit;">
+              They never showed up
+            </button>
+          </form>
+        {% elif ev.event_type == 'depart' %}
+          <i class="bi bi-box-arrow-left" style="color:var(--ink-muted);"></i>
+          <strong>{{ ev.actor_user.full_name|default:"Technician" }}</strong> left site
+        {% elif ev.event_type == 'dispute' %}
+          <i class="bi bi-exclamation-triangle-fill" style="color:var(--accent);"></i>
+          <strong style="color:var(--accent);">Visit disputed</strong>
+          {% if ev.note %}<br><small style="color:var(--ink-muted);">"{{ ev.note }}"</small>{% endif %}
+        {% endif %}
+      </div>
+    </li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+
+{# ── Support history ──────────────────────────────────────────────── #}
+{% if tickets %}
+<div class="p-card">
+  <div class="p-card-header">
+    <h2 class="p-card-title"><i class="bi bi-clock-history me-1"></i> Support history</h2>
+  </div>
+  <ul class="list-unstyled mb-0">
+  {% for t in tickets %}
+    <li class="tl-item">
+      <div class="tl-time">{{ t.created_at|date:"d M Y" }}</div>
+      <div class="tl-body">
+        <strong>{{ t.subject }}</strong>
+        <span class="s-pill s-{{ t.status }}" style="margin-left:6px;">{{ t.get_status_display }}</span>
+        <br>
+        <small>{{ t.ticket_no }} · {{ t.get_ticket_type_display }} · {{ t.get_priority_display }}</small>
+      </div>
+    </li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% endblock %}

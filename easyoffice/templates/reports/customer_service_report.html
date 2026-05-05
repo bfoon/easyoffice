@@ -1,0 +1,800 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Customer Service Report{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'reports_dashboard' %}">Reports</a>
+  <span>/</span>
+  <span>Customer Service</span>
+{% endblock %}
+
+{% block content %}
+<style>
+  /* ─────────────────────────────────────────────────────────────
+     Customer Service Report — "Service Operations Command Center"
+     A more expressive layout than the rest of the reports family:
+     hero band + radial / polar / funnel charts for visual variety.
+     ───────────────────────────────────────────────────────────── */
+
+  :root {
+    --cs-rose: #f43f5e;
+    --cs-amber: #f59e0b;
+    --cs-emerald: #10b981;
+    --cs-sky: #0ea5e9;
+    --cs-violet: #8b5cf6;
+    --cs-pink: #ec4899;
+    --cs-cyan: #06b6d4;
+    --cs-orange: #f97316;
+    --cs-slate: #64748b;
+  }
+
+  /* ── Hero strip ──────────────────────────────────────────── */
+  .cs-hero {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #0e7490 100%);
+    border-radius: 16px;
+    padding: 22px 26px;
+    color: #fff;
+    margin-bottom: 22px;
+    position: relative;
+    overflow: hidden;
+  }
+  .cs-hero::before {
+    content: "";
+    position: absolute; right: -60px; top: -60px;
+    width: 240px; height: 240px;
+    background: radial-gradient(circle, rgba(14,165,233,0.35), transparent 70%);
+    border-radius: 50%;
+  }
+  .cs-hero-title {
+    font-size: 1.35rem; font-weight: 800; margin: 0 0 4px;
+    display: flex; align-items: center; gap: 10px;
+    position: relative; z-index: 1;
+  }
+  .cs-hero-sub {
+    font-size: .82rem; color: #cbd5e1; margin: 0;
+    position: relative; z-index: 1;
+  }
+  .cs-hero-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 14px;
+    margin-top: 18px;
+    position: relative; z-index: 1;
+  }
+  .cs-hero-stat {
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    padding: 12px 14px;
+    backdrop-filter: blur(8px);
+  }
+  .cs-hero-stat .v { font-size: 1.5rem; font-weight: 800; line-height: 1; }
+  .cs-hero-stat .l { font-size: .68rem; color: #cbd5e1; margin-top: 6px;
+                     text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+  .cs-hero-stat .v.danger  { color: #fca5a5; }
+  .cs-hero-stat .v.warn    { color: #fbbf24; }
+  .cs-hero-stat .v.ok      { color: #6ee7b7; }
+  .cs-hero-stat .v.info    { color: #7dd3fc; }
+
+  /* ── KPI grid ──────────────────────────────────────────── */
+  .cs-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+  .cs-kpi {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: 14px;
+    padding: 16px 18px;
+    display: flex; gap: 14px; align-items: center;
+    position: relative;
+  }
+  .cs-kpi-ico {
+    width: 42px; height: 42px;
+    border-radius: 11px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.2rem; flex-shrink: 0;
+  }
+  .cs-kpi-val { font-size: 1.5rem; font-weight: 800; color: var(--eo-text); line-height: 1; }
+  .cs-kpi-lbl { font-size: .72rem; color: var(--eo-text-muted); margin-top: 5px;
+                font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .cs-kpi-trend {
+    position: absolute; top: 10px; right: 12px;
+    font-size: .68rem; font-weight: 700;
+    padding: 2px 7px; border-radius: 999px;
+  }
+
+  /* ── Cards / grids ──────────────────────────────────────── */
+  .cs-grid-2 {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 18px; margin-bottom: 18px;
+  }
+  .cs-grid-3 {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 18px; margin-bottom: 18px;
+  }
+  .cs-card {
+    background: var(--eo-surface);
+    border: 1px solid var(--eo-border);
+    border-radius: 14px;
+    padding: 20px;
+  }
+  .cs-card h3 {
+    font-size: .85rem; font-weight: 700; margin: 0 0 14px;
+    color: var(--eo-text);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .cs-card h3 .pill {
+    font-size: .65rem; font-weight: 600;
+    background: var(--eo-bg, #f5f5f7);
+    color: var(--eo-text-muted);
+    padding: 2px 8px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+
+  /* ── Tables ─────────────────────────────────────────────── */
+  .cs-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .cs-table th {
+    text-align: left;
+    font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--eo-text-muted); font-weight: 600;
+    padding: 8px 10px; border-bottom: 1px solid var(--eo-border);
+  }
+  .cs-table td {
+    padding: 10px; border-bottom: 1px solid var(--eo-border);
+    color: var(--eo-text);
+  }
+  .cs-table tr:last-child td { border-bottom: 0; }
+
+  /* ── Badges ─────────────────────────────────────────────── */
+  .cs-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: .68rem; font-weight: 600;
+  }
+  .cs-badge.s-new      { background:#dbeafe; color:#1e40af; }
+  .cs-badge.s-open     { background:#cffafe; color:#155e75; }
+  .cs-badge.s-progress { background:#e0e7ff; color:#3730a3; }
+  .cs-badge.s-pending  { background:#fef3c7; color:#92400e; }
+  .cs-badge.s-resolved { background:#d1fae5; color:#065f46; }
+  .cs-badge.s-closed   { background:#e5e7eb; color:#374151; }
+  .cs-badge.s-escal    { background:#fee2e2; color:#b91c1c; }
+  .cs-badge.s-assigned { background:#ede9fe; color:#5b21b6; }
+  .cs-badge.s-await    { background:#fef9c3; color:#854d0e; }
+  .cs-badge.s-cancelled{ background:#f1f5f9; color:#64748b; }
+
+  .cs-badge.p-low     { background:#e0f2fe; color:#0369a1; }
+  .cs-badge.p-medium  { background:#fef3c7; color:#92400e; }
+  .cs-badge.p-high    { background:#ffedd5; color:#9a3412; }
+  .cs-badge.p-critical{ background:#fee2e2; color:#b91c1c; }
+
+  .cs-badge.t-sales       { background:#d1fae5; color:#065f46; }
+  .cs-badge.t-maintenance { background:#fef3c7; color:#92400e; }
+  .cs-badge.t-support     { background:#dbeafe; color:#1e40af; }
+  .cs-badge.t-complaint   { background:#fee2e2; color:#b91c1c; }
+  .cs-badge.t-callback    { background:#fce7f3; color:#9d174d; }
+  .cs-badge.t-product     { background:#e0e7ff; color:#3730a3; }
+  .cs-badge.t-general     { background:#e5e7eb; color:#374151; }
+
+  .cs-empty { color: var(--eo-text-muted); font-size: .85rem;
+              padding: 20px 0; text-align: center; }
+
+  canvas { max-height: 320px; }
+
+  /* ── CSAT score gauge ──────────────────────────────────── */
+  .cs-csat-block {
+    display: flex; align-items: center; gap: 18px;
+    padding: 8px 0 4px;
+  }
+  .cs-csat-score {
+    font-size: 3rem; font-weight: 800; line-height: 1;
+    color: var(--cs-emerald);
+  }
+  .cs-csat-meta {
+    font-size: .76rem; color: var(--eo-text-muted); line-height: 1.5;
+  }
+  .cs-csat-stars {
+    color: var(--cs-amber); font-size: 1.05rem; letter-spacing: 2px;
+    margin-bottom: 2px;
+  }
+
+  /* ── Peak hour callout ─────────────────────────────────── */
+  .cs-peak {
+    background: linear-gradient(135deg, rgba(244,63,94,0.08), rgba(249,115,22,0.06));
+    border: 1px dashed rgba(244,63,94,0.3);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: .8rem;
+    margin-top: 12px;
+  }
+  .cs-peak strong { color: var(--cs-rose); }
+
+  /* ── Department load mini-bar ──────────────────────────── */
+  .cs-dept-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+  .cs-dept-name { width: 35%; font-weight: 600; font-size: .85rem; }
+  .cs-dept-bar-wrap { flex: 1; background: var(--eo-bg, #f1f5f9); height: 8px; border-radius: 999px; overflow: hidden; }
+  .cs-dept-bar { height: 100%; background: linear-gradient(90deg, var(--cs-sky), var(--cs-violet)); border-radius: 999px; }
+  .cs-dept-bar.has-overdue { background: linear-gradient(90deg, var(--cs-amber), var(--cs-rose)); }
+  .cs-dept-meta { font-size: .76rem; color: var(--eo-text-muted); width: 95px; text-align: right; flex-shrink: 0; }
+  .cs-dept-meta .overdue { color: var(--cs-rose); font-weight: 700; }
+
+  @media (max-width: 720px) {
+    .cs-hero-strip { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+
+<!-- ─── HERO ─────────────────────────────────────────────────── -->
+<div class="cs-hero">
+  <h1 class="cs-hero-title">
+    <i class="bi bi-headset"></i> Customer Service Operations
+  </h1>
+  <p class="cs-hero-sub">
+    Switchboard activity, ticket lifecycle and customer satisfaction — last 30 days unless noted.
+  </p>
+  <div class="cs-hero-strip">
+    <div class="cs-hero-stat">
+      <div class="v info">{{ calls_today|default:0|intcomma }}</div>
+      <div class="l">Calls Today</div>
+    </div>
+    <div class="cs-hero-stat">
+      <div class="v">{{ calls_30d|default:0|intcomma }}</div>
+      <div class="l">Calls (30d)</div>
+    </div>
+    <div class="cs-hero-stat">
+      <div class="v">{{ avg_call_duration_human|default:"—" }}</div>
+      <div class="l">Avg. Call Time</div>
+    </div>
+    <div class="cs-hero-stat">
+      <div class="v warn">{{ open_tickets|default:0|intcomma }}</div>
+      <div class="l">Open Tickets</div>
+    </div>
+    <div class="cs-hero-stat">
+      <div class="v danger">{{ overdue_tickets|default:0|intcomma }}</div>
+      <div class="l">Overdue</div>
+    </div>
+    <div class="cs-hero-stat">
+      <div class="v ok">{{ sla_met_pct|default:0 }}%</div>
+      <div class="l">SLA Met</div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── KPI ROW ──────────────────────────────────────────────── -->
+<div class="cs-kpi-grid">
+  <div class="cs-kpi">
+    <div class="cs-kpi-ico" style="background:#0ea5e915;color:#0ea5e9"><i class="bi bi-people-fill"></i></div>
+    <div>
+      <div class="cs-kpi-val">{{ total_customers|default:0|intcomma }}</div>
+      <div class="cs-kpi-lbl">Total Customers</div>
+    </div>
+    <span class="cs-kpi-trend" style="background:#d1fae5;color:#065f46">+{{ new_customers_30d|default:0 }} 30d</span>
+  </div>
+  <div class="cs-kpi">
+    <div class="cs-kpi-ico" style="background:#10b98115;color:#10b981"><i class="bi bi-check2-circle"></i></div>
+    <div>
+      <div class="cs-kpi-val" style="color:#10b981">{{ resolved_30d|default:0|intcomma }}</div>
+      <div class="cs-kpi-lbl">Resolved (30d) · {{ resolution_rate|default:0 }}%</div>
+    </div>
+  </div>
+  <div class="cs-kpi">
+    <div class="cs-kpi-ico" style="background:#f59e0b15;color:#f59e0b"><i class="bi bi-clock-history"></i></div>
+    <div>
+      <div class="cs-kpi-val">{{ median_resolution_human|default:"—" }}</div>
+      <div class="cs-kpi-lbl">Median Resolution Time</div>
+    </div>
+  </div>
+  <div class="cs-kpi">
+    <div class="cs-kpi-ico" style="background:#ef444415;color:#ef4444"><i class="bi bi-arrow-up-right-circle"></i></div>
+    <div>
+      <div class="cs-kpi-val" style="color:#ef4444">{{ escalated_tickets|default:0 }}</div>
+      <div class="cs-kpi-lbl">Escalated Tickets</div>
+    </div>
+  </div>
+  <div class="cs-kpi">
+    <div class="cs-kpi-ico" style="background:#ec489915;color:#ec4899"><i class="bi bi-telephone-forward"></i></div>
+    <div>
+      <div class="cs-kpi-val">{{ callback_pending|default:0 }}</div>
+      <div class="cs-kpi-lbl">Pending Callbacks</div>
+    </div>
+  </div>
+  <div class="cs-kpi">
+    <div class="cs-kpi-ico" style="background:#8b5cf615;color:#8b5cf6"><i class="bi bi-chat-square-heart-fill"></i></div>
+    <div>
+      <div class="cs-kpi-val">{{ feedback_response_rate|default:0 }}%</div>
+      <div class="cs-kpi-lbl">Feedback Response Rate</div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── ROW 1: Daily volume + CSAT score ─────────────────────── -->
+<div class="cs-grid-2">
+  <div class="cs-card">
+    <h3><i class="bi bi-activity"></i> Daily Volume — Calls vs Tickets vs Resolved <span class="pill">last 30 days</span></h3>
+    <canvas id="chartDailyVolume"></canvas>
+  </div>
+
+  <div class="cs-card">
+    <h3><i class="bi bi-star-fill" style="color:#f59e0b"></i> Customer Satisfaction (CSAT) <span class="pill">last 30 days</span></h3>
+    {% if csat_responses_30d %}
+    <div class="cs-csat-block">
+      <div>
+        <div class="cs-csat-score">{{ avg_csat|default:0 }}<span style="font-size:1.1rem;font-weight:600;color:var(--eo-text-muted)"> / 5</span></div>
+        <div class="cs-csat-stars">
+          {% for i in "12345" %}{% if forloop.counter <= avg_csat %}★{% else %}☆{% endif %}{% endfor %}
+        </div>
+        <div class="cs-csat-meta">
+          Average across <strong>{{ csat_responses_30d }}</strong> rated tickets.
+        </div>
+      </div>
+      <div style="flex:1;min-width:140px"><canvas id="chartRatingRadar" style="max-height:200px"></canvas></div>
+    </div>
+    {% else %}
+      <div class="cs-empty">No CSAT responses in the last 30 days.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ─── ROW 2: Hourly call clock + Calls-by-type donut ───────── -->
+<div class="cs-grid-2">
+  <div class="cs-card">
+    <h3><i class="bi bi-clock-fill" style="color:#0ea5e9"></i> Call Volume by Hour <span class="pill">last 7 days</span></h3>
+    <canvas id="chartHourly"></canvas>
+    {% if peak_hour is not None and peak_hour_count %}
+    <div class="cs-peak">
+      <i class="bi bi-megaphone-fill"></i>
+      Peak call hour is <strong>{{ peak_hour|stringformat:"02d" }}:00</strong> with
+      <strong>{{ peak_hour_count }}</strong> calls — staff your switchboard accordingly.
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="cs-card">
+    <h3><i class="bi bi-pie-chart-fill" style="color:#8b5cf6"></i> Call Mix by Type <span class="pill">last 30 days</span></h3>
+    <canvas id="chartCallsByType"></canvas>
+  </div>
+</div>
+
+<!-- ─── ROW 3: Ticket status + priority donuts ────────────────── -->
+<div class="cs-grid-2">
+  <div class="cs-card">
+    <h3><i class="bi bi-list-check"></i> Tickets by Status <span class="pill">all-time</span></h3>
+    <canvas id="chartTicketsStatus"></canvas>
+  </div>
+  <div class="cs-card">
+    <h3><i class="bi bi-flag-fill" style="color:#dc2626"></i> Open Tickets by Priority</h3>
+    <canvas id="chartTicketsPriority"></canvas>
+  </div>
+</div>
+
+<!-- ─── ROW 4: Resolution funnel (full width) ─────────────────── -->
+<div class="cs-card" style="margin-bottom:18px">
+  <h3><i class="bi bi-funnel-fill" style="color:#0ea5e9"></i> Resolution Funnel <span class="pill">last 30 days</span></h3>
+  <p style="font-size:.78rem;color:var(--eo-text-muted);margin:-8px 0 14px">
+    Where does case volume drop off? From inbound creation to a closed file. A steep cliff between
+    "Created" and "Assigned" usually means triage backlog; a cliff between "Resolved" and "Closed"
+    means tickets aren't being formally archived.
+  </p>
+  <canvas id="chartFunnel" style="max-height:260px"></canvas>
+</div>
+
+<!-- ─── ROW 5: Top agents + Department load ──────────────────── -->
+<div class="cs-grid-2">
+  <div class="cs-card">
+    <h3><i class="bi bi-trophy-fill" style="color:#f59e0b"></i> Top Agents — Tickets Resolved <span class="pill">last 30 days</span></h3>
+    {% if top_agents %}
+    <table class="cs-table">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th style="text-align:right">Resolved</th>
+          <th style="text-align:right">Avg. Time</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in top_agents %}
+        <tr>
+          <td>
+            <div style="font-weight:600">
+              {% if a.resolved_by__first_name or a.resolved_by__last_name %}
+                {{ a.resolved_by__first_name }} {{ a.resolved_by__last_name }}
+              {% else %}
+                {{ a.resolved_by__email|default:"Agent" }}
+              {% endif %}
+            </div>
+            <div style="font-size:.74rem;color:var(--eo-text-muted)">{{ a.resolved_by__email|default:"—" }}</div>
+          </td>
+          <td style="text-align:right;font-weight:700">{{ a.resolved }}</td>
+          <td style="text-align:right;color:var(--eo-text-muted);font-size:.78rem">{{ a.avg_resolution_human }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="cs-empty">No tickets resolved in the last 30 days yet.</div>
+    {% endif %}
+  </div>
+
+  <div class="cs-card">
+    <h3><i class="bi bi-diagram-3-fill" style="color:#8b5cf6"></i> Department Load — Open Tickets</h3>
+    {% if department_load %}
+      {% for d in department_load %}
+      <div class="cs-dept-row">
+        <div class="cs-dept-name">{{ d.department__name|default:"—" }}</div>
+        <div class="cs-dept-bar-wrap">
+          {% widthratio d.open_count department_load.0.open_count 100 as pct %}
+          <div class="cs-dept-bar {% if d.overdue %}has-overdue{% endif %}" style="width:{{ pct|default:5 }}%"></div>
+        </div>
+        <div class="cs-dept-meta">
+          <strong>{{ d.open_count }}</strong>
+          {% if d.overdue %} · <span class="overdue">{{ d.overdue }} late</span>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="cs-empty">No open tickets assigned to departments.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ─── ROW 6: Top complaint customers + Pending callbacks ───── -->
+<div class="cs-grid-2">
+  <div class="cs-card">
+    <h3><i class="bi bi-exclamation-octagon-fill" style="color:#dc2626"></i> Top Customers by Case Volume <span class="pill">last 30 days</span></h3>
+    {% if top_complaint_customers %}
+    <table class="cs-table">
+      <thead>
+        <tr>
+          <th>Customer</th>
+          <th style="text-align:right">Total Cases</th>
+          <th style="text-align:right">Open</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in top_complaint_customers %}
+        <tr>
+          <td>
+            <div style="font-weight:600">{{ c.customer__company_name|default:c.customer__full_name }}</div>
+            {% if c.customer__company_name and c.customer__full_name %}
+              <div style="font-size:.74rem;color:var(--eo-text-muted)">{{ c.customer__full_name }}</div>
+            {% endif %}
+          </td>
+          <td style="text-align:right;font-weight:700">{{ c.ticket_count }}</td>
+          <td style="text-align:right">
+            {% if c.open_count %}<span style="color:#dc2626;font-weight:700">{{ c.open_count }}</span>
+            {% else %}<span style="color:var(--eo-text-muted)">0</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="cs-empty">No support / complaint tickets in the last 30 days.</div>
+    {% endif %}
+  </div>
+
+  <div class="cs-card">
+    <h3><i class="bi bi-telephone-outbound-fill" style="color:#ec4899"></i> Pending Callbacks</h3>
+    {% if recent_callbacks %}
+    <table class="cs-table">
+      <thead>
+        <tr>
+          <th>Ticket</th>
+          <th>Customer</th>
+          <th>Number</th>
+          <th>Owner</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in recent_callbacks %}
+        <tr>
+          <td style="font-family:monospace;font-size:.76rem">{{ t.ticket_no }}</td>
+          <td>{{ t.customer.display_name|default:"—"|truncatechars:22 }}</td>
+          <td style="font-family:monospace;font-size:.76rem">{{ t.callback_number|default:"—" }}</td>
+          <td style="color:var(--eo-text-muted);font-size:.76rem">
+            {% if t.current_owner %}{{ t.current_owner.first_name|default:t.current_owner.email }}{% else %}<em>unassigned</em>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="cs-empty">No callbacks pending. ✓</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ─── ROW 7: CSAT trend (full width) ───────────────────────── -->
+<div class="cs-card" style="margin-bottom:18px">
+  <h3><i class="bi bi-graph-up-arrow" style="color:#10b981"></i> CSAT Trend <span class="pill">last 12 months</span></h3>
+  <canvas id="chartCsatTrend" style="max-height:240px"></canvas>
+</div>
+
+<!-- ─── ROW 8: Recent tickets (full width) ───────────────────── -->
+<div class="cs-card">
+  <h3><i class="bi bi-ticket-detailed-fill" style="color:#0ea5e9"></i> Recent Tickets <span class="pill">latest 15</span></h3>
+  {% if recent_tickets %}
+  <div style="overflow-x:auto">
+    <table class="cs-table">
+      <thead>
+        <tr>
+          <th>Ticket #</th>
+          <th>Customer</th>
+          <th>Subject</th>
+          <th>Type</th>
+          <th>Priority</th>
+          <th>Status</th>
+          <th>Department</th>
+          <th>Owner</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in recent_tickets %}
+        <tr>
+          <td style="font-family:monospace;font-size:.76rem">{{ t.ticket_no }}</td>
+          <td>{{ t.customer.display_name|default:"—"|truncatechars:22 }}</td>
+          <td>{{ t.subject|truncatechars:42 }}</td>
+          <td>
+            <span class="cs-badge t-{{ t.ticket_type }}">{{ t.get_ticket_type_display }}</span>
+          </td>
+          <td><span class="cs-badge p-{{ t.priority }}">{{ t.get_priority_display }}</span></td>
+          <td>
+            {% if t.status == 'new' %}<span class="cs-badge s-new">New</span>
+            {% elif t.status == 'open' %}<span class="cs-badge s-open">Open</span>
+            {% elif t.status == 'in_progress' %}<span class="cs-badge s-progress">In Progress</span>
+            {% elif t.status == 'pending' %}<span class="cs-badge s-pending">Pending</span>
+            {% elif t.status == 'assigned' %}<span class="cs-badge s-assigned">Assigned</span>
+            {% elif t.status == 'awaiting_customer' %}<span class="cs-badge s-await">Awaiting Customer</span>
+            {% elif t.status == 'resolved' %}<span class="cs-badge s-resolved">Resolved</span>
+            {% elif t.status == 'closed' %}<span class="cs-badge s-closed">Closed</span>
+            {% elif t.status == 'escalated' %}<span class="cs-badge s-escal">Escalated</span>
+            {% elif t.status == 'cancelled' %}<span class="cs-badge s-cancelled">Cancelled</span>
+            {% else %}<span class="cs-badge s-open">{{ t.get_status_display }}</span>
+            {% endif %}
+          </td>
+          <td style="color:var(--eo-text-muted);font-size:.78rem">{{ t.department.name|default:"—"|truncatechars:18 }}</td>
+          <td style="color:var(--eo-text-muted);font-size:.78rem">
+            {% if t.current_owner %}{{ t.current_owner.first_name|default:t.current_owner.email|truncatechars:14 }}{% else %}<em>—</em>{% endif %}
+          </td>
+          <td style="color:var(--eo-text-muted);font-size:.76rem;white-space:nowrap">{{ t.created_at|date:"M d, H:i" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="cs-empty">No tickets yet.</div>
+  {% endif %}
+</div>
+
+<!-- ─── Chart.js ─────────────────────────────────────────────── -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  const callsByType   = {{ calls_by_type_json|safe }};
+  const callsHourly   = {{ calls_hourly_json|safe }};
+  const ticketsStatus = {{ tickets_status_json|safe }};
+  const ticketsPriority = {{ tickets_priority_json|safe }};
+  const dailyVolume   = {{ daily_volume_json|safe }};
+  const funnel        = {{ resolution_funnel_json|safe }};
+  const csatTrend     = {{ csat_trend_json|safe }};
+  const ratingDims    = {{ rating_breakdown_json|safe }};
+
+  const palette = ['#f43f5e','#f59e0b','#10b981','#0ea5e9','#8b5cf6','#ec4899','#06b6d4','#84cc16','#6366f1','#f97316','#64748b','#14b8a6','#a855f7'];
+
+  // Common defaults
+  Chart.defaults.font.family = "system-ui, -apple-system, 'Segoe UI', sans-serif";
+  Chart.defaults.font.size = 11;
+
+  // ── Daily volume — multi-line ──────────────────────────────
+  if (dailyVolume.length && document.getElementById('chartDailyVolume')) {
+    new Chart(document.getElementById('chartDailyVolume'), {
+      type: 'line',
+      data: {
+        labels: dailyVolume.map(r => r.date),
+        datasets: [
+          { label: 'Calls', data: dailyVolume.map(r => r.calls),
+            borderColor: '#0ea5e9', backgroundColor: 'rgba(14,165,233,0.10)',
+            tension: 0.3, fill: true, pointRadius: 2, borderWidth: 2 },
+          { label: 'Tickets In', data: dailyVolume.map(r => r.tickets),
+            borderColor: '#f43f5e', backgroundColor: 'rgba(244,63,94,0.10)',
+            tension: 0.3, fill: true, pointRadius: 2, borderWidth: 2 },
+          { label: 'Resolved', data: dailyVolume.map(r => r.resolved),
+            borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.10)',
+            tension: 0.3, fill: true, pointRadius: 2, borderWidth: 2 },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: { ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
+          y: { beginAtZero: true, ticks: { precision: 0 } },
+        },
+        plugins: { legend: { position: 'top', labels: { boxWidth: 12 } } },
+      },
+    });
+  }
+
+  // ── Hourly call distribution — polar/clock ─────────────────
+  if (callsHourly.length && document.getElementById('chartHourly')) {
+    // Use a polar area chart: each slice = an hour, length = call count.
+    // Visually evokes a clock face — perfect for cyclical data.
+    new Chart(document.getElementById('chartHourly'), {
+      type: 'polarArea',
+      data: {
+        labels: callsHourly.map(h => h.label),
+        datasets: [{
+          data: callsHourly.map(h => h.count),
+          backgroundColor: callsHourly.map((h, i) => {
+            // Heat: hours with no calls fade out; busy hours pop
+            const max = Math.max(1, ...callsHourly.map(x => x.count));
+            const ratio = h.count / max;
+            return `rgba(14, 165, 233, ${0.15 + ratio * 0.65})`;
+          }),
+          borderColor: 'rgba(14, 165, 233, 0.5)',
+          borderWidth: 1,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { r: { ticks: { display: false }, grid: { color: 'rgba(0,0,0,0.06)' } } },
+        plugins: { legend: { display: false } },
+      },
+    });
+  }
+
+  // ── Calls by type ─────────────────────────────────────────
+  if (callsByType.length && document.getElementById('chartCallsByType')) {
+    new Chart(document.getElementById('chartCallsByType'), {
+      type: 'doughnut',
+      data: {
+        labels: callsByType.map(r => r.label),
+        datasets: [{
+          data: callsByType.map(r => r.count),
+          backgroundColor: callsByType.map((_, i) => palette[i % palette.length]),
+          borderWidth: 2, borderColor: '#fff',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } } },
+        cutout: '60%',
+      },
+    });
+  }
+
+  // ── Tickets by status ─────────────────────────────────────
+  if (ticketsStatus.length && document.getElementById('chartTicketsStatus')) {
+    new Chart(document.getElementById('chartTicketsStatus'), {
+      type: 'doughnut',
+      data: {
+        labels: ticketsStatus.map(r => r.label),
+        datasets: [{
+          data: ticketsStatus.map(r => r.count),
+          backgroundColor: ticketsStatus.map((_, i) => palette[i % palette.length]),
+          borderWidth: 2, borderColor: '#fff',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'right', labels: { boxWidth: 12 } } },
+        cutout: '60%',
+      },
+    });
+  }
+
+  // ── Tickets by priority ───────────────────────────────────
+  if (ticketsPriority.length && document.getElementById('chartTicketsPriority')) {
+    const pColor = { low: '#0ea5e9', medium: '#f59e0b', high: '#f97316', critical: '#dc2626' };
+    new Chart(document.getElementById('chartTicketsPriority'), {
+      type: 'doughnut',
+      data: {
+        labels: ticketsPriority.map(r => r.label),
+        datasets: [{
+          data: ticketsPriority.map(r => r.count),
+          backgroundColor: ticketsPriority.map(r => pColor[r.priority] || '#64748b'),
+          borderWidth: 2, borderColor: '#fff',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'right', labels: { boxWidth: 12 } } },
+        cutout: '60%',
+      },
+    });
+  }
+
+  // ── Resolution funnel — horizontal bar with descending widths ──
+  if (funnel.length && document.getElementById('chartFunnel')) {
+    new Chart(document.getElementById('chartFunnel'), {
+      type: 'bar',
+      data: {
+        labels: funnel.map(f => f.stage),
+        datasets: [{
+          label: 'Tickets',
+          data: funnel.map(f => f.count),
+          backgroundColor: ['#0ea5e9', '#6366f1', '#8b5cf6', '#10b981', '#64748b'],
+          borderRadius: 8,
+        }],
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          x: { beginAtZero: true, ticks: { precision: 0 } },
+          y: { ticks: { font: { size: 12, weight: 600 } } },
+        },
+        plugins: { legend: { display: false } },
+      },
+    });
+  }
+
+  // ── CSAT trend — line, 12 months ──────────────────────────
+  if (csatTrend.length && document.getElementById('chartCsatTrend')) {
+    new Chart(document.getElementById('chartCsatTrend'), {
+      type: 'line',
+      data: {
+        labels: csatTrend.map(r => r.month),
+        datasets: [{
+          label: 'Avg CSAT',
+          data: csatTrend.map(r => r.avg),
+          borderColor: '#10b981',
+          backgroundColor: 'rgba(16,185,129,0.12)',
+          tension: 0.35, fill: true, pointRadius: 4, borderWidth: 2,
+          pointBackgroundColor: '#10b981',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          y: { beginAtZero: true, suggestedMax: 5, ticks: { stepSize: 1 } },
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              afterLabel: (ctx) => {
+                const r = csatTrend[ctx.dataIndex];
+                return `Responses: ${r.n}`;
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  // ── Rating breakdown — radar (4 dimensions) ───────────────
+  if (ratingDims.length && document.getElementById('chartRatingRadar')) {
+    new Chart(document.getElementById('chartRatingRadar'), {
+      type: 'radar',
+      data: {
+        labels: ratingDims.map(r => r.dim),
+        datasets: [{
+          label: 'Avg score',
+          data: ratingDims.map(r => r.score),
+          backgroundColor: 'rgba(245,158,11,0.18)',
+          borderColor: '#f59e0b',
+          borderWidth: 2,
+          pointBackgroundColor: '#f59e0b',
+          pointRadius: 3,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          r: {
+            beginAtZero: true, suggestedMax: 5,
+            ticks: { stepSize: 1, font: { size: 9 } },
+            pointLabels: { font: { size: 10 } },
+            grid: { color: 'rgba(0,0,0,0.06)' },
+          },
+        },
+        plugins: { legend: { display: false } },
+      },
+    });
+  }
+})();
+</script>
+{% endblock %}

@@ -752,7 +752,7 @@ class TicketDetailView(LoginRequiredMixin, DetailView):
                 is_active=True,
                 staffprofile__department__isnull=False,
             ).select_related("staffprofile", "staffprofile__department").order_by("first_name", "last_name")
-
+        ctx['linked_contract'] = self.object.contract
         ctx.update({
             "updates": ticket.updates.select_related("user"),
             "routes": ticket.routes.select_related("from_department", "to_department", "from_user", "to_user"),

@@ -4,6 +4,7 @@ EasyOffice Django Settings
 import os
 from pathlib import Path
 from decouple import config, Csv
+from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -59,6 +60,7 @@ LOCAL_APPS = [
     'apps.user_admin',
     'apps.orders',
     'apps.inventory',
+    'apps.customer_portal',
     'apps.admin_security.apps.AdminSecurityConfig',
 ]
 
@@ -195,6 +197,18 @@ EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
 EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='EasyOffice <noreply@easyoffice.com>')
+
+
+# Adjust to your project. Format is 'app_label.ModelName'.
+CUSTOMER_PORTAL_CONTRACT_MODEL = 'finance.Contract'   # or 'finance.Contract'
+CUSTOMER_PORTAL_TASK_MODEL = 'tasks.Task'
+CUSTOMER_PORTAL_TICKET_MODEL = 'customer_service.ServiceTicket'
+CUSTOMER_PORTAL_ASSIGNMENT_MODEL = 'customer_service.ServiceTicketAssignment'
+CUSTOMER_PORTAL_CUSTOMER_MODEL = 'customer_service.Customer'
+
+# Used by email templates
+SITE_URL = 'https://easyoffice.gm'
+SUPPORT_EMAIL = 'support@easysolutions.gm'
 
 # =============================================================
 # AUTH & SECURITY
@@ -375,4 +389,14 @@ LOGGING = {
             'propagate': False,
         },
     },
+}
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'ALGORITHM': 'HS256',
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
 }

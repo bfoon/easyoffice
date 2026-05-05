@@ -1,0 +1,138 @@
+{# ───────────────────────────────────────────────────────────────────────── #}
+{#  Snippet: customer-portal action buttons for task_detail.html              #}
+{#                                                                            #}
+{#  Paste into your existing task_detail.html, in the action panel area.     #}
+{#  Show only if the task is customer-facing.                                #}
+{#                                                                            #}
+{#  Add to TaskDetailView.get_context_data:                                  #}
+{#    ctx['is_customer_facing'] = bool(                                       #}
+{#        task.customer_visible                                               #}
+{#        or task.maintenance_visit_id                                        #}
+{#    )                                                                       #}
+{#                                                                            #}
+{# ───────────────────────────────────────────────────────────────────────── #}
+
+{% if is_customer_facing %}
+
+{# ── On-site button ────────────────────────────────────────────────────── #}
+<div class="eo-card mb-3">
+  <div class="eo-card-header">
+    <h2 class="eo-card-title">Customer Site Status</h2>
+  </div>
+
+  {% if task.on_site_at %}
+    <div class="alert alert-success small mb-2" style="background:#dcfce7;border-color:#16a34a;color:#166534">
+      <i class="bi bi-geo-alt-fill"></i>
+      <strong>You marked yourself on site at {{ task.on_site_at|date:"H:i" }} on {{ task.on_site_at|date:"D j M" }}.</strong>
+      The customer and management have been notified.
+    </div>
+
+    <form method="post" action="{% url 'task_clear_on_site' task.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="eo-btn eo-btn-secondary w-100">
+        <i class="bi bi-box-arrow-left"></i> I've left site
+      </button>
+    </form>
+
+  {% else %}
+
+    <p class="small text-muted mb-2">
+      Tap "On site" when you arrive at the customer's location. The customer,
+      sales team, CEO and admin will all be notified instantly.
+    </p>
+
+    <form method="post" action="{% url 'task_on_site' task.pk %}" id="onSiteForm">
+      {% csrf_token %}
+      <input type="hidden" name="gps_latitude" id="gps_latitude">
+      <input type="hidden" name="gps_longitude" id="gps_longitude">
+
+      <textarea name="note" rows="2" class="eo-form-control mb-2 small"
+                placeholder="Optional note (e.g. 'reception locked, called Mariama')"></textarea>
+
+      <button type="submit" class="eo-btn eo-btn-primary w-100"
+              style="background:#10b981;border-color:#10b981">
+        <i class="bi bi-geo-alt"></i> I'm on site
+      </button>
+    </form>
+
+    <script>
+      // Best-effort GPS — silently ignore if denied. The customer/staff
+      // already know the location from the address; GPS is just supporting.
+      if ('geolocation' in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          function(pos) {
+            document.getElementById('gps_latitude').value = pos.coords.latitude.toFixed(6);
+            document.getElementById('gps_longitude').value = pos.coords.longitude.toFixed(6);
+          },
+          function() { /* user denied — fine */ },
+          { timeout: 8000, maximumAge: 30000 }
+        );
+      }
+    </script>
+
+  {% endif %}
+</div>
+
+
+{# ── Customer-aware "Mark done" button ────────────────────────────────── #}
+{% if task.status != 'done' and task.status != 'cancelled' %}
+<div class="eo-card mb-3">
+  <div class="eo-card-header">
+    <h2 class="eo-card-title">Complete Task</h2>
+  </div>
+
+  {% if task.awaiting_cs_verification %}
+    <div class="alert alert-info small">
+      <i class="bi bi-clock-history"></i>
+      <strong>Awaiting customer service verification.</strong>
+      The CS agent will confirm with the customer and close the ticket.
+    </div>
+  {% else %}
+    <p class="small text-muted mb-2">
+      When you mark this task done, customer service will verify with the
+      customer before closing the ticket.
+    </p>
+
+    <form method="post" action="{% url 'task_mark_done' task.pk %}">
+      {% csrf_token %}
+      <textarea name="completion_comment" rows="3" required
+                class="eo-form-control mb-2 small"
+                placeholder="What did you do? Required."></textarea>
+
+      <button type="submit" class="eo-btn eo-btn-primary w-100">
+        <i class="bi bi-check2-circle"></i> Mark task complete
+      </button>
+    </form>
+  {% endif %}
+</div>
+{% endif %}
+
+
+{# ── On-site history (visible to staff so they can see the trail) ────── #}
+{% if task.on_site_events.exists %}
+<div class="eo-card mb-3">
+  <div class="eo-card-header">
+    <h2 class="eo-card-title">On-site History</h2>
+  </div>
+  <ul class="list-unstyled mb-0 small">
+    {% for ev in task.on_site_events.all|slice:":10" %}
+      <li class="mb-2 d-flex" style="gap:8px">
+        <span style="min-width:90px;color:var(--eo-text-muted)">{{ ev.created_at|date:"d M H:i" }}</span>
+        <span>
+          {% if ev.event_type == 'arrive' %}
+            <i class="bi bi-geo-alt-fill text-success"></i> {{ ev.actor_user.full_name|default:"Tech" }} arrived on site
+          {% elif ev.event_type == 'depart' %}
+            <i class="bi bi-box-arrow-left"></i> {{ ev.actor_user.full_name|default:"Tech" }} left site
+          {% elif ev.event_type == 'dispute' %}
+            <i class="bi bi-exclamation-triangle-fill text-danger"></i>
+            <strong>Customer disputes this visit.</strong>
+            {% if ev.note %}<br><small>"{{ ev.note }}"</small>{% endif %}
+          {% endif %}
+        </span>
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% endif %}

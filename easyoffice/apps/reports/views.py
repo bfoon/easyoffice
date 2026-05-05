@@ -1424,9 +1424,15 @@ class OrdersReportView(_SupervisorReportsAccessMixin, TemplateView):
         ctx['fulfilled_total_month'] = month_qs.aggregate(t=Sum('total'))['t'] or 0
 
         # Pending / cancelled snapshot
-        ctx['pending_orders']    = SalesOrder.objects.filter(
-            status__in=[OrderStatus.NEW, OrderStatus.CONFIRMED, OrderStatus.IN_FULFILLMENT]
+        _terminal_status_codes = {'fulfilled', 'cancelled', 'canceled', 'refunded', 'returned'}
+        _pending_status_codes = [
+            code for code, _label in OrderStatus.choices
+            if code.lower() not in _terminal_status_codes
+        ]
+        ctx['pending_orders'] = SalesOrder.objects.filter(
+            status__in=_pending_status_codes
         ).count()
+
         ctx['cancelled_orders']  = SalesOrder.objects.filter(status=OrderStatus.CANCELLED).count()
 
         # Conversion rate (fulfilled / total non-cancelled)  — last 30d

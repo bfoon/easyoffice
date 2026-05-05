@@ -823,3 +823,166 @@ class ContractInvoiceLink(models.Model):
             f'{self.contract.title} → {self.invoice.number or self.invoice.pk} '
             f'({self.get_source_display()})'
         )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finance Audit Trail & Anomaly Detection
+# ─────────────────────────────────────────────────────────────────────────────
+
+class FinanceAuditLog(models.Model):
+    """
+    Append-only journal for finance actions.
+    Used by apps.finance.signals.
+    """
+
+    class Action(models.TextChoices):
+        CREATE  = 'create',  'Created'
+        UPDATE  = 'update',  'Updated'
+        DELETE  = 'delete',  'Deleted'
+        APPROVE = 'approve', 'Approved'
+        REJECT  = 'reject',  'Rejected'
+        PAY     = 'pay',     'Paid'
+        CANCEL  = 'cancel',  'Cancelled'
+        SEND    = 'send',    'Sent'
+        EXPORT  = 'export',  'Exported'
+        VIEW    = 'view',    'Viewed Sensitive'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    actor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_audit_actions',
+    )
+    actor_name = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text='Snapshot of name at time of action',
+    )
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=300, blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    action = models.CharField(max_length=20, choices=Action.choices)
+    model_name = models.CharField(
+        max_length=100,
+        db_index=True,
+        help_text='e.g. Payment, PurchaseRequest, Contract',
+    )
+    object_id = models.CharField(max_length=64, db_index=True, blank=True)
+    object_repr = models.CharField(
+        max_length=300,
+        blank=True,
+        help_text='Object string snapshot in case the object is deleted',
+    )
+
+    amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    currency = models.CharField(max_length=10, blank=True)
+
+    changes = models.JSONField(default=dict, blank=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['model_name', 'object_id']),
+            models.Index(fields=['action', '-timestamp']),
+            models.Index(fields=['actor', '-timestamp']),
+        ]
+        verbose_name = 'Finance Audit Log Entry'
+        verbose_name_plural = 'Finance Audit Trail'
+
+    def __str__(self):
+        who = self.actor_name or (self.actor and self.actor.get_full_name()) or 'System'
+        return f'{who} {self.get_action_display()} {self.model_name} {self.object_repr}'
+
+
+class FinanceAnomaly(models.Model):
+    """
+    Red flags raised from finance audit/activity.
+    """
+
+    class Severity(models.TextChoices):
+        LOW    = 'low',    'Low'
+        MEDIUM = 'medium', 'Medium'
+        HIGH   = 'high',   'High'
+
+    class Status(models.TextChoices):
+        OPEN      = 'open',      'Open'
+        REVIEWING = 'reviewing', 'Under Review'
+        RESOLVED  = 'resolved',  'Resolved'
+        DISMISSED = 'dismissed', 'Dismissed'
+
+    class Kind(models.TextChoices):
+        DUPLICATE_AMOUNT = 'duplicate_amount', 'Duplicate Payment Amount'
+        OFF_HOURS_EDIT   = 'off_hours_edit',   'Off-Hours Edit'
+        WEEKEND_PAYMENT  = 'weekend_payment',  'Weekend Payment'
+        BUDGET_OVERRUN   = 'budget_overrun',   'Budget Overrun'
+        LARGE_AMOUNT     = 'large_amount',     'Unusually Large Amount'
+        RAPID_APPROVAL   = 'rapid_approval',   'Rapid Self-Approval'
+        BACKDATED        = 'backdated',         'Backdated Transaction'
+        DUPLICATE_VENDOR = 'duplicate_vendor',  'Possible Duplicate Vendor'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    kind = models.CharField(max_length=30, choices=Kind.choices)
+    severity = models.CharField(max_length=10, choices=Severity.choices, default=Severity.MEDIUM)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+
+    title = models.CharField(max_length=200)
+    description = models.TextField()
+
+    model_name = models.CharField(max_length=100, blank=True)
+    object_id = models.CharField(max_length=64, blank=True)
+    audit_entry = models.ForeignKey(
+        FinanceAuditLog,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='anomalies',
+    )
+
+    amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    currency = models.CharField(max_length=10, blank=True)
+    extra = models.JSONField(default=dict, blank=True)
+
+    detected_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_anomalies',
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    resolution = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-detected_at']
+        indexes = [
+            models.Index(fields=['status', '-detected_at']),
+            models.Index(fields=['severity', 'status']),
+        ]
+        verbose_name = 'Finance Anomaly'
+        verbose_name_plural = 'Finance Anomalies'
+
+    def __str__(self):
+        return f'[{self.severity.upper()}] {self.title}'
+
+    @property
+    def severity_color(self):
+        return {
+            'low': '#f59e0b',
+            'medium': '#f97316',
+            'high': '#ef4444',
+        }.get(self.severity, '#94a3b8')
+
+    @property
+    def status_color(self):
+        return {
+            'open': '#ef4444',
+            'reviewing': '#f59e0b',
+            'resolved': '#10b981',
+            'dismissed': '#94a3b8',
+        }.get(self.status, '#94a3b8')

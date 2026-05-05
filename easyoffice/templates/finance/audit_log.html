@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Audit Trail{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'finance_dashboard' %}">Finance</a> <span>›</span>
+<a href="{% url 'financial_control_center' %}">Control Center</a> <span>›</span>
+<span>Audit Trail</span>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  :root {
+    --aud-ink: #0f172a; --aud-ink-soft: #334155; --aud-grey: #64748b;
+    --aud-bg: #fafaf7; --aud-card: #fff; --aud-line: #e2e8f0; --aud-line-soft: #f1f5f9;
+    --aud-gold: #b08d57; --aud-green: #059669; --aud-red: #dc2626;
+    --aud-amber: #d97706; --aud-blue: #2563eb; --aud-purple: #7c3aed;
+  }
+  .aud-shell { background: var(--aud-bg); margin: -16px -16px 0; padding: 24px 24px 60px; min-height: calc(100vh - 60px); }
+  .aud-wrap { max-width: 1280px; margin: 0 auto; }
+
+  .aud-header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 1px solid var(--aud-ink); padding-bottom: 16px; margin-bottom: 24px;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .aud-eyebrow {
+    font-family: 'Georgia', serif; font-size: 11px; letter-spacing: .25em;
+    text-transform: uppercase; color: var(--aud-gold); margin-bottom: 4px;
+  }
+  .aud-title {
+    font-family: 'Georgia', serif; font-size: 30px; font-weight: 400;
+    color: var(--aud-ink); letter-spacing: -.02em; margin: 0;
+  }
+  .aud-subtitle { color: var(--aud-grey); font-size: 13px; margin-top: 6px; }
+
+  .aud-export-btn {
+    background: white; border: 1px solid var(--aud-line);
+    padding: 7px 14px; border-radius: 3px; font-size: 12px;
+    color: var(--aud-ink); text-decoration: none; cursor: pointer;
+    font-family: inherit; transition: all .15s;
+  }
+  .aud-export-btn:hover { background: var(--aud-ink); color: white; border-color: var(--aud-ink); }
+  .aud-export-btn.primary { background: var(--aud-gold); color: white; border-color: var(--aud-gold); }
+
+  .aud-filters {
+    background: var(--aud-card); border: 1px solid var(--aud-line); border-radius: 4px;
+    padding: 16px 20px; margin-bottom: 20px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px;
+    align-items: end;
+  }
+  .aud-filters label {
+    display: block; font-size: 10px; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--aud-grey); font-weight: 600; margin-bottom: 4px;
+  }
+  .aud-filters input, .aud-filters select {
+    width: 100%; border: 1px solid var(--aud-line); border-radius: 3px;
+    padding: 7px 10px; font-size: 13px; color: var(--aud-ink); background: white;
+    font-family: inherit;
+  }
+  .aud-filters .actions { display: flex; gap: 8px; }
+
+  .aud-table-wrap {
+    background: var(--aud-card); border: 1px solid var(--aud-line); border-radius: 4px; overflow: hidden;
+  }
+  .aud-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .aud-table thead {
+    background: var(--aud-ink); color: white;
+  }
+  .aud-table th {
+    text-align: left; padding: 12px 14px; font-weight: 500;
+    font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  }
+  .aud-table th.num { text-align: right; }
+  .aud-table td {
+    padding: 12px 14px; border-bottom: 1px solid var(--aud-line-soft);
+    vertical-align: top;
+  }
+  .aud-table tr:hover td { background: var(--aud-line-soft); }
+  .aud-table .ts {
+    font-feature-settings: 'tnum'; color: var(--aud-grey); font-size: 11px;
+    white-space: nowrap; min-width: 110px;
+  }
+  .aud-table .actor { font-weight: 600; color: var(--aud-ink); }
+  .aud-table .actor .meta { color: var(--aud-grey); font-size: 11px; font-weight: 400; }
+  .aud-table .obj { color: var(--aud-ink-soft); max-width: 360px; }
+  .aud-table .obj .model {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--aud-grey); margin-bottom: 2px; font-weight: 600;
+  }
+  .aud-table .amt { text-align: right; font-feature-settings: 'tnum'; font-weight: 600; color: var(--aud-ink); }
+  .aud-table .ip { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--aud-grey); }
+
+  .action-tag {
+    display: inline-block; font-size: 10px; padding: 2px 7px; border-radius: 2px;
+    text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
+    white-space: nowrap;
+  }
+  .action-tag.create   { background: rgba(5,150,105,.12); color: #047857; }
+  .action-tag.update   { background: rgba(37,99,235,.12); color: #1e40af; }
+  .action-tag.delete   { background: rgba(220,38,38,.12); color: #991b1b; }
+  .action-tag.approve  { background: rgba(176,141,87,.15); color: var(--aud-gold); }
+  .action-tag.reject   { background: rgba(220,38,38,.12); color: #991b1b; }
+  .action-tag.pay      { background: rgba(5,150,105,.18); color: #065f46; }
+  .action-tag.cancel   { background: rgba(100,116,139,.12); color: var(--aud-grey); }
+  .action-tag.send     { background: rgba(37,99,235,.12); color: #1e40af; }
+  .action-tag.export   { background: rgba(124,58,237,.12); color: #6d28d9; }
+
+  .aud-pagination {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 20px; background: var(--aud-line-soft); border-top: 1px solid var(--aud-line);
+  }
+  .aud-pagination .info { font-size: 12px; color: var(--aud-grey); }
+  .aud-pagination .controls { display: flex; gap: 4px; }
+  .aud-pagination .btn-page {
+    background: white; border: 1px solid var(--aud-line); padding: 5px 10px;
+    border-radius: 3px; font-size: 12px; color: var(--aud-ink); text-decoration: none;
+  }
+  .aud-pagination .btn-page:hover { background: var(--aud-ink); color: white; border-color: var(--aud-ink); }
+  .aud-pagination .btn-page.disabled { opacity: .4; pointer-events: none; }
+
+  .aud-empty {
+    padding: 80px 20px; text-align: center; color: var(--aud-grey);
+  }
+  .aud-empty i { font-size: 32px; color: var(--aud-line); display: block; margin-bottom: 12px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="aud-shell">
+  <div class="aud-wrap">
+
+    <div class="aud-header">
+      <div>
+        <div class="aud-eyebrow">Compliance · Forensics</div>
+        <h1 class="aud-title">Financial Audit Trail</h1>
+        <div class="aud-subtitle">{{ total_count|intcomma }} entries logged</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <a href="{% url 'export_audit_trail_pdf' %}?{{ request.GET.urlencode }}" class="aud-export-btn primary">
+          <i class="bi bi-file-earmark-pdf"></i> PDF
+        </a>
+        <a href="{% url 'export_audit_trail_xlsx' %}?{{ request.GET.urlencode }}" class="aud-export-btn">
+          <i class="bi bi-file-earmark-spreadsheet"></i> Excel
+        </a>
+        <a href="{% url 'finance_anomaly_list' %}" class="aud-export-btn">
+          <i class="bi bi-exclamation-triangle"></i> Anomalies
+        </a>
+        <a href="{% url 'financial_control_center' %}" class="aud-export-btn">
+          ← Dashboard
+        </a>
+      </div>
+    </div>
+
+    <form method="get" class="aud-filters">
+      <div>
+        <label>Search</label>
+        <input type="text" name="q" value="{{ filters.q }}" placeholder="Object, actor, notes…">
+      </div>
+      <div>
+        <label>Action</label>
+        <select name="action">
+          <option value="">All actions</option>
+          {% for k, v in action_choices %}
+          <option value="{{ k }}" {% if filters.action == k %}selected{% endif %}>{{ v }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Model</label>
+        <select name="model">
+          <option value="">All models</option>
+          {% for m in model_choices %}
+          <option value="{{ m }}" {% if filters.model == m %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>From</label>
+        <input type="date" name="from" value="{{ filters.from }}">
+      </div>
+      <div>
+        <label>To</label>
+        <input type="date" name="to" value="{{ filters.to }}">
+      </div>
+      <div class="actions">
+        <button type="submit" class="aud-export-btn primary">Apply</button>
+        <a href="{% url 'finance_audit_log' %}" class="aud-export-btn">Reset</a>
+      </div>
+    </form>
+
+    <div class="aud-table-wrap">
+      <table class="aud-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Actor</th>
+            <th>Action</th>
+            <th>Object</th>
+            <th class="num">Amount</th>
+            <th>IP</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in page %}
+          <tr>
+            <td class="ts">{{ e.timestamp|date:"d M Y" }}<br>{{ e.timestamp|date:"H:i:s" }}</td>
+            <td class="actor">
+              {{ e.actor_name|default:"System" }}
+              {% if e.actor %}<div class="meta">@{{ e.actor.username }}</div>{% endif %}
+            </td>
+            <td><span class="action-tag {{ e.action }}">{{ e.get_action_display }}</span></td>
+            <td class="obj">
+              <div class="model">{{ e.model_name }}</div>
+              <div>{{ e.object_repr|truncatechars:80 }}</div>
+            </td>
+            <td class="amt">
+              {% if e.amount %}{{ e.currency|default:"GMD" }} {{ e.amount|floatformat:0|intcomma }}{% else %}—{% endif %}
+            </td>
+            <td class="ip">{{ e.ip_address|default:"—" }}</td>
+            <td>
+              <a href="{% url 'finance_audit_entry' pk=e.pk %}" style="color:var(--aud-gold);text-decoration:none;font-size:18px">→</a>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="7">
+            <div class="aud-empty">
+              <i class="bi bi-search"></i>
+              No audit entries match these filters.
+            </div>
+          </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      {% if page.has_other_pages %}
+      <div class="aud-pagination">
+        <div class="info">
+          Page {{ page.number }} of {{ page.paginator.num_pages }}
+          · {{ page.paginator.count|intcomma }} total
+        </div>
+        <div class="controls">
+          <a href="?{% for k, v in request.GET.items %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page=1" class="btn-page {% if not page.has_previous %}disabled{% endif %}">First</a>
+          {% if page.has_previous %}
+          <a href="?{% for k, v in request.GET.items %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page.previous_page_number }}" class="btn-page">‹ Prev</a>
+          {% else %}
+          <span class="btn-page disabled">‹ Prev</span>
+          {% endif %}
+          {% if page.has_next %}
+          <a href="?{% for k, v in request.GET.items %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page.next_page_number }}" class="btn-page">Next ›</a>
+          {% else %}
+          <span class="btn-page disabled">Next ›</span>
+          {% endif %}
+          <a href="?{% for k, v in request.GET.items %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page.paginator.num_pages }}" class="btn-page {% if not page.has_next %}disabled{% endif %}">Last</a>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

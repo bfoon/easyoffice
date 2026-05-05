@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Ageing Report{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'finance_dashboard' %}">Finance</a> <span>›</span>
+<a href="{% url 'financial_control_center' %}">Control Center</a> <span>›</span>
+<span>Ageing</span>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  :root {
+    --rpt-ink: #0f172a; --rpt-ink-soft: #334155; --rpt-grey: #64748b;
+    --rpt-bg: #fafaf7; --rpt-card: #fff; --rpt-line: #e2e8f0; --rpt-line-soft: #f1f5f9;
+    --rpt-gold: #b08d57; --rpt-green: #059669; --rpt-red: #dc2626;
+    --rpt-amber: #d97706; --rpt-blue: #2563eb;
+  }
+  .rpt-shell { background: var(--rpt-bg); margin: -16px -16px 0; padding: 24px 24px 60px; min-height: calc(100vh - 60px); }
+  .rpt-wrap { max-width: 1240px; margin: 0 auto; }
+
+  .rpt-toolbar {
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--rpt-card); border: 1px solid var(--rpt-line); border-radius: 4px;
+    padding: 14px 24px; margin-bottom: 20px;
+  }
+  .rpt-toolbar .meta { font-size: 12px; color: var(--rpt-grey); }
+  .rpt-export-btn {
+    background: white; border: 1px solid var(--rpt-line);
+    padding: 6px 14px; border-radius: 3px; font-size: 12px;
+    color: var(--rpt-ink); text-decoration: none; cursor: pointer;
+    font-family: inherit; transition: all .15s;
+  }
+  .rpt-export-btn:hover { background: var(--rpt-ink); color: white; border-color: var(--rpt-ink); }
+  .rpt-export-btn.primary { background: var(--rpt-gold); color: white; border-color: var(--rpt-gold); }
+
+  .rpt-header {
+    background: var(--rpt-card); border: 1px solid var(--rpt-line); border-radius: 4px;
+    padding: 28px 32px; margin-bottom: 24px;
+  }
+  .rpt-eyebrow {
+    font-family: 'Georgia', serif; font-size: 10px; letter-spacing: .25em;
+    text-transform: uppercase; color: var(--rpt-gold); margin-bottom: 6px;
+  }
+  .rpt-title {
+    font-family: 'Georgia', serif; font-size: 30px; font-weight: 400;
+    color: var(--rpt-ink); letter-spacing: -.02em; margin: 0 0 8px;
+  }
+  .rpt-as-of { color: var(--rpt-grey); font-size: 13px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 1000px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  .ageing-card {
+    background: var(--rpt-card); border: 1px solid var(--rpt-line); border-radius: 4px;
+    overflow: hidden;
+  }
+  .ageing-card-header {
+    padding: 22px 28px; border-bottom: 1px solid var(--rpt-line);
+  }
+  .ageing-card.ar .ageing-card-header { border-top: 3px solid var(--rpt-green); }
+  .ageing-card.ap .ageing-card-header { border-top: 3px solid var(--rpt-blue); }
+  .ageing-card-eyebrow {
+    font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--rpt-grey); font-weight: 600;
+  }
+  .ageing-card-title {
+    font-family: 'Georgia', serif; font-size: 20px; font-weight: 500;
+    color: var(--rpt-ink); margin: 4px 0 14px;
+  }
+  .ageing-total {
+    font-family: 'Georgia', serif; font-size: 32px; color: var(--rpt-ink);
+    letter-spacing: -.02em;
+  }
+  .ageing-total .currency { font-size: 13px; color: var(--rpt-grey); margin-right: 4px; }
+  .ageing-total-label {
+    font-size: 11px; color: var(--rpt-grey); margin-top: 4px;
+    text-transform: uppercase; letter-spacing: .12em;
+  }
+
+  .bucket-table {
+    width: 100%; border-collapse: collapse;
+  }
+  .bucket-table td {
+    padding: 14px 28px; border-bottom: 1px solid var(--rpt-line-soft);
+    vertical-align: middle;
+  }
+  .bucket-table tr:last-child td { border-bottom: 0; }
+  .bucket-name { font-weight: 600; color: var(--rpt-ink); width: 180px; }
+  .bucket-name .swatch {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 8px; vertical-align: middle;
+  }
+  .bucket-bar-cell { padding: 14px 0 !important; }
+  .bucket-bar { height: 8px; background: var(--rpt-line-soft); border-radius: 2px; overflow: hidden; }
+  .bucket-bar > div { height: 100%; transition: width .4s; }
+  .bucket-amount {
+    text-align: right; font-feature-settings: 'tnum'; font-weight: 600;
+    color: var(--rpt-ink); width: 160px;
+  }
+  .bucket-count {
+    color: var(--rpt-grey); font-size: 11px; text-align: right; width: 80px;
+  }
+
+  .invoices-list {
+    padding: 16px 28px; background: var(--rpt-line-soft);
+    font-size: 12px;
+  }
+  .invoices-list h5 {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .15em;
+    color: var(--rpt-grey); margin: 0 0 10px;
+  }
+  .invoices-list ul { list-style: none; padding: 0; margin: 0; }
+  .invoices-list li {
+    display: flex; justify-content: space-between; padding: 4px 0;
+    color: var(--rpt-ink-soft); border-bottom: 1px dashed var(--rpt-line);
+  }
+  .invoices-list li:last-child { border-bottom: 0; }
+  .invoices-list .amt { font-weight: 600; color: var(--rpt-ink); font-feature-settings: 'tnum'; }
+
+  .empty {
+    padding: 60px 20px; text-align: center; color: var(--rpt-grey); font-size: 14px;
+  }
+  @media print {
+    .rpt-toolbar { display: none; }
+    .rpt-shell { background: white; padding: 0; margin: 0; }
+    .grid-2 { grid-template-columns: 1fr; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="rpt-shell">
+  <div class="rpt-wrap">
+
+    <div class="rpt-toolbar">
+      <div class="meta">
+        Generated {% now "d M Y · H:i" %} · {{ request.user.get_full_name|default:request.user.username }}
+      </div>
+      <div style="display:flex;gap:8px">
+        <a href="{% url 'export_ageing_pdf' %}" class="rpt-export-btn primary">
+          <i class="bi bi-file-earmark-pdf"></i> PDF
+        </a>
+        <a href="{% url 'export_ageing_xlsx' %}" class="rpt-export-btn">
+          <i class="bi bi-file-earmark-spreadsheet"></i> Excel
+        </a>
+        <button onclick="window.print()" class="rpt-export-btn">
+          <i class="bi bi-printer"></i> Print
+        </button>
+        <a href="{% url 'financial_control_center' %}" class="rpt-export-btn">
+          ← Dashboard
+        </a>
+      </div>
+    </div>
+
+    <div class="rpt-header">
+      <div class="rpt-eyebrow">Ageing Analysis</div>
+      <h1 class="rpt-title">Receivables &amp; Payables</h1>
+      <div class="rpt-as-of">As of {{ ar.as_of|date:"d F Y" }}</div>
+    </div>
+
+    <div class="grid-2">
+
+      {# ── RECEIVABLES ────────────────────────────────────────────── #}
+      <div class="ageing-card ar">
+        <div class="ageing-card-header">
+          <div class="ageing-card-eyebrow">Accounts Receivable</div>
+          <h3 class="ageing-card-title">Money owed to us</h3>
+          <div class="ageing-total"><span class="currency">GMD</span>{{ ar.total|floatformat:0|intcomma }}</div>
+          <div class="ageing-total-label">Outstanding</div>
+        </div>
+
+        {% if ar.total %}
+        <table class="bucket-table">
+          {% for b in ar.buckets %}
+          <tr>
+            <td class="bucket-name">
+              <span class="swatch" style="background:{% if b.key == 'current' %}var(--rpt-green){% elif b.key == '1_30' %}#fbbf24{% elif b.key == '31_60' %}var(--rpt-amber){% else %}var(--rpt-red){% endif %}"></span>
+              {{ b.label }}
+            </td>
+            <td class="bucket-bar-cell">
+              <div class="bucket-bar">
+                <div style="width:{% if ar.total %}{% widthratio b.amount ar.total 100 %}{% else %}0{% endif %}%;
+                            background:{% if b.key == 'current' %}var(--rpt-green){% elif b.key == '1_30' %}#fbbf24{% elif b.key == '31_60' %}var(--rpt-amber){% else %}var(--rpt-red){% endif %}"></div>
+              </div>
+            </td>
+            <td class="bucket-count">{{ b.count }} inv.</td>
+            <td class="bucket-amount">GMD {{ b.amount|floatformat:0|intcomma }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+
+        {# Show preview invoices for the over-90 bucket if any #}
+        {% for b in ar.buckets %}
+          {% if b.key == 'over_90' and b.invoices %}
+          <div class="invoices-list">
+            <h5>⚠ Critical: 90+ days overdue</h5>
+            <ul>
+              {% for inv in b.invoices %}
+              <li>
+                <span>{{ inv.invoice_number }} · {{ inv.customer|default:"—" }} · {{ inv.days_overdue }} days</span>
+                <span class="amt">GMD {{ inv.amount|floatformat:0|intcomma }}</span>
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+        {% endfor %}
+
+        {% else %}
+        <div class="empty">No outstanding receivables.</div>
+        {% endif %}
+      </div>
+
+      {# ── PAYABLES ──────────────────────────────────────────────── #}
+      <div class="ageing-card ap">
+        <div class="ageing-card-header">
+          <div class="ageing-card-eyebrow">Accounts Payable</div>
+          <h3 class="ageing-card-title">Money we owe</h3>
+          <div class="ageing-total"><span class="currency">GMD</span>{{ ap.total|floatformat:0|intcomma }}</div>
+          <div class="ageing-total-label">Pending</div>
+        </div>
+
+        {% if ap.total %}
+        <table class="bucket-table">
+          {% for b in ap.buckets %}
+          <tr>
+            <td class="bucket-name">
+              <span class="swatch" style="background:{% if b.key == 'current' %}var(--rpt-blue){% elif b.key == '1_30' %}#fbbf24{% elif b.key == '31_60' %}var(--rpt-amber){% else %}var(--rpt-red){% endif %}"></span>
+              {{ b.label }}
+            </td>
+            <td class="bucket-bar-cell">
+              <div class="bucket-bar">
+                <div style="width:{% if ap.total %}{% widthratio b.amount ap.total 100 %}{% else %}0{% endif %}%;
+                            background:{% if b.key == 'current' %}var(--rpt-blue){% elif b.key == '1_30' %}#fbbf24{% elif b.key == '31_60' %}var(--rpt-amber){% else %}var(--rpt-red){% endif %}"></div>
+              </div>
+            </td>
+            <td class="bucket-count">{{ b.count }} req.</td>
+            <td class="bucket-amount">GMD {{ b.amount|floatformat:0|intcomma }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+
+        {% for b in ap.buckets %}
+          {% if b.key == 'over_90' and b.items %}
+          <div class="invoices-list">
+            <h5>⚠ Critical: 90+ days outstanding</h5>
+            <ul>
+              {% for it in b.items %}
+              <li>
+                <span>{{ it.title|truncatechars:40 }} · {{ it.recipient|default:"—" }}</span>
+                <span class="amt">GMD {{ it.amount|floatformat:0|intcomma }}</span>
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+        {% endfor %}
+
+        {% else %}
+        <div class="empty">No outstanding payables.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Audit Entry · {{ entry.model_name }}{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'finance_dashboard' %}">Finance</a> <span>›</span>
+<a href="{% url 'financial_control_center' %}">Control Center</a> <span>›</span>
+<a href="{% url 'finance_audit_log' %}">Audit Trail</a> <span>›</span>
+<span>Entry</span>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  :root {
+    --aud-ink: #0f172a; --aud-ink-soft: #334155; --aud-grey: #64748b;
+    --aud-bg: #fafaf7; --aud-card: #fff; --aud-line: #e2e8f0; --aud-line-soft: #f1f5f9;
+    --aud-gold: #b08d57; --aud-green: #059669; --aud-red: #dc2626;
+  }
+  .aud-shell { background: var(--aud-bg); margin: -16px -16px 0; padding: 24px 24px 60px; min-height: calc(100vh - 60px); }
+  .aud-wrap { max-width: 920px; margin: 0 auto; }
+
+  .aud-back {
+    display: inline-block; color: var(--aud-grey); text-decoration: none;
+    font-size: 13px; margin-bottom: 16px;
+  }
+  .aud-back:hover { color: var(--aud-ink); }
+
+  .aud-card {
+    background: var(--aud-card); border: 1px solid var(--aud-line); border-radius: 4px;
+    overflow: hidden;
+  }
+  .aud-card-head {
+    padding: 28px 32px; border-bottom: 1px solid var(--aud-line);
+    background: linear-gradient(180deg, var(--aud-line-soft), transparent);
+  }
+  .aud-eyebrow {
+    font-family: 'Georgia', serif; font-size: 10px; letter-spacing: .25em;
+    text-transform: uppercase; color: var(--aud-gold); margin-bottom: 6px;
+  }
+  .aud-title {
+    font-family: 'Georgia', serif; font-size: 24px; font-weight: 400;
+    color: var(--aud-ink); letter-spacing: -.01em; margin: 0 0 8px;
+  }
+  .aud-id { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--aud-grey); }
+
+  .aud-meta-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0;
+    background: var(--aud-line-soft); border-bottom: 1px solid var(--aud-line);
+  }
+  .aud-meta-cell {
+    padding: 16px 20px; border-right: 1px solid var(--aud-line);
+  }
+  .aud-meta-cell:last-child { border-right: 0; }
+  .aud-meta-cell .label {
+    font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--aud-grey); font-weight: 600; margin-bottom: 4px;
+  }
+  .aud-meta-cell .value {
+    font-size: 14px; color: var(--aud-ink); font-weight: 500;
+    word-break: break-word;
+  }
+  .aud-meta-cell .value.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+  .aud-body { padding: 28px 32px; }
+  .aud-section-title {
+    font-family: 'Georgia', serif; font-size: 14px; font-weight: 600;
+    color: var(--aud-ink); letter-spacing: .1em; text-transform: uppercase;
+    margin: 0 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--aud-ink);
+  }
+
+  .diff-table {
+    width: 100%; border-collapse: collapse; font-size: 13px;
+    margin-bottom: 24px;
+  }
+  .diff-table th {
+    text-align: left; padding: 10px 14px; background: var(--aud-line-soft);
+    color: var(--aud-grey); font-size: 10px; letter-spacing: .12em;
+    text-transform: uppercase; font-weight: 600;
+  }
+  .diff-table td {
+    padding: 12px 14px; border-bottom: 1px solid var(--aud-line-soft);
+    vertical-align: top; font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  }
+  .diff-table .field {
+    font-family: inherit; font-weight: 600; color: var(--aud-ink); width: 180px;
+  }
+  .diff-table .old {
+    color: #991b1b; background: rgba(220,38,38,.04);
+    text-decoration: line-through; text-decoration-color: rgba(220,38,38,.3);
+  }
+  .diff-table .new {
+    color: #047857; background: rgba(5,150,105,.04); font-weight: 500;
+  }
+  .diff-table .arrow {
+    text-align: center; color: var(--aud-gold); width: 30px; font-weight: bold;
+  }
+
+  .action-tag-big {
+    display: inline-block; font-size: 12px; padding: 6px 14px; border-radius: 3px;
+    text-transform: uppercase; letter-spacing: .12em; font-weight: 700;
+  }
+  .action-tag-big.create   { background: rgba(5,150,105,.15); color: #047857; }
+  .action-tag-big.update   { background: rgba(37,99,235,.15); color: #1e40af; }
+  .action-tag-big.delete   { background: rgba(220,38,38,.15); color: #991b1b; }
+  .action-tag-big.approve  { background: rgba(176,141,87,.2); color: var(--aud-gold); }
+  .action-tag-big.pay      { background: rgba(5,150,105,.2); color: #065f46; }
+
+  .aud-empty-diff {
+    color: var(--aud-grey); font-style: italic; padding: 20px;
+    background: var(--aud-line-soft); border-radius: 3px; text-align: center;
+  }
+
+  .anomaly-banner {
+    background: linear-gradient(90deg, rgba(220,38,38,.06), transparent);
+    border-left: 3px solid var(--aud-red); padding: 12px 18px;
+    border-radius: 0 3px 3px 0; margin-bottom: 20px;
+  }
+  .anomaly-banner h4 { margin: 0 0 4px; font-size: 14px; color: var(--aud-red); }
+  .anomaly-banner p { margin: 0; font-size: 13px; color: var(--aud-ink-soft); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="aud-shell">
+  <div class="aud-wrap">
+
+    <a href="{% url 'finance_audit_log' %}" class="aud-back">← Back to audit log</a>
+
+    <div class="aud-card">
+      <div class="aud-card-head">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
+          <div>
+            <div class="aud-eyebrow">Audit Entry</div>
+            <h1 class="aud-title">{{ entry.model_name }}: {{ entry.object_repr|truncatechars:80 }}</h1>
+            <div class="aud-id">{{ entry.id }}</div>
+          </div>
+          <span class="action-tag-big {{ entry.action }}">{{ entry.get_action_display }}</span>
+        </div>
+      </div>
+
+      <div class="aud-meta-grid">
+        <div class="aud-meta-cell">
+          <div class="label">When</div>
+          <div class="value">{{ entry.timestamp|date:"d M Y" }}</div>
+          <div class="value" style="font-size:12px;color:var(--aud-grey)">{{ entry.timestamp|date:"H:i:s T" }}</div>
+        </div>
+        <div class="aud-meta-cell">
+          <div class="label">Actor</div>
+          <div class="value">{{ entry.actor_name|default:"System" }}</div>
+          {% if entry.actor %}<div class="value" style="font-size:11px;color:var(--aud-grey)">@{{ entry.actor.username }}</div>{% endif %}
+        </div>
+        <div class="aud-meta-cell">
+          <div class="label">IP Address</div>
+          <div class="value mono">{{ entry.ip_address|default:"—" }}</div>
+        </div>
+        {% if entry.amount %}
+        <div class="aud-meta-cell">
+          <div class="label">Amount</div>
+          <div class="value">{{ entry.currency|default:"GMD" }} {{ entry.amount|floatformat:2|intcomma }}</div>
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="aud-body">
+
+        {% if entry.anomalies.exists %}
+        {% for anom in entry.anomalies.all %}
+        <div class="anomaly-banner">
+          <h4>⚠ {{ anom.title }}</h4>
+          <p>{{ anom.description }}</p>
+        </div>
+        {% endfor %}
+        {% endif %}
+
+        <h3 class="aud-section-title">Changes</h3>
+        {% if entry.changes %}
+        <table class="diff-table">
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Before</th>
+              <th></th>
+              <th>After</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for field, vals in entry.changes.items %}
+            <tr>
+              <td class="field">{{ field }}</td>
+              <td class="old">{{ vals.0|default:"—" }}</td>
+              <td class="arrow">→</td>
+              <td class="new">{{ vals.1|default:"—" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="aud-empty-diff">
+          {% if entry.action == 'create' %}New record — no prior state to diff.
+          {% elif entry.action == 'export' %}Export action — no record changes.
+          {% else %}No field changes recorded.
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if entry.user_agent %}
+        <h3 class="aud-section-title" style="margin-top:32px">Session</h3>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--aud-grey);
+                    background:var(--aud-line-soft);padding:12px 14px;border-radius:3px;
+                    word-break:break-all">
+          {{ entry.user_agent }}
+        </div>
+        {% endif %}
+
+        {% if entry.notes %}
+        <h3 class="aud-section-title" style="margin-top:32px">Notes</h3>
+        <div style="font-size:14px;color:var(--aud-ink-soft);line-height:1.6">
+          {{ entry.notes|linebreaksbr }}
+        </div>
+        {% endif %}
+
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

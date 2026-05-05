@@ -1,0 +1,324 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Financial Anomalies{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'finance_dashboard' %}">Finance</a> <span>›</span>
+<a href="{% url 'financial_control_center' %}">Control Center</a> <span>›</span>
+<span>Anomalies</span>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  :root {
+    --an-ink: #0f172a; --an-ink-soft: #334155; --an-grey: #64748b;
+    --an-bg: #fafaf7; --an-card: #fff; --an-line: #e2e8f0; --an-line-soft: #f1f5f9;
+    --an-gold: #b08d57; --an-green: #059669; --an-red: #dc2626; --an-amber: #d97706;
+  }
+  .an-shell { background: var(--an-bg); margin: -16px -16px 0; padding: 24px 24px 60px; min-height: calc(100vh - 60px); }
+  .an-wrap { max-width: 1200px; margin: 0 auto; }
+
+  .an-header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 1px solid var(--an-ink); padding-bottom: 16px; margin-bottom: 24px;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .an-eyebrow {
+    font-family: 'Georgia', serif; font-size: 11px; letter-spacing: .25em;
+    text-transform: uppercase; color: var(--an-gold); margin-bottom: 4px;
+  }
+  .an-title {
+    font-family: 'Georgia', serif; font-size: 30px; font-weight: 400;
+    color: var(--an-ink); letter-spacing: -.02em; margin: 0;
+  }
+  .an-subtitle { color: var(--an-grey); font-size: 13px; margin-top: 6px; }
+
+  .an-back-btn {
+    background: white; border: 1px solid var(--an-line);
+    padding: 7px 14px; border-radius: 3px; font-size: 12px;
+    color: var(--an-ink); text-decoration: none; transition: all .15s;
+  }
+  .an-back-btn:hover { background: var(--an-ink); color: white; border-color: var(--an-ink); }
+
+  .an-stats {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+    background: var(--an-card); border: 1px solid var(--an-line); border-radius: 4px;
+    margin-bottom: 24px; overflow: hidden;
+  }
+  .an-stat {
+    padding: 18px 20px; border-right: 1px solid var(--an-line);
+    cursor: pointer; transition: background .15s; text-decoration: none;
+  }
+  .an-stat:last-child { border-right: 0; }
+  .an-stat:hover { background: var(--an-line-soft); }
+  .an-stat.active { background: var(--an-line-soft); border-bottom: 3px solid var(--an-gold); }
+  .an-stat .label {
+    font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--an-grey); font-weight: 600; margin-bottom: 6px;
+  }
+  .an-stat .value {
+    font-family: 'Georgia', serif; font-size: 26px; font-weight: 400;
+    color: var(--an-ink); letter-spacing: -.01em;
+  }
+  .an-stat.high .value { color: var(--an-red); }
+  .an-stat.resolved .value { color: var(--an-green); }
+  @media (max-width: 768px) { .an-stats { grid-template-columns: repeat(2, 1fr); } .an-stat:nth-child(2) { border-right: 0; } }
+
+  .an-filter-row {
+    display: flex; gap: 12px; align-items: center;
+    margin-bottom: 16px; flex-wrap: wrap;
+  }
+  .an-filter-row label { font-size: 11px; color: var(--an-grey); text-transform: uppercase; letter-spacing: .1em; font-weight: 600; }
+  .an-filter-row select {
+    border: 1px solid var(--an-line); border-radius: 3px; padding: 6px 10px;
+    font-size: 13px; background: white; font-family: inherit;
+  }
+
+  .an-list {
+    background: var(--an-card); border: 1px solid var(--an-line); border-radius: 4px;
+    overflow: hidden;
+  }
+  .an-item {
+    display: grid; grid-template-columns: 6px 1fr auto; gap: 0;
+    border-bottom: 1px solid var(--an-line);
+    transition: background .15s;
+  }
+  .an-item:last-child { border-bottom: 0; }
+  .an-item:hover { background: var(--an-line-soft); }
+  .an-item .severity-stripe {
+    width: 6px;
+    background: var(--an-amber);
+  }
+  .an-item.high .severity-stripe { background: var(--an-red); }
+  .an-item.medium .severity-stripe { background: var(--an-amber); }
+  .an-item.low .severity-stripe { background: #fbbf24; }
+  .an-item.resolved { opacity: .55; }
+
+  .an-item-body { padding: 18px 20px; }
+  .an-item-title {
+    font-family: 'Georgia', serif; font-size: 16px; font-weight: 500;
+    color: var(--an-ink); margin: 0 0 6px;
+  }
+  .an-item-desc {
+    color: var(--an-ink-soft); font-size: 13px; line-height: 1.5;
+    margin: 0 0 10px;
+  }
+  .an-item-meta {
+    display: flex; gap: 16px; font-size: 12px; color: var(--an-grey);
+    flex-wrap: wrap; align-items: center;
+  }
+  .an-pill {
+    display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 2px;
+    text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
+  }
+  .sev-low    { background: rgba(245,158,11,.15); color: #b45309; }
+  .sev-medium { background: rgba(217,119,6,.18); color: #c2410c; }
+  .sev-high   { background: rgba(220,38,38,.15); color: #991b1b; }
+  .stat-open      { background: rgba(220,38,38,.12); color: #991b1b; }
+  .stat-reviewing { background: rgba(245,158,11,.15); color: #b45309; }
+  .stat-resolved  { background: rgba(5,150,105,.15); color: #047857; }
+  .stat-dismissed { background: rgba(100,116,139,.12); color: var(--an-grey); }
+
+  .an-item-actions {
+    padding: 18px 20px; display: flex; flex-direction: column; gap: 6px;
+    align-items: flex-end; min-width: 220px;
+  }
+  .an-amount {
+    font-family: 'Georgia', serif; font-size: 18px; color: var(--an-ink);
+    font-weight: 500;
+  }
+  .an-action-btn {
+    background: var(--an-ink); color: white; border: 0;
+    padding: 6px 14px; border-radius: 3px; font-size: 12px;
+    cursor: pointer; font-family: inherit; text-decoration: none;
+    transition: all .15s;
+  }
+  .an-action-btn:hover { background: var(--an-gold); }
+  .an-action-btn.dismiss { background: white; color: var(--an-grey); border: 1px solid var(--an-line); }
+  .an-action-btn.dismiss:hover { background: var(--an-line-soft); color: var(--an-ink); border-color: var(--an-ink); }
+
+  .an-empty {
+    padding: 80px 20px; text-align: center; color: var(--an-grey);
+  }
+  .an-empty .icon { font-size: 40px; color: var(--an-line); margin-bottom: 14px; }
+  .an-empty h3 { color: var(--an-ink-soft); font-weight: 500; }
+
+  /* Resolution modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(15,23,42,.6);
+    display: none; align-items: center; justify-content: center; z-index: 1000;
+    padding: 20px;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal-box {
+    background: white; border-radius: 6px; max-width: 520px; width: 100%;
+    box-shadow: 0 24px 60px rgba(0,0,0,.3);
+  }
+  .modal-head {
+    padding: 20px 24px; border-bottom: 1px solid var(--an-line);
+  }
+  .modal-head h3 { font-family: 'Georgia', serif; font-weight: 500; margin: 0; color: var(--an-ink); }
+  .modal-body { padding: 20px 24px; }
+  .modal-body label {
+    display: block; font-size: 11px; color: var(--an-grey);
+    letter-spacing: .12em; text-transform: uppercase; font-weight: 600; margin: 12px 0 6px;
+  }
+  .modal-body select, .modal-body textarea {
+    width: 100%; border: 1px solid var(--an-line); border-radius: 3px;
+    padding: 8px 10px; font-size: 13px; font-family: inherit;
+  }
+  .modal-body textarea { min-height: 100px; resize: vertical; }
+  .modal-foot {
+    padding: 16px 24px; border-top: 1px solid var(--an-line);
+    display: flex; justify-content: flex-end; gap: 8px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="an-shell">
+  <div class="an-wrap">
+
+    <div class="an-header">
+      <div>
+        <div class="an-eyebrow">Risk · Forensics</div>
+        <h1 class="an-title">Financial Anomalies</h1>
+        <div class="an-subtitle">Automated detection of unusual or risky activity</div>
+      </div>
+      <a href="{% url 'financial_control_center' %}" class="an-back-btn">← Dashboard</a>
+    </div>
+
+    <div class="an-stats">
+      <a href="?status=open" class="an-stat {% if filters.status == 'open' %}active{% endif %}">
+        <div class="label">Open</div>
+        <div class="value">{{ counts.open }}</div>
+      </a>
+      <a href="?status=open&severity=high" class="an-stat high {% if filters.severity == 'high' %}active{% endif %}">
+        <div class="label">High Severity (Open)</div>
+        <div class="value">{{ counts.high }}</div>
+      </a>
+      <a href="?status=reviewing" class="an-stat {% if filters.status == 'reviewing' %}active{% endif %}">
+        <div class="label">Under Review</div>
+        <div class="value">{{ counts.reviewing }}</div>
+      </a>
+      <a href="?status=resolved" class="an-stat resolved {% if filters.status == 'resolved' %}active{% endif %}">
+        <div class="label">Resolved</div>
+        <div class="value">{{ counts.resolved }}</div>
+      </a>
+    </div>
+
+    <form method="get" class="an-filter-row">
+      <label>Status</label>
+      <select name="status" onchange="this.form.submit()">
+        <option value="all" {% if filters.status == 'all' %}selected{% endif %}>All</option>
+        <option value="open" {% if filters.status == 'open' %}selected{% endif %}>Open</option>
+        <option value="reviewing" {% if filters.status == 'reviewing' %}selected{% endif %}>Under Review</option>
+        <option value="resolved" {% if filters.status == 'resolved' %}selected{% endif %}>Resolved</option>
+        <option value="dismissed" {% if filters.status == 'dismissed' %}selected{% endif %}>Dismissed</option>
+      </select>
+      <label>Severity</label>
+      <select name="severity" onchange="this.form.submit()">
+        <option value="">All severities</option>
+        <option value="high" {% if filters.severity == 'high' %}selected{% endif %}>High</option>
+        <option value="medium" {% if filters.severity == 'medium' %}selected{% endif %}>Medium</option>
+        <option value="low" {% if filters.severity == 'low' %}selected{% endif %}>Low</option>
+      </select>
+    </form>
+
+    <div class="an-list">
+      {% for a in page %}
+      <div class="an-item {{ a.severity }} {% if a.status == 'resolved' or a.status == 'dismissed' %}resolved{% endif %}">
+        <div class="severity-stripe"></div>
+        <div class="an-item-body">
+          <h3 class="an-item-title">{{ a.title }}</h3>
+          <p class="an-item-desc">{{ a.description }}</p>
+          <div class="an-item-meta">
+            <span class="an-pill sev-{{ a.severity }}">{{ a.get_severity_display }}</span>
+            <span class="an-pill stat-{{ a.status }}">{{ a.get_status_display }}</span>
+            <span>· {{ a.get_kind_display }}</span>
+            <span>· Detected {{ a.detected_at|naturaltime }}</span>
+            {% if a.reviewed_by %}<span>· Reviewed by {{ a.reviewed_by.get_full_name|default:a.reviewed_by.username }}</span>{% endif %}
+            {% if a.audit_entry_id %}
+            <a href="{% url 'finance_audit_entry' pk=a.audit_entry_id %}" style="color:var(--an-gold);text-decoration:none">View audit entry →</a>
+            {% endif %}
+          </div>
+        </div>
+        <div class="an-item-actions">
+          {% if a.amount %}
+          <div class="an-amount">{{ a.currency|default:"GMD" }} {{ a.amount|floatformat:0|intcomma }}</div>
+          {% endif %}
+          {% if can_resolve and a.status == 'open' or a.status == 'reviewing' %}
+          <button class="an-action-btn"
+                  onclick="openModal('{{ a.pk }}', '{{ a.title|escapejs }}')">
+            Mark Reviewed
+          </button>
+          {% endif %}
+        </div>
+      </div>
+      {% empty %}
+      <div class="an-empty">
+        <div class="icon"><i class="bi bi-shield-check"></i></div>
+        <h3>No anomalies found</h3>
+        <p>Nothing unusual matches these filters.</p>
+      </div>
+      {% endfor %}
+    </div>
+
+    {# Pagination #}
+    {% if page.has_other_pages %}
+    <div style="display:flex;justify-content:center;gap:6px;margin-top:18px">
+      {% if page.has_previous %}
+      <a href="?{% for k, v in request.GET.items %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page.previous_page_number }}" class="an-back-btn">‹ Prev</a>
+      {% endif %}
+      <span style="padding:7px 14px;font-size:12px;color:var(--an-grey)">
+        Page {{ page.number }} of {{ page.paginator.num_pages }}
+      </span>
+      {% if page.has_next %}
+      <a href="?{% for k, v in request.GET.items %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page.next_page_number }}" class="an-back-btn">Next ›</a>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Resolve modal ──────────────────────────────────────────────────── #}
+{% if can_resolve %}
+<div class="modal-backdrop" id="resolve-modal">
+  <div class="modal-box">
+    <form method="post" id="resolve-form">
+      {% csrf_token %}
+      <div class="modal-head">
+        <h3>Review Anomaly</h3>
+        <div id="modal-anom-title" style="font-size:13px;color:var(--an-grey);margin-top:4px"></div>
+      </div>
+      <div class="modal-body">
+        <label>New Status</label>
+        <select name="status">
+          <option value="reviewing">Under Review</option>
+          <option value="resolved" selected>Resolved (action taken)</option>
+          <option value="dismissed">Dismissed (false positive)</option>
+        </select>
+        <label>Resolution Notes</label>
+        <textarea name="resolution" placeholder="Briefly describe what was done or why this is a false positive…"></textarea>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="an-action-btn dismiss" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="an-action-btn">Submit</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  const modal = document.getElementById('resolve-modal');
+  const form = document.getElementById('resolve-form');
+  const titleEl = document.getElementById('modal-anom-title');
+  function openModal(pk, title) {
+    form.action = "{% url 'finance_anomaly_resolve' pk='00000000-0000-0000-0000-000000000000' %}".replace('00000000-0000-0000-0000-000000000000', pk);
+    titleEl.textContent = title;
+    modal.classList.add('show');
+  }
+  function closeModal() { modal.classList.remove('show'); }
+  modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Budget vs Actual — FY{{ data.fiscal_year }}{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'finance_dashboard' %}">Finance</a> <span>›</span>
+<a href="{% url 'financial_control_center' %}">Control Center</a> <span>›</span>
+<span>Budget vs Actual</span>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  :root {
+    --rpt-ink: #0f172a; --rpt-ink-soft: #334155; --rpt-grey: #64748b;
+    --rpt-bg: #fafaf7; --rpt-card: #fff; --rpt-line: #e2e8f0; --rpt-line-soft: #f1f5f9;
+    --rpt-gold: #b08d57; --rpt-green: #059669; --rpt-red: #dc2626; --rpt-amber: #d97706;
+  }
+  .rpt-shell { background: var(--rpt-bg); margin: -16px -16px 0; padding: 24px 24px 60px; min-height: calc(100vh - 60px); }
+  .rpt-wrap { max-width: 1180px; margin: 0 auto; }
+  .rpt-toolbar {
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--rpt-card); border: 1px solid var(--rpt-line); border-radius: 4px;
+    padding: 14px 24px; margin-bottom: 20px;
+  }
+  .rpt-toolbar .meta { font-size: 12px; color: var(--rpt-grey); }
+  .rpt-export-btn {
+    background: white; border: 1px solid var(--rpt-line);
+    padding: 6px 14px; border-radius: 3px; font-size: 12px;
+    color: var(--rpt-ink); text-decoration: none; cursor: pointer;
+    font-family: inherit; transition: all .15s;
+  }
+  .rpt-export-btn:hover { background: var(--rpt-ink); color: white; border-color: var(--rpt-ink); }
+  .rpt-export-btn.primary { background: var(--rpt-gold); color: white; border-color: var(--rpt-gold); }
+
+  .rpt-header {
+    background: var(--rpt-card); border: 1px solid var(--rpt-line); border-radius: 4px;
+    padding: 32px 36px; margin-bottom: 24px;
+  }
+  .rpt-eyebrow {
+    font-family: 'Georgia', serif; font-size: 10px; letter-spacing: .25em;
+    text-transform: uppercase; color: var(--rpt-gold); margin-bottom: 6px;
+  }
+  .rpt-title {
+    font-family: 'Georgia', serif; font-size: 30px; font-weight: 400;
+    color: var(--rpt-ink); letter-spacing: -.02em; margin: 0 0 24px;
+  }
+  .rpt-summary {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+    border-top: 1px solid var(--rpt-line); padding-top: 20px;
+  }
+  .rpt-summary .stat { padding: 0 20px; border-right: 1px solid var(--rpt-line); }
+  .rpt-summary .stat:first-child { padding-left: 0; }
+  .rpt-summary .stat:last-child { border-right: 0; padding-right: 0; }
+  .rpt-summary .stat-label {
+    font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--rpt-grey); font-weight: 600;
+  }
+  .rpt-summary .stat-value {
+    font-family: 'Georgia', serif; font-size: 24px; color: var(--rpt-ink);
+    margin-top: 6px; letter-spacing: -.01em;
+  }
+  .rpt-summary .stat-value .currency { font-size: 11px; color: var(--rpt-grey); margin-right: 4px; font-family: inherit; }
+
+  .rpt-table-wrap {
+    background: var(--rpt-card); border: 1px solid var(--rpt-line); border-radius: 4px; overflow: hidden;
+  }
+  .rpt-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .rpt-table thead {
+    background: var(--rpt-ink); color: white;
+  }
+  .rpt-table th {
+    text-align: left; padding: 12px 16px; font-weight: 500;
+    font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  }
+  .rpt-table th.num { text-align: right; }
+  .rpt-table td { padding: 14px 16px; border-bottom: 1px solid var(--rpt-line-soft); vertical-align: middle; }
+  .rpt-table td.num { text-align: right; font-feature-settings: 'tnum'; }
+  .rpt-table tr:hover td { background: var(--rpt-line-soft); }
+  .rpt-table .name { font-weight: 600; color: var(--rpt-ink); }
+  .rpt-table .meta { color: var(--rpt-grey); font-size: 11px; margin-top: 2px; }
+  .rpt-table tr.over-budget td { background: rgba(220,38,38,.04); }
+  .rpt-table tr.over-budget td.num { color: var(--rpt-red); font-weight: 600; }
+
+  .util-cell { display: flex; align-items: center; gap: 8px; min-width: 130px; }
+  .util-bar { flex: 1; height: 6px; background: var(--rpt-line-soft); border-radius: 2px; overflow: hidden; }
+  .util-bar > div { height: 100%; transition: width .4s; }
+  .util-pct { font-size: 12px; font-weight: 600; color: var(--rpt-ink); min-width: 44px; text-align: right; }
+
+  .rpt-table tfoot td {
+    background: var(--rpt-line-soft); font-weight: 700; color: var(--rpt-ink);
+    border-top: 2px solid var(--rpt-ink); border-bottom: 0; padding: 16px;
+  }
+
+  .status-pill {
+    display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 2px;
+    text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
+  }
+  .status-pill.active { background: rgba(5,150,105,.12); color: #047857; }
+  .status-pill.draft { background: var(--rpt-line); color: var(--rpt-ink-soft); }
+  .status-pill.closed { background: rgba(100,116,139,.12); color: var(--rpt-grey); }
+
+  .empty {
+    padding: 60px 20px; text-align: center; color: var(--rpt-grey); font-size: 14px;
+  }
+  @media print {
+    .rpt-toolbar { display: none; }
+    .rpt-shell { background: white; padding: 0; margin: 0; }
+    .rpt-header, .rpt-table-wrap { box-shadow: none; border: 1px solid #ddd; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="rpt-shell">
+  <div class="rpt-wrap">
+
+    <div class="rpt-toolbar">
+      <div class="meta">
+        Snapshot at {% now "d M Y · H:i" %} · {{ request.user.get_full_name|default:request.user.username }}
+      </div>
+      <div style="display:flex;gap:8px">
+        <a href="{% url 'export_budget_variance_pdf' %}?fy={{ data.fiscal_year }}" class="rpt-export-btn primary">
+          <i class="bi bi-file-earmark-pdf"></i> PDF
+        </a>
+        <a href="{% url 'export_budget_variance_xlsx' %}?fy={{ data.fiscal_year }}" class="rpt-export-btn">
+          <i class="bi bi-file-earmark-spreadsheet"></i> Excel
+        </a>
+        <button onclick="window.print()" class="rpt-export-btn">
+          <i class="bi bi-printer"></i> Print
+        </button>
+        <a href="{% url 'financial_control_center' %}" class="rpt-export-btn">
+          ← Dashboard
+        </a>
+      </div>
+    </div>
+
+    <div class="rpt-header">
+      <div class="rpt-eyebrow">FY{{ data.fiscal_year }} · Variance Analysis</div>
+      <h1 class="rpt-title">Budget vs Actual</h1>
+
+      <div class="rpt-summary">
+        <div class="stat">
+          <div class="stat-label">Budgets</div>
+          <div class="stat-value">{{ data.rows|length }}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total Allocated</div>
+          <div class="stat-value"><span class="currency">GMD</span>{{ data.grand_total|floatformat:0|intcomma }}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total Spent</div>
+          <div class="stat-value"><span class="currency">GMD</span>{{ data.grand_spent|floatformat:0|intcomma }}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Org Utilization</div>
+          <div class="stat-value" style="color:{% if data.grand_utilization > 90 %}var(--rpt-red){% elif data.grand_utilization > 70 %}var(--rpt-amber){% else %}var(--rpt-green){% endif %}">
+            {{ data.grand_utilization|floatformat:1 }}%
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rpt-table-wrap">
+      <table class="rpt-table">
+        <thead>
+          <tr>
+            <th>Budget</th>
+            <th>Department</th>
+            <th>Status</th>
+            <th class="num">Total</th>
+            <th class="num">Spent</th>
+            <th class="num">Balance</th>
+            <th>Utilization</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in data.rows %}
+          <tr class="{% if r.over_budget %}over-budget{% endif %}">
+            <td>
+              <div class="name">{{ r.name }}</div>
+              {% if r.unit and r.unit != "—" %}<div class="meta">{{ r.unit }}</div>{% endif %}
+            </td>
+            <td>{{ r.department }}</td>
+            <td><span class="status-pill {{ r.status }}">{{ r.status }}</span></td>
+            <td class="num">GMD {{ r.total|floatformat:0|intcomma }}</td>
+            <td class="num">GMD {{ r.spent|floatformat:0|intcomma }}</td>
+            <td class="num" style="{% if r.balance < 0 %}color:var(--rpt-red);font-weight:600{% endif %}">
+              GMD {{ r.balance|floatformat:0|intcomma }}
+            </td>
+            <td>
+              <div class="util-cell">
+                <div class="util-bar">
+                  <div style="width:{% if r.utilization > 100 %}100{% else %}{{ r.utilization|floatformat:0 }}{% endif %}%;
+                              background:{% if r.utilization > 100 %}var(--rpt-red){% elif r.utilization > 90 %}var(--rpt-red){% elif r.utilization > 70 %}var(--rpt-amber){% else %}var(--rpt-green){% endif %}"></div>
+                </div>
+                <span class="util-pct" style="{% if r.over_budget %}color:var(--rpt-red){% endif %}">
+                  {{ r.utilization|floatformat:1 }}%
+                </span>
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="7" class="empty">No budgets defined for FY{{ data.fiscal_year }}.</td></tr>
+          {% endfor %}
+        </tbody>
+        {% if data.rows %}
+        <tfoot>
+          <tr>
+            <td colspan="3">TOTAL</td>
+            <td class="num">GMD {{ data.grand_total|floatformat:0|intcomma }}</td>
+            <td class="num">GMD {{ data.grand_spent|floatformat:0|intcomma }}</td>
+            <td class="num">GMD {{ data.grand_balance|floatformat:0|intcomma }}</td>
+            <td>{{ data.grand_utilization|floatformat:1 }}%</td>
+          </tr>
+        </tfoot>
+        {% endif %}
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

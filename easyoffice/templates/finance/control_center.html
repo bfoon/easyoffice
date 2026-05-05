@@ -1,0 +1,848 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Financial Control Center{% endblock %}
+{% block breadcrumb %}<a href="{% url 'finance_dashboard' %}">Finance</a> <span>›</span> <span>Control Center</span>{% endblock %}
+
+{% block extra_css %}
+<style>
+  /* ═══════════════════════════════════════════════════════════════════════
+     Financial Control Center — refined editorial aesthetic
+     Built on top of the eo-* design system
+     ═════════════════════════════════════════════════════════════════════ */
+
+  :root {
+    --fcc-ink:        #0f172a;
+    --fcc-ink-soft:   #334155;
+    --fcc-grey:       #64748b;
+    --fcc-grey-light: #94a3b8;
+    --fcc-bg:         #fafaf7;
+    --fcc-card:       #ffffff;
+    --fcc-line:       #e2e8f0;
+    --fcc-line-soft:  #f1f5f9;
+    --fcc-gold:       #b08d57;
+    --fcc-gold-soft:  rgba(176,141,87,.08);
+    --fcc-green:      #059669;
+    --fcc-red:        #dc2626;
+    --fcc-amber:      #d97706;
+    --fcc-blue:       #2563eb;
+  }
+
+  .fcc-shell { background: var(--fcc-bg); margin: -16px -16px 0; padding: 24px 24px 60px; min-height: calc(100vh - 60px); }
+
+  /* ── Masthead ────────────────────────────────────────────────────────── */
+  .fcc-masthead {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 1px solid var(--fcc-ink); padding-bottom: 18px; margin-bottom: 28px;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .fcc-eyebrow {
+    font-family: 'Georgia', 'Times New Roman', serif;
+    font-size: 11px; letter-spacing: .25em; text-transform: uppercase;
+    color: var(--fcc-gold); margin-bottom: 6px;
+  }
+  .fcc-title {
+    font-family: 'Georgia', 'Times New Roman', serif;
+    font-size: 36px; font-weight: 400; color: var(--fcc-ink);
+    letter-spacing: -.02em; line-height: 1.1; margin: 0;
+  }
+  .fcc-subtitle {
+    color: var(--fcc-grey); font-size: 13px; margin-top: 8px;
+    display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+  }
+  .fcc-subtitle .dot { width: 4px; height: 4px; background: var(--fcc-grey-light); border-radius: 50%; }
+
+  /* ── Filter bar ──────────────────────────────────────────────────────── */
+  .fcc-filterbar {
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+    padding: 10px 14px; background: var(--fcc-card); border: 1px solid var(--fcc-line);
+    border-radius: 4px; margin-bottom: 24px; box-shadow: 0 1px 0 rgba(15,23,42,.02);
+  }
+  .fcc-filterbar label {
+    font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--fcc-grey); font-weight: 600; margin: 0 4px 0 8px;
+  }
+  .fcc-filterbar select, .fcc-filterbar input[type=date] {
+    border: 1px solid var(--fcc-line); border-radius: 3px; padding: 6px 10px;
+    font-size: 13px; color: var(--fcc-ink); background: white;
+    font-family: inherit;
+  }
+  .fcc-pill-group { display: inline-flex; border: 1px solid var(--fcc-line); border-radius: 3px; overflow: hidden; }
+  .fcc-pill-group button {
+    border: 0; background: white; padding: 6px 12px; font-size: 12px;
+    color: var(--fcc-ink-soft); cursor: pointer; border-right: 1px solid var(--fcc-line);
+    transition: all .15s;
+  }
+  .fcc-pill-group button:last-child { border-right: 0; }
+  .fcc-pill-group button.active {
+    background: var(--fcc-ink); color: white;
+  }
+  .fcc-pill-group button:hover:not(.active) { background: var(--fcc-line-soft); }
+
+  /* ── KPI strip ───────────────────────────────────────────────────────── */
+  .fcc-kpi-strip {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+    border-top: 1px solid var(--fcc-line); border-bottom: 1px solid var(--fcc-line);
+    background: var(--fcc-card); margin-bottom: 32px;
+  }
+  .fcc-kpi {
+    padding: 22px 24px; border-right: 1px solid var(--fcc-line);
+    position: relative;
+  }
+  .fcc-kpi:last-child { border-right: 0; }
+  .fcc-kpi-label {
+    font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--fcc-grey); font-weight: 600; margin-bottom: 8px;
+  }
+  .fcc-kpi-value {
+    font-family: 'Georgia', serif;
+    font-size: 30px; font-weight: 400; color: var(--fcc-ink);
+    line-height: 1; letter-spacing: -.02em;
+  }
+  .fcc-kpi-value .currency { font-size: 14px; color: var(--fcc-grey); margin-right: 4px; }
+  .fcc-kpi-meta {
+    font-size: 12px; color: var(--fcc-grey); margin-top: 8px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .fcc-kpi-change { font-weight: 600; font-feature-settings: 'tnum'; }
+  .fcc-kpi-change.up { color: var(--fcc-green); }
+  .fcc-kpi-change.down { color: var(--fcc-red); }
+  .fcc-kpi-change.neutral { color: var(--fcc-grey); }
+  .fcc-kpi.has-alert { background: linear-gradient(180deg, rgba(220,38,38,.03), transparent); }
+
+  @media (max-width: 1024px) { .fcc-kpi-strip { grid-template-columns: repeat(2, 1fr); } .fcc-kpi:nth-child(2) { border-right: 0; } }
+  @media (max-width: 600px) { .fcc-kpi-strip { grid-template-columns: 1fr; } .fcc-kpi { border-right: 0; border-bottom: 1px solid var(--fcc-line); } }
+
+  /* ── Card / panel ────────────────────────────────────────────────────── */
+  .fcc-card {
+    background: var(--fcc-card); border: 1px solid var(--fcc-line);
+    border-radius: 4px; padding: 22px 24px;
+    box-shadow: 0 1px 0 rgba(15,23,42,.02);
+  }
+  .fcc-card-header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 18px; padding-bottom: 12px;
+    border-bottom: 1px solid var(--fcc-line-soft);
+  }
+  .fcc-card-title {
+    font-family: 'Georgia', serif; font-size: 17px; font-weight: 500;
+    color: var(--fcc-ink); margin: 0; letter-spacing: -.01em;
+  }
+  .fcc-card-eyebrow {
+    font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--fcc-gold); font-weight: 600; margin-bottom: 4px;
+  }
+  .fcc-card-action a {
+    font-size: 12px; color: var(--fcc-ink-soft); text-decoration: none;
+    border-bottom: 1px solid var(--fcc-grey-light); padding-bottom: 1px;
+  }
+  .fcc-card-action a:hover { color: var(--fcc-gold); border-color: var(--fcc-gold); }
+
+  /* ── Grid layout ─────────────────────────────────────────────────────── */
+  .fcc-grid { display: grid; gap: 20px; }
+  .fcc-grid-2 { grid-template-columns: 2fr 1fr; }
+  .fcc-grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .fcc-grid-half { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 1024px) {
+    .fcc-grid-2, .fcc-grid-3, .fcc-grid-half { grid-template-columns: 1fr; }
+  }
+
+  /* ── Chart canvas containers ─────────────────────────────────────────── */
+  .fcc-chart-wrap { position: relative; height: 320px; }
+  .fcc-chart-wrap.tall { height: 380px; }
+  .fcc-chart-wrap.short { height: 260px; }
+
+  /* ── Mini list (recent activity, top customers) ──────────────────────── */
+  .fcc-list { list-style: none; padding: 0; margin: 0; }
+  .fcc-list li {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid var(--fcc-line-soft);
+    font-size: 13px;
+  }
+  .fcc-list li:last-child { border-bottom: 0; }
+  .fcc-list .label { color: var(--fcc-ink-soft); flex: 1; min-width: 0;
+                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 12px; }
+  .fcc-list .value { font-weight: 600; color: var(--fcc-ink); font-feature-settings: 'tnum'; }
+  .fcc-list .meta { font-size: 11px; color: var(--fcc-grey); }
+
+  /* ── Audit stream item ───────────────────────────────────────────────── */
+  .fcc-audit-item {
+    padding: 12px 0; border-bottom: 1px solid var(--fcc-line-soft);
+    display: grid; grid-template-columns: 70px 1fr auto; gap: 12px; align-items: center;
+  }
+  .fcc-audit-item:last-child { border-bottom: 0; }
+  .fcc-audit-time { font-size: 11px; color: var(--fcc-grey); font-feature-settings: 'tnum'; }
+  .fcc-audit-msg { font-size: 13px; color: var(--fcc-ink-soft); }
+  .fcc-audit-msg strong { color: var(--fcc-ink); font-weight: 600; }
+  .fcc-audit-amt { font-size: 12px; color: var(--fcc-ink); font-feature-settings: 'tnum'; font-weight: 600; }
+  .fcc-action-tag {
+    display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 2px;
+    letter-spacing: .05em; text-transform: uppercase; font-weight: 600;
+    background: var(--fcc-line-soft); color: var(--fcc-ink-soft); margin-right: 6px;
+  }
+  .fcc-action-tag.create { background: rgba(5,150,105,.1); color: #047857; }
+  .fcc-action-tag.update { background: rgba(37,99,235,.1); color: #1e40af; }
+  .fcc-action-tag.delete { background: rgba(220,38,38,.1); color: #991b1b; }
+  .fcc-action-tag.approve { background: rgba(176,141,87,.15); color: var(--fcc-gold); }
+  .fcc-action-tag.pay { background: rgba(5,150,105,.15); color: #047857; }
+
+  /* ── Alert banner (high-severity anomalies) ──────────────────────────── */
+  .fcc-alert-banner {
+    background: linear-gradient(90deg, rgba(220,38,38,.05), transparent);
+    border-left: 3px solid var(--fcc-red); padding: 14px 18px;
+    border-radius: 0 4px 4px 0; margin-bottom: 24px;
+    display: flex; align-items: center; gap: 14px; justify-content: space-between;
+  }
+  .fcc-alert-banner .alert-text { color: var(--fcc-ink); font-size: 14px; }
+  .fcc-alert-banner .alert-text strong { color: var(--fcc-red); }
+  .fcc-alert-banner a {
+    color: var(--fcc-red); text-decoration: none; font-weight: 600;
+    border-bottom: 1px solid var(--fcc-red); padding-bottom: 1px; font-size: 13px;
+  }
+
+  /* ── Reports nav ─────────────────────────────────────────────────────── */
+  .fcc-reports-nav {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px;
+    background: var(--fcc-line); border-radius: 4px; overflow: hidden;
+    border: 1px solid var(--fcc-line); margin-bottom: 32px;
+  }
+  .fcc-reports-nav a {
+    background: var(--fcc-card); padding: 18px 20px; text-decoration: none;
+    color: var(--fcc-ink); transition: background .15s;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .fcc-reports-nav a:hover { background: var(--fcc-gold-soft); }
+  .fcc-reports-nav .icon {
+    font-size: 18px; color: var(--fcc-gold); margin-bottom: 6px;
+  }
+  .fcc-reports-nav .name {
+    font-family: 'Georgia', serif; font-size: 14px; font-weight: 500;
+    color: var(--fcc-ink);
+  }
+  .fcc-reports-nav .desc { font-size: 11px; color: var(--fcc-grey); }
+  @media (max-width: 1024px) { .fcc-reports-nav { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 600px) { .fcc-reports-nav { grid-template-columns: 1fr; } }
+
+  /* ── Ageing mini bars ────────────────────────────────────────────────── */
+  .fcc-ageing-row {
+    display: grid; grid-template-columns: 90px 1fr 110px; align-items: center;
+    gap: 12px; padding: 8px 0; font-size: 12px;
+  }
+  .fcc-ageing-bar { height: 6px; background: var(--fcc-line-soft); border-radius: 2px; overflow: hidden; }
+  .fcc-ageing-bar > div { height: 100%; transition: width .4s; }
+  .fcc-ageing-row .label { color: var(--fcc-ink-soft); font-weight: 500; }
+  .fcc-ageing-row .amt { text-align: right; font-feature-settings: 'tnum'; font-weight: 600; color: var(--fcc-ink); }
+
+  /* ── Loading skeleton ────────────────────────────────────────────────── */
+  .fcc-loading { opacity: .5; pointer-events: none; }
+
+  /* spacer */
+  .fcc-section-spacer { height: 24px; }
+
+  /* gold rule */
+  .fcc-rule-gold { height: 2px; background: var(--fcc-gold); width: 40px; margin: 0 0 14px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="fcc-shell">
+
+  {# ── Masthead ─────────────────────────────────────────────────────── #}
+  <div class="fcc-masthead">
+    <div>
+      <div class="fcc-eyebrow">EasyOffice · Finance</div>
+      <h1 class="fcc-title">Financial Control Center</h1>
+      <div class="fcc-subtitle">
+        <span>{{ period.label|default:"Year-to-date" }}</span>
+        <span class="dot"></span>
+        <span>{{ period.start|date:"d M Y" }} → {{ period.end|date:"d M Y" }}</span>
+        <span class="dot"></span>
+        <span>{{ basis|title }} basis</span>
+        <span class="dot"></span>
+        <span>{{ period.days }} days</span>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <a href="{% url 'finance_audit_log' %}" class="eo-btn eo-btn-secondary">
+        <i class="bi bi-shield-check"></i> Audit Log
+      </a>
+      <a href="{% url 'finance_anomaly_list' %}" class="eo-btn eo-btn-secondary">
+        <i class="bi bi-exclamation-triangle"></i>
+        Anomalies
+        {% if open_anomalies %}<span class="badge bg-danger ms-1">{{ open_anomalies }}</span>{% endif %}
+      </a>
+      <a href="{% url 'finance_dashboard' %}" class="eo-btn eo-btn-secondary">
+        <i class="bi bi-grid-3x3"></i> Operations View
+      </a>
+    </div>
+  </div>
+
+  {# ── Alert banner for high-severity open anomalies ─────────────────── #}
+  {% if high_anomalies %}
+  <div class="fcc-alert-banner">
+    <div class="alert-text">
+      <i class="bi bi-exclamation-octagon" style="color:var(--fcc-red)"></i>
+      <strong>{{ high_anomalies }} high-severity anomal{{ high_anomalies|pluralize:"y,ies" }}</strong>
+      require{{ high_anomalies|pluralize:"s," }} review.
+    </div>
+    <a href="{% url 'finance_anomaly_list' %}?severity=high">Review now →</a>
+  </div>
+  {% endif %}
+
+  {# ── Filter bar ────────────────────────────────────────────────────── #}
+  <form method="get" class="fcc-filterbar" id="fcc-filters">
+    <label>Period</label>
+    <div class="fcc-pill-group" role="group">
+      {% for key, label in period_presets %}
+      <button type="button" class="fcc-period-btn" data-preset="{{ key }}">{{ label }}</button>
+      {% endfor %}
+    </div>
+
+    <label style="margin-left:12px">From</label>
+    <input type="date" name="from" value="{{ period.start|date:'Y-m-d' }}">
+    <label>To</label>
+    <input type="date" name="to" value="{{ period.end|date:'Y-m-d' }}">
+
+    <label style="margin-left:12px">Basis</label>
+    <div class="fcc-pill-group">
+      <button type="button" class="fcc-basis-btn {% if basis == 'cash' %}active{% endif %}" data-basis="cash">Cash</button>
+      <button type="button" class="fcc-basis-btn {% if basis == 'accrual' %}active{% endif %}" data-basis="accrual">Accrual</button>
+    </div>
+    <input type="hidden" name="basis" value="{{ basis }}" id="fcc-basis-input">
+
+    <button type="submit" class="eo-btn eo-btn-primary" style="margin-left:auto">
+      <i class="bi bi-arrow-clockwise"></i> Apply
+    </button>
+  </form>
+
+  {# ── KPI strip ─────────────────────────────────────────────────────── #}
+  <div class="fcc-kpi-strip">
+    <div class="fcc-kpi">
+      <div class="fcc-kpi-label">Revenue</div>
+      <div class="fcc-kpi-value"><span class="currency">GMD</span>{{ kpi.revenue|floatformat:0|intcomma }}</div>
+      <div class="fcc-kpi-meta">
+        {% if kpi.revenue_change is not None %}
+          {% if kpi.revenue_change > 0 %}
+            <span class="fcc-kpi-change up">▲ {{ kpi.revenue_change|floatformat:1 }}%</span>
+          {% elif kpi.revenue_change < 0 %}
+            <span class="fcc-kpi-change down">▼ {{ kpi.revenue_change|floatformat:1 }}%</span>
+          {% else %}
+            <span class="fcc-kpi-change neutral">— flat</span>
+          {% endif %}
+          vs prior period
+        {% else %}
+          <span style="color:var(--fcc-grey-light)">No prior data</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="fcc-kpi">
+      <div class="fcc-kpi-label">Expenses</div>
+      <div class="fcc-kpi-value"><span class="currency">GMD</span>{{ kpi.expenses|floatformat:0|intcomma }}</div>
+      <div class="fcc-kpi-meta">
+        {% if kpi.expense_change is not None %}
+          {% if kpi.expense_change > 0 %}
+            <span class="fcc-kpi-change down">▲ {{ kpi.expense_change|floatformat:1 }}%</span>
+          {% elif kpi.expense_change < 0 %}
+            <span class="fcc-kpi-change up">▼ {{ kpi.expense_change|floatformat:1 }}%</span>
+          {% else %}
+            <span class="fcc-kpi-change neutral">— flat</span>
+          {% endif %}
+          vs prior period
+        {% else %}
+          <span style="color:var(--fcc-grey-light)">No prior data</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="fcc-kpi {% if kpi.net_income < 0 %}has-alert{% endif %}">
+      <div class="fcc-kpi-label">Net Income</div>
+      <div class="fcc-kpi-value">
+        <span class="currency">GMD</span>{{ kpi.net_income|floatformat:0|intcomma }}
+      </div>
+      <div class="fcc-kpi-meta">
+        Margin
+        <span class="fcc-kpi-change {% if kpi.margin_pct >= 0 %}up{% else %}down{% endif %}">
+          {{ kpi.margin_pct|floatformat:1 }}%
+        </span>
+      </div>
+    </div>
+
+    <div class="fcc-kpi">
+      <div class="fcc-kpi-label">Cash on Hand</div>
+      <div class="fcc-kpi-value"><span class="currency">GMD</span>{{ kpi.cash_on_hand|floatformat:0|intcomma }}</div>
+      <div class="fcc-kpi-meta">
+        {% if kpi.runway_days %}
+          Runway:
+          <span class="fcc-kpi-change {% if kpi.runway_days < 60 %}down{% elif kpi.runway_days < 180 %}neutral{% else %}up{% endif %}">
+            {{ kpi.runway_days|floatformat:0 }} days
+          </span>
+        {% else %}
+          <span style="color:var(--fcc-grey-light)">No outflow this period</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ── Reports nav ───────────────────────────────────────────────────── #}
+  <div class="fcc-reports-nav">
+    <a href="{% url 'report_income_statement' %}?{{ request.GET.urlencode }}">
+      <span class="icon"><i class="bi bi-bar-chart-line"></i></span>
+      <span class="name">Income Statement</span>
+      <span class="desc">P&amp;L · Revenue, expenses, net</span>
+    </a>
+    <a href="{% url 'report_cash_flow' %}?{{ request.GET.urlencode }}">
+      <span class="icon"><i class="bi bi-arrow-down-up"></i></span>
+      <span class="name">Cash Flow</span>
+      <span class="desc">Inflows, outflows, position</span>
+    </a>
+    <a href="{% url 'report_budget_variance' %}">
+      <span class="icon"><i class="bi bi-pie-chart"></i></span>
+      <span class="name">Budget vs Actual</span>
+      <span class="desc">Variance by department</span>
+    </a>
+    <a href="{% url 'report_ageing' %}">
+      <span class="icon"><i class="bi bi-hourglass-split"></i></span>
+      <span class="name">Ageing</span>
+      <span class="desc">Receivables &amp; payables</span>
+    </a>
+    <a href="{% url 'finance_audit_log' %}">
+      <span class="icon"><i class="bi bi-journal-text"></i></span>
+      <span class="name">Audit Trail</span>
+      <span class="desc">Who did what, when</span>
+    </a>
+  </div>
+
+  {# ── Charts row 1 ──────────────────────────────────────────────────── #}
+  <div class="fcc-grid fcc-grid-2" style="margin-bottom:20px">
+    <div class="fcc-card">
+      <div class="fcc-card-header">
+        <div>
+          <div class="fcc-card-eyebrow">Performance</div>
+          <h3 class="fcc-card-title">Revenue vs Expenses</h3>
+        </div>
+        <div class="fcc-card-action">
+          <a href="{% url 'report_income_statement' %}?{{ request.GET.urlencode }}">View statement →</a>
+        </div>
+      </div>
+      <div class="fcc-chart-wrap"><canvas id="chart-revexp"></canvas></div>
+    </div>
+
+    <div class="fcc-card">
+      <div class="fcc-card-header">
+        <div>
+          <div class="fcc-card-eyebrow">Composition</div>
+          <h3 class="fcc-card-title">Expenses by Type</h3>
+        </div>
+      </div>
+      <div class="fcc-chart-wrap"><canvas id="chart-exp-type"></canvas></div>
+    </div>
+  </div>
+
+  {# ── Charts row 2: cash flow + customers ───────────────────────────── #}
+  <div class="fcc-grid fcc-grid-2" style="margin-bottom:20px">
+    <div class="fcc-card">
+      <div class="fcc-card-header">
+        <div>
+          <div class="fcc-card-eyebrow">Liquidity</div>
+          <h3 class="fcc-card-title">Daily Cash Movement</h3>
+        </div>
+        <div class="fcc-card-action">
+          <a href="{% url 'report_cash_flow' %}?{{ request.GET.urlencode }}">Cash flow statement →</a>
+        </div>
+      </div>
+      <div class="fcc-chart-wrap"><canvas id="chart-cash"></canvas></div>
+      <div id="chart-cash-empty" style="display:none;text-align:center;color:var(--fcc-grey);padding:40px 0;font-size:13px">
+        Daily view available for periods up to 120 days. Switch to a shorter period to see daily cash movement.
+      </div>
+    </div>
+
+    <div class="fcc-card">
+      <div class="fcc-card-header">
+        <div>
+          <div class="fcc-card-eyebrow">Top Sources</div>
+          <h3 class="fcc-card-title">Revenue by Customer</h3>
+        </div>
+      </div>
+      <div class="fcc-chart-wrap"><canvas id="chart-customers"></canvas></div>
+    </div>
+  </div>
+
+  {# ── Row 3: ageing + audit + exposure ─────────────────────────────── #}
+  <div class="fcc-grid fcc-grid-3" style="margin-bottom:20px">
+    {# Receivables ageing #}
+    <div class="fcc-card">
+      <div class="fcc-card-header">
+        <div>
+          <div class="fcc-card-eyebrow">Receivables</div>
+          <h3 class="fcc-card-title">Money Owed to Us</h3>
+        </div>
+        <div class="fcc-card-action"><a href="{% url 'report_ageing' %}">All →</a></div>
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="font-family:Georgia,serif;font-size:24px;color:var(--fcc-ink);font-weight:500">
+          GMD {{ ar.total|floatformat:0|intcomma }}
+        </div>
+        <div style="font-size:11px;color:var(--fcc-grey);text-transform:uppercase;letter-spacing:.1em">
+          Outstanding · {{ ar.as_of|date:"d M Y" }}
+        </div>
+      </div>
+      {% for b in ar.buckets %}
+      <div class="fcc-ageing-row">
+        <span class="label">{{ b.label }}</span>
+        <div class="fcc-ageing-bar">
+          <div style="width:{% if ar.total %}{% widthratio b.amount ar.total 100 %}{% else %}0{% endif %}%;
+                      background:{% if b.key == 'current' %}var(--fcc-green){% elif b.key == '1_30' %}#fbbf24{% elif b.key == '31_60' %}var(--fcc-amber){% else %}var(--fcc-red){% endif %}"></div>
+        </div>
+        <span class="amt">GMD {{ b.amount|floatformat:0|intcomma }}</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    {# Payables ageing #}
+    <div class="fcc-card">
+      <div class="fcc-card-header">
+        <div>
+          <div class="fcc-card-eyebrow">Payables</div>
+          <h3 class="fcc-card-title">Money We Owe</h3>
+        </div>
+        <div class="fcc-card-action"><a href="{% url 'report_ageing' %}">All →</a></div>
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="font-family:Georgia,serif;font-size:24px;color:var(--fcc-ink);font-weight:500">
+          GMD {{ ap.total|floatformat:0|intcomma }}
+        </div>
+        <div style="font-size:11px;color:var(--fcc-grey);text-transform:uppercase;letter-spacing:.1em">
+          Pending · {{ ap.as_of|date:"d M Y" }}
+        </div>
+      </div>
+      {% for b in ap.buckets %}
+      <div class="fcc-ageing-row">
+        <span class="label">{{ b.label }}</span>
+        <div class="fcc-ageing-bar">
+          <div style="width:{% if ap.total %}{% widthratio b.amount ap.total 100 %}{% else %}0{% endif %}%;
+                      background:{% if b.key == 'current' %}var(--fcc-blue){% elif b.key == '1_30' %}#fbbf24{% elif b.key == '31_60' %}var(--fcc-amber){% else %}var(--fcc-red){% endif %}"></div>
+        </div>
+        <span class="amt">GMD {{ b.amount|floatformat:0|intcomma }}</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    {# Exposure #}
+    <div class="fcc-card">
+      <div class="fcc-card-header">
+        <div>
+          <div class="fcc-card-eyebrow">Forward View</div>
+          <h3 class="fcc-card-title">Commitments &amp; Exposure</h3>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div>
+          <div style="font-size:11px;color:var(--fcc-grey);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">
+            Active Contracts
+          </div>
+          <div style="font-family:Georgia,serif;font-size:20px;color:var(--fcc-ink)">
+            GMD {{ contract_exp.monthly_committed|floatformat:0|intcomma }}<span style="font-size:11px;color:var(--fcc-grey);font-family:inherit"> /month</span>
+          </div>
+          <div style="font-size:12px;color:var(--fcc-grey)">
+            {{ contract_exp.active_count }} active
+            {% if contract_exp.expiring_count %}· <span style="color:var(--fcc-amber)">{{ contract_exp.expiring_count }} expiring</span>{% endif %}
+          </div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--fcc-grey);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">
+            Annualized
+          </div>
+          <div style="font-family:Georgia,serif;font-size:20px;color:var(--fcc-ink)">
+            GMD {{ contract_exp.annual_committed|floatformat:0|intcomma }}
+          </div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--fcc-grey);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">
+            Outstanding Loans
+          </div>
+          <div style="font-family:Georgia,serif;font-size:20px;color:var(--fcc-ink)">
+            GMD {{ loan_exp.outstanding|floatformat:0|intcomma }}
+          </div>
+          <div style="font-size:12px;color:var(--fcc-grey)">{{ loan_exp.active_count }} active loans</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Row 4: budgets + audit stream ─────────────────────────────────── #}
+  <div class="fcc-grid fcc-grid-2">
+    <div class="fcc-card">
+      <div class="fcc-card-header">
+        <div>
+          <div class="fcc-card-eyebrow">FY{{ budget_snapshot.fiscal_year }}</div>
+          <h3 class="fcc-card-title">Budget Utilization</h3>
+        </div>
+        <div class="fcc-card-action"><a href="{% url 'report_budget_variance' %}">Full report →</a></div>
+      </div>
+      <div style="margin-bottom:18px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+          <span style="font-size:11px;color:var(--fcc-grey);text-transform:uppercase;letter-spacing:.1em">
+            Org-wide
+          </span>
+          <span style="font-size:13px;color:var(--fcc-ink);font-weight:600">
+            GMD {{ budget_snapshot.grand_spent|floatformat:0|intcomma }}
+            <span style="color:var(--fcc-grey);font-weight:400">/ {{ budget_snapshot.grand_total|floatformat:0|intcomma }}</span>
+          </span>
+        </div>
+        <div style="height:8px;background:var(--fcc-line-soft);border-radius:2px;overflow:hidden">
+          <div style="height:100%;width:{{ budget_snapshot.grand_utilization|floatformat:0 }}%;
+               background:{% if budget_snapshot.grand_utilization > 90 %}var(--fcc-red){% elif budget_snapshot.grand_utilization > 70 %}var(--fcc-amber){% else %}var(--fcc-green){% endif %}"></div>
+        </div>
+        <div style="font-size:11px;color:var(--fcc-grey);margin-top:4px">
+          {{ budget_snapshot.grand_utilization|floatformat:1 }}% utilized
+        </div>
+      </div>
+
+      <ul class="fcc-list">
+        {% for r in budget_snapshot.rows|slice:":6" %}
+        <li>
+          <span class="label">
+            {{ r.name }}
+            <span class="meta">· {{ r.department }}</span>
+          </span>
+          <span class="value" style="{% if r.over_budget %}color:var(--fcc-red){% endif %}">
+            {{ r.utilization|floatformat:0 }}%
+          </span>
+        </li>
+        {% empty %}
+        <li><span class="label" style="color:var(--fcc-grey)">No budgets defined for this fiscal year.</span></li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div class="fcc-card">
+      <div class="fcc-card-header">
+        <div>
+          <div class="fcc-card-eyebrow">Audit</div>
+          <h3 class="fcc-card-title">Recent Activity</h3>
+        </div>
+        <div class="fcc-card-action"><a href="{% url 'finance_audit_log' %}">Full log →</a></div>
+      </div>
+
+      <div>
+        {% for entry in recent_audit %}
+        <div class="fcc-audit-item">
+          <div class="fcc-audit-time">{{ entry.timestamp|date:"d M H:i" }}</div>
+          <div class="fcc-audit-msg">
+            <span class="fcc-action-tag {{ entry.action }}">{{ entry.get_action_display }}</span>
+            <strong>{{ entry.actor_name|default:"System" }}</strong>
+            on {{ entry.model_name }}
+            <div style="color:var(--fcc-grey);font-size:11px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              {{ entry.object_repr|truncatechars:60 }}
+            </div>
+          </div>
+          <div class="fcc-audit-amt">
+            {% if entry.amount %}{{ entry.currency|default:"GMD" }} {{ entry.amount|floatformat:0|intcomma }}{% endif %}
+          </div>
+        </div>
+        {% empty %}
+        <div style="text-align:center;padding:40px 0;color:var(--fcc-grey);font-size:13px">
+          No audit activity yet.
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+  // Editorial palette
+  const PAL = {
+    ink:    '#0f172a',
+    gold:   '#b08d57',
+    green:  '#059669',
+    red:    '#dc2626',
+    blue:   '#2563eb',
+    amber:  '#d97706',
+    grey:   '#94a3b8',
+    soft:   '#e2e8f0',
+  };
+  const SERIF_FONT = 'Georgia, serif';
+  Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  Chart.defaults.color = '#475569';
+
+  // ── Filter bar wiring ─────────────────────────────────────────────────
+  const form = document.getElementById('fcc-filters');
+  const basisInput = document.getElementById('fcc-basis-input');
+  document.querySelectorAll('.fcc-period-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const today = new Date();
+      const preset = btn.dataset.preset;
+      let from, to = today;
+      if (preset === 'mtd') from = new Date(today.getFullYear(), today.getMonth(), 1);
+      else if (preset === 'qtd') {
+        const q = Math.floor(today.getMonth() / 3);
+        from = new Date(today.getFullYear(), q * 3, 1);
+      }
+      else if (preset === 'last_30') from = new Date(today.getTime() - 29 * 86400000);
+      else if (preset === 'last_90') from = new Date(today.getTime() - 89 * 86400000);
+      else if (preset === 'last_year') {
+        from = new Date(today.getFullYear() - 1, 0, 1);
+        to = new Date(today.getFullYear() - 1, 11, 31);
+      }
+      else from = new Date(today.getFullYear(), 0, 1); // ytd
+      form.querySelector('[name=from]').value = from.toISOString().split('T')[0];
+      form.querySelector('[name=to]').value = to.toISOString().split('T')[0];
+      form.submit();
+    });
+  });
+  document.querySelectorAll('.fcc-basis-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      basisInput.value = btn.dataset.basis;
+      document.querySelectorAll('.fcc-basis-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      form.submit();
+    });
+  });
+
+  // ── Money formatter ───────────────────────────────────────────────────
+  const fmt = (v) => {
+    if (v === null || v === undefined) return '—';
+    return 'GMD ' + Math.round(v).toLocaleString();
+  };
+
+  // ── Fetch data and render ─────────────────────────────────────────────
+  const dataUrl = "{% url 'financial_dashboard_data' %}?" + (window.location.search.substring(1) || '');
+
+  fetch(dataUrl, {credentials: 'same-origin'})
+    .then(r => r.json())
+    .then(d => {
+      renderRevExp(d.revenue_vs_expense);
+      renderExpType(d.expense_by_type);
+      renderCash(d.cash_flow_daily);
+      renderCustomers(d.revenue_by_customer);
+    })
+    .catch(err => console.error('Dashboard data fetch failed:', err));
+
+  // ── Chart: revenue vs expenses (combo bar+line) ───────────────────────
+  function renderRevExp(s) {
+    const ctx = document.getElementById('chart-revexp');
+    if (!ctx) return;
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: s.labels,
+        datasets: [
+          {label: 'Revenue', data: s.revenue, backgroundColor: PAL.green + 'cc', borderRadius: 2, order: 2},
+          {label: 'Expenses', data: s.expenses, backgroundColor: PAL.red + 'cc', borderRadius: 2, order: 2},
+          {label: 'Net', data: s.net, type: 'line', borderColor: PAL.gold, borderWidth: 2,
+           pointBackgroundColor: PAL.gold, pointRadius: 3, tension: .3, order: 1, fill: false},
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: {position: 'bottom', labels: {usePointStyle: true, boxWidth: 8, padding: 14, font: {size: 11}}},
+          tooltip: {callbacks: {label: c => c.dataset.label + ': ' + fmt(c.parsed.y)}},
+        },
+        scales: {
+          y: {ticks: {callback: v => v >= 1000 ? (v/1000).toFixed(0) + 'k' : v}, grid: {color: PAL.soft}},
+          x: {grid: {display: false}},
+        },
+      }
+    });
+  }
+
+  // ── Chart: expense by type (donut) ────────────────────────────────────
+  function renderExpType(rows) {
+    const ctx = document.getElementById('chart-exp-type');
+    if (!ctx || !rows.length) return;
+    const colors = [PAL.gold, PAL.ink, PAL.green, PAL.amber, PAL.blue, PAL.red,
+                    '#64748b', '#a78bfa', '#06b6d4', '#f97316'];
+    new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: rows.map(r => r.label),
+        datasets: [{
+          data: rows.map(r => r.amount),
+          backgroundColor: rows.map((_, i) => colors[i % colors.length]),
+          borderWidth: 1, borderColor: '#fff',
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '65%',
+        plugins: {
+          legend: {position: 'right', labels: {usePointStyle: true, boxWidth: 8, padding: 10, font: {size: 11}}},
+          tooltip: {callbacks: {label: c => c.label + ': ' + fmt(c.parsed)}},
+        }
+      }
+    });
+  }
+
+  // ── Chart: daily cash movement ────────────────────────────────────────
+  function renderCash(s) {
+    const ctx = document.getElementById('chart-cash');
+    const empty = document.getElementById('chart-cash-empty');
+    if (!s) {
+      if (ctx) ctx.style.display = 'none';
+      if (empty) empty.style.display = 'block';
+      return;
+    }
+    if (!ctx) return;
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: s.labels,
+        datasets: [
+          {label: 'Cash In', data: s.cash_in, borderColor: PAL.green, backgroundColor: PAL.green+'22',
+           borderWidth: 1.5, tension: .25, pointRadius: 0, fill: false},
+          {label: 'Cash Out', data: s.cash_out, borderColor: PAL.red, backgroundColor: PAL.red+'22',
+           borderWidth: 1.5, tension: .25, pointRadius: 0, fill: false},
+          {label: 'Cumulative', data: s.cumulative, borderColor: PAL.gold, borderWidth: 2,
+           tension: .2, pointRadius: 0, fill: {target: 'origin', above: PAL.gold + '15'}, yAxisID: 'y1'},
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, interaction: {mode: 'index', intersect: false},
+        plugins: {
+          legend: {position: 'bottom', labels: {usePointStyle: true, boxWidth: 8, padding: 14, font: {size: 11}}},
+          tooltip: {callbacks: {label: c => c.dataset.label + ': ' + fmt(c.parsed.y)}},
+        },
+        scales: {
+          y: {position: 'left', ticks: {callback: v => v >= 1000 ? (v/1000).toFixed(0) + 'k' : v}, grid: {color: PAL.soft}},
+          y1: {position: 'right', grid: {drawOnChartArea: false}, ticks: {callback: v => v >= 1000 ? (v/1000).toFixed(0) + 'k' : v}},
+          x: {ticks: {maxTicksLimit: 10, autoSkip: true}, grid: {display: false}},
+        }
+      }
+    });
+  }
+
+  // ── Chart: revenue by customer (horizontal bars) ─────────────────────
+  function renderCustomers(rows) {
+    const ctx = document.getElementById('chart-customers');
+    if (!ctx || !rows.length) return;
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: rows.map(r => r.customer),
+        datasets: [{
+          data: rows.map(r => r.amount),
+          backgroundColor: PAL.gold + 'cc', borderRadius: 2, barThickness: 14,
+        }]
+      },
+      options: {
+        indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: {display: false},
+          tooltip: {callbacks: {label: c => fmt(c.parsed.x)}},
+        },
+        scales: {
+          x: {ticks: {callback: v => v >= 1000 ? (v/1000).toFixed(0) + 'k' : v}, grid: {color: PAL.soft}},
+          y: {grid: {display: false}, ticks: {font: {size: 11}}},
+        }
+      }
+    });
+  }
+})();
+</script>
+{% endblock %}

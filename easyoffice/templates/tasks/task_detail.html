@@ -10,7 +10,6 @@
 
 {# ─────────────────────────────────────────────────────────────────────────── #}
 {#  Page-scoped styles                                                          #}
-{#  Lives in extra_css so it's emitted in <head>, before any content renders.   #}
 {# ─────────────────────────────────────────────────────────────────────────── #}
 {% block extra_css %}
 <style>
@@ -41,6 +40,14 @@
     background:linear-gradient(135deg, rgba(16,185,129,.10), rgba(5,150,105,.04));
     padding:12px 14px; font-size:.84rem; color:#047857;
     margin-top:14px;
+  }
+
+  /* ── Pinned banner ──────────────────────────────────────────────────── */
+  .task-pinned-banner{
+    background:#fef3c7; border:1px solid #fcd34d; color:#92400e;
+    border-radius:12px; padding:10px 14px; font-size:.84rem;
+    margin-bottom:14px;
+    display:flex; align-items:center; gap:8px;
   }
 
   /* ── Quick-update card ───────────────────────────────────────────────── */
@@ -92,7 +99,28 @@
     font-size:.72rem; font-weight:800; color:var(--eo-text);
   }
 
-  /* ── Completion-note modal (custom, no Bootstrap dependency) ─────────── */
+  /* ── Attachment list ─────────────────────────────────────────────────── */
+  .att-row{
+    display:flex; align-items:center; gap:12px;
+    padding:8px 0; border-bottom:1px solid var(--eo-border);
+  }
+  .att-row:last-child{ border-bottom:0; }
+  .att-thumb{
+    width:48px; height:48px; flex-shrink:0;
+    border-radius:6px; border:1px solid var(--eo-border);
+    background:var(--eo-surface);
+    display:flex; align-items:center; justify-content:center;
+    overflow:hidden;
+  }
+  .att-thumb img{ width:100%; height:100%; object-fit:cover; }
+  .att-info{ flex:1; min-width:0; }
+  .att-name{
+    font-size:.87rem; color:var(--eo-accent); text-decoration:none;
+    display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .att-meta{ font-size:.72rem; color:var(--eo-text-muted); }
+
+  /* ── Completion-note modal (no Bootstrap dependency) ─────────────────── */
   .tcn-backdrop{
     position:fixed; inset:0; z-index:1090;
     background:rgba(15,23,42,.55);
@@ -100,7 +128,6 @@
     padding:16px;
   }
   .tcn-backdrop.is-open{ display:flex; }
-
   .tcn-modal{
     background:#fff; border-radius:16px;
     width:100%; max-width:520px;
@@ -113,7 +140,6 @@
     to  { transform:translateY(0);   opacity:1; }
   }
   [data-bs-theme="dark"] .tcn-modal{ background:#1f2937; color:#e5e7eb; }
-
   .tcn-head{
     padding:18px 22px 14px;
     background:linear-gradient(135deg,#10b981 0%,#059669 100%);
@@ -128,14 +154,12 @@
   }
   .tcn-head h3{ margin:0; font-size:1rem; font-weight:600; }
   .tcn-head p { margin:2px 0 0; font-size:.78rem; opacity:.92; }
-
   .tcn-body{ padding:18px 22px 6px; }
   .tcn-body label{
     display:block; font-size:.78rem; font-weight:600;
     color:#374151; margin-bottom:6px;
   }
   [data-bs-theme="dark"] .tcn-body label{ color:#d1d5db; }
-
   .tcn-body textarea{
     width:100%;
     min-height:130px; max-height:260px;
@@ -166,7 +190,6 @@
     display:none;
   }
   .tcn-error.is-shown{ display:block; }
-
   .tcn-summary{
     background:#f0fdf4; border:1px solid #bbf7d0;
     color:#166534; padding:8px 12px;
@@ -179,7 +202,6 @@
     border-color:rgba(16,185,129,.3);
     color:#bbf7d0;
   }
-
   .tcn-foot{
     padding:14px 22px 18px;
     display:flex; gap:8px; justify-content:flex-end;
@@ -219,8 +241,24 @@
 {% block content %}
 <div class="row g-4">
 
-  {# ─── Main column ──────────────────────────────────────────────────── #}
+  {# ─────────────────────────────────────────────────────────────────── #}
+  {# MAIN COLUMN                                                          #}
+  {# ─────────────────────────────────────────────────────────────────── #}
   <div class="col-lg-8">
+
+    {# ── Pinned banner (above everything if pinned) ── #}
+    {% if task.is_pinned %}
+    <div class="task-pinned-banner">
+      <i class="bi bi-pin-angle-fill"></i>
+      <div>
+        <strong>This task is pinned.</strong>
+        Pinned by {{ task.pinned_by.full_name|default:"—" }}
+        on {{ task.pinned_at|date:"d M Y, H:i" }}.
+        It appears at the top of focus lists for CEO, Admin, and supervisors.
+      </div>
+    </div>
+    {% endif %}
+
     <div class="eo-card">
 
       {# ── Hero ── #}
@@ -257,6 +295,12 @@
                 {% if task.project_milestone %}
                 <span class="eo-status" style="background:#ede9fe;color:#5b21b6">
                   <i class="bi bi-flag"></i> Linked Milestone
+                </span>
+                {% endif %}
+
+                {% if task.is_pinned %}
+                <span class="eo-status" style="background:#fef3c7;color:#92400e">
+                  <i class="bi bi-pin-angle-fill"></i> Pinned
                 </span>
                 {% endif %}
               </div>
@@ -299,6 +343,7 @@
           {% endif %}
         </div>
       </div>
+      {# /task-hero #}
 
       {# ── Description ── #}
       {% if task.description %}
@@ -383,6 +428,7 @@
         </div>
       </div>
       {% endif %}
+      {# /quick-update #}
 
       {# ── Subtasks ── #}
       {% if subtasks %}
@@ -455,34 +501,174 @@
         </form>
         {% endif %}
       </div>
+      {# /comments #}
 
-    </div>{# /eo-card #}
+    </div>
+    {# /eo-card main wrapper #}
 
-    {# ── Attachments ── #}
-    {% if attachments %}
+
+    {# ─────────────────────────────────────────────────────────────────── #}
+    {# ATTACHMENTS                                                          #}
+    {# ─────────────────────────────────────────────────────────────────── #}
     <div class="eo-card mt-4">
-      <div class="eo-card-header">
-        <h2 class="eo-card-title">Attachments ({{ attachments.count }})</h2>
+      <div class="eo-card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <h2 class="eo-card-title mb-0">
+          Attachments ({{ attachments.count|default:0 }})
+        </h2>
+
+        {% if attachments %}
+        <form method="get" class="d-flex align-items-center gap-2 mb-0">
+          <label class="small text-muted mb-0" for="att_sort">Sort:</label>
+          <select name="att_sort" id="att_sort" class="eo-form-select form-select-sm"
+                  style="min-width:160px"
+                  onchange="this.form.submit()">
+            {% for key, label in attachment_sort_choices %}
+              <option value="{{ key }}" {% if attachment_sort == key %}selected{% endif %}>
+                {{ label }}
+              </option>
+            {% endfor %}
+          </select>
+        </form>
+        {% endif %}
       </div>
-      {% for att in attachments %}
-      <div class="d-flex align-items-center gap-3 py-2 border-bottom">
-        <i class="bi bi-paperclip" style="color:var(--eo-text-muted)"></i>
-        <a href="{{ att.file.url }}" target="_blank"
-           style="flex:1;font-size:.87rem;color:var(--eo-accent)">
-          {{ att.file_name }}
-        </a>
-        <span style="font-size:.75rem;color:var(--eo-text-muted)">
-          {{ att.uploaded_by.full_name }}
-        </span>
+
+      {% if can_comment %}
+      <form method="post" enctype="multipart/form-data"
+            action="{% url 'task_attachment_upload' task.pk %}"
+            class="mb-3 p-3 border rounded"
+            style="background:var(--eo-surface)">
+        {% csrf_token %}
+        <label class="small fw-bold mb-2 d-block">
+          <i class="bi bi-cloud-arrow-up"></i> Upload files or photos
+        </label>
+        <input type="file" name="files" multiple
+               accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,video/*"
+               class="eo-form-control mb-2"
+               id="taskFilesInput"/>
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <small class="text-muted">Max 25MB per file. Images, docs, PDFs, video.</small>
+          <button type="submit" class="eo-btn eo-btn-primary btn-sm">
+            <i class="bi bi-upload"></i> Upload
+          </button>
+        </div>
+
+        {# Mobile-only "Take photo" — separate form so it submits immediately. #}
+      </form>
+
+      <form method="post" enctype="multipart/form-data"
+            action="{% url 'task_attachment_upload' task.pk %}"
+            class="mb-3 d-md-none">
+        {% csrf_token %}
+        <label class="eo-btn eo-btn-secondary btn-sm w-100" style="cursor:pointer">
+          <i class="bi bi-camera"></i> Take photo
+          <input type="file" name="files" accept="image/*" capture="environment"
+                 style="display:none"
+                 onchange="this.form.submit()"/>
+        </label>
+      </form>
+      {% endif %}
+
+      {% if attachments %}
+        <div class="d-flex flex-column">
+          {% for att in attachments %}
+          <div class="att-row">
+            <div class="att-thumb">
+              {% if att.is_image %}
+                <a href="{{ att.file.url }}" target="_blank" rel="noopener" style="display:block;width:100%;height:100%">
+                  <img src="{{ att.file.url }}" alt="{{ att.file_name }}"/>
+                </a>
+              {% else %}
+                <i class="bi bi-file-earmark" style="font-size:1.4rem;color:var(--eo-text-muted)"></i>
+              {% endif %}
+            </div>
+
+            <div class="att-info">
+              <a href="{{ att.file.url }}" target="_blank" rel="noopener" class="att-name">
+                {{ att.file_name }}
+              </a>
+              <div class="att-meta">
+                {{ att.uploaded_by.full_name }}
+                · {{ att.uploaded_at|date:"d M Y, H:i" }}
+                {% if att.human_size %} · {{ att.human_size }}{% endif %}
+              </div>
+            </div>
+
+            {% if att.uploaded_by_id == request.user.id or can_full_edit_task %}
+            <form method="post"
+                  action="{% url 'task_attachment_delete' task.pk att.pk %}"
+                  onsubmit="return confirm('Remove “{{ att.file_name|escapejs }}”?');"
+                  style="margin:0">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-link text-danger p-1"
+                      title="Delete attachment">
+                <i class="bi bi-trash"></i>
+              </button>
+            </form>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="text-muted small text-center mb-0 py-3">
+          No attachments yet. Upload files or photos to document this task.
+        </p>
+      {% endif %}
+    </div>
+    {# /attachments card #}
+
+  </div>
+  {# /col-lg-8 main column #}
+
+
+  {# ─────────────────────────────────────────────────────────────────── #}
+  {# SIDE COLUMN                                                         #}
+  {# ─────────────────────────────────────────────────────────────────── #}
+  <div class="col-lg-4 d-flex flex-column gap-4">
+
+    {# ── Action buttons (pin / delete) ── #}
+    {% if can_full_edit_task or can_delete_task %}
+    <div class="eo-card">
+      <h2 class="eo-card-title mb-3">Actions</h2>
+      <div class="d-flex flex-wrap gap-2">
+
+        {% if can_full_edit_task %}
+          {% if task.is_pinned %}
+            <form method="post" action="{% url 'task_unpin' task.pk %}" style="margin:0">
+              {% csrf_token %}
+              <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm"
+                      title="Pinned by {{ task.pinned_by.full_name|default:'—' }} on {{ task.pinned_at|date:'d M H:i' }}">
+                <i class="bi bi-pin-angle-fill text-warning"></i> Unpin
+              </button>
+            </form>
+          {% else %}
+            <form method="post" action="{% url 'task_pin' task.pk %}" style="margin:0">
+              {% csrf_token %}
+              <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm">
+                <i class="bi bi-pin-angle"></i> Pin task
+              </button>
+            </form>
+          {% endif %}
+        {% endif %}
+
+        {% if can_delete_task %}
+          <form method="post" action="{% url 'task_delete' task.pk %}" style="margin:0"
+                onsubmit="return confirm('Delete this task? This cannot be undone.');">
+            {% csrf_token %}
+            <button type="submit" class="eo-btn eo-btn-sm"
+                    style="border:1px solid #dc2626;color:#dc2626;background:transparent">
+              <i class="bi bi-trash"></i> Delete task
+            </button>
+          </form>
+        {% elif task.assigned_by_id == request.user.id %}
+          <span class="small text-muted align-self-center"
+                title="Task has activity (comments, time-logs, attachments, reassignments, or progress) and can no longer be deleted. Cancel it instead.">
+            <i class="bi bi-info-circle"></i> Cannot delete — task has activity
+          </span>
+        {% endif %}
+
       </div>
-      {% endfor %}
     </div>
     {% endif %}
-  </div>
-
-
-  {# ─── Side column ──────────────────────────────────────────────────── #}
-  <div class="col-lg-4 d-flex flex-column gap-4">
 
     {# ── Task details ── #}
     <div class="eo-card">
@@ -599,6 +785,7 @@
         {% endif %}
       </div>
     </div>
+    {# /task-details #}
 
     {# ── Collaborators ── #}
     {% if task.collaborators.exists %}
@@ -691,14 +878,15 @@
     </div>
     {% endif %}
 
-  </div>{# /side column #}
+  </div>
+  {# /col-lg-4 side column #}
+
 </div>
+{# /row #}
 
 
 {# ─────────────────────────────────────────────────────────────────────────── #}
 {#  Completion-note modal                                                       #}
-{#  Self-contained — no Bootstrap JS dependency. Triggered by the script        #}
-{#  in extra_js when the user tries to set status=done or progress=100.         #}
 {# ─────────────────────────────────────────────────────────────────────────── #}
 <div class="tcn-backdrop" id="tcnBackdrop" aria-hidden="true">
   <div class="tcn-modal" role="dialog" aria-modal="true" aria-labelledby="tcnTitle">
@@ -741,16 +929,12 @@
 
 {# ─────────────────────────────────────────────────────────────────────────── #}
 {#  Page-scoped JS                                                              #}
-{#  Lives in extra_js so it runs AFTER bootstrap.bundle.min.js / easyoffice.js  #}
-{#  have already loaded. (Even though this modal doesn't depend on Bootstrap,   #}
-{#  putting all page JS here keeps load-order consistent across the project.)   #}
 {# ─────────────────────────────────────────────────────────────────────────── #}
 {% block extra_js %}
 <script>
 (function(){
   'use strict';
 
-  // ── DOM refs ─────────────────────────────────────────────────────────
   var quickForm      = document.getElementById('quickUpdateForm');
   var statusSelect   = document.getElementById('quickStatusSelect');
   var progressInput  = document.getElementById('quickProgressInput');
@@ -764,19 +948,10 @@
   var btnCancel   = document.getElementById('tcnCancel');
   var btnConfirm  = document.getElementById('tcnConfirm');
 
-  if (!backdrop) return; // Modal not in template — safe no-op.
+  if (!backdrop) return;
 
-  // The form whose submission we're holding hostage until the user
-  // provides a completion note.
   var pendingForm = null;
 
-  // ── Helpers ──────────────────────────────────────────────────────────
-
-  /**
-   * Mirror of TaskQuickUpdateView.post's `will_complete` logic:
-   *   close the task if status=done OR progress=100,
-   *   UNLESS status is cancelled (cancelling != completing).
-   */
   function isClosingValues(statusVal, progressVal){
     if (statusVal === 'cancelled') return false;
     var prog = parseInt(progressVal, 10);
@@ -805,7 +980,6 @@
     return 'Closing this task.';
   }
 
-  // ── Modal open / close ───────────────────────────────────────────────
   function openModal(form){
     pendingForm = form;
     summaryText.textContent = describeClose(readFormState(form));
@@ -825,7 +999,6 @@
     pendingForm = null;
   }
 
-  // ── Submit with the completion note attached ────────────────────────
   function submitWithNote(){
     if (!pendingForm) return;
 
@@ -837,10 +1010,6 @@
       return;
     }
 
-    // Inject the note as a hidden field, then let the form submit
-    // normally so all server-side flow (status update, completed_at
-    // stamp, TaskComment creation, watcher notifications) runs as
-    // designed in TaskQuickUpdateView.
     var existing = pendingForm.querySelector('input[name="completion_comment"]');
     if (existing) existing.remove();
 
@@ -856,7 +1025,6 @@
     pendingForm.submit();
   }
 
-  // ── Textarea behaviour ──────────────────────────────────────────────
   textarea.addEventListener('input', function(){
     var v = textarea.value;
     counter.textContent = v.length + ' / 2000';
@@ -865,14 +1033,12 @@
   });
 
   textarea.addEventListener('keydown', function(e){
-    // Cmd/Ctrl + Enter submits the modal.
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter'){
       e.preventDefault();
       if (!btnConfirm.disabled) submitWithNote();
     }
   });
 
-  // ── Modal dismissal ─────────────────────────────────────────────────
   btnCancel.addEventListener('click', closeModal);
 
   backdrop.addEventListener('click', function(e){
@@ -887,8 +1053,6 @@
 
   btnConfirm.addEventListener('click', submitWithNote);
 
-  // ── Intercept ALL forms that can close the task ─────────────────────
-  // (the main #quickUpdateForm + every .quick-status-form pill)
   function attachInterceptor(form){
     form.addEventListener('submit', function(e){
       var state = readFormState(form);
@@ -902,7 +1066,6 @@
   if (quickForm) attachInterceptor(quickForm);
   document.querySelectorAll('.quick-status-form').forEach(attachInterceptor);
 
-  // ── Live yellow hint on the main form ───────────────────────────────
   function refreshHint(){
     if (!completionHint) return;
     var s = statusSelect  ? statusSelect.value  : '';

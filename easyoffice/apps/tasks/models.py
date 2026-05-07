@@ -63,6 +63,23 @@ class Task(models.Model):
     )
     customer_visible = models.BooleanField(default=False)
     awaiting_cs_verification = models.BooleanField(default=False)
+
+    # ── Pinning (focus for CEO / Admin / supervisors) ────────────────────
+    is_pinned = models.BooleanField(default=False, db_index=True)
+    pinned_at = models.DateTimeField(null=True, blank=True)
+    pinned_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='tasks_pinned',
+    )
+
+    # ── Reminder bookkeeping ─────────────────────────────────────────────
+    # Last time the reminder cron sent ANY reminder (pre-due or overdue)
+    last_reminder_at = models.DateTimeField(null=True, blank=True)
+    # Did we already send the "24h before due" warning? Avoid duplicates.
+    pre_due_reminder_sent = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -71,6 +88,7 @@ class Task(models.Model):
         indexes = [
             models.Index(fields=['assigned_to', 'status']),
             models.Index(fields=['due_date']),
+            models.Index(fields=['-is_pinned', '-pinned_at']),
         ]
 
     def __str__(self):
@@ -129,6 +147,54 @@ class Task(models.Model):
             'completed_at', 'progress_pct', 'updated_at',
         ])
 
+    @property
+    def has_activity(self):
+        """
+        True if there's content on the task that would be lost on delete.
+
+        We only care about user-contributed CONTENT here:
+          - any comment
+          - any attachment (file or photo)
+
+        Things that DON'T count as activity (task is still deletable):
+          - time-logs
+          - reassignments
+          - status changes / progress updates
+          - on-site arrival
+          - pin / unpin
+
+        Rationale: comments and attachments are work product authored by
+        people other than (or including) the creator. Status/time/pin
+        changes are administrative and the creator is allowed to throw
+        the task away.
+        """
+        if self.comments.exists():
+            return True
+        if self.attachments.exists():
+            return True
+        return False
+
+    def pin(self, *, by_user):
+        """Pin this task to the top of focus lists."""
+        from django.utils import timezone
+        if self.is_pinned:
+            return False
+        self.is_pinned = True
+        self.pinned_at = timezone.now()
+        self.pinned_by = by_user
+        self.save(update_fields=['is_pinned', 'pinned_at', 'pinned_by', 'updated_at'])
+        return True
+
+    def unpin(self):
+        if not self.is_pinned:
+            return False
+        self.is_pinned = False
+        self.pinned_at = None
+        self.pinned_by = None
+        self.save(update_fields=['is_pinned', 'pinned_at', 'pinned_by', 'updated_at'])
+        return True
+
+
 class TaskComment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='comments')
@@ -158,6 +224,25 @@ class TaskAttachment(models.Model):
 
     def __str__(self):
         return self.file_name
+
+    @property
+    def is_image(self):
+        """True if the attachment is an image — used by the template to
+        decide between rendering a thumbnail vs a generic file icon."""
+        if self.file_type and self.file_type.startswith('image/'):
+            return True
+        name = (self.file_name or '').lower()
+        return name.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'))
+
+    @property
+    def human_size(self):
+        """Human-readable file size: '482 B', '1.4 MB', '2.3 GB' etc."""
+        size = self.file_size or 0
+        for unit in ('B', 'KB', 'MB', 'GB'):
+            if size < 1024:
+                return f"{size:.0f} {unit}" if unit == 'B' else f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{size:.1f} TB"
 
 
 class TaskReassignment(models.Model):

@@ -171,6 +171,31 @@ class DashboardView(LoginRequiredMixin, TemplateView):
 
             ctx['team_members'] = [sp.user for sp in supervisee_profiles[:8]]
 
+            # ── Pinned Focus Area (supervisor scope) ────────────────────
+            # Show pinned tasks that either (a) belong to a direct report
+            # or (b) the supervisor pinned themselves (so a supervisor who
+            # flags a cross-team task for follow-up still sees it here).
+            pinned_qs = (
+                Task.objects
+                .filter(is_pinned=True)
+                .filter(
+                    Q(assigned_to_id__in=supervisee_user_ids)
+                    | Q(pinned_by=user)
+                )
+                .exclude(status__in=['done', 'cancelled'])
+                .select_related(
+                    'assigned_to',
+                    'assigned_to__staffprofile',
+                    'assigned_to__staffprofile__unit',
+                    'pinned_by',
+                    'project',
+                )
+                .distinct()
+                .order_by('-pinned_at')
+            )
+            ctx['pinned_count'] = pinned_qs.count()
+            ctx['pinned_tasks'] = pinned_qs[:6]
+
             ctx['opportunity_match_count'] = OpportunityMatch.objects.filter(is_read=False).count()
             ctx['recent_opportunity_matches'] = OpportunityMatch.objects.select_related(
                 'source', 'keyword'
@@ -327,6 +352,25 @@ class AdminDashboardView(LoginRequiredMixin, TemplateView):
             'assigned_by',
             'project',
         ).order_by('due_date')[:30]
+
+        # ── Pinned Focus Area (org-wide for CEO / Admin / Office Manager) ──
+        # Every still-open pinned task in the org. Sorted by most-recently
+        # pinned first so newly-flagged items surface at the top.
+        pinned_qs = (
+            Task.objects
+            .filter(is_pinned=True)
+            .exclude(status__in=['done', 'cancelled'])
+            .select_related(
+                'assigned_to',
+                'assigned_to__staffprofile',
+                'assigned_to__staffprofile__unit',
+                'pinned_by',
+                'project',
+            )
+            .order_by('-pinned_at')
+        )
+        ctx['pinned_count'] = pinned_qs.count()
+        ctx['pinned_tasks'] = pinned_qs[:8]
 
         ctx['projects_by_status'] = total_projects_qs.values('status').annotate(
             count=Count('id')

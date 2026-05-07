@@ -7,22 +7,24 @@ Automatic audit-trail capture + lightweight anomaly detection.
 How it works
 ------------
 We hook post_save / post_delete on every financial model (Payment,
-PaymentRequest, IncomingPaymentRequest, PurchaseRequest, EmployeeFinanceRequest,
-EmployeeLoan, Budget, Contract). For each event we:
+PaymentRequest, IncomingPaymentRequest, PurchaseRequest,
+EmployeeFinanceRequest, EmployeeLoan, Budget, Contract). For each event we:
 
-1. Create a FinanceAuditLog row with the actor (pulled from thread-local
-   request middleware), object snapshot, and field-level diff.
+1. Create a FinanceAuditLog row with the actor (pulled from the
+   FinanceAuditMiddleware thread-local), object snapshot, and field-level
+   diff.
 2. Run the anomaly detector against the new state. If anything fires,
    create a FinanceAnomaly row.
 
-The actor comes from a thread-local set by FinanceAuditMiddleware
-(audit_middleware.py). If it's missing (e.g. background task), we record
-"System" as the actor.
+The actor comes from `apps.finance.middleware.get_current_actor()`. If it's
+missing (e.g. background task, management command), we record "System" as
+the actor.
 
 Field diffing
 -------------
-We compare pre-save (cached on instance) vs post-save state. For brand-new
-records we just record the create. For deletes we snapshot the final state.
+We compare pre-save (cached on instance as `_audit_old`) vs post-save state.
+For brand-new records we just record the create. For deletes we snapshot
+the final state.
 """
 import logging
 from datetime import timedelta
@@ -44,34 +46,51 @@ from apps.finance.models import (
     FinanceAuditLog,
     FinanceAnomaly,
 )
-from apps.finance.audit_middleware import get_current_request
+from apps.finance.middleware import get_current_actor, get_current_request
 
 logger = logging.getLogger(__name__)
 
 
 # Models we audit and what fields to snapshot. Excluded fields are noise
-# (timestamps, auto-fields, M2M handled separately).
+# (timestamps, auto-fields, M2M handled separately). Field names match
+# exactly what's defined on each model in apps/finance/models.py.
 AUDITED_MODELS = {
-    Payment:                  ['reference', 'amount', 'currency', 'method', 'direction',
-                               'payment_type', 'recipient', 'payment_date', 'budget_id',
-                               'project_id', 'employee_id', 'notes'],
-    PaymentRequest:           ['title', 'amount', 'currency', 'status', 'recipient_type',
-                               'recipient_user_id', 'recipient_name', 'due_date',
-                               'budget_id', 'project_id', 'payment_type'],
-    IncomingPaymentRequest:   ['invoice_number', 'title', 'customer_name', 'amount',
-                               'tax_amount', 'discount_amount', 'currency', 'issue_date',
-                               'due_date', 'status', 'paid_at'],
-    PurchaseRequest:          ['title', 'estimated_cost', 'actual_cost', 'status',
-                               'priority', 'vendor', 'budget_id', 'project_id'],
-    EmployeeFinanceRequest:   ['request_type', 'title', 'amount_requested', 'amount_approved',
-                               'status', 'employee_id', 'budget_id'],
-    EmployeeLoan:             ['principal_amount', 'approved_amount', 'disbursed_amount',
-                               'amount_repaid', 'status', 'employee_id'],
-    Budget:                   ['name', 'fiscal_year', 'total_amount', 'allocated_amount',
-                               'spent_amount', 'status', 'department_id', 'unit_id'],
-    Contract:                 ['title', 'contract_type', 'standard_cost', 'currency',
-                               'billing_cycle', 'start_date', 'end_date', 'status',
-                               'staff_id', 'vendor_company'],
+    Payment: [
+        'reference', 'amount', 'currency', 'method', 'direction',
+        'payment_type', 'recipient', 'payment_date', 'budget_id',
+        'project_id', 'employee_id', 'notes',
+    ],
+    PaymentRequest: [
+        'title', 'amount', 'currency', 'status', 'recipient_type',
+        'recipient_user_id', 'recipient_name', 'due_date',
+        'budget_id', 'project_id', 'payment_type',
+    ],
+    IncomingPaymentRequest: [
+        'invoice_number', 'title', 'customer_name', 'amount',
+        'tax_amount', 'discount_amount', 'currency', 'issue_date',
+        'due_date', 'status', 'paid_at',
+    ],
+    PurchaseRequest: [
+        'title', 'estimated_cost', 'actual_cost', 'status',
+        'priority', 'vendor', 'budget_id', 'project_id',
+    ],
+    EmployeeFinanceRequest: [
+        'request_type', 'title', 'amount_requested', 'amount_approved',
+        'status', 'employee_id', 'budget_id',
+    ],
+    EmployeeLoan: [
+        'principal_amount', 'approved_amount', 'disbursed_amount',
+        'amount_repaid', 'status', 'employee_id',
+    ],
+    Budget: [
+        'name', 'fiscal_year', 'total_amount', 'allocated_amount',
+        'spent_amount', 'status', 'department_id', 'unit_id',
+    ],
+    Contract: [
+        'title', 'contract_type', 'standard_cost', 'currency',
+        'billing_cycle', 'start_date', 'end_date', 'status',
+        'staff_id', 'vendor_company',
+    ],
 }
 
 
@@ -80,7 +99,7 @@ def _snapshot(instance, fields):
     snap = {}
     for f in fields:
         try:
-            v = getattr(instance, f)
+            v = getattr(instance, f, None)
             if isinstance(v, Decimal):
                 snap[f] = str(v)
             elif hasattr(v, 'isoformat'):
@@ -104,9 +123,11 @@ def _diff(old: dict, new: dict) -> dict:
 
 
 def _amount_of(instance):
-    for attr in ('amount', 'amount_requested', 'amount_approved',
-                 'estimated_cost', 'standard_cost', 'total_amount',
-                 'principal_amount'):
+    for attr in (
+        'amount', 'amount_requested', 'amount_approved',
+        'estimated_cost', 'standard_cost', 'total_amount',
+        'principal_amount',
+    ):
         if hasattr(instance, attr):
             v = getattr(instance, attr)
             if v is not None:
@@ -119,15 +140,27 @@ def _currency_of(instance):
 
 
 def _actor_data():
-    """Pull (user, ip, ua) from the current request thread-local."""
-    req = get_current_request()
-    if req is None or not getattr(req, 'user', None) or not req.user.is_authenticated:
+    """
+    Pull (user, name, ip, ua) from the middleware thread-local.
+
+    Uses get_current_actor / get_current_request from apps.finance.middleware,
+    matching the existing accessor pattern in the project.
+    """
+    user = get_current_actor()
+    if user is None:
         return None, '', '', ''
-    user = req.user
+
     name = (user.get_full_name() or user.username) if user else ''
-    xff = req.META.get('HTTP_X_FORWARDED_FOR', '')
-    ip = xff.split(',')[0].strip() if xff else req.META.get('REMOTE_ADDR', '')
-    ua = req.META.get('HTTP_USER_AGENT', '')[:300]
+
+    req = get_current_request()
+    ip = ''
+    ua = ''
+    if req is not None:
+        meta = getattr(req, 'META', {}) or {}
+        xff = meta.get('HTTP_X_FORWARDED_FOR', '')
+        ip = xff.split(',')[0].strip() if xff else meta.get('REMOTE_ADDR', '')
+        ua = (meta.get('HTTP_USER_AGENT', '') or '')[:300]
+
     return user, name, ip, ua
 
 
@@ -297,7 +330,7 @@ def _detect_anomalies(sender, instance, created, changes, actor, audit_entry):
         dupe = Payment.objects.filter(
             amount=instance.amount,
             recipient=instance.recipient,
-            payment_date__gte=now.date() - timedelta(hours=DUPLICATE_WINDOW_HOURS // 24 + 1),
+            payment_date__gte=now.date() - timedelta(days=1),
         ).exclude(pk=instance.pk).exists()
         if dupe:
             _flag(
@@ -313,8 +346,10 @@ def _detect_anomalies(sender, instance, created, changes, actor, audit_entry):
     if sender in (PurchaseRequest, EmployeeFinanceRequest) and 'status' in changes:
         new_status = changes['status'][1]
         if new_status in ('ceo_approved', 'approved'):
-            requester_id = (getattr(instance, 'requested_by_id', None)
-                            or getattr(instance, 'employee_id', None))
+            requester_id = (
+                getattr(instance, 'requested_by_id', None)
+                or getattr(instance, 'employee_id', None)
+            )
             if actor and actor.pk == requester_id:
                 _flag(
                     FinanceAnomaly.Kind.RAPID_APPROVAL,
@@ -323,7 +358,7 @@ def _detect_anomalies(sender, instance, created, changes, actor, audit_entry):
                     f'{actor} approved a {sender.__name__.lower()} they submitted themselves.',
                     instance, audit_entry,
                 )
-            elif instance.created_at:
+            elif getattr(instance, 'created_at', None):
                 gap = (now - instance.created_at).total_seconds()
                 if gap < RAPID_APPROVAL_SECONDS:
                     _flag(

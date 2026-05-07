@@ -1,0 +1,116 @@
+{# ───────────────────────────────────────────────────────────────────────── #}
+{#  templates/dashboard/_pinned_focus_card.html                              #}
+{#                                                                           #}
+{#  Reusable focus card showing pinned tasks. Used by:                       #}
+{#    - admin_dashboard.html  (CEO / Office Manager / Admin)                 #}
+{#    - supervisor_dashboard.html  (supervisors viewing their team)          #}
+{#                                                                           #}
+{#  Required context:                                                        #}
+{#    pinned_tasks       — queryset of Task objects (already filtered)       #}
+{#    pinned_count       — total count (in case the list was sliced)         #}
+{#                                                                           #}
+{#  Render with:                                                             #}
+{#    {% include 'dashboard/_pinned_focus_card.html' %}                      #}
+{#                                                                           #}
+{# ───────────────────────────────────────────────────────────────────────── #}
+{% load humanize %}
+
+{% if pinned_tasks %}
+<div class="eo-card" style="border-left:4px solid #f59e0b">
+  <div class="eo-card-header">
+    <div>
+      <h2 class="eo-card-title">
+        <i class="bi bi-pin-angle-fill me-2" style="color:#f59e0b"></i>
+        Focus Area — Pinned Tasks
+      </h2>
+      <p class="eo-card-subtitle">
+        {{ pinned_count }} task{{ pinned_count|pluralize }}
+        flagged for direct attention by leadership
+      </p>
+    </div>
+    <a href="{% url 'task_list' %}?pinned=1"
+       class="eo-btn eo-btn-secondary eo-btn-sm">
+      View all pinned
+    </a>
+  </div>
+
+  <div style="display:flex;flex-direction:column">
+    {% for task in pinned_tasks %}
+    <div style="display:flex;align-items:flex-start;gap:14px;padding:14px 0;
+                {% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
+
+      {# Priority colour bar — same as overdue card so the dashboards match #}
+      <div style="width:4px;border-radius:4px;align-self:stretch;min-height:48px;flex-shrink:0;
+                  background:{% if task.priority == 'critical' %}#dc2626
+                            {% elif task.priority == 'urgent' %}#ea580c
+                            {% elif task.priority == 'high' %}#d97706
+                            {% else %}#f59e0b{% endif %}"></div>
+
+      <div style="flex:1;min-width:0">
+
+        {# Title + status badges row #}
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:5px">
+          <a href="{% url 'task_detail' task.pk %}"
+             style="font-weight:700;font-size:.9rem;color:var(--eo-text);
+                    text-decoration:none;flex:1;min-width:0;overflow:hidden;
+                    text-overflow:ellipsis;white-space:nowrap">
+            <i class="bi bi-pin-angle-fill" style="color:#f59e0b;font-size:.78rem"></i>
+            {{ task.title|truncatechars:55 }}
+          </a>
+          <div style="display:flex;gap:5px;flex-shrink:0">
+            <span class="eo-status eo-status-{{ task.status }}" style="font-size:.68rem">
+              {{ task.get_status_display }}
+            </span>
+            <span class="eo-priority eo-priority-{{ task.priority }}" style="font-size:.68rem">
+              <i class="bi bi-flag-fill"></i> {{ task.get_priority_display }}
+            </span>
+            {% if task.is_overdue %}
+            <span class="eo-status" style="font-size:.68rem;background:#fee2e2;color:#991b1b">
+              <i class="bi bi-alarm"></i> Overdue
+            </span>
+            {% endif %}
+          </div>
+        </div>
+
+        {# Meta row: assignee, unit, project, who pinned it #}
+        <div style="font-size:.75rem;color:var(--eo-text-muted);
+                    display:flex;flex-wrap:wrap;gap:12px;margin-bottom:6px">
+          <span><i class="bi bi-person me-1"></i>{{ task.assigned_to.full_name }}</span>
+          {% if task.assigned_to.staffprofile.unit %}
+          <span><i class="bi bi-diagram-3 me-1"></i>{{ task.assigned_to.staffprofile.unit.name }}</span>
+          {% endif %}
+          {% if task.project %}
+          <span><i class="bi bi-kanban me-1"></i>{{ task.project.name|truncatechars:20 }}</span>
+          {% endif %}
+          {% if task.due_date %}
+          <span class="{% if task.is_overdue %}text-danger fw-bold{% endif %}">
+            <i class="bi bi-calendar3 me-1"></i>Due {{ task.due_date|date:"N j" }}
+          </span>
+          {% endif %}
+        </div>
+
+        {# Pinning attribution row #}
+        <div style="font-size:.72rem;color:var(--eo-text-muted)">
+          <i class="bi bi-pin-angle me-1"></i>
+          Pinned by
+          <strong style="color:var(--eo-text)">
+            {{ task.pinned_by.full_name|default:"—" }}
+          </strong>
+          {% if task.pinned_at %} · {{ task.pinned_at|naturaltime }}{% endif %}
+          {% if task.progress_pct %} · {{ task.progress_pct }}% complete{% endif %}
+        </div>
+
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if pinned_count > pinned_tasks|length %}
+  <div style="text-align:center;padding-top:10px;margin-top:6px;border-top:1px solid var(--eo-border)">
+    <a href="{% url 'task_list' %}?pinned=1" style="font-size:.8rem;color:var(--eo-accent);text-decoration:none">
+      Show all {{ pinned_count }} pinned tasks →
+    </a>
+  </div>
+  {% endif %}
+</div>
+{% endif %}

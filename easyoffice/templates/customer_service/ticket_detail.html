@@ -3,6 +3,7 @@
 {% block breadcrumb %}<a href="{% url 'customer_service_dashboard' %}">Customer Service</a> / <a href="{% url 'customer_service_ticket_list' %}">Tickets</a> / {{ ticket.ticket_no }}{% endblock %}
 {% block content %}
 {% load humanize %}
+{% load portal_tags %}
 <style>
   :root {
     --cs-primary: #2563eb;
@@ -119,16 +120,17 @@
   .cs-timeline { position: relative; padding-left: 30px; }
   .cs-timeline::before {
     content:''; position: absolute;
-    left: 11px; top: 8px; bottom: 8px;
+    left: 11px; top: 4px; bottom: 4px;
     width: 2px; background: #e2e8f0;
   }
   .cs-timeline-item {
     position: relative;
-    margin-bottom: 16px;
+    margin-bottom: 10px;
   }
+  .cs-timeline-item:last-child { margin-bottom: 0; }
   .cs-timeline-item::before {
     content:''; position: absolute;
-    left: -23px; top: 6px;
+    left: -23px; top: 4px;
     width: 10px; height: 10px; border-radius: 50%;
     background: #fff; border: 2px solid var(--cs-primary);
   }
@@ -139,24 +141,36 @@
 
   .cs-timeline-head {
     display: flex; align-items: center; gap: 8px;
-    font-size: .85rem; flex-wrap: wrap;
+    font-size: .82rem; flex-wrap: wrap;
+    line-height: 1.3;
   }
   .cs-timeline-type {
-    font-size: .68rem; font-weight: 700;
+    font-size: .66rem; font-weight: 700;
     text-transform: uppercase; letter-spacing: .05em;
-    padding: 2px 8px; border-radius: 999px;
+    padding: 1px 7px; border-radius: 999px;
     background: #f1f5f9; color: #475569;
   }
   .cs-timeline-item.cs-type-resolution .cs-timeline-type { background: #d1fae5; color: #065f46; }
   .cs-timeline-item.cs-type-escalation .cs-timeline-type { background: #fee2e2; color: #991b1b; }
   .cs-timeline-body {
     background: #f8fafc;
-    border-radius: 10px;
-    padding: 10px 12px;
-    margin-top: 6px;
-    white-space: pre-wrap;
-    font-size: .88rem;
-    line-height: 1.5;
+    border-radius: 8px;
+    padding: 7px 11px;
+    margin-top: 3px;
+    /* pre-line keeps newlines but collapses runs of spaces; combined
+       with `{{ update.body.strip }}` in the template, multi-newline
+       padding doesn't bloat the box. */
+    white-space: pre-line;
+    font-size: .86rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+  /* Reply pill at the end of a customer-update body — keeps it inline so
+     non-portal updates don't get any extra padding. */
+  .cs-timeline-body .prb-toggle,
+  .cs-timeline-body .prb-disabled {
+    margin-left: 8px;
+    vertical-align: baseline;
   }
 
   /* Info rows */
@@ -258,27 +272,30 @@
   /* ── Portal thread panel ─────────────────────────────────────────── */
   .portal-thread-card {
     background: #fff;
-    border: 1.5px solid #c7d2fe;
-    border-radius: 16px;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
     margin-bottom: 14px;
     overflow: hidden;
-    box-shadow: 0 4px 14px rgba(99,102,241,.07);
+    box-shadow: 0 1px 2px rgba(15,23,42,.04);
   }
   .portal-thread-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 13px 18px;
-    background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
-    border-bottom: 1px solid #e0e7ff;
+    padding: 9px 14px;
+    background: #fafbff;
+    border-bottom: 1px solid #eef2ff;
+    gap: 8px;
   }
   .portal-thread-header h3 {
-    font-size: .92rem; font-weight: 700; margin: 0;
-    display: flex; align-items: center; gap: 8px;
-    color: #3730a3;
+    font-size: .82rem; font-weight: 600; margin: 0;
+    display: flex; align-items: center; gap: 6px;
+    color: #4338ca;
+    letter-spacing: -.005em;
   }
+  .portal-thread-header h3 i { font-size: 14px; }
   .portal-status-badge {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 3px 10px; border-radius: 999px;
-    font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 999px;
+    font-size: .65rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
   }
   .pbs-pending_review { background: #f5f3ff; color: #5b21b6; border: 1px solid #ddd6fe; }
   .pbs-open, .pbs-reopened { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
@@ -286,53 +303,53 @@
   .pbs-cancelled { background: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; }
 
   .portal-thread-scroll {
-    max-height: 500px;
+    max-height: 460px;
     overflow-y: auto;
-    padding: 16px 18px;
+    padding: 12px 14px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 10px;
   }
   .portal-msg {
     display: grid;
-    grid-template-columns: 32px 1fr;
-    gap: 10px;
+    grid-template-columns: 28px 1fr;
+    gap: 8px;
     align-items: flex-start;
   }
   .portal-avatar {
-    width: 32px; height: 32px; border-radius: 50%;
+    width: 28px; height: 28px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
-    font-weight: 700; font-size: 12px; flex-shrink: 0;
+    font-weight: 600; font-size: 11px; flex-shrink: 0;
   }
-  .portal-avatar.av-customer { background: #fff0f0; color: #c0392b; border: 1.5px solid rgba(192,57,43,.2); }
-  .portal-avatar.av-staff    { background: #eff6ff; color: #1d4ed8; border: 1.5px solid rgba(29,78,216,.2); }
-  .portal-avatar.av-system   { background: #f3f4f6; color: #6b7280; border: 1.5px solid #e5e7eb; }
+  .portal-avatar.av-customer { background: #fff0f0; color: #c0392b; border: 1px solid rgba(192,57,43,.18); }
+  .portal-avatar.av-staff    { background: #eff6ff; color: #1d4ed8; border: 1px solid rgba(29,78,216,.18); }
+  .portal-avatar.av-system   { background: #f3f4f6; color: #6b7280; border: 1px solid #e5e7eb; }
 
   .portal-bubble {
-    border-radius: 10px;
-    padding: 10px 13px;
-    font-size: .875rem;
-    line-height: 1.6;
+    border-radius: 8px;
+    padding: 7px 11px;
+    font-size: .82rem;
+    line-height: 1.5;
+    position: relative;
   }
   .portal-bubble.bub-customer {
     background: #fff; border: 1px solid #e5e7eb;
-    box-shadow: 0 1px 3px rgba(0,0,0,.04);
   }
   .portal-bubble.bub-staff {
     background: #eff6ff; border: 1px solid #bfdbfe;
   }
   .portal-bubble.bub-system {
     background: #f9fafb; border: 1px dashed #d1d5db;
-    color: #6b7280; font-size: .82rem;
+    color: #6b7280; font-size: .76rem;
   }
   .portal-bubble-head {
-    display: flex; align-items: baseline; gap: 8px;
-    margin-bottom: 4px; flex-wrap: wrap;
+    display: flex; align-items: baseline; gap: 6px;
+    margin-bottom: 2px; flex-wrap: wrap;
   }
-  .portal-bubble-head strong { font-size: .85rem; color: #111827; }
+  .portal-bubble-head strong { font-size: .78rem; color: #111827; font-weight: 600; }
   .portal-role-badge {
-    font-size: .65rem; font-weight: 700; text-transform: uppercase;
-    padding: 1px 7px; border-radius: 999px; letter-spacing: .04em;
+    font-size: .58rem; font-weight: 700; text-transform: uppercase;
+    padding: 1px 6px; border-radius: 999px; letter-spacing: .03em;
   }
   .prb-customer { background: #fee2e2; color: #991b1b; }
   .prb-staff    { background: #dbeafe; color: #1e40af; }
@@ -343,47 +360,129 @@
     color: #1f2937;
   }
   .portal-attach-list {
-    margin-top: 8px; padding-top: 8px;
+    margin-top: 6px; padding-top: 6px;
     border-top: 1px dashed #e5e7eb;
-    display: flex; flex-wrap: wrap; gap: 6px;
+    display: flex; flex-wrap: wrap; gap: 4px;
   }
   .portal-attach-chip {
     display: inline-flex; align-items: center; gap: 4px;
-    font-size: .75rem; padding: 2px 8px;
+    font-size: .7rem; padding: 2px 7px;
     background: #f3f4f6; border: 1px solid #e5e7eb;
     border-radius: 4px; color: #374151;
   }
 
-  .portal-reply-composer {
-    padding: 14px 18px;
-    border-top: 1px solid #e0e7ff;
+  /* Inline per-message reply button (bottom-right of each customer bubble) */
+  .portal-msg-reply-btn {
+    margin-top: 6px;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    color: #475569;
+    font-size: .68rem;
+    font-weight: 500;
+    padding: 2px 9px 2px 7px;
+    border-radius: 999px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    line-height: 1.3;
+    transition: all .12s ease;
+    font-family: inherit;
+  }
+  .portal-msg-reply-btn i { font-size: 9px; }
+  .portal-msg-reply-btn:hover {
+    background: #1d4ed8; border-color: #1d4ed8; color: #fff;
+  }
+  .portal-msg-reply-btn[aria-expanded="true"] {
+    background: #1d4ed8; border-color: #1d4ed8; color: #fff;
+  }
+
+  .portal-msg-reply-form {
+    margin-top: 6px;
+    padding: 9px 10px;
     background: #f8faff;
+    border: 1px solid #c7d8f5;
+    border-radius: 8px;
+  }
+  .portal-msg-reply-form[hidden] { display: none !important; }
+  .portal-msg-reply-form textarea {
+    width: 100%;
+    border: 1px solid #cbd5e1;
+    border-radius: 5px;
+    padding: 6px 9px;
+    font: inherit;
+    font-size: .78rem;
+    line-height: 1.5;
+    resize: vertical;
+    min-height: 56px;
+    background: #fff;
+    color: #0f172a;
+    box-sizing: border-box;
+  }
+  .portal-msg-reply-form textarea:focus {
+    outline: none; border-color: #1d4ed8;
+    box-shadow: 0 0 0 2px rgba(29,78,216,.10);
+  }
+  .portal-msg-reply-actions {
+    display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px;
+  }
+  .portal-msg-reply-cancel,
+  .portal-msg-reply-submit {
+    font-family: inherit;
+    font-size: .7rem;
+    font-weight: 500;
+    padding: 4px 11px;
+    border-radius: 5px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    line-height: 1.2;
+  }
+  .portal-msg-reply-cancel {
+    background: #fff; border-color: #cbd5e1; color: #64748b;
+  }
+  .portal-msg-reply-cancel:hover { background: #f1f5f9; color: #334155; }
+  .portal-msg-reply-submit {
+    background: #1d4ed8; border-color: #1d4ed8; color: #fff;
+    display: inline-flex; align-items: center; gap: 3px;
+  }
+  .portal-msg-reply-submit:hover { background: #1e40af; }
+  .portal-msg-reply-submit i { font-size: 9px; }
+
+  .portal-reply-composer {
+    padding: 10px 14px;
+    border-top: 1px solid #eef2ff;
+    background: #fafbff;
   }
   .portal-reply-composer label {
-    font-size: .8rem; font-weight: 700; color: #3730a3;
-    display: block; margin-bottom: 6px;
+    font-size: .72rem; font-weight: 600; color: #4338ca;
+    display: block; margin-bottom: 4px;
+    letter-spacing: -.005em;
   }
   .portal-reply-composer textarea {
-    width: 100%; border: 1.5px solid #c7d2fe;
-    border-radius: 10px; padding: 10px 12px;
-    font-size: .875rem; line-height: 1.55;
+    width: 100%; border: 1px solid #cbd5e1;
+    border-radius: 6px; padding: 7px 10px;
+    font-size: .82rem; line-height: 1.5;
     resize: vertical; outline: none;
     background: #fff; color: #111827;
-    transition: border-color .15s;
+    transition: border-color .15s, box-shadow .15s;
+    min-height: 64px;
   }
-  .portal-reply-composer textarea:focus { border-color: var(--cs-primary); }
+  .portal-reply-composer textarea:focus {
+    border-color: var(--cs-primary);
+    box-shadow: 0 0 0 2px rgba(37,99,235,.08);
+  }
   .portal-reply-footer {
     display: flex; align-items: center; justify-content: space-between;
-    margin-top: 8px; gap: 10px; flex-wrap: wrap;
+    margin-top: 6px; gap: 8px; flex-wrap: wrap;
   }
-  .portal-reply-footer small { font-size: .75rem; color: #6b7280; }
+  .portal-reply-footer small { font-size: .68rem; color: #6b7280; }
 
   /* ── New-customer-reply indicator (unread badge on the tab / heading) */
   .portal-unread-dot {
     display: inline-block;
-    width: 8px; height: 8px; border-radius: 50%;
+    width: 7px; height: 7px; border-radius: 50%;
     background: #ef4444;
-    margin-left: 4px;
+    margin-left: 3px;
     vertical-align: middle;
     animation: pulse-dot 1.6s ease-in-out infinite;
   }
@@ -394,13 +493,15 @@
 
   /* ── Portal status sync strip ────────────────────────────────────── */
   .portal-sync-strip {
-    padding: 8px 18px;
-    font-size: .78rem;
-    display: flex; align-items: center; gap: 8px;
-    border-top: 1px solid #e0e7ff;
+    padding: 6px 14px;
+    font-size: .72rem;
+    display: flex; align-items: center; gap: 6px;
+    border-top: 1px solid #eef2ff;
+    line-height: 1.4;
   }
   .portal-sync-strip.in-sync { background: #f0fdf4; color: #065f46; }
   .portal-sync-strip.out-of-sync { background: #fffbeb; color: #92400e; }
+  .portal-sync-strip i { font-size: 12px; flex-shrink: 0; }
 </style>
 
 <!-- ═══════════ HERO ═══════════ -->
@@ -692,13 +793,13 @@
         </div>
 
         {% for update in updates %}
-        <div class="cs-timeline-item cs-type-{{ update.update_type }}">
+        <div class="cs-timeline-item cs-type-{{ update.update_type }}" id="u-{{ update.pk }}">
           <div class="cs-timeline-head">
             <strong>{{ update.user.full_name|default:"System" }}</strong>
             <span class="cs-timeline-type">{{ update.get_update_type_display }}</span>
             <small class="text-muted ms-auto">{{ update.created_at|date:"M j, Y H:i" }}</small>
           </div>
-          <div class="cs-timeline-body">{{ update.body }}</div>
+          <div class="cs-timeline-body">{{ update.body.strip }}{% portal_reply_button update ticket %}</div>
         </div>
         {% endfor %}
       </div>

@@ -45,8 +45,9 @@ from io import StringIO
 from django.contrib import messages
 from django.db import transaction
 from django.db.models import Count, Q, Avg
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect
+from django.urls import reverse
 from django.utils import timezone
 from django.views.generic import View, TemplateView
 
@@ -552,36 +553,103 @@ class PortalReplyView(CustomerServiceAccessMixin, View):
     """
     http_method_names = ['post']
 
+    # Reply-body field names accepted from POST. Two templates submit here:
+    #   * _portal_thread.html       → posts 'portal_body' (bottom composer
+    #                                  + inline-on-customer-bubble form)
+    #   * _portal_reply_button.html → posts 'body'        (per-update inline
+    #                                  reply button on the activity timeline)
+    # Either should just work — never assume one specific name.
+    _BODY_FIELDS = ('portal_body', 'body', 'reply_body')
+
     def post(self, request, pk):
         ticket = get_object_or_404(ServiceTicket, pk=pk)
 
-        body = (request.POST.get('portal_body') or '').strip()
+        body = ''
+        for name in self._BODY_FIELDS:
+            val = (request.POST.get(name) or '').strip()
+            if val:
+                body = val
+                break
+
+        # Optional in-page anchor so the agent lands back at the comment
+        # they were replying to (set by the inline reply button).
+        return_to = (request.POST.get('return_to') or '').strip()
+        if not return_to.startswith('#'):
+            return_to = ''
+
         if not body:
             messages.error(request, 'Reply body cannot be empty.')
-            return redirect('customer_service_ticket_detail', pk=ticket.pk)
+            return self._redirect_back(ticket, return_to)
 
         portal_req = self._get_portal_request(ticket)
         if not portal_req:
             messages.error(request, 'No linked customer portal request found for this ticket.')
-            return redirect('customer_service_ticket_detail', pk=ticket.pk)
+            return self._redirect_back(ticket, return_to)
 
         if portal_req.status in ('closed', 'cancelled'):
             messages.warning(
                 request,
                 f'The portal request is {portal_req.get_status_display().lower()} — reply not sent.',
             )
-            return redirect('customer_service_ticket_detail', pk=ticket.pk)
+            return self._redirect_back(ticket, return_to)
 
         with transaction.atomic():
-            from apps.customer_portal.models import TicketComment as PortalComment
+            # Try to grab the portal sync helpers — they give us:
+            #   * mirror_staff_reply_to_portal: writes the customer-visible
+            #     TicketComment with the re-entrancy guard set
+            #   * _SyncContext: suppresses the staff→portal auto-mirror
+            #     signal that would otherwise duplicate our reply
+            try:
+                from apps.customer_portal import sync as portal_sync
+                _SyncContext = portal_sync._SyncContext
+            except Exception:
+                portal_sync = None
+                _SyncContext = None
 
-            comment = PortalComment.objects.create(
-                request=portal_req,
-                author_kind='staff',
-                author_user=request.user,
-                author_display_name=(request.user.get_full_name() or request.user.username),
-                body=body,
-            )
+            from .models import ServiceTicketUpdate
+
+            # 1. Write the reply on the STAFF side so it appears in this
+            #    ticket's activity timeline. Wrap in _SyncContext so the
+            #    customer_portal post_save signal sees _is_syncing() and
+            #    skips mirroring this to the portal a SECOND time —
+            #    we'll do that ourselves explicitly below.
+            if _SyncContext is not None:
+                with _SyncContext():
+                    staff_update = ServiceTicketUpdate.objects.create(
+                        ticket=ticket,
+                        user=request.user,
+                        update_type='customer_update',
+                        body=f'📤 Replied to customer via portal:\n\n{body}',
+                    )
+            else:
+                staff_update = ServiceTicketUpdate.objects.create(
+                    ticket=ticket,
+                    user=request.user,
+                    update_type='customer_update',
+                    body=f'📤 Replied to customer via portal:\n\n{body}',
+                )
+
+            # 2. Mirror to the customer portal so the customer sees the
+            #    reply too. The helper itself uses _SyncContext.
+            comment = None
+            if portal_sync is not None and hasattr(portal_sync, 'mirror_staff_reply_to_portal'):
+                comment = portal_sync.mirror_staff_reply_to_portal(
+                    portal_request=portal_req,
+                    staff_user=request.user,
+                    body=body,
+                )
+            else:
+                # Fallback for environments without sync.py helpers.
+                from apps.customer_portal.models import TicketComment as PortalComment
+                comment = PortalComment.objects.create(
+                    request=portal_req,
+                    author_kind='staff',
+                    author_user=request.user,
+                    author_display_name=(
+                        request.user.get_full_name() or request.user.username
+                    ),
+                    body=body,
+                )
 
             if portal_req.status == 'pending_review':
                 portal_req.status = 'open'
@@ -592,7 +660,15 @@ class PortalReplyView(CustomerServiceAccessMixin, View):
         )
 
         messages.success(request, 'Reply sent to the customer portal.')
-        return redirect('customer_service_ticket_detail', pk=ticket.pk)
+        return self._redirect_back(ticket, return_to)
+
+    @staticmethod
+    def _redirect_back(ticket, fragment: str = ''):
+        """Redirect to ticket detail, optionally with a #anchor."""
+        url = reverse('customer_service_ticket_detail', kwargs={'pk': ticket.pk})
+        if fragment:
+            url = f'{url}{fragment}'
+        return HttpResponseRedirect(url)
 
     @staticmethod
     def _get_portal_request(ticket):

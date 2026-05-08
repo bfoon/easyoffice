@@ -15,27 +15,33 @@ Setup:
   3. Load the library in your template:
        {% load portal_tags %}
 
-Usage in your existing CS ticket detail template:
+Usage in your existing CS ticket detail template — paste the
+{% portal_reply_button %} call INSIDE the .cs-timeline-body div, AFTER
+the body text. The button positions itself in the bottom-right corner
+via absolute positioning:
 
     {% load portal_tags %}
 
-    {% for u in ticket.updates.all %}
-      <div class="activity-row">
-        <span class="activity-author">{{ u.user|default:"System" }}</span>
-        <span class="activity-type">{{ u.get_update_type_display }}</span>
-        <span class="activity-time">{{ u.created_at }}</span>
-        <div class="activity-body">{{ u.body|linebreaksbr }}</div>
-
-        {# This is the new bit: #}
-        {% portal_reply_button u ticket %}
+    {% for update in updates %}
+      <div class="cs-timeline-item cs-type-{{ update.update_type }}">
+        <div class="cs-timeline-head">
+          <strong>{{ update.user.full_name|default:"System" }}</strong>
+          <span class="cs-timeline-type">{{ update.get_update_type_display }}</span>
+          <small class="text-muted ms-auto">{{ update.created_at|date:"M j, Y H:i" }}</small>
+        </div>
+        <div class="cs-timeline-body">
+          {{ update.body }}
+          {% portal_reply_button update ticket %}   {# ← this line is new #}
+        </div>
       </div>
     {% endfor %}
 
 The tag renders nothing for non-portal updates, so it's safe to drop in
-unconditionally.
+unconditionally on every row.
 """
 from __future__ import annotations
 
+import re
 from django import template
 
 register = template.Library()
@@ -48,6 +54,9 @@ register = template.Library()
 # customer_portal.sync.mirror_customer_comment_to_staff stamps every
 # customer reply's body with this prefix. We use it as the marker.
 _CUSTOMER_COMMENT_PREFIX = '💬 Reply from'
+
+# Pattern to extract the author name out of "💬 Reply from <name> (via portal):"
+_AUTHOR_RE = re.compile(r'^💬 Reply from (.+?) \(via portal\):', re.UNICODE)
 
 
 @register.filter(name='is_portal_customer_comment')
@@ -69,14 +78,20 @@ def extract_portal_message(update) -> str:
         return getattr(update, 'body', '') or ''
 
     body = update.body
-    # Strip the first line (the "Reply from X" header) and any
-    # immediately-following blank line.
     lines = body.split('\n')
     if lines and lines[0].startswith(_CUSTOMER_COMMENT_PREFIX):
         lines = lines[1:]
     if lines and not lines[0].strip():
         lines = lines[1:]
     return '\n'.join(lines).strip()
+
+
+def _extract_author_name(body: str) -> str:
+    """Pull the customer's name from '💬 Reply from <name> (via portal):'."""
+    if not body:
+        return ''
+    m = _AUTHOR_RE.match(body.split('\n', 1)[0])
+    return m.group(1).strip() if m else ''
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -89,14 +104,15 @@ def extract_portal_message(update) -> str:
 )
 def portal_reply_button(context, update, ticket):
     """
-    Render an inline "Reply" button + collapsed reply form for a
-    ServiceTicketUpdate row that came from the customer portal.
+    Render an inline "Reply" link in the bottom-right corner of the
+    timeline-body card for ServiceTicketUpdate rows that came from the
+    customer portal.
 
     Renders nothing for non-portal updates, so it's safe to call on
     every row in your activity log loop.
 
     Usage:
-        {% portal_reply_button u ticket %}
+        {% portal_reply_button update ticket %}
     """
     is_customer = is_portal_customer_comment(update)
 
@@ -104,6 +120,7 @@ def portal_reply_button(context, update, ticket):
     # i.e. the ticket has a linked PortalSupportRequest and that
     # request is not in a terminal state.
     can_reply = False
+    author_name = ''
     if is_customer:
         portal_req = (
             getattr(ticket, 'portal_request_origin', None)
@@ -112,11 +129,15 @@ def portal_reply_button(context, update, ticket):
         if portal_req and portal_req.status not in ('cancelled', 'closed'):
             can_reply = True
 
+        # Extract the customer name for the "Replying to <name>" caption.
+        author_name = _extract_author_name(getattr(update, 'body', ''))
+
     return {
         'update': update,
         'ticket': ticket,
         'is_customer': is_customer,
         'can_reply': can_reply,
+        'author_name': author_name,
         'request': context.get('request'),
         # Used to build a stable id for the toggle target.
         'reply_id': f'portal-reply-{getattr(update, "pk", "x")}',

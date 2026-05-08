@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import include, path
 from . import views
 
 urlpatterns = [
@@ -15,4 +15,9 @@ urlpatterns = [
 
     path("department-queue/", views.DepartmentQueueView.as_view(), name="customer_service_department_queue"),
     path("feedback/<uuid:token>/", views.FeedbackFormView.as_view(), name="customer_service_feedback"),
+
+    # ── Pull in the extra routes (PortalReplyView, ConfirmAndCloseTicketView,
+    #     CreateOrderFromTicketView, CompleteAssignmentView, oversight, etc.)
+    #     defined in urls_extra.py so reverse() can find them.
+    path("", include("apps.customer_service.urls_extra")),
 ]

@@ -5,30 +5,40 @@
 
   HOW TO USE
   ──────────
-  1. In your existing customer_service TicketDetailView (or DetailView),
-     import and call get_portal_context() from views_extra.py and merge
-     the result into your context:
+  1. In your existing customer_service TicketDetailView, merge the
+     portal context into your context_data:
 
        from .views_extra import get_portal_context
 
        def get_context_data(self, **kwargs):
            ctx = super().get_context_data(**kwargs)
-           ctx.update(get_portal_context(self.object))   # adds portal_request, portal_comments, portal_comment_count
+           ctx.update(get_portal_context(self.object))
            return ctx
 
-  2. Register the new URL in urls_extra.py (already done — it's the
-     `customer_service_portal_reply` route).
+     This sets:
+       portal_request, portal_comments, portal_comment_count
 
-  3. In your existing customer_service/ticket_detail.html, paste this
-     line wherever you want the thread panel to appear (after the ticket
-     info card, before the activity log is a good spot):
+  2. In customer_service/ticket_detail.html, paste this line wherever
+     you want the thread panel to appear:
 
        {% include "customer_service/_portal_thread.html" %}
 
-  That's it. No model changes needed.
+  3. In your urls (urls_extra.py or portal_urls.py), make sure the
+     'customer_service_portal_reply' route is registered.
+
+  Two reply entry points are rendered:
+    a. Per-message inline reply button on every CUSTOMER message
+       (click → form expands directly under that message)
+    b. Bottom composer for first replies / general use
+
+  Both POST to the SAME endpoint with field name 'portal_body' (or
+  'body' — the view accepts either).
 #}
 
 {% load humanize %}
+
+{# Resolve the ticket object — detail views may use 'object' or 'ticket'. #}
+{% with ticket_obj=object|default:ticket %}
 
 {% if portal_request %}
 <div class="card shadow-sm mt-4" id="portal-thread-card">
@@ -45,18 +55,16 @@
       {% endif %}
     </div>
     <div class="d-flex align-items-center gap-2">
-      {# Portal request status badge #}
       <span class="badge
         {% if portal_request.status == 'open' or portal_request.status == 'reopened' %}bg-success
         {% elif portal_request.status == 'pending_review' %}bg-warning text-dark
-        {% elif portal_request.status in 'resolved,closed' %}bg-secondary
+        {% elif portal_request.status == 'resolved' or portal_request.status == 'closed' %}bg-secondary
         {% elif portal_request.status == 'cancelled' %}bg-danger
         {% else %}bg-light text-dark border{% endif %}"
         style="font-size:11px;"
         title="Customer portal status">
         Portal: {{ portal_request.get_status_display }}
       </span>
-      {# Jump to customer view (no token leakage — goes to admin) #}
       <a href="/admin/customer_portal/portalsupportrequest/{{ portal_request.pk }}/change/"
          class="btn btn-outline-secondary btn-sm py-0 px-2"
          style="font-size:11px;" target="_blank" title="Open in admin">
@@ -65,13 +73,28 @@
     </div>
   </div>
 
+  {# ── Pending reopen banner ────────────────────────────────────── #}
+  {% with pending_reopen=portal_request.reopen_requests.all|dictsort:"-created_at"|first %}
+    {% if pending_reopen and pending_reopen.decision == 'pending' %}
+    <div style="margin: 0; padding: 10px 18px; background:#fff8e1; border-bottom:1px solid #f0d9a0; font-size:12.5px; color:#6f4d13;">
+      <i class="bi bi-arrow-counterclockwise"></i>
+      <strong>Reopen request pending review.</strong>
+      {{ pending_reopen.requested_by_contact.full_name|default:"Customer" }}
+      asked to reopen this ticket on
+      {{ pending_reopen.created_at|date:"d M H:i" }}.
+      Reason: <em>{{ pending_reopen.reason|truncatechars:160 }}</em>
+    </div>
+    {% endif %}
+  {% endwith %}
+
   {# ── Message thread ────────────────────────────────────────────── #}
   <div class="card-body p-0">
-    <div style="max-height:520px; overflow-y:auto; padding:16px 18px; display:flex; flex-direction:column; gap:14px;"
+    <div style="max-height:560px; overflow-y:auto; padding:16px 18px; display:flex; flex-direction:column; gap:14px;"
          id="portal-thread-scroll">
 
       {% for c in portal_comments %}
-      <div style="display:grid; grid-template-columns:34px 1fr; gap:10px; align-items:flex-start;">
+      <div class="pt-row" id="pt-msg-{{ c.pk }}"
+           style="display:grid; grid-template-columns:34px 1fr; gap:10px; align-items:flex-start;">
 
         {# Avatar #}
         <div style="width:34px; height:34px; border-radius:50%;
@@ -91,54 +114,103 @@
           {% endif %}
         </div>
 
-        {# Bubble #}
-        <div style="
-          border-radius:10px; padding:10px 14px;
-          {% if c.author_kind == 'staff' %}
-            background:#eff6ff; border:1px solid #bfdbfe;
-          {% elif c.author_kind == 'system' %}
-            background:#f9fafb; border:1px dashed #d1d5db;
-          {% else %}
-            background:#fff; border:1px solid #e5e7eb;
-            box-shadow: 0 1px 2px rgba(0,0,0,.04);
-          {% endif %}">
+        {# Bubble + reply affordance below it #}
+        <div style="min-width:0;"> {# min-width:0 prevents grid blowout on long words #}
 
-          {# Header row #}
-          <div class="d-flex align-items-baseline gap-2 mb-1 flex-wrap">
-            <strong style="font-size:13px;">{{ c.display_name }}</strong>
+          <div style="
+            border-radius:10px; padding:10px 14px;
             {% if c.author_kind == 'staff' %}
-              <span class="badge bg-primary" style="font-size:10px; font-weight:600;">Staff</span>
-            {% elif c.author_kind == 'customer' %}
-              <span class="badge bg-danger" style="font-size:10px; font-weight:600;">Customer</span>
+              background:#eff6ff; border:1px solid #bfdbfe;
             {% elif c.author_kind == 'system' %}
-              <span class="badge bg-secondary" style="font-size:10px; font-weight:600;">System</span>
+              background:#f9fafb; border:1px dashed #d1d5db;
+            {% else %}
+              background:#fff; border:1px solid #e5e7eb;
+              box-shadow: 0 1px 2px rgba(0,0,0,.04);
+            {% endif %}">
+
+            {# Header row #}
+            <div class="d-flex align-items-baseline gap-2 mb-1 flex-wrap">
+              <strong style="font-size:13px;">{{ c.display_name }}</strong>
+              {% if c.author_kind == 'staff' %}
+                <span class="badge bg-primary" style="font-size:10px; font-weight:600;">Staff</span>
+              {% elif c.author_kind == 'customer' %}
+                <span class="badge bg-danger" style="font-size:10px; font-weight:600;">Customer</span>
+              {% elif c.author_kind == 'system' %}
+                <span class="badge bg-secondary" style="font-size:10px; font-weight:600;">System</span>
+              {% endif %}
+              <small class="text-muted" style="font-size:11.5px;" title="{{ c.created_at|date:'D j M Y H:i' }}">
+                {{ c.created_at|naturaltime }}
+              </small>
+            </div>
+
+            {# Body #}
+            <div style="font-size:13.5px; line-height:1.6; white-space:pre-wrap; word-wrap:break-word; color:#1f2937;">{{ c.body }}</div>
+
+            {# Attachments #}
+            {% if c.attachments.all %}
+            <div style="margin-top:8px; padding-top:8px; border-top:1px dashed #e5e7eb;
+                        display:flex; flex-wrap:wrap; gap:6px;">
+              {% for a in c.attachments.all %}
+              <span style="display:inline-flex; align-items:center; gap:4px;
+                           font-size:11.5px; padding:3px 8px;
+                           background:#f3f4f6; border:1px solid #e5e7eb;
+                           border-radius:4px; color:#374151;">
+                <i class="bi bi-paperclip"></i>
+                {{ a.original_name|truncatechars:28 }}
+                <small class="text-muted">({{ a.size_human }})</small>
+              </span>
+              {% endfor %}
+            </div>
             {% endif %}
-            <small class="text-muted" style="font-size:11.5px;" title="{{ c.created_at|date:'D j M Y H:i' }}">
-              {{ c.created_at|naturaltime }}
-            </small>
+
           </div>
 
-          {# Body #}
-          <div style="font-size:13.5px; line-height:1.6; white-space:pre-wrap; word-wrap:break-word; color:#1f2937;">{{ c.body }}</div>
+          {# ── Per-message reply affordance ──
+             Only on CUSTOMER messages, only when ticket can still
+             receive replies. #}
+          {% if c.author_kind == 'customer' and portal_request.status != 'closed' and portal_request.status != 'cancelled' %}
+            <div class="pt-reply-wrap" style="margin-top:6px;">
+              <button type="button"
+                      class="pt-reply-toggle"
+                      data-pt-target="pt-form-{{ c.pk }}"
+                      aria-expanded="false">
+                <i class="bi bi-reply"></i> Reply
+              </button>
 
-          {# Attachments #}
-          {% if c.attachments.all %}
-          <div style="margin-top:8px; padding-top:8px; border-top:1px dashed #e5e7eb;
-                      display:flex; flex-wrap:wrap; gap:6px;">
-            {% for a in c.attachments.all %}
-            <span style="display:inline-flex; align-items:center; gap:4px;
-                         font-size:11.5px; padding:3px 8px;
-                         background:#f3f4f6; border:1px solid #e5e7eb;
-                         border-radius:4px; color:#374151;">
-              <i class="bi bi-paperclip"></i>
-              {{ a.original_name|truncatechars:28 }}
-              <small class="text-muted">({{ a.size_human }})</small>
-            </span>
-            {% endfor %}
-          </div>
+              <form method="post"
+                    action="{% url 'customer_service_portal_reply' pk=ticket_obj.pk %}"
+                    class="pt-reply-form"
+                    id="pt-form-{{ c.pk }}"
+                    hidden>
+                {% csrf_token %}
+                <input type="hidden" name="return_to" value="#pt-msg-{{ c.pk }}">
+
+                <div class="pt-form-context">
+                  Replying to <strong>{{ c.display_name }}</strong>
+                  <span class="text-muted">— {{ c.body|truncatechars:60 }}</span>
+                </div>
+
+                <textarea name="portal_body"
+                          rows="3"
+                          required
+                          maxlength="8000"
+                          placeholder="Your reply (the customer will see this on their portal)…"></textarea>
+
+                <div class="pt-form-actions">
+                  <button type="button"
+                          class="pt-reply-cancel"
+                          data-pt-target="pt-form-{{ c.pk }}">
+                    Cancel
+                  </button>
+                  <button type="submit" class="pt-reply-submit">
+                    <i class="bi bi-send"></i> Send reply
+                  </button>
+                </div>
+              </form>
+            </div>
           {% endif %}
 
-        </div>
+        </div>{# end column 2 #}
       </div>
       {% empty %}
       <p class="text-center text-muted py-4 mb-0" style="font-size:13.5px;">
@@ -149,15 +221,15 @@
 
     </div>{# end scroll container #}
 
-    {# ── Staff reply composer ────────────────────────────────────── #}
-    {% if portal_request.status not in 'closed,cancelled' %}
+    {# ── Bottom composer (always-visible "first reply" form) ──── #}
+    {% if portal_request.status != 'closed' and portal_request.status != 'cancelled' %}
     <div style="padding:14px 18px; border-top:1px solid #e9ecef; background:#f8faff;">
       <form method="post"
-            action="{% url 'customer_service_portal_reply' pk=object.pk %}"
+            action="{% url 'customer_service_portal_reply' pk=ticket_obj.pk %}"
             id="portal-reply-form">
         {% csrf_token %}
         <label class="form-label fw-semibold" style="font-size:12.5px; margin-bottom:6px;">
-          <i class="bi bi-reply me-1 text-primary"></i> Reply to customer
+          <i class="bi bi-reply-fill me-1 text-primary"></i> Reply to customer
         </label>
         <textarea name="portal_body"
                   class="form-control form-control-sm"
@@ -193,12 +265,197 @@
   </div>{# end card-body #}
 </div>{# end card #}
 
+
+{# ── Per-message reply styles + JS ─────────────────────────────── #}
+<style>
+  .pt-reply-toggle {
+    background: none;
+    border: 1px solid #d1d5db;
+    color: #4b5563;
+    font-size: 11.5px;
+    font-weight: 500;
+    padding: 3px 10px 3px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: inherit;
+    transition: all .12s ease;
+    line-height: 1.2;
+  }
+  .pt-reply-toggle:hover {
+    background: #f3f4f6;
+    border-color: #9ca3af;
+    color: #1f2937;
+  }
+  .pt-reply-toggle[aria-expanded="true"] {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+    color: #fff;
+  }
+  .pt-reply-toggle i { font-size: 11px; }
+
+  .pt-reply-form {
+    margin-top: 8px;
+    padding: 12px;
+    background: #fdfbf9;
+    border: 1px solid #e8e3de;
+    border-radius: 8px;
+    animation: pt-slide .14s ease-out;
+  }
+  .pt-reply-form[hidden] { display: none !important; }
+  @keyframes pt-slide {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .pt-form-context {
+    font-size: 11.5px;
+    color: #6b7280;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px dashed #e5e7eb;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pt-form-context strong { color: #374151; font-weight: 500; }
+  .pt-reply-form textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 5px;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+    min-height: 64px;
+    background: #fff;
+    color: #1a1714;
+    box-sizing: border-box;
+  }
+  .pt-reply-form textarea:focus {
+    outline: none;
+    border-color: #1d4ed8;
+    box-shadow: 0 0 0 3px rgba(29,78,216,.1);
+  }
+  .pt-form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .pt-reply-cancel,
+  .pt-reply-submit {
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 5px 12px;
+    border-radius: 5px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    line-height: 1.2;
+  }
+  .pt-reply-cancel {
+    background: #fff;
+    border-color: #d1d5db;
+    color: #6b7280;
+  }
+  .pt-reply-cancel:hover {
+    background: #f9fafb;
+    color: #374151;
+  }
+  .pt-reply-submit {
+    background: #1d4ed8;
+    color: #fff;
+    border-color: #1d4ed8;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .pt-reply-submit:hover { background: #1e40af; }
+  .pt-reply-submit:disabled {
+    background: #9ca3af;
+    border-color: #9ca3af;
+    cursor: not-allowed;
+  }
+  .pt-reply-submit i { font-size: 11px; }
+</style>
+
 <script>
-  // Auto-scroll the thread to the bottom on page load
-  (function() {
+(function () {
+  // Initialise once per page; safe under template re-includes.
+  if (window.__ptReplyInitDone) {
+    // Still need to scroll to bottom on every render.
     var el = document.getElementById('portal-thread-scroll');
     if (el) el.scrollTop = el.scrollHeight;
-  })();
+    return;
+  }
+  window.__ptReplyInitDone = true;
+
+  // Auto-scroll the message thread to bottom on load.
+  var scrollEl = document.getElementById('portal-thread-scroll');
+  if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+
+  // Event delegation — handles every Reply / Cancel button.
+  document.addEventListener('click', function (e) {
+    var trigger = e.target.closest('[data-pt-target]');
+    if (!trigger) return;
+
+    var targetId = trigger.getAttribute('data-pt-target');
+    var form = document.getElementById(targetId);
+    if (!form) return;
+
+    var isToggle = trigger.classList.contains('pt-reply-toggle');
+    var isCancel = trigger.classList.contains('pt-reply-cancel');
+
+    if (isCancel) {
+      form.hidden = true;
+      var matchingToggle = document.querySelector(
+        '.pt-reply-toggle[data-pt-target="' + targetId + '"]'
+      );
+      if (matchingToggle) matchingToggle.setAttribute('aria-expanded', 'false');
+      return;
+    }
+
+    if (isToggle) {
+      var willOpen = form.hidden;
+      // Close ALL other open inline reply forms first — only one open at a time.
+      if (willOpen) {
+        document.querySelectorAll('.pt-reply-form:not([hidden])').forEach(function (f) {
+          f.hidden = true;
+        });
+        document.querySelectorAll('.pt-reply-toggle[aria-expanded="true"]').forEach(function (b) {
+          b.setAttribute('aria-expanded', 'false');
+        });
+      }
+      form.hidden = !willOpen;
+      trigger.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      if (willOpen) {
+        var ta = form.querySelector('textarea');
+        if (ta) {
+          ta.focus();
+          // Scroll the form into view smoothly.
+          form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }
+    }
+  });
+
+  // Submit guard — disable button while posting to prevent double-send.
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!form.classList) return;
+    if (!form.classList.contains('pt-reply-form') && form.id !== 'portal-reply-form') return;
+    var btn = form.querySelector('button[type="submit"]');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="bi bi-hourglass"></i> Sending…';
+    }
+  });
+})();
 </script>
 
 {% endif %}{# end if portal_request #}
+
+{% endwith %}

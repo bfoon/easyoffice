@@ -34,6 +34,22 @@ logger = logging.getLogger(__name__)
 # 5. PORTAL REPLY (staff replies into the customer portal thread)
 # ════════════════════════════════════════════════════════════════════════
 
+# Reply-body field names accepted from POST. Two templates submit to
+# this endpoint:
+#   * _portal_thread.html        → posts 'portal_body' (bottom composer)
+#   * _portal_reply_button.html  → posts 'body'        (per-message inline)
+# Either should just work.
+_BODY_FIELD_CANDIDATES = ('body', 'portal_body', 'reply_body')
+
+
+def _read_reply_body(request) -> str:
+    for name in _BODY_FIELD_CANDIDATES:
+        val = (request.POST.get(name) or '').strip()
+        if val:
+            return val
+    return ''
+
+
 class PortalReplyView(View):
     """
     POST /customer-service/tickets/<pk>/portal-reply/
@@ -60,14 +76,17 @@ class PortalReplyView(View):
             return redirect('login')
 
         ticket = get_object_or_404(ServiceTicket, pk=pk)
-        body = (request.POST.get('body') or '').strip()
+        body = _read_reply_body(request)
 
         return_to = (request.POST.get('return_to') or '').strip()
         if not return_to.startswith('#'):
             return_to = ''
 
         if len(body) < 2:
-            messages.error(request, 'Reply text is required.')
+            messages.error(
+                request,
+                'Reply text is required. Please type your message and click Send.',
+            )
             return self._redirect_back(ticket, return_to)
 
         try:
@@ -113,23 +132,39 @@ class PortalReplyView(View):
                     update_type='customer_update',
                     body=f'📤 Replied to customer via portal:\n\n{body}',
                 )
+
+                # First staff reply on a still-pending request: open it.
+                if portal_req.status == 'pending_review':
+                    portal_req.status = 'open'
+                    portal_req.save(update_fields=['status', 'updated_at'])
+                    portal_sync.push_portal_status_to_staff(
+                        portal_req,
+                        reason='First staff reply received',
+                        actor=request.user,
+                    )
         except Exception:
             logger.exception('customer_service: portal reply failed')
-            messages.error(request, 'Sorry — your reply could not be sent. Please try again.')
+            messages.error(
+                request,
+                'Sorry — your reply could not be sent. Please try again, '
+                'or check the server logs if this keeps happening.',
+            )
             return self._redirect_back(ticket, return_to)
 
-        # Best-effort email notification to the customer.
         try:
             _notify_customer_of_staff_reply(portal_req, request.user, body)
         except Exception:
             logger.warning('customer_service: customer notification failed', exc_info=True)
 
-        messages.success(request, 'Reply sent — the customer will see it on the portal.')
+        messages.success(
+            request,
+            f'Reply sent — {portal_req.contact.full_name or "the customer"} '
+            f'will see it on their portal.',
+        )
         return self._redirect_back(ticket, return_to)
 
     @staticmethod
     def _redirect_back(ticket, fragment: str = ''):
-        """Build a redirect to ticket detail, optionally with a #anchor."""
         url = reverse('customer_service_ticket_detail', kwargs={'pk': ticket.pk})
         if fragment:
             url = f'{url}{fragment}'
@@ -150,3 +185,61 @@ def _notify_customer_of_staff_reply(portal_req, agent, body: str) -> None:
     fn = getattr(cp_notif, 'send_staff_reply_alert', None)
     if callable(fn):
         fn(portal_req=portal_req, agent=agent, body=body)
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Helper for ticket detail context — used by the _portal_thread.html
+# partial. Add to your existing TicketDetailView.get_context_data:
+#
+#     from .views_extra import get_portal_context
+#     ...
+#     def get_context_data(self, **kwargs):
+#         ctx = super().get_context_data(**kwargs)
+#         ctx.update(get_portal_context(self.object))
+#         return ctx
+# ────────────────────────────────────────────────────────────────────────
+
+def get_portal_context(ticket) -> dict:
+    """
+    Returns context keys needed by _portal_thread.html:
+        portal_request          — the PortalSupportRequest or None
+        portal_comments         — queryset of TicketComment, oldest-first
+        portal_comment_count    — total comments
+
+    Safe to call on any ticket, including those without portal origins.
+    """
+    if not ticket:
+        return {
+            'portal_request': None,
+            'portal_comments': [],
+            'portal_comment_count': 0,
+        }
+
+    try:
+        from apps.customer_portal.models import PortalSupportRequest
+    except Exception:
+        return {
+            'portal_request': None,
+            'portal_comments': [],
+            'portal_comment_count': 0,
+        }
+
+    portal_req = (
+        PortalSupportRequest.objects
+        .filter(service_ticket=ticket)
+        .prefetch_related('comments__attachments', 'reopen_requests')
+        .first()
+    )
+    if not portal_req:
+        return {
+            'portal_request': None,
+            'portal_comments': [],
+            'portal_comment_count': 0,
+        }
+
+    comments = list(portal_req.comments.all().order_by('created_at'))
+    return {
+        'portal_request': portal_req,
+        'portal_comments': comments,
+        'portal_comment_count': len(comments),
+    }

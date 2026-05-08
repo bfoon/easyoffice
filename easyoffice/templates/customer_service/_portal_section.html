@@ -1,0 +1,340 @@
+{% comment %}
+apps/customer_service/templates/customer_service/_portal_section.html
+======================================================================
+
+Drop this into your existing customer_service ticket detail template
+where you want the customer-portal section to appear:
+
+    {% include "customer_service/_portal_section.html" with ticket=ticket %}
+
+Required context:
+    ticket     — the ServiceTicket instance
+
+Renders nothing if there's no linked PortalSupportRequest (i.e. the
+ticket was created from inside the staff app, not from the portal).
+{% endcomment %}
+
+{# Pull the portal request via the reverse relation. #}
+{% with portal_req=ticket.portal_request_origin.all|first %}
+{% if portal_req %}
+
+<style>
+  /* Scoped to .portal-section so it doesn't bleed into the rest of the
+     CS app's design system. Mirrors the customer-side aesthetic at a
+     more compact scale. */
+  .portal-section {
+    margin: 24px 0;
+    border: 1px solid #e8e3de;
+    border-radius: 12px;
+    background: #fdfbf9;
+    overflow: hidden;
+  }
+  .portal-section-head {
+    padding: 16px 22px;
+    background: linear-gradient(135deg, #1a1714 0%, #2e2925 100%);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .portal-section-head .ps-icon {
+    width: 32px; height: 32px;
+    background: rgba(255,255,255,.08);
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+  }
+  .portal-section-head h3 {
+    font-size: 14px;
+    margin: 0;
+    font-weight: 500;
+    letter-spacing: -.01em;
+    color: #fff;
+  }
+  .portal-section-head .ps-meta {
+    font-size: 11px;
+    color: rgba(255,255,255,.55);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-top: 1px;
+  }
+  .portal-section-head .ps-status {
+    margin-left: auto;
+    font-size: 11px;
+    background: rgba(255,255,255,.12);
+    color: #fff;
+    padding: 4px 10px;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    font-weight: 500;
+  }
+  .portal-section-head .ps-status.is-cancelled { background: rgba(192,57,43,.55); }
+  .portal-section-head .ps-status.is-resolved  { background: rgba(46,160,67,.55); }
+  .portal-section-head .ps-status.is-closed    { background: rgba(46,160,67,.4);  }
+
+  .portal-section-body { padding: 18px 22px; }
+
+  .portal-thread {
+    list-style: none;
+    margin: 0 0 18px;
+    padding: 0;
+  }
+  .portal-thread li {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .portal-thread li:last-child { margin-bottom: 0; }
+  .portal-thread .ps-avatar {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    text-transform: uppercase;
+  }
+  .portal-thread .ps-avatar.kind-customer { background: #c0392b; }
+  .portal-thread .ps-avatar.kind-staff    { background: #1a56db; }
+  .portal-thread .ps-avatar.kind-system   { background: #9e9994; }
+
+  .portal-thread .ps-bubble {
+    flex: 1;
+    background: #fff;
+    border: 1px solid #e8e3de;
+    border-radius: 8px;
+    padding: 10px 14px;
+  }
+  .portal-thread .ps-bubble.kind-system {
+    background: #f6f3f0;
+    border-style: dashed;
+    color: #5c5550;
+    font-size: 12.5px;
+  }
+  .portal-thread .ps-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 4px;
+  }
+  .portal-thread .ps-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #1a1714;
+  }
+  .portal-thread .ps-time {
+    font-size: 11px;
+    color: #9e9994;
+  }
+  .portal-thread .ps-body {
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: #1a1714;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .portal-thread .ps-attachments {
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .portal-thread .ps-attach {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    color: #5c5550;
+    background: #faf8f6;
+    border: 1px solid #e8e3de;
+    border-radius: 4px;
+    padding: 3px 8px;
+  }
+
+  .portal-replybox label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: #5c5550;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: 6px;
+  }
+  .portal-replybox textarea {
+    width: 100%;
+    min-height: 80px;
+    padding: 10px 12px;
+    border: 1px solid #e8e3de;
+    border-radius: 6px;
+    font: inherit;
+    font-size: 13.5px;
+    resize: vertical;
+    background: #fff;
+  }
+  .portal-replybox textarea:focus {
+    outline: none;
+    border-color: #c0392b;
+    box-shadow: 0 0 0 3px rgba(192,57,43,.08);
+  }
+  .portal-replybox-hint {
+    font-size: 11.5px;
+    color: #9e9994;
+    margin: 4px 0 10px;
+  }
+  .portal-replybox-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .portal-replybox button {
+    background: #c0392b;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .portal-replybox button:hover { background: #962d22; }
+  .portal-replybox button[disabled] {
+    background: #9e9994;
+    cursor: not-allowed;
+  }
+
+  .portal-empty {
+    text-align: center;
+    padding: 18px;
+    font-size: 13px;
+    color: #9e9994;
+  }
+
+  .portal-pending-banner {
+    margin-bottom: 14px;
+    padding: 10px 14px;
+    background: #fef9ec;
+    border: 1px solid #f0d9a0;
+    border-radius: 6px;
+    font-size: 12.5px;
+    color: #92651a;
+  }
+  .portal-pending-banner strong { color: #6f4d13; }
+</style>
+
+<div class="portal-section">
+
+  <div class="portal-section-head">
+    <span class="ps-icon">🎫</span>
+    <div>
+      <h3>Customer portal conversation</h3>
+      <div class="ps-meta">
+        Submitted {{ portal_req.created_at|date:"d M Y, H:i" }}
+        · {{ portal_req.contact.full_name|default:"Anonymous contact" }}
+      </div>
+    </div>
+    <span class="ps-status
+      {% if portal_req.status == 'cancelled' %}is-cancelled
+      {% elif portal_req.status == 'resolved' %}is-resolved
+      {% elif portal_req.status == 'closed' %}is-closed
+      {% endif %}">
+      Portal: {{ portal_req.get_status_display }}
+    </span>
+  </div>
+
+  <div class="portal-section-body">
+
+    {# Pending reopen request banner — the agent should know. #}
+    {% with pending_reopen=portal_req.reopen_requests.all|dictsort:"-created_at"|first %}
+      {% if pending_reopen and pending_reopen.decision == 'pending' %}
+        <div class="portal-pending-banner">
+          <strong>↺ Reopen request pending review.</strong>
+          {{ pending_reopen.requested_by_contact.full_name|default:"Customer" }}
+          asked to reopen this ticket on
+          {{ pending_reopen.created_at|date:"d M H:i" }}.
+          Reason: <em>{{ pending_reopen.reason|truncatechars:160 }}</em>
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {# Conversation thread #}
+    {% if portal_req.comments.all %}
+      <ul class="portal-thread">
+        {% for c in portal_req.comments.all %}
+          <li>
+            <span class="ps-avatar kind-{{ c.author_kind }}">
+              {% if c.author_kind == 'system' %}!
+              {% elif c.author_kind == 'staff' %}{{ c.display_name|first|upper }}
+              {% else %}{{ c.display_name|first|upper }}
+              {% endif %}
+            </span>
+            <div class="ps-bubble kind-{{ c.author_kind }}">
+              <div class="ps-head">
+                <span class="ps-name">
+                  {{ c.display_name }}
+                  {% if c.author_kind == 'customer' %}
+                    <span style="font-weight:400; color:#9e9994; font-size:11px;">· customer</span>
+                  {% elif c.author_kind == 'staff' %}
+                    <span style="font-weight:400; color:#9e9994; font-size:11px;">· you</span>
+                  {% endif %}
+                </span>
+                <span class="ps-time">{{ c.created_at|date:"d M H:i" }}</span>
+              </div>
+              <div class="ps-body">{{ c.body }}</div>
+              {% if c.attachments.all %}
+                <div class="ps-attachments">
+                  {% for a in c.attachments.all %}
+                    <span class="ps-attach">📎 {{ a.original_name }} ({{ a.size_human }})</span>
+                  {% endfor %}
+                </div>
+              {% endif %}
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="portal-empty">No customer messages yet.</div>
+    {% endif %}
+
+    {# Reply box — only when the ticket can still receive replies #}
+    {% if portal_req.status != 'cancelled' and portal_req.status != 'closed' %}
+      <form method="post"
+            action="{% url 'customer_service_portal_reply' pk=ticket.pk %}"
+            class="portal-replybox">
+        {% csrf_token %}
+        <label for="portal-reply-{{ ticket.pk }}">Reply to customer (visible on portal)</label>
+        <textarea id="portal-reply-{{ ticket.pk }}"
+                  name="body"
+                  placeholder="Write a reply the customer will see on their portal…"
+                  required></textarea>
+        <p class="portal-replybox-hint">
+          The customer will see this on their portal ticket detail page,
+          and a copy will be added to this ticket's activity log.
+          For internal-only notes, use the regular update form instead.
+        </p>
+        <div class="portal-replybox-actions">
+          <button type="submit">Send reply</button>
+        </div>
+      </form>
+    {% else %}
+      <div class="portal-empty">
+        {% if portal_req.status == 'cancelled' %}
+          Customer cancelled this ticket — replies disabled.
+        {% else %}
+          Ticket is closed — replies disabled.
+        {% endif %}
+      </div>
+    {% endif %}
+
+  </div>
+</div>
+
+{% endif %}
+{% endwith %}

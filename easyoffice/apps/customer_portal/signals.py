@@ -402,8 +402,14 @@ def _looks_like_renewal(instance) -> bool:
 
 def _connect():
     """
-    Connect the post_save signal once we know the Contract model exists.
-    Called from apps.py.ready().
+    Connect signal listeners. Called from apps.py.ready().
+
+    Three independent connections:
+      1. Contract.post_save           — issue tokens, mirror customer, etc.
+      2. ServiceTicket.post_save      — push staff status changes to portal
+      3. ServiceTicketUpdate.post_save — surface customer-visible staff
+                                          updates (resolution notes) on the
+                                          portal conversation thread
     """
     Contract = _get_contract_model()
     if Contract is None:
@@ -451,6 +457,140 @@ def _connect():
             transaction.on_commit(
                 lambda: _send_token_email_safely(token, instance, contact, is_renewal=not created)
             )
+
+    # ── Staff → Portal: ticket status changes ──────────────────────────────
+    try:
+        ServiceTicket = apps.get_model('customer_service', 'ServiceTicket')
+    except Exception:
+        ServiceTicket = None
+        logger.warning(
+            'customer_portal: ServiceTicket signal NOT connected — model missing',
+        )
+
+    if ServiceTicket is not None:
+
+        @receiver(
+            post_save, sender=ServiceTicket,
+            dispatch_uid='customer_portal_service_ticket_save',
+        )
+        def on_service_ticket_saved(sender, instance, created, **kwargs):
+            # First save (the portal itself just created it) — no mirror yet.
+            if created:
+                return
+            try:
+                from . import sync as _sync
+                _sync.push_staff_status_to_portal(instance)
+            except Exception:
+                logger.exception(
+                    'customer_portal: staff→portal sync failed for ticket %s',
+                    getattr(instance, 'pk', '?'),
+                )
+
+    # ── Staff → Portal: customer-visible activity-log entries ─────────────
+    #
+    # If a staff agent posts a ServiceTicketUpdate of type 'resolution' or
+    # 'customer_update' that wasn't itself triggered by the portal, mirror
+    # it as a staff comment on the portal thread so the customer sees what
+    # the agent said about their issue.
+    try:
+        ServiceTicketUpdate = apps.get_model('customer_service', 'ServiceTicketUpdate')
+    except Exception:
+        ServiceTicketUpdate = None
+
+    if ServiceTicketUpdate is not None:
+
+        @receiver(
+            post_save, sender=ServiceTicketUpdate,
+            dispatch_uid='customer_portal_service_ticket_update',
+        )
+        def on_service_ticket_update(sender, instance, created, **kwargs):
+            if not created:
+                return  # we only care about newly-posted entries
+            try:
+                from . import sync as _sync
+                # Suppress the entries WE just wrote from the staff-side
+                # by checking the re-entrancy guard.
+                if _sync._is_syncing():
+                    return
+                _maybe_mirror_staff_update_to_portal(instance)
+            except Exception:
+                logger.exception(
+                    'customer_portal: staff-update mirror failed (update=%s)',
+                    getattr(instance, 'pk', '?'),
+                )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers used by the new ServiceTicketUpdate listener
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Update types we surface to the customer. 'note' alone is internal-only;
+# 'resolution' / 'customer_update' / 'status_change' are visible.
+_CUSTOMER_VISIBLE_UPDATE_TYPES = {
+    'resolution',
+    'customer_update',
+    'status_change',
+}
+
+
+def _maybe_mirror_staff_update_to_portal(staff_update) -> None:
+    """
+    Mirror a staff ServiceTicketUpdate as a TicketComment(author_kind='staff')
+    on the portal thread, ONLY if:
+      - The ticket has a linked PortalSupportRequest
+      - The update_type is something the customer should see
+      - The body looks like real content (not a system-generated stub)
+    """
+    update_type = (getattr(staff_update, 'update_type', '') or '').lower()
+    if update_type not in _CUSTOMER_VISIBLE_UPDATE_TYPES:
+        return
+
+    body = (getattr(staff_update, 'body', '') or '').strip()
+    if not body or len(body) < 3:
+        return
+
+    # Skip our OWN auto-written entries (mirror_customer_comment_to_staff
+    # writes lines starting with "💬 Reply from"; status-change auto-entries
+    # start with "❌"/"✓"/"↺"). The re-entrancy guard catches the same-tx
+    # case; this catches the cross-process case.
+    if body.startswith(('💬 Reply from', '❌', '✓', '↺')):
+        return
+
+    try:
+        from .models import PortalSupportRequest, TicketComment
+    except Exception:
+        return
+
+    portal_req = (
+        PortalSupportRequest.objects
+        .filter(service_ticket=staff_update.ticket)
+        .first()
+    )
+    if not portal_req:
+        return
+
+    # Don't mirror to a tx that's already terminal — there's nothing for
+    # the customer to do with the message.
+    if portal_req.status in ('closed', 'cancelled'):
+        return
+
+    user = getattr(staff_update, 'user', None)
+    name = ''
+    if user:
+        name = (
+            getattr(user, 'full_name', None)
+            or (user.get_full_name() if hasattr(user, 'get_full_name') else None)
+            or user.get_username()
+        )
+
+    TicketComment.objects.create(
+        request=portal_req,
+        author_kind='staff',
+        author_user=user,
+        author_display_name=name or 'Support Agent',
+        body=body,
+        event_tag=update_type if update_type != 'customer_update' else '',
+    )
 
 
 def _send_token_email_safely(token, contract, contact, *, is_renewal: bool) -> None:

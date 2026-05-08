@@ -1,0 +1,204 @@
+{#
+  apps/customer_service/templates/customer_service/_portal_thread.html
+  ─────────────────────────────────────────────────────────────────────
+  Drop-in partial for the CS ticket detail page.
+
+  HOW TO USE
+  ──────────
+  1. In your existing customer_service TicketDetailView (or DetailView),
+     import and call get_portal_context() from views_extra.py and merge
+     the result into your context:
+
+       from .views_extra import get_portal_context
+
+       def get_context_data(self, **kwargs):
+           ctx = super().get_context_data(**kwargs)
+           ctx.update(get_portal_context(self.object))   # adds portal_request, portal_comments, portal_comment_count
+           return ctx
+
+  2. Register the new URL in urls_extra.py (already done — it's the
+     `customer_service_portal_reply` route).
+
+  3. In your existing customer_service/ticket_detail.html, paste this
+     line wherever you want the thread panel to appear (after the ticket
+     info card, before the activity log is a good spot):
+
+       {% include "customer_service/_portal_thread.html" %}
+
+  That's it. No model changes needed.
+#}
+
+{% load humanize %}
+
+{% if portal_request %}
+<div class="card shadow-sm mt-4" id="portal-thread-card">
+  {# ── Card header ───────────────────────────────────────────────── #}
+  <div class="card-header d-flex align-items-center justify-content-between py-2 px-3"
+       style="background:#f8faff; border-bottom:1px solid #dee2f0;">
+    <div class="d-flex align-items-center gap-2">
+      <i class="bi bi-person-circle text-primary" style="font-size:18px;"></i>
+      <span class="fw-semibold" style="font-size:14.5px;">Customer Portal Thread</span>
+      {% if portal_comment_count %}
+      <span class="badge bg-primary rounded-pill" style="font-size:11px;">
+        {{ portal_comment_count }}
+      </span>
+      {% endif %}
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      {# Portal request status badge #}
+      <span class="badge
+        {% if portal_request.status == 'open' or portal_request.status == 'reopened' %}bg-success
+        {% elif portal_request.status == 'pending_review' %}bg-warning text-dark
+        {% elif portal_request.status in 'resolved,closed' %}bg-secondary
+        {% elif portal_request.status == 'cancelled' %}bg-danger
+        {% else %}bg-light text-dark border{% endif %}"
+        style="font-size:11px;"
+        title="Customer portal status">
+        Portal: {{ portal_request.get_status_display }}
+      </span>
+      {# Jump to customer view (no token leakage — goes to admin) #}
+      <a href="/admin/customer_portal/portalsupportrequest/{{ portal_request.pk }}/change/"
+         class="btn btn-outline-secondary btn-sm py-0 px-2"
+         style="font-size:11px;" target="_blank" title="Open in admin">
+        <i class="bi bi-box-arrow-up-right"></i>
+      </a>
+    </div>
+  </div>
+
+  {# ── Message thread ────────────────────────────────────────────── #}
+  <div class="card-body p-0">
+    <div style="max-height:520px; overflow-y:auto; padding:16px 18px; display:flex; flex-direction:column; gap:14px;"
+         id="portal-thread-scroll">
+
+      {% for c in portal_comments %}
+      <div style="display:grid; grid-template-columns:34px 1fr; gap:10px; align-items:flex-start;">
+
+        {# Avatar #}
+        <div style="width:34px; height:34px; border-radius:50%;
+          display:flex; align-items:center; justify-content:center;
+          font-weight:700; font-size:12px; flex-shrink:0;
+          {% if c.author_kind == 'customer' %}
+            background:#fff0f0; color:#c0392b; border:1.5px solid rgba(192,57,43,.2);
+          {% elif c.author_kind == 'staff' %}
+            background:#eff6ff; color:#1d4ed8; border:1.5px solid rgba(29,78,216,.2);
+          {% else %}
+            background:#f3f4f6; color:#6b7280; border:1.5px solid #e5e7eb;
+          {% endif %}">
+          {% if c.author_kind == 'system' %}
+            <i class="bi bi-gear-fill"></i>
+          {% else %}
+            {{ c.display_name|slice:":1"|upper }}
+          {% endif %}
+        </div>
+
+        {# Bubble #}
+        <div style="
+          border-radius:10px; padding:10px 14px;
+          {% if c.author_kind == 'staff' %}
+            background:#eff6ff; border:1px solid #bfdbfe;
+          {% elif c.author_kind == 'system' %}
+            background:#f9fafb; border:1px dashed #d1d5db;
+          {% else %}
+            background:#fff; border:1px solid #e5e7eb;
+            box-shadow: 0 1px 2px rgba(0,0,0,.04);
+          {% endif %}">
+
+          {# Header row #}
+          <div class="d-flex align-items-baseline gap-2 mb-1 flex-wrap">
+            <strong style="font-size:13px;">{{ c.display_name }}</strong>
+            {% if c.author_kind == 'staff' %}
+              <span class="badge bg-primary" style="font-size:10px; font-weight:600;">Staff</span>
+            {% elif c.author_kind == 'customer' %}
+              <span class="badge bg-danger" style="font-size:10px; font-weight:600;">Customer</span>
+            {% elif c.author_kind == 'system' %}
+              <span class="badge bg-secondary" style="font-size:10px; font-weight:600;">System</span>
+            {% endif %}
+            <small class="text-muted" style="font-size:11.5px;" title="{{ c.created_at|date:'D j M Y H:i' }}">
+              {{ c.created_at|naturaltime }}
+            </small>
+          </div>
+
+          {# Body #}
+          <div style="font-size:13.5px; line-height:1.6; white-space:pre-wrap; word-wrap:break-word; color:#1f2937;">{{ c.body }}</div>
+
+          {# Attachments #}
+          {% if c.attachments.all %}
+          <div style="margin-top:8px; padding-top:8px; border-top:1px dashed #e5e7eb;
+                      display:flex; flex-wrap:wrap; gap:6px;">
+            {% for a in c.attachments.all %}
+            <span style="display:inline-flex; align-items:center; gap:4px;
+                         font-size:11.5px; padding:3px 8px;
+                         background:#f3f4f6; border:1px solid #e5e7eb;
+                         border-radius:4px; color:#374151;">
+              <i class="bi bi-paperclip"></i>
+              {{ a.original_name|truncatechars:28 }}
+              <small class="text-muted">({{ a.size_human }})</small>
+            </span>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+        </div>
+      </div>
+      {% empty %}
+      <p class="text-center text-muted py-4 mb-0" style="font-size:13.5px;">
+        <i class="bi bi-chat-square-dots me-1"></i>
+        No messages in this portal thread yet.
+      </p>
+      {% endfor %}
+
+    </div>{# end scroll container #}
+
+    {# ── Staff reply composer ────────────────────────────────────── #}
+    {% if portal_request.status not in 'closed,cancelled' %}
+    <div style="padding:14px 18px; border-top:1px solid #e9ecef; background:#f8faff;">
+      <form method="post"
+            action="{% url 'customer_service_portal_reply' pk=object.pk %}"
+            id="portal-reply-form">
+        {% csrf_token %}
+        <label class="form-label fw-semibold" style="font-size:12.5px; margin-bottom:6px;">
+          <i class="bi bi-reply me-1 text-primary"></i> Reply to customer
+        </label>
+        <textarea name="portal_body"
+                  class="form-control form-control-sm"
+                  rows="3"
+                  required
+                  maxlength="8000"
+                  placeholder="Type your reply here — the customer will see it immediately in their portal…"
+                  style="font-size:13.5px; resize:vertical;"></textarea>
+
+        <div class="d-flex align-items-center justify-content-between mt-2 gap-2 flex-wrap">
+          <small class="text-muted" style="font-size:11.5px;">
+            <i class="bi bi-eye me-1"></i>
+            Visible to the customer in their support portal.
+            {% if portal_request.status == 'pending_review' %}
+            Sending this reply will also open the ticket.
+            {% endif %}
+          </small>
+          <button type="submit" class="btn btn-primary btn-sm">
+            <i class="bi bi-send me-1"></i> Send reply
+          </button>
+        </div>
+      </form>
+    </div>
+    {% else %}
+    <div style="padding:12px 18px; border-top:1px solid #e9ecef; background:#f8f9fa;">
+      <p class="text-muted mb-0" style="font-size:12.5px;">
+        <i class="bi bi-lock me-1"></i>
+        This portal request is {{ portal_request.get_status_display|lower }} — no further replies can be sent.
+      </p>
+    </div>
+    {% endif %}
+
+  </div>{# end card-body #}
+</div>{# end card #}
+
+<script>
+  // Auto-scroll the thread to the bottom on page load
+  (function() {
+    var el = document.getElementById('portal-thread-scroll');
+    if (el) el.scrollTop = el.scrollHeight;
+  })();
+</script>
+
+{% endif %}{# end if portal_request #}

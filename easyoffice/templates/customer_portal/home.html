@@ -1,6 +1,87 @@
 {% extends "customer_portal/_base.html" %}
 {% block title %}Support Portal — {{ contract.title }}{% endblock %}
 
+{% block extra_head %}
+<style>
+  /* Extend status pills to cover the new portal-side statuses. */
+  .s-pending_review { background: #e8f0fe; color: #1a56db; }
+  .s-cancelled      { background: var(--accent-bg); color: var(--accent); }
+  .s-reopened       { background: #fef3e2; color: #9a5600; }
+
+  /* Make ticket rows feel clickable. */
+  a.tl-link {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    margin: 0 -10px;
+    padding: 0 10px;
+    border-radius: var(--radius-sm);
+    transition: background .12s ease;
+  }
+  a.tl-link:hover {
+    background: var(--rule-light);
+    color: inherit;
+  }
+  a.tl-link .tl-item {
+    border-bottom: 1px solid var(--rule-light);
+    padding: 14px 0;
+  }
+  a.tl-link:last-child .tl-item { border-bottom: none; }
+  a.tl-link .chev {
+    float: right;
+    color: var(--ink-muted);
+    font-size: 14px;
+    margin-left: 8px;
+    margin-top: 2px;
+    opacity: 0;
+    transition: opacity .15s, transform .15s;
+  }
+  a.tl-link:hover .chev {
+    opacity: 1;
+    transform: translateX(2px);
+  }
+
+  /* Awaiting-feedback callout: gentle nudge to rate. */
+  .feedback-pending {
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: linear-gradient(135deg, #fef9ec 0%, #fef3e2 100%);
+    border: 1px dashed #e8c987;
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+    color: var(--warn);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .feedback-pending i { font-size: 13px; }
+
+  /* Stat strip on the hero. */
+  .hero-stats {
+    margin-top: 22px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255,255,255,.08);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 26px;
+  }
+  .hero-stat-num {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    color: #fff;
+    line-height: 1;
+    letter-spacing: -.02em;
+  }
+  .hero-stat-lbl {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: rgba(255,255,255,.5);
+    margin-top: 6px;
+  }
+</style>
+{% endblock %}
+
 {% block content %}
 
 {# ── Hero greeting ─────────────────────────────────────────────────── #}
@@ -18,7 +99,68 @@
       <i class="bi bi-plus-lg"></i> New request
     </a>
   </div>
+
+  {% if open_requests or resolved_requests or upcoming_visits %}
+  <div class="hero-stats">
+    <div>
+      <div class="hero-stat-num">{{ open_requests|length|default:0 }}</div>
+      <div class="hero-stat-lbl">Open</div>
+    </div>
+    <div>
+      <div class="hero-stat-num">{{ resolved_requests|length|default:0 }}</div>
+      <div class="hero-stat-lbl">Awaiting feedback</div>
+    </div>
+    {% if upcoming_visits %}
+    <div>
+      <div class="hero-stat-num">{{ upcoming_visits|length }}</div>
+      <div class="hero-stat-lbl">Upcoming visits</div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
+
+
+{# ── Awaiting feedback (resolved, not yet rated) ──────────────────── #}
+{% if resolved_requests %}
+<div class="p-card">
+  <div class="p-card-header">
+    <h2 class="p-card-title"><i class="bi bi-star me-1"></i> Awaiting your feedback</h2>
+    <span style="font-size:12px; background:var(--warn-bg); color:var(--warn); padding:2px 10px; border-radius:999px; font-weight:500;">
+      {{ resolved_requests|length }}
+    </span>
+  </div>
+
+  {% for req in resolved_requests %}
+    <a class="tl-link" href="{% url 'customer_portal_ticket_detail' token=token.token request_id=req.id %}#rate">
+      <div class="tl-item">
+        <div class="tl-time">
+          {% if req.resolved_at %}{{ req.resolved_at|date:"d M Y" }}{% else %}{{ req.updated_at|date:"d M Y" }}{% endif %}
+          <i class="bi bi-chevron-right chev"></i>
+        </div>
+        <div class="tl-body">
+          <strong>{{ req.subject }}</strong>
+          <span class="s-pill s-resolved" style="margin-left:6px;">Resolved</span>
+          <br>
+          <small>
+            {{ req.get_kind_display }}
+            <span style="color:var(--rule); padding:0 4px;">·</span>
+            {{ req.display_reference|default:"Pending ticket" }}
+            {% if req.assigned_agent_name %}
+              <span style="color:var(--rule); padding:0 4px;">·</span>
+              Handled by {{ req.assigned_agent_name }}
+            {% endif %}
+          </small>
+          <div class="feedback-pending">
+            <i class="bi bi-stars"></i>
+            How did we do? <span style="text-decoration:underline; text-underline-offset:2px;">Rate this resolution</span>
+          </div>
+        </div>
+      </div>
+    </a>
+  {% endfor %}
+</div>
+{% endif %}
 
 
 {# ── Open requests ─────────────────────────────────────────────────── #}
@@ -33,31 +175,40 @@
   </div>
 
   {% if open_requests %}
-    <ul class="list-unstyled mb-0">
     {% for req in open_requests %}
-      <li class="tl-item">
-        <div class="tl-time">{{ req.created_at|date:"d M Y" }}</div>
-        <div class="tl-body">
-          <strong>{{ req.subject }}</strong>
-          <br>
-          <small>
-            {{ req.get_kind_display }}
-            <span style="color:var(--rule); padding:0 4px;">·</span>
-            {{ req.get_priority_display }}
-            {% if req.service_ticket %}
+      <a class="tl-link" href="{% url 'customer_portal_ticket_detail' token=token.token request_id=req.id %}">
+        <div class="tl-item">
+          <div class="tl-time">
+            {{ req.created_at|date:"d M Y" }}
+            <i class="bi bi-chevron-right chev"></i>
+          </div>
+          <div class="tl-body">
+            <strong>{{ req.subject }}</strong>
+            <br>
+            <small>
+              {{ req.get_kind_display }}
               <span style="color:var(--rule); padding:0 4px;">·</span>
-              Ticket {{ req.service_ticket.ticket_no }}
-              <span class="s-pill s-{{ req.service_ticket.status }}" style="margin-left:4px;">
-                {{ req.service_ticket.get_status_display }}
+              {{ req.get_priority_display }}
+              <span style="color:var(--rule); padding:0 4px;">·</span>
+              {{ req.display_reference|default:"Pending review" }}
+              <span class="s-pill s-{{ req.status }}" style="margin-left:6px;">
+                {{ req.get_status_display }}
               </span>
-            {% else %}
-              <span class="s-pill s-new" style="margin-left:4px;">Pending review</span>
-            {% endif %}
-          </small>
+              {% if req.assigned_agent_name %}
+                <br><span style="color:var(--ink-muted); font-size:12px;">
+                  <i class="bi bi-person-badge" style="font-size:11px;"></i>
+                  Handled by {{ req.assigned_agent_name }}
+                  {% if req.assigned_technician_name and req.assigned_technician_name != req.assigned_agent_name %}
+                    <span style="color:var(--rule); padding:0 4px;">·</span>
+                    Technician: {{ req.assigned_technician_name }}
+                  {% endif %}
+                </span>
+              {% endif %}
+            </small>
+          </div>
         </div>
-      </li>
+      </a>
     {% endfor %}
-    </ul>
   {% else %}
     <div style="text-align:center; padding:32px 16px; color:var(--ink-muted);">
       <i class="bi bi-check-circle" style="font-size:28px; display:block; margin-bottom:10px; color:var(--rule);"></i>
@@ -172,11 +323,51 @@
 {% endif %}
 
 
-{# ── Support history ──────────────────────────────────────────────── #}
+{# ── Recent / closed history ──────────────────────────────────────── #}
+{% if recent_requests %}
+<div class="p-card">
+  <div class="p-card-header">
+    <h2 class="p-card-title"><i class="bi bi-clock-history me-1"></i> Recent history</h2>
+  </div>
+  {% for req in recent_requests %}
+    <a class="tl-link" href="{% url 'customer_portal_ticket_detail' token=token.token request_id=req.id %}">
+      <div class="tl-item">
+        <div class="tl-time">
+          {% if req.closed_at %}{{ req.closed_at|date:"d M Y" }}
+          {% elif req.cancelled_at %}{{ req.cancelled_at|date:"d M Y" }}
+          {% else %}{{ req.created_at|date:"d M Y" }}{% endif %}
+          <i class="bi bi-chevron-right chev"></i>
+        </div>
+        <div class="tl-body">
+          <strong>{{ req.subject }}</strong>
+          <span class="s-pill s-{{ req.status }}" style="margin-left:6px;">{{ req.get_status_display }}</span>
+          <br>
+          <small>
+            {{ req.display_reference|default:"—" }}
+            <span style="color:var(--rule); padding:0 4px;">·</span>
+            {{ req.get_kind_display }}
+            {% if req.rating %}
+              <span style="color:var(--rule); padding:0 4px;">·</span>
+              <span style="color:#daa520;">
+                {% for _ in "12345"|make_list %}
+                  {% if forloop.counter <= req.rating.score %}<i class="bi bi-star-fill" style="font-size:10px;"></i>{% else %}<i class="bi bi-star" style="font-size:10px; color:var(--ink-muted);"></i>{% endif %}
+                {% endfor %}
+              </span>
+            {% endif %}
+          </small>
+        </div>
+      </div>
+    </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+
+{# ── Legacy support history (full ServiceTicket list, fallback) ───── #}
 {% if tickets %}
 <div class="p-card">
   <div class="p-card-header">
-    <h2 class="p-card-title"><i class="bi bi-clock-history me-1"></i> Support history</h2>
+    <h2 class="p-card-title"><i class="bi bi-archive me-1"></i> All tickets</h2>
   </div>
   <ul class="list-unstyled mb-0">
   {% for t in tickets %}

@@ -2,6 +2,7 @@
 {% block title %}{{ ticket.ticket_no }} · {{ ticket.subject }}{% endblock %}
 {% block breadcrumb %}<a href="{% url 'customer_service_dashboard' %}">Customer Service</a> / <a href="{% url 'customer_service_ticket_list' %}">Tickets</a> / {{ ticket.ticket_no }}{% endblock %}
 {% block content %}
+{% load humanize %}
 <style>
   :root {
     --cs-primary: #2563eb;
@@ -57,6 +58,7 @@
   .cs-status-resolved, .cs-status-closed { background: #d1fae5; color: #065f46; }
   .cs-status-escalated { background: #fee2e2; color: #991b1b; }
   .cs-status-cancelled { background: #f1f5f9; color: #64748b; }
+  .cs-status-pending_review { background: #f5f3ff; color: #5b21b6; }
 
   .cs-priority-critical { color: #dc2626; }
   .cs-priority-high { color: #ea580c; }
@@ -252,6 +254,153 @@
     box-shadow: 0 10px 30px rgba(0,0,0,.2);
     z-index: 9999; display: none;
   }
+
+  /* ── Portal thread panel ─────────────────────────────────────────── */
+  .portal-thread-card {
+    background: #fff;
+    border: 1.5px solid #c7d2fe;
+    border-radius: 16px;
+    margin-bottom: 14px;
+    overflow: hidden;
+    box-shadow: 0 4px 14px rgba(99,102,241,.07);
+  }
+  .portal-thread-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 13px 18px;
+    background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+    border-bottom: 1px solid #e0e7ff;
+  }
+  .portal-thread-header h3 {
+    font-size: .92rem; font-weight: 700; margin: 0;
+    display: flex; align-items: center; gap: 8px;
+    color: #3730a3;
+  }
+  .portal-status-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  }
+  .pbs-pending_review { background: #f5f3ff; color: #5b21b6; border: 1px solid #ddd6fe; }
+  .pbs-open, .pbs-reopened { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+  .pbs-resolved, .pbs-closed { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+  .pbs-cancelled { background: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; }
+
+  .portal-thread-scroll {
+    max-height: 500px;
+    overflow-y: auto;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .portal-msg {
+    display: grid;
+    grid-template-columns: 32px 1fr;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .portal-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 12px; flex-shrink: 0;
+  }
+  .portal-avatar.av-customer { background: #fff0f0; color: #c0392b; border: 1.5px solid rgba(192,57,43,.2); }
+  .portal-avatar.av-staff    { background: #eff6ff; color: #1d4ed8; border: 1.5px solid rgba(29,78,216,.2); }
+  .portal-avatar.av-system   { background: #f3f4f6; color: #6b7280; border: 1.5px solid #e5e7eb; }
+
+  .portal-bubble {
+    border-radius: 10px;
+    padding: 10px 13px;
+    font-size: .875rem;
+    line-height: 1.6;
+  }
+  .portal-bubble.bub-customer {
+    background: #fff; border: 1px solid #e5e7eb;
+    box-shadow: 0 1px 3px rgba(0,0,0,.04);
+  }
+  .portal-bubble.bub-staff {
+    background: #eff6ff; border: 1px solid #bfdbfe;
+  }
+  .portal-bubble.bub-system {
+    background: #f9fafb; border: 1px dashed #d1d5db;
+    color: #6b7280; font-size: .82rem;
+  }
+  .portal-bubble-head {
+    display: flex; align-items: baseline; gap: 8px;
+    margin-bottom: 4px; flex-wrap: wrap;
+  }
+  .portal-bubble-head strong { font-size: .85rem; color: #111827; }
+  .portal-role-badge {
+    font-size: .65rem; font-weight: 700; text-transform: uppercase;
+    padding: 1px 7px; border-radius: 999px; letter-spacing: .04em;
+  }
+  .prb-customer { background: #fee2e2; color: #991b1b; }
+  .prb-staff    { background: #dbeafe; color: #1e40af; }
+  .prb-system   { background: #f3f4f6; color: #6b7280; }
+
+  .portal-bubble-body {
+    white-space: pre-wrap; word-wrap: break-word;
+    color: #1f2937;
+  }
+  .portal-attach-list {
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px dashed #e5e7eb;
+    display: flex; flex-wrap: wrap; gap: 6px;
+  }
+  .portal-attach-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: .75rem; padding: 2px 8px;
+    background: #f3f4f6; border: 1px solid #e5e7eb;
+    border-radius: 4px; color: #374151;
+  }
+
+  .portal-reply-composer {
+    padding: 14px 18px;
+    border-top: 1px solid #e0e7ff;
+    background: #f8faff;
+  }
+  .portal-reply-composer label {
+    font-size: .8rem; font-weight: 700; color: #3730a3;
+    display: block; margin-bottom: 6px;
+  }
+  .portal-reply-composer textarea {
+    width: 100%; border: 1.5px solid #c7d2fe;
+    border-radius: 10px; padding: 10px 12px;
+    font-size: .875rem; line-height: 1.55;
+    resize: vertical; outline: none;
+    background: #fff; color: #111827;
+    transition: border-color .15s;
+  }
+  .portal-reply-composer textarea:focus { border-color: var(--cs-primary); }
+  .portal-reply-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 8px; gap: 10px; flex-wrap: wrap;
+  }
+  .portal-reply-footer small { font-size: .75rem; color: #6b7280; }
+
+  /* ── New-customer-reply indicator (unread badge on the tab / heading) */
+  .portal-unread-dot {
+    display: inline-block;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #ef4444;
+    margin-left: 4px;
+    vertical-align: middle;
+    animation: pulse-dot 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: .5; transform: scale(.75); }
+  }
+
+  /* ── Portal status sync strip ────────────────────────────────────── */
+  .portal-sync-strip {
+    padding: 8px 18px;
+    font-size: .78rem;
+    display: flex; align-items: center; gap: 8px;
+    border-top: 1px solid #e0e7ff;
+  }
+  .portal-sync-strip.in-sync { background: #f0fdf4; color: #065f46; }
+  .portal-sync-strip.out-of-sync { background: #fffbeb; color: #92400e; }
 </style>
 
 <!-- ═══════════ HERO ═══════════ -->
@@ -283,6 +432,11 @@
     {% if ticket.callback_required %}
     <span class="cs-status-pill" style="background:rgba(255,255,255,.2);color:#fff">
       <i class="bi bi-telephone-outbound"></i> Callback required
+    </span>
+    {% endif %}
+    {% if portal_request %}
+    <span class="cs-status-pill" style="background:rgba(139,92,246,.35);color:#fff">
+      <i class="bi bi-person-circle"></i> Portal: {{ portal_request.get_status_display }}
     </span>
     {% endif %}
   </div>
@@ -368,6 +522,156 @@
       <h6 style="font-weight:700;color:#334155"><i class="bi bi-file-text"></i> Description</h6>
       <div style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:10px;border-left:3px solid var(--cs-primary);font-size:.9rem;line-height:1.6">{{ ticket.description }}</div>
     </div>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         CUSTOMER PORTAL THREAD
+         Shows only when a PortalSupportRequest is linked.
+         Wire up: in TicketDetailView.get_context_data() call
+             ctx.update(get_portal_context(self.object))
+         from views_extra.py
+    ═══════════════════════════════════════════════════════════════ -->
+    {% if portal_request %}
+    <div class="portal-thread-card" id="portal-thread-card">
+
+      {# ── Header ───────────────────────────────────────────────── #}
+      <div class="portal-thread-header">
+        <h3>
+          <i class="bi bi-person-circle"></i>
+          Customer Portal Thread
+          {% if portal_unread_count %}
+          <span class="portal-unread-dot" title="{{ portal_unread_count }} unread customer message{{ portal_unread_count|pluralize }}"></span>
+          {% endif %}
+          {% if portal_comment_count %}
+          <span style="background:#6366f1;color:#fff;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:999px;margin-left:2px;">
+            {{ portal_comment_count }}
+          </span>
+          {% endif %}
+        </h3>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="portal-status-badge pbs-{{ portal_request.status }}">
+            Portal: {{ portal_request.get_status_display }}
+          </span>
+          <a href="/admin/customer_portal/portalsupportrequest/{{ portal_request.pk }}/change/"
+             target="_blank"
+             style="font-size:.75rem;color:#6366f1;text-decoration:none;border:1px solid #c7d2fe;padding:3px 8px;border-radius:6px;"
+             title="Open portal request in admin">
+            <i class="bi bi-box-arrow-up-right"></i>
+          </a>
+        </div>
+      </div>
+
+      {# ── Status sync strip ────────────────────────────────────── #}
+      {% if portal_request.status == 'open' and ticket.status == 'resolved' %}
+      <div class="portal-sync-strip out-of-sync">
+        <i class="bi bi-exclamation-triangle-fill"></i>
+        <span>
+          This ticket is <strong>Resolved</strong> but the portal request is still
+          <strong>Open</strong>. Resolving on the CS side does not auto-close the portal.
+          Reply to the customer below and they can rate and close it from their portal.
+        </span>
+      </div>
+      {% elif portal_request.status == 'pending_review' %}
+      <div class="portal-sync-strip out-of-sync">
+        <i class="bi bi-hourglass-split"></i>
+        <span>
+          Portal request is <strong>Pending Review</strong> — the customer cannot reply yet.
+          Send a reply below to open it and notify them.
+        </span>
+      </div>
+      {% elif portal_request.status in 'resolved,closed,cancelled' %}
+      <div class="portal-sync-strip in-sync">
+        <i class="bi bi-check-circle-fill"></i>
+        <span>Portal request is <strong>{{ portal_request.get_status_display }}</strong>. No further replies needed.</span>
+      </div>
+      {% endif %}
+
+      {# ── Message thread ───────────────────────────────────────── #}
+      <div class="portal-thread-scroll" id="portalThreadScroll">
+        {% for c in portal_comments %}
+        <div class="portal-msg">
+
+          {# Avatar #}
+          <div class="portal-avatar av-{{ c.author_kind }}">
+            {% if c.author_kind == 'system' %}
+              <i class="bi bi-gear-fill" style="font-size:13px;"></i>
+            {% else %}
+              {{ c.display_name|slice:":1"|upper }}
+            {% endif %}
+          </div>
+
+          {# Bubble #}
+          <div class="portal-bubble bub-{{ c.author_kind }}">
+            <div class="portal-bubble-head">
+              <strong>{{ c.display_name }}</strong>
+              <span class="portal-role-badge prb-{{ c.author_kind }}">
+                {% if c.author_kind == 'customer' %}Customer
+                {% elif c.author_kind == 'staff' %}Staff
+                {% else %}System{% endif %}
+              </span>
+              <small class="text-muted ms-auto" style="font-size:.75rem;" title="{{ c.created_at|date:'D j M Y H:i' }}">
+                {{ c.created_at|naturaltime }}
+              </small>
+            </div>
+            <div class="portal-bubble-body">{{ c.body }}</div>
+            {% if c.attachments.all %}
+            <div class="portal-attach-list">
+              {% for a in c.attachments.all %}
+              <span class="portal-attach-chip">
+                <i class="bi bi-paperclip"></i>
+                {{ a.original_name|truncatechars:28 }}
+                <small class="text-muted">({{ a.size_human }})</small>
+              </span>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </div>
+        </div>
+        {% empty %}
+        <div style="text-align:center;padding:28px 0;color:#9ca3af;">
+          <i class="bi bi-chat-square-dots" style="font-size:1.6rem;display:block;margin-bottom:8px;"></i>
+          <span style="font-size:.875rem;">No messages yet — the customer hasn't replied.</span>
+        </div>
+        {% endfor %}
+      </div>
+
+      {# ── Reply composer ───────────────────────────────────────── #}
+      {% if portal_request.status not in 'closed,cancelled' %}
+      <div class="portal-reply-composer">
+        <form method="post" action="{% url 'customer_service_portal_reply' pk=ticket.pk %}">
+          {% csrf_token %}
+          <label>
+            <i class="bi bi-reply me-1"></i> Reply to customer
+            {% if portal_request.status == 'pending_review' %}
+            <span style="font-weight:400;color:#b45309;margin-left:6px;">(will open the ticket)</span>
+            {% endif %}
+          </label>
+          <textarea name="portal_body"
+                    rows="3"
+                    required
+                    maxlength="8000"
+                    placeholder="Type your reply — the customer sees this immediately in their portal…"></textarea>
+          <div class="portal-reply-footer">
+            <small>
+              <i class="bi bi-eye me-1"></i>
+              Visible to the customer in their support portal.
+            </small>
+            <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm">
+              <i class="bi bi-send me-1"></i> Send to customer
+            </button>
+          </div>
+        </form>
+      </div>
+      {% else %}
+      <div style="padding:10px 18px;border-top:1px solid #e0e7ff;background:#f8faff;">
+        <small class="text-muted">
+          <i class="bi bi-lock me-1"></i>
+          Portal request is {{ portal_request.get_status_display|lower }} — no further replies.
+        </small>
+      </div>
+      {% endif %}
+
+    </div>{# end portal-thread-card #}
+    {% endif %}{# end if portal_request #}
 
     <!-- Timeline -->
     <div class="cs-card">
@@ -511,6 +815,14 @@
           </div>
           <textarea name="resolution_note" rows="4" class="eo-form-control"
                     placeholder="Describe the resolution before marking resolved." required></textarea>
+          {% if portal_request and portal_request.status not in 'closed,cancelled' %}
+          <div style="margin:10px 0;padding:10px 12px;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;font-size:.8rem;color:#92400e;">
+            <i class="bi bi-info-circle me-1"></i>
+            <strong>Portal tip:</strong> Resolving here marks this CS ticket resolved but
+            the customer's portal request stays open until they rate it.
+            Use the <em>Reply to customer</em> box above to tell them it's fixed.
+          </div>
+          {% endif %}
           <button class="eo-btn eo-btn-primary w-100 mt-2" style="background:#10b981;border-color:#10b981">
             <i class="bi bi-check-circle"></i> Resolve Ticket
           </button>
@@ -585,11 +897,13 @@
     </div>
 
     {% if linked_contract %}
-    <div class="cs-meta-row">
-      <span class="cs-meta-label">Contract</span>
-      <a href="{% url 'contract_detail' linked_contract.pk %}">
-        {{ linked_contract.title }}
-      </a>
+    <div class="cs-card">
+      <div class="cs-info-row">
+        <span class="cs-info-label">Contract</span>
+        <span class="cs-info-value">
+          <a href="{% url 'contract_detail' linked_contract.pk %}">{{ linked_contract.title }}</a>
+        </span>
+      </div>
     </div>
     {% endif %}
 
@@ -714,6 +1028,12 @@ $$('.cs-quick-reply').forEach(btn => {
     }
   }
   tick(); setInterval(tick, 1000);
+})();
+
+/* Auto-scroll portal thread to bottom */
+(function(){
+  const scroll = document.getElementById('portalThreadScroll');
+  if (scroll) scroll.scrollTop = scroll.scrollHeight;
 })();
 </script>
 {% endblock %}

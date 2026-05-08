@@ -27,6 +27,10 @@ OPTION A — paste these lines into your existing urlpatterns:
          views_extra.HeadReportCSVView.as_view(),
          name='customer_service_oversight_report_csv'),
 
+    path('tickets/<int:pk>/portal-reply/',
+         views_extra.PortalReplyView.as_view(),
+         name='customer_service_portal_reply'),
+
 
 OPTION B — include this whole module from your existing urls.py:
 
@@ -61,5 +65,11 @@ urlpatterns = [
         'oversight/report.csv',
         views_extra.HeadReportCSVView.as_view(),
         name='customer_service_oversight_report_csv',
+    ),
+    # ── NEW: staff reply into customer portal thread ─────────────────
+    path(
+        'tickets/<int:pk>/portal-reply/',
+        views_extra.PortalReplyView.as_view(),
+        name='customer_service_portal_reply',
     ),
 ]

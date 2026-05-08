@@ -1,0 +1,254 @@
+{% comment %}
+apps/customer_service/templates/customer_service/_portal_reply_button.html
+==========================================================================
+
+Inclusion-tag template rendered by `{% portal_reply_button update ticket %}`.
+
+Renders nothing for non-portal updates. For portal customer comments,
+renders a small "Reply" button that toggles an inline reply form. The
+form posts to `customer_service_portal_reply` (PortalReplyView).
+
+Self-contained: no external CSS/JS dependencies. Styling is namespaced
+under .prb- so it won't collide with your existing CS app styles.
+{% endcomment %}
+
+{% if is_customer %}
+  {% if can_reply %}
+    <div class="prb-wrap">
+      <button type="button"
+              class="prb-toggle"
+              data-prb-target="{{ reply_id }}"
+              aria-expanded="false"
+              aria-controls="{{ reply_id }}">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M9 11l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Reply to customer
+      </button>
+
+      <form method="post"
+            action="{% url 'customer_service_portal_reply' pk=ticket.pk %}"
+            class="prb-form"
+            id="{{ reply_id }}"
+            hidden>
+        {% csrf_token %}
+        {# Anchor we redirect back to so the agent lands at the same row. #}
+        <input type="hidden" name="return_to" value="#u-{{ update.pk }}">
+
+        <div class="prb-form-context">
+          Replying to <strong>{{ update.body|slice:"15:" |truncatechars:60 }}</strong>
+        </div>
+
+        <textarea name="body"
+                  class="prb-textarea"
+                  rows="3"
+                  placeholder="Your reply will be visible to the customer on their portal…"
+                  required></textarea>
+
+        <div class="prb-form-actions">
+          <button type="button" class="prb-cancel" data-prb-target="{{ reply_id }}">
+            Cancel
+          </button>
+          <button type="submit" class="prb-submit">
+            Send reply
+          </button>
+        </div>
+      </form>
+    </div>
+
+  {% else %}
+    {# Customer comment but ticket is closed/cancelled — show a faded note. #}
+    <div class="prb-wrap">
+      <span class="prb-disabled">
+        ⓘ Replies disabled — ticket is closed or cancelled
+      </span>
+    </div>
+  {% endif %}
+{% endif %}
+
+{# ───────────────────────────────────────────────────────────────────────
+   Styles + JS: emitted ONCE per page load via the data-prb-init guard
+   on the parent <html>. Subsequent renders just reuse what's already
+   in the DOM. (Cheap because the guard check is the first thing each
+   instance does.)
+   ─────────────────────────────────────────────────────────────────── #}
+<script>
+(function () {
+  if (window.__prbInitDone) return;
+  window.__prbInitDone = true;
+
+  // Inject styles once.
+  var css = '\
+    .prb-wrap { margin-top: 8px; }\
+    .prb-toggle {\
+      background: none;\
+      border: 1px solid #d1d5db;\
+      color: #374151;\
+      font-size: 12px;\
+      font-weight: 500;\
+      padding: 5px 11px 5px 9px;\
+      border-radius: 6px;\
+      cursor: pointer;\
+      display: inline-flex;\
+      align-items: center;\
+      gap: 5px;\
+      font-family: inherit;\
+      transition: all .12s ease;\
+      line-height: 1.2;\
+    }\
+    .prb-toggle:hover {\
+      background: #f3f4f6;\
+      border-color: #9ca3af;\
+      color: #1f2937;\
+    }\
+    .prb-toggle[aria-expanded="true"] {\
+      background: #c0392b;\
+      color: #fff;\
+      border-color: #c0392b;\
+    }\
+    .prb-toggle[aria-expanded="true"] svg path {\
+      stroke: #fff;\
+    }\
+    .prb-form {\
+      margin-top: 10px;\
+      padding: 14px;\
+      background: #fdfbf9;\
+      border: 1px solid #e8e3de;\
+      border-radius: 8px;\
+      animation: prb-slide-in .15s ease-out;\
+    }\
+    .prb-form[hidden] { display: none !important; }\
+    @keyframes prb-slide-in {\
+      from { opacity: 0; transform: translateY(-4px); }\
+      to   { opacity: 1; transform: translateY(0); }\
+    }\
+    .prb-form-context {\
+      font-size: 11.5px;\
+      color: #6b7280;\
+      margin-bottom: 8px;\
+      padding-bottom: 8px;\
+      border-bottom: 1px dashed #e5e7eb;\
+      white-space: nowrap;\
+      overflow: hidden;\
+      text-overflow: ellipsis;\
+    }\
+    .prb-form-context strong {\
+      color: #374151;\
+      font-weight: 500;\
+    }\
+    .prb-textarea {\
+      width: 100%;\
+      padding: 9px 11px;\
+      border: 1px solid #d1d5db;\
+      border-radius: 6px;\
+      font: inherit;\
+      font-size: 13px;\
+      line-height: 1.5;\
+      resize: vertical;\
+      min-height: 70px;\
+      background: #fff;\
+      color: #1a1714;\
+      box-sizing: border-box;\
+    }\
+    .prb-textarea:focus {\
+      outline: none;\
+      border-color: #c0392b;\
+      box-shadow: 0 0 0 3px rgba(192,57,43,.08);\
+    }\
+    .prb-form-actions {\
+      display: flex;\
+      justify-content: flex-end;\
+      gap: 8px;\
+      margin-top: 10px;\
+    }\
+    .prb-cancel, .prb-submit {\
+      font-family: inherit;\
+      font-size: 12.5px;\
+      font-weight: 500;\
+      padding: 7px 14px;\
+      border-radius: 6px;\
+      cursor: pointer;\
+      border: 1px solid transparent;\
+      line-height: 1.2;\
+    }\
+    .prb-cancel {\
+      background: #fff;\
+      border-color: #d1d5db;\
+      color: #6b7280;\
+    }\
+    .prb-cancel:hover {\
+      background: #f9fafb;\
+      color: #374151;\
+    }\
+    .prb-submit {\
+      background: #c0392b;\
+      color: #fff;\
+    }\
+    .prb-submit:hover {\
+      background: #962d22;\
+    }\
+    .prb-submit:disabled, .prb-submit[disabled] {\
+      background: #9ca3af;\
+      cursor: not-allowed;\
+    }\
+    .prb-disabled {\
+      display: inline-block;\
+      font-size: 11.5px;\
+      color: #9ca3af;\
+      font-style: italic;\
+      padding: 4px 0;\
+    }\
+  ';
+  var style = document.createElement('style');
+  style.id = 'prb-styles';
+  style.appendChild(document.createTextNode(css));
+  document.head.appendChild(style);
+
+  // Event delegation — one listener handles every reply button on the page,
+  // including any rendered later by HTMX/Turbo updates.
+  document.addEventListener('click', function (e) {
+    var trigger = e.target.closest('[data-prb-target]');
+    if (!trigger) return;
+
+    var targetId = trigger.getAttribute('data-prb-target');
+    var form = document.getElementById(targetId);
+    if (!form) return;
+
+    var isToggle = trigger.classList.contains('prb-toggle');
+    var isCancel = trigger.classList.contains('prb-cancel');
+
+    if (isCancel) {
+      form.hidden = true;
+      // Find the matching toggle and reset its expanded state.
+      var matchingToggle = document.querySelector(
+        '.prb-toggle[data-prb-target="' + targetId + '"]'
+      );
+      if (matchingToggle) matchingToggle.setAttribute('aria-expanded', 'false');
+      return;
+    }
+
+    if (isToggle) {
+      var willOpen = form.hidden;
+      form.hidden = !willOpen;
+      trigger.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      if (willOpen) {
+        var ta = form.querySelector('textarea');
+        if (ta) ta.focus();
+      }
+    }
+  });
+
+  // Submit guard — disable the button while posting so impatient agents
+  // don't double-send.
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!form.classList || !form.classList.contains('prb-form')) return;
+    var btn = form.querySelector('.prb-submit');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+    }
+  });
+})();
+</script>

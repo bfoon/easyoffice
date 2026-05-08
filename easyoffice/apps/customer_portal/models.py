@@ -21,6 +21,11 @@ What lives here:
   * PortalAccessToken        — a UUID-based token tied to (contact, contract).
                                Issued on contract creation; revoked + reissued
                                on renewal. Expires when the contract ends.
+  * DeviceBinding            — fingerprint of a verified machine for a given
+                               token. New machines must clear an OTP gate
+                               before they can use the token.
+  * DeviceOTP                — one-time codes emailed to the contact for
+                               device verification.
   * MaintenanceSchedule      — created only for maintenance contracts.
                                Holds cadence (monthly / quarterly / etc.) and
                                points at the next due date.
@@ -31,14 +36,24 @@ What lives here:
                                staff side, kept here for the portal timeline.
   * PortalSupportRequest     — what the customer submits through the portal.
                                Auto-creates a ServiceTicket on the staff side.
+                               Now carries its own lifecycle (open → closed,
+                               cancellable, ratable, reopenable).
+  * TicketComment            — a customer or staff message on a request.
+  * TicketAttachment         — a file / photo uploaded against a request.
+  * TicketRating             — 1-5 star rating + optional written feedback.
+  * ReopenRequest            — customer asks for a resolved ticket to be
+                               reopened, with reason.
 """
 from __future__ import annotations
 
-import uuid
+import hashlib
+import os
 import secrets
+import uuid
 from datetime import timedelta
 
 from django.conf import settings
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -47,11 +62,6 @@ from django.utils.translation import gettext_lazy as _
 # ─────────────────────────────────────────────────────────────────────────────
 # Configurable model labels
 # ─────────────────────────────────────────────────────────────────────────────
-#
-# We don't know whether your Contract model lives in apps.contracts,
-# apps.finance, or somewhere else, and we shouldn't import it directly here
-# (avoids circular imports + lets you point this at the right app via
-# settings without editing code). All FKs use string refs.
 
 CONTRACT_MODEL = getattr(
     settings, 'CUSTOMER_PORTAL_CONTRACT_MODEL', 'finance.Contract'
@@ -94,10 +104,6 @@ class ContractContact(TimeStampedModel):
     A person on the customer side who should have portal access for a given
     contract. There can be multiple contacts per contract — Operations,
     Finance, etc. each get their own token.
-
-    Note: we DON'T blindly upsert a contact on every contract save — the
-    signal in signals.py is careful to (a) keep the contract's primary
-    counterparty as one ContractContact, (b) not duplicate by email.
     """
     ROLE_CHOICES = (
         ('primary',     'Primary'),
@@ -149,7 +155,6 @@ class ContractContact(TimeStampedModel):
     def __str__(self):
         return f'{self.full_name} <{self.email}> [{self.contract_id}]'
 
-    # Convenience: the live token for this contact (if any)
     @property
     def active_token(self):
         return (
@@ -165,15 +170,6 @@ class ContractContact(TimeStampedModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_token() -> str:
-    """
-    A token has to:
-      * be URL-safe (we put it in /portal/<token>/),
-      * have at least ~128 bits of entropy,
-      * not be guessable from any other field.
-
-    secrets.token_urlsafe(48) gives ~64 chars of url-safe base64 with 384
-    bits of entropy. Overkill, but cheap.
-    """
     return secrets.token_urlsafe(48)
 
 
@@ -181,16 +177,6 @@ class PortalAccessToken(TimeStampedModel):
     """
     A token grants ONE contact ONE-link access to the portal for the
     duration of ONE contract period.
-
-    Lifecycle:
-      * Issued when a contract is saved (signal in signals.py).
-      * `valid_until` matches contract.end_date (with a small buffer so a
-        same-day expiry doesn't lock the customer out at noon).
-      * On contract renewal, the old token is REVOKED — not deleted — and a
-        new one is issued. This preserves audit history.
-      * If the customer clicks an old/revoked link, the portal view tells
-        them so plainly and offers a "request a new link" action that emails
-        the head of customer service. (Implemented in views.py.)
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     token = models.CharField(
@@ -216,12 +202,10 @@ class PortalAccessToken(TimeStampedModel):
         help_text='Set to contract.end_date + 1 day at 23:59 by signal.',
     )
 
-    # Diagnostics — we want to know how the customer is using the portal
     issued_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
     use_count = models.PositiveIntegerField(default=0)
 
-    # Revocation: not deleted, so we can answer "what happened?" later.
     revoked_at = models.DateTimeField(null=True, blank=True)
     revoked_reason = models.CharField(max_length=200, blank=True)
 
@@ -250,7 +234,6 @@ class PortalAccessToken(TimeStampedModel):
         self.save(update_fields=['revoked_at', 'revoked_reason', 'updated_at'])
 
     def touch(self) -> None:
-        """Record portal hit. Cheap — no concurrency safeguard, just a counter."""
         PortalAccessToken.objects.filter(pk=self.pk).update(
             last_used_at=timezone.now(),
             use_count=models.F('use_count') + 1,
@@ -258,22 +241,198 @@ class PortalAccessToken(TimeStampedModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Device binding & OTP verification
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY:
+#   The portal token alone is enough to access the portal — but if a customer
+#   forwards their email to a colleague (or worse, the link gets indexed in
+#   somebody's browser sync), we need a second factor that ties usage to a
+#   specific machine. A "device fingerprint" (UA + accept-lang + a stable
+#   client-side seed stored in localStorage) is far from cryptographic, but
+#   it's good enough to detect "this is a NEW machine" and force a one-time
+#   email OTP before access is granted.
+#
+# FLOW:
+#   1. First visit: portal computes a fingerprint → no DeviceBinding for this
+#      (token, fingerprint) → render verify_device.html → email a 6-digit OTP
+#      to the contact's email on record.
+#   2. Customer enters the code → we create a DeviceBinding marked verified.
+#      A signed cookie + the localStorage seed make sure the same browser
+#      keeps working without re-prompting.
+#   3. Switching to another machine? New fingerprint → step 1 repeats.
+#   4. Bindings can be revoked from the staff admin if a device is lost.
+
+def _make_device_seed() -> str:
+    """Random opaque blob the client stores in localStorage."""
+    return secrets.token_urlsafe(24)
+
+
+def _hash_fingerprint(*parts: str) -> str:
+    """
+    Deterministic hash of the parts that make up a device's identity.
+    We hash so we never persist the raw UA/IP/seed in plaintext — privacy +
+    storage hygiene.
+    """
+    blob = '|'.join((p or '') for p in parts).encode('utf-8')
+    return hashlib.sha256(blob).hexdigest()
+
+
+class DeviceBinding(TimeStampedModel):
+    """
+    One row per (token, device fingerprint) pair that has cleared OTP
+    verification. A token can have many bindings — that's fine; a customer
+    who works from laptop + phone shouldn't have to fight us.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    token = models.ForeignKey(
+        PortalAccessToken,
+        on_delete=models.CASCADE,
+        related_name='device_bindings',
+    )
+
+    # Hash, not raw — see _hash_fingerprint above.
+    fingerprint_hash = models.CharField(max_length=64, db_index=True)
+
+    # Human-readable hints so staff can recognise the device in the admin
+    # ("MacBook · Chrome 123 · Banjul").
+    label = models.CharField(max_length=120, blank=True)
+    user_agent = models.CharField(max_length=400, blank=True)
+    ip_first_seen = models.GenericIPAddressField(null=True, blank=True)
+    ip_last_seen = models.GenericIPAddressField(null=True, blank=True)
+
+    verified_at = models.DateTimeField(default=timezone.now)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    use_count = models.PositiveIntegerField(default=1)
+
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_reason = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        ordering = ['-last_seen_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['token', 'fingerprint_hash'],
+                name='unique_device_per_token',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['token', 'revoked_at']),
+        ]
+
+    def __str__(self):
+        return f'Device for token {self.token_id} — {self.label or self.fingerprint_hash[:12]}'
+
+    @property
+    def is_active(self) -> bool:
+        return self.revoked_at is None
+
+    def touch(self, *, ip: str | None = None) -> None:
+        DeviceBinding.objects.filter(pk=self.pk).update(
+            last_seen_at=timezone.now(),
+            ip_last_seen=ip or self.ip_last_seen,
+            use_count=models.F('use_count') + 1,
+        )
+
+    def revoke(self, reason: str = '') -> None:
+        if self.revoked_at:
+            return
+        self.revoked_at = timezone.now()
+        self.revoked_reason = (reason or '')[:200]
+        self.save(update_fields=['revoked_at', 'revoked_reason', 'updated_at'])
+
+
+def _make_otp_code() -> str:
+    """6-digit numeric code, leading zeros preserved."""
+    return f'{secrets.randbelow(1_000_000):06d}'
+
+
+class DeviceOTP(TimeStampedModel):
+    """
+    Email-delivered one-time code for new-device verification.
+
+    Security notes:
+      * Codes are 6 digits — easy for humans, but we cap attempts and expire
+        them in 10 minutes.
+      * We store the SHA-256 of the code, not the code itself. The plaintext
+        only exists in the email (and in process memory for the few ms it
+        takes to send).
+      * Stale codes (issued but not yet consumed) are invalidated when a new
+        one is issued — prevents a hoarded inbox of valid OTPs.
+    """
+    PURPOSE_CHOICES = (
+        ('device_verify',  'Device verification'),
+        ('device_rebind',  'Switch to a new device'),
+    )
+
+    OTP_TTL = timedelta(minutes=10)
+    MAX_ATTEMPTS = 5
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    token = models.ForeignKey(
+        PortalAccessToken,
+        on_delete=models.CASCADE,
+        related_name='device_otps',
+    )
+    fingerprint_hash = models.CharField(max_length=64, db_index=True)
+
+    code_hash = models.CharField(max_length=64)
+    purpose = models.CharField(max_length=20, choices=PURPOSE_CHOICES, default='device_verify')
+
+    issued_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    invalidated_at = models.DateTimeField(null=True, blank=True)
+
+    attempts = models.PositiveSmallIntegerField(default=0)
+    delivered_to_email = models.EmailField()
+    requested_ip = models.GenericIPAddressField(null=True, blank=True)
+    requested_user_agent = models.CharField(max_length=400, blank=True)
+
+    class Meta:
+        ordering = ['-issued_at']
+        indexes = [
+            models.Index(fields=['token', 'fingerprint_hash', 'consumed_at']),
+        ]
+
+    def __str__(self):
+        return f'OTP for token {self.token_id} ({self.purpose})'
+
+    @classmethod
+    def hash_code(cls, code: str) -> str:
+        return hashlib.sha256((code or '').strip().encode('utf-8')).hexdigest()
+
+    @property
+    def is_consumable(self) -> bool:
+        return (
+            self.consumed_at is None
+            and self.invalidated_at is None
+            and timezone.now() <= self.expires_at
+            and self.attempts < self.MAX_ATTEMPTS
+        )
+
+    def mark_attempt(self) -> None:
+        DeviceOTP.objects.filter(pk=self.pk).update(
+            attempts=models.F('attempts') + 1,
+        )
+        self.refresh_from_db(fields=['attempts'])
+
+    def consume(self) -> None:
+        self.consumed_at = timezone.now()
+        self.save(update_fields=['consumed_at', 'updated_at'])
+
+    def invalidate(self, reason: str = '') -> None:
+        if self.invalidated_at or self.consumed_at:
+            return
+        self.invalidated_at = timezone.now()
+        self.save(update_fields=['invalidated_at', 'updated_at'])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Maintenance schedule (only for maintenance contracts)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MaintenanceSchedule(TimeStampedModel):
-    """
-    Created automatically when a maintenance contract is saved IF it has
-    preventive maintenance. The signal looks at:
-
-        contract.contract_type == 'maintenance'
-
-    and the optional contract.maintenance_features field (JSON or text)
-    containing 'preventive' or 'on_call'. If your Contract model doesn't
-    have a maintenance_features field, the signal degrades gracefully:
-    every maintenance contract gets a quarterly PM schedule as a default,
-    which is the most common cadence for the GMD market.
-    """
     CADENCE_CHOICES = (
         ('weekly',     'Weekly'),
         ('biweekly',   'Bi-weekly'),
@@ -305,7 +464,6 @@ class MaintenanceSchedule(TimeStampedModel):
         return f'PM schedule for contract {self.contract_id} ({self.cadence})'
 
     def advance(self) -> None:
-        """Push next_due_date forward by one cadence period."""
         from dateutil.relativedelta import relativedelta
         if not self.next_due_date:
             return
@@ -323,15 +481,6 @@ class MaintenanceSchedule(TimeStampedModel):
 
 
 class MaintenanceVisit(TimeStampedModel):
-    """
-    A planned or completed maintenance visit. Created either by:
-      (a) the recurring PM cron when next_due_date is reached, or
-      (b) the customer requesting on-call support via the portal.
-
-    Each visit links to a Task — that's where the technician actually works,
-    taps "on site", logs time, and ultimately marks "done". The portal
-    timeline reads from MaintenanceVisit + OnSiteEvent.
-    """
     KIND_CHOICES = (
         ('preventive',  'Preventive'),
         ('on_call',     'On-call / Reactive'),
@@ -342,9 +491,9 @@ class MaintenanceVisit(TimeStampedModel):
         ('dispatched',  'Technician Dispatched'),
         ('on_site',     'On Site'),
         ('completed',   'Completed'),
-        ('verified',    'Verified by CS'),   # CS confirmed with customer
+        ('verified',    'Verified by CS'),
         ('cancelled',   'Cancelled'),
-        ('disputed',    'Disputed'),         # customer says tech didn't show
+        ('disputed',    'Disputed'),
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -372,7 +521,6 @@ class MaintenanceVisit(TimeStampedModel):
         related_name='maintenance_visits',
     )
 
-    # The Task the technician actually works against.
     task = models.OneToOneField(
         TASK_MODEL,
         on_delete=models.SET_NULL,
@@ -380,8 +528,6 @@ class MaintenanceVisit(TimeStampedModel):
         related_name='maintenance_visit',
     )
 
-    # Optional link to a service ticket (when the visit came from a
-    # customer-initiated support request).
     ticket = models.ForeignKey(
         TICKET_MODEL,
         on_delete=models.SET_NULL,
@@ -390,14 +536,8 @@ class MaintenanceVisit(TimeStampedModel):
     )
 
     summary = models.CharField(max_length=220, blank=True)
-    customer_visible_notes = models.TextField(
-        blank=True,
-        help_text='What the customer sees in the portal. Keep it human.',
-    )
-    internal_notes = models.TextField(
-        blank=True,
-        help_text='Hidden from the customer.',
-    )
+    customer_visible_notes = models.TextField(blank=True)
+    internal_notes = models.TextField(blank=True)
 
     class Meta:
         ordering = ['-scheduled_for', '-created_at']
@@ -411,23 +551,10 @@ class MaintenanceVisit(TimeStampedModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# On-site events (for both portal display + audit)
+# On-site events
 # ─────────────────────────────────────────────────────────────────────────────
 
 class OnSiteEvent(TimeStampedModel):
-    """
-    Created every time a technician taps "I'm on site" or "I'm leaving site"
-    on a Task. We deliberately keep ARRIVE and DEPART as separate rows
-    rather than start/end columns on one row, because:
-
-      * Some sites get multiple visits in one day.
-      * If the tech forgets to tap depart, we still have a clean arrive
-        record (and a flag we can set after a timeout).
-
-    Notifications are NOT sent here — they're sent by the view that creates
-    the event, after the DB write commits. Keep model code free of side
-    effects.
-    """
     EVENT_TYPES = (
         ('arrive',  'Arrived on site'),
         ('depart',  'Left site'),
@@ -445,7 +572,6 @@ class OnSiteEvent(TimeStampedModel):
         on_delete=models.SET_NULL,
         null=True, blank=True,
         related_name='on_site_events',
-        help_text='Mirrored from task.maintenance_visit / linked ticket assignment.',
     )
     contract = models.ForeignKey(
         CONTRACT_MODEL,
@@ -461,18 +587,14 @@ class OnSiteEvent(TimeStampedModel):
         on_delete=models.SET_NULL,
         null=True, blank=True,
         related_name='on_site_events_recorded',
-        help_text='The technician (for arrive/depart) or null for customer disputes.',
     )
     actor_contact = models.ForeignKey(
         ContractContact,
         on_delete=models.SET_NULL,
         null=True, blank=True,
         related_name='on_site_events_disputed',
-        help_text='The customer-side contact who logged a dispute.',
     )
 
-    # Optional GPS — the front-end MAY supply navigator.geolocation. If it
-    # doesn't, that's fine; we still log the event.
     gps_latitude = models.DecimalField(
         max_digits=9, decimal_places=6, null=True, blank=True,
     )
@@ -493,26 +615,25 @@ class OnSiteEvent(TimeStampedModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Customer-submitted support requests
+# Customer-submitted support requests (now with full lifecycle)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PortalSupportRequest(TimeStampedModel):
     """
-    What a customer submits via /portal/<token>/new-request/.
+    Lifecycle (portal-side, distinct from the staff-side ServiceTicket so a
+    customer cancellation doesn't disturb staff workflow without a signal):
 
-    We don't reuse customer_service.ServiceTicket directly here for two
-    reasons:
+        pending_review
+          ↓ (CS picks it up — usually instant on creation)
+        open
+          ↓                      ↘
+        resolved          cancelled (by customer, before resolution)
+          ↓ (customer rates / requests reopen / falls into auto-close)
+        closed
+          ↓ (cannot be reopened from the portal — must contact CS)
 
-      1. We need to capture portal-only fields (originating contact, token
-         used, dispute flags) without polluting ServiceTicket.
-      2. The portal sometimes accepts requests that we want a CS agent to
-         vet before they become an actual ticket — e.g. the customer says
-         "is this covered?" — so we need a "pending review" stage that
-         doesn't yet exist on the ticket.
-
-    On submission, an actual ServiceTicket IS created (status='new') and
-    linked back via `service_ticket`. The CS team works on that ticket
-    normally; the portal just shows the customer their view.
+    Disputes / reopens are tracked separately so we can show "this ticket
+    was reopened twice before final close" in support history.
     """
     REQUEST_KINDS = (
         ('support',     'General Support'),
@@ -528,6 +649,21 @@ class PortalSupportRequest(TimeStampedModel):
         ('high',     'High'),
         ('critical', 'Critical / Urgent'),
     )
+
+    STATUS_CHOICES = (
+        ('pending_review', 'Pending Review'),
+        ('open',           'Open'),
+        ('in_progress',    'In Progress'),
+        ('on_hold',        'On Hold'),
+        ('resolved',       'Resolved — awaiting your confirmation'),
+        ('closed',         'Closed'),
+        ('cancelled',      'Cancelled by customer'),
+        ('reopened',       'Reopened'),
+    )
+
+    OPEN_STATUSES = ('pending_review', 'open', 'in_progress', 'on_hold', 'reopened')
+    RESOLVED_STATUSES = ('resolved',)
+    TERMINAL_STATUSES = ('closed', 'cancelled')
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     contract = models.ForeignKey(
@@ -553,7 +689,28 @@ class PortalSupportRequest(TimeStampedModel):
     subject = models.CharField(max_length=220)
     description = models.TextField()
 
-    # Set once the CS team has spun up an actual ticket from this request.
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default='pending_review',
+        db_index=True,
+    )
+
+    # Lifecycle stamps
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancellation_reason = models.TextField(blank=True)
+
+    # Reopen counters — kept here for fast filters even though there's a
+    # ReopenRequest table for full audit trail.
+    reopen_count = models.PositiveSmallIntegerField(default=0)
+    last_reopened_at = models.DateTimeField(null=True, blank=True)
+
+    # Mirror of the assigned agent / technician at time of last sync —
+    # so the customer doesn't have to wait for a join across apps and so
+    # we have a sensible string even if the staff user is later deactivated.
+    assigned_agent_name = models.CharField(max_length=180, blank=True)
+    assigned_technician_name = models.CharField(max_length=180, blank=True)
+
     service_ticket = models.ForeignKey(
         TICKET_MODEL,
         on_delete=models.SET_NULL,
@@ -566,8 +723,305 @@ class PortalSupportRequest(TimeStampedModel):
     class Meta:
         ordering = ['-created_at']
         indexes = [
+            models.Index(fields=['contract', 'status']),
             models.Index(fields=['contract', 'created_at']),
         ]
 
     def __str__(self):
-        return f'PortalRequest "{self.subject}" ({self.kind})'
+        return f'PortalRequest "{self.subject}" ({self.status})'
+
+    # ── State helpers ────────────────────────────────────────────────────
+
+    @property
+    def is_open(self) -> bool:
+        return self.status in self.OPEN_STATUSES
+
+    @property
+    def is_resolved(self) -> bool:
+        return self.status in self.RESOLVED_STATUSES
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in self.TERMINAL_STATUSES
+
+    @property
+    def can_cancel(self) -> bool:
+        """Customer can cancel anything not yet resolved or terminal."""
+        return self.status in self.OPEN_STATUSES
+
+    @property
+    def can_comment(self) -> bool:
+        """Customer can chime in until the ticket is closed for good."""
+        return self.status not in ('closed', 'cancelled')
+
+    @property
+    def can_request_reopen(self) -> bool:
+        """Reopen is only meaningful AFTER resolution."""
+        return self.status in self.RESOLVED_STATUSES + ('closed',)
+
+    @property
+    def can_rate(self) -> bool:
+        """Rate once the work is done. Allow rating up to closed."""
+        if self.status not in self.RESOLVED_STATUSES + ('closed',):
+            return False
+        return not hasattr(self, 'rating')
+
+    @property
+    def display_reference(self) -> str:
+        """Short human handle shown to the customer."""
+        if self.service_ticket and getattr(self.service_ticket, 'ticket_no', None):
+            return self.service_ticket.ticket_no
+        return f'PR-{str(self.id)[:8].upper()}'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Comments
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TicketComment(TimeStampedModel):
+    """
+    A message on a portal request. Either side can post — `author_kind`
+    distinguishes them. Internal notes by staff are NOT mirrored here; only
+    customer-visible exchange.
+    """
+    AUTHOR_CHOICES = (
+        ('customer', 'Customer'),
+        ('staff',    'Support Agent'),
+        ('system',   'System'),  # auto-posts on status changes etc.
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    request = models.ForeignKey(
+        PortalSupportRequest,
+        on_delete=models.CASCADE,
+        related_name='comments',
+    )
+
+    author_kind = models.CharField(max_length=12, choices=AUTHOR_CHOICES, default='customer')
+    author_contact = models.ForeignKey(
+        ContractContact,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='ticket_comments',
+    )
+    author_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='portal_ticket_comments',
+    )
+    author_display_name = models.CharField(max_length=180, blank=True)
+
+    body = models.TextField()
+
+    # System events get a structured tag so the UI can style them
+    # ("✓ Ticket resolved", "↺ Reopen requested"). Not free text.
+    event_tag = models.CharField(max_length=40, blank=True)
+
+    submitted_from_ip = models.GenericIPAddressField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['request', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f'Comment on {self.request_id} by {self.author_kind}'
+
+    @property
+    def display_name(self) -> str:
+        if self.author_display_name:
+            return self.author_display_name
+        if self.author_kind == 'customer' and self.author_contact:
+            return self.author_contact.full_name
+        if self.author_kind == 'staff' and self.author_user:
+            return getattr(self.author_user, 'full_name', None) or self.author_user.get_username()
+        if self.author_kind == 'system':
+            return 'System'
+        return 'Unknown'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Attachments
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _attachment_path(instance, filename):
+    """
+    File layout:
+        portal/tickets/<request-uuid>/<random>-<safe-filename>
+    The random prefix prevents simple URL guessing; the request-uuid
+    grouping means we can recursively delete files when a request is
+    purged.
+    """
+    base = os.path.basename(filename)[:120]
+    rand = secrets.token_hex(8)
+    return f'portal/tickets/{instance.request_id}/{rand}-{base}'
+
+
+class TicketAttachment(TimeStampedModel):
+    """
+    A file or photo attached to a portal request — either by the customer
+    on the portal side, or by staff (mirrored from the ticket detail view
+    if you wire that up).
+
+    Validation: keep it permissive on type but strict on size. The view
+    enforces the size limit and a basic content-sniff blacklist (no .exe /
+    .bat / etc.).
+    """
+    UPLOADER_CHOICES = (
+        ('customer', 'Customer'),
+        ('staff',    'Support Agent'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    request = models.ForeignKey(
+        PortalSupportRequest,
+        on_delete=models.CASCADE,
+        related_name='attachments',
+    )
+    comment = models.ForeignKey(
+        TicketComment,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='attachments',
+        help_text='If the file was attached to a specific comment.',
+    )
+
+    file = models.FileField(upload_to=_attachment_path)
+    original_name = models.CharField(max_length=200)
+    content_type = models.CharField(max_length=100, blank=True)
+    size_bytes = models.PositiveBigIntegerField(default=0)
+
+    uploader_kind = models.CharField(
+        max_length=12, choices=UPLOADER_CHOICES, default='customer',
+    )
+    uploader_contact = models.ForeignKey(
+        ContractContact,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='ticket_attachments',
+    )
+    uploader_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='portal_ticket_attachments',
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['request', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.original_name} ({self.size_bytes} B)'
+
+    @property
+    def is_image(self) -> bool:
+        return (self.content_type or '').lower().startswith('image/')
+
+    @property
+    def size_human(self) -> str:
+        size = self.size_bytes
+        for unit in ('B', 'KB', 'MB', 'GB'):
+            if size < 1024 or unit == 'GB':
+                return f'{size:.0f} {unit}' if unit == 'B' else f'{size:.1f} {unit}'
+            size /= 1024
+        return f'{self.size_bytes} B'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ratings
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TicketRating(TimeStampedModel):
+    """
+    1–5 star CSAT plus optional written feedback. One rating per request
+    (enforced by OneToOneField). If you ever want to allow re-rating after
+    a reopen, store ratings on a separate "resolution episode" object.
+    """
+    SCORE_CHOICES = [(i, f'{i} star{"" if i == 1 else "s"}') for i in range(1, 6)]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    request = models.OneToOneField(
+        PortalSupportRequest,
+        on_delete=models.CASCADE,
+        related_name='rating',
+    )
+    rated_by_contact = models.ForeignKey(
+        ContractContact,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='ratings',
+    )
+
+    score = models.PositiveSmallIntegerField(
+        choices=SCORE_CHOICES,
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+    )
+    feedback = models.TextField(blank=True)
+    would_recommend = models.BooleanField(null=True, blank=True)
+
+    submitted_from_ip = models.GenericIPAddressField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['score']),
+        ]
+
+    def __str__(self):
+        return f'{self.score}★ for {self.request_id}'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reopen requests
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ReopenRequest(TimeStampedModel):
+    """
+    The customer says "this isn't actually fixed". We don't auto-reopen —
+    a staff agent reviews it. Tracked here so we have an audit trail of
+    "customer pushed back twice, agent reopened on third try".
+    """
+    DECISION_CHOICES = (
+        ('pending',  'Pending review'),
+        ('approved', 'Approved — ticket reopened'),
+        ('declined', 'Declined — ticket remains closed'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    request = models.ForeignKey(
+        PortalSupportRequest,
+        on_delete=models.CASCADE,
+        related_name='reopen_requests',
+    )
+    requested_by_contact = models.ForeignKey(
+        ContractContact,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='reopen_requests',
+    )
+
+    reason = models.TextField()
+    decision = models.CharField(
+        max_length=12, choices=DECISION_CHOICES, default='pending', db_index=True,
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='portal_reopen_decisions',
+    )
+    decision_note = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['request', 'decision']),
+        ]
+
+    def __str__(self):
+        return f'Reopen request for {self.request_id} ({self.decision})'

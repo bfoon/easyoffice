@@ -83,6 +83,11 @@
   .sec-badge.b-expired{ background:#fee2e2; color:#b91c1c; }
   .sec-badge.b-pending{ background:#fef9c3; color:#854d0e; }
   .sec-badge.b-used   { background:#dbeafe; color:#1e40af; }
+  /* OTP-status badges */
+  .sec-badge.b-bypass { background:#fee2e2; color:#b91c1c; }
+  .sec-badge.b-always { background:#ede9fe; color:#5b21b6; }
+  .sec-badge.b-force  { background:#fed7aa; color:#9a3412; }
+  .sec-badge.b-fails  { background:#fde68a; color:#92400e; }
   .sec-empty { color: var(--eo-text-muted); font-size: .85rem; padding: 16px 0; text-align: center; }
   canvas { max-height: 300px; }
 
@@ -148,6 +153,26 @@
   <div class="sec-kpi danger">
     <div class="sec-kpi-val">{{ geo_alerts_30d }}</div>
     <div class="sec-kpi-label">Geo-velocity Alerts</div>
+  </div>
+  <div class="sec-kpi info">
+    <div class="sec-kpi-val">{{ otp_sent_30d|default:0|intcomma }}</div>
+    <div class="sec-kpi-label">OTPs Sent (30d)</div>
+  </div>
+  <div class="sec-kpi ok">
+    <div class="sec-kpi-val">{{ otp_success_30d|default:0|intcomma }}</div>
+    <div class="sec-kpi-label">OTPs Verified (30d)</div>
+  </div>
+  <div class="sec-kpi danger">
+    <div class="sec-kpi-val">{{ otp_failed_30d|default:0|intcomma }}</div>
+    <div class="sec-kpi-label">OTP Failures (30d)</div>
+  </div>
+  <div class="sec-kpi warn">
+    <div class="sec-kpi-val">{{ otp_bypass_active_count|default:0 }}</div>
+    <div class="sec-kpi-label">Users on OTP Bypass</div>
+  </div>
+  <div class="sec-kpi info">
+    <div class="sec-kpi-val">{{ otp_always_on_count|default:0 }}</div>
+    <div class="sec-kpi-label">OTP Always-On Users</div>
   </div>
   <div class="sec-kpi info">
     <div class="sec-kpi-val">{{ token_total_links|default:0|intcomma }}</div>
@@ -221,7 +246,106 @@
   </div>
 </div>
 
-<!-- ── NEW: Tokenised public-link usage ─────────────────────────────── -->
+<!-- ── NEW: OTP Activity (events by type + sent/verified/failed trend) ── -->
+<div class="sec-grid">
+  <div class="sec-card">
+    <h3>
+      <i class="bi bi-shield-check" style="color:#6366f1"></i>
+      OTP Events by Type
+      <span class="pill">last 30 days</span>
+    </h3>
+    {% if otp_events_by_type %}
+      <canvas id="chartOtpEvents"></canvas>
+      {% if otp_verify_rate is not None %}
+      <div style="margin-top:12px;font-size:.78rem;color:var(--eo-text-muted);text-align:center">
+        Verification rate:
+        <strong style="color:var(--eo-text)">{{ otp_verify_rate }}%</strong>
+        ({{ otp_success_30d|intcomma }} verified of
+        {{ otp_success_30d|add:otp_failed_30d|add:otp_expired_30d|intcomma }} attempts)
+      </div>
+      {% endif %}
+    {% else %}
+      <div class="sec-empty">No OTP events recorded in the last 30 days.</div>
+    {% endif %}
+  </div>
+
+  <div class="sec-card">
+    <h3>
+      <i class="bi bi-graph-up-arrow" style="color:#0ea5e9"></i>
+      OTP Activity Trend
+      <span class="pill">last 30 days</span>
+    </h3>
+    <canvas id="chartOtpTrend"></canvas>
+    <div style="margin-top:10px;display:flex;gap:18px;flex-wrap:wrap;font-size:.74rem;color:var(--eo-text-muted)">
+      <span><strong style="color:var(--eo-text)">{{ otp_failed_24h|default:0 }}</strong> failures in last 24h</span>
+      <span><strong style="color:var(--eo-text)">{{ otp_live_challenges|default:0 }}</strong> live challenges (unused, not expired)</span>
+      <span><strong style="color:var(--eo-text)">{{ otp_force_next_count|default:0 }}</strong> users with forced-next-login pending</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── NEW: OTP Status by User (current posture) ─────────────────────── -->
+<div class="sec-card" style="margin-bottom:18px">
+  <h3>
+    <i class="bi bi-shield-fill-exclamation" style="color:#f59e0b"></i>
+    OTP Status by User
+    <span class="pill">non-default posture</span>
+  </h3>
+  <p style="font-size:.78rem;color:var(--eo-text-muted);margin:-6px 0 14px">
+    Users whose OTP setting deviates from the default — bypass currently in
+    effect, OTP forced on every login, OTP forced on next login, or repeated
+    OTP failures in the last 30 days. {{ otp_users_total|default:0 }} active
+    users in total; {{ otp_status_rows|length }} need attention.
+  </p>
+  {% if otp_status_rows %}
+  <div style="overflow-x:auto">
+    <table class="sec-table">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Email</th>
+          <th>State</th>
+          <th>Bypass Expires</th>
+          <th style="text-align:right">OTP Failures (30d)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in otp_status_rows %}
+        <tr>
+          <td style="font-weight:600">{{ r.full_name }}</td>
+          <td style="color:var(--eo-text-muted)">{{ r.email }}</td>
+          <td>
+            {% for code, label in r.flags %}
+              {% if code == 'bypass' %}<span class="sec-badge b-bypass">{{ label }}</span>
+              {% elif code == 'always' %}<span class="sec-badge b-always">{{ label }}</span>
+              {% elif code == 'force'  %}<span class="sec-badge b-force">{{ label }}</span>
+              {% elif code == 'failures' %}<span class="sec-badge b-fails">{{ label }}</span>
+              {% else %}<span class="sec-badge b-other">{{ label }}</span>
+              {% endif %}
+            {% endfor %}
+          </td>
+          <td style="white-space:nowrap;color:var(--eo-text-muted);font-size:.76rem">
+            {% if r.bypass_until %}
+              {{ r.bypass_until|date:"M d, Y H:i" }}
+              <div style="font-size:.7rem">({{ r.bypass_remaining_hours }}h left)</div>
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td style="text-align:right;font-weight:700{% if r.recent_failures %};color:#dc2626{% endif %}">
+            {{ r.recent_failures|default:0 }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="sec-empty">All users on default OTP posture. ✓</div>
+  {% endif %}
+</div>
+
+<!-- ── Tokenised public-link usage ─────────────────────────────────── -->
 <div class="sec-card" style="margin-bottom:18px">
   <h3>
     <i class="bi bi-link-45deg" style="color:#0ea5e9"></i>
@@ -373,8 +497,10 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
 (function () {
-  const eventsByType = {{ events_by_type_json|safe }};
-  const loginTrend   = {{ login_trend_json|safe }};
+  const eventsByType    = {{ events_by_type_json|safe }};
+  const loginTrend      = {{ login_trend_json|safe }};
+  const otpEventsByType = {{ otp_events_by_type_json|safe }};
+  const otpTrend        = {{ otp_trend_json|safe }};
 
   const palette = ['#dc2626','#f59e0b','#10b981','#6366f1','#8b5cf6','#ec4899','#06b6d4','#84cc16','#0ea5e9','#f97316','#64748b','#14b8a6','#a855f7'];
 
@@ -407,6 +533,56 @@
             borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.12)',
             fill: true, tension: 0.3, pointRadius: 2 },
           { label: 'Failed', data: loginTrend.map(r => r.failed),
+            borderColor: '#dc2626', backgroundColor: 'rgba(220,38,38,0.12)',
+            fill: true, tension: 0.3, pointRadius: 2 },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: { ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
+          y: { beginAtZero: true, ticks: { precision: 0 } },
+        },
+        plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } },
+      },
+    });
+  }
+
+  // ── OTP events by type (donut) ──────────────────────────────────────
+  if (otpEventsByType.length && document.getElementById('chartOtpEvents')) {
+    new Chart(document.getElementById('chartOtpEvents'), {
+      type: 'doughnut',
+      data: {
+        labels: otpEventsByType.map(e => e.label),
+        datasets: [{
+          data: otpEventsByType.map(e => e.count),
+          backgroundColor: otpEventsByType.map((_, i) => palette[i % palette.length]),
+          borderWidth: 2, borderColor: '#fff',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } } },
+        cutout: '62%',
+      },
+    });
+  }
+
+  // ── OTP daily activity trend (sent / verified / failed) ─────────────
+  if (document.getElementById('chartOtpTrend')) {
+    new Chart(document.getElementById('chartOtpTrend'), {
+      type: 'line',
+      data: {
+        labels: otpTrend.map(r => r.date),
+        datasets: [
+          { label: 'Sent', data: otpTrend.map(r => r.sent),
+            borderColor: '#0ea5e9', backgroundColor: 'rgba(14,165,233,0.10)',
+            fill: true, tension: 0.3, pointRadius: 2 },
+          { label: 'Verified', data: otpTrend.map(r => r.success),
+            borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.12)',
+            fill: true, tension: 0.3, pointRadius: 2 },
+          { label: 'Failed', data: otpTrend.map(r => r.failed),
             borderColor: '#dc2626', backgroundColor: 'rgba(220,38,38,0.12)',
             fill: true, tension: 0.3, pointRadius: 2 },
         ],

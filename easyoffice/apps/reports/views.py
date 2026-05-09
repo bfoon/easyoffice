@@ -678,6 +678,219 @@ class SecurityReportView(_ReportsAccessMixin, TemplateView):
             v['count'] for v in token_usage_summary.values()
         )
 
+        # ─────────────────────────────────────────────────────────────────
+        # NEW: OTP activity & status
+        # ─────────────────────────────────────────────────────────────────
+        # Pulls two complementary views:
+        #
+        #   1. ACTIVITY (from SecurityEvent): how OTP has been *exercised*
+        #      over the last 30 days — codes sent, verified, failed,
+        #      expired, plus admin actions (forced-next-login, always-on
+        #      toggled, OTP enable/disable bypass).
+        #
+        #   2. STATUS (from User + OTPChallenge): the *current* posture
+        #      across the organisation — who has OTP bypass active right
+        #      now, who is on always-on OTP, whose next login will be
+        #      forced through OTP, plus a fresh "live OTP challenges"
+        #      tally (issued in the last 24h, still unused, not expired).
+        #
+        # Both blocks are wrapped defensively — if for some reason the
+        # OTP-related event types aren't in the enum (older deploy), the
+        # KPIs degrade to zero rather than 500-ing the page.
+        # ─────────────────────────────────────────────────────────────────
+        OTP_EVENT_TYPES = (
+            'otp_sent', 'otp_success', 'otp_failed', 'otp_expired',
+            'otp_enabled', 'otp_disabled',
+            'otp_forced_next', 'otp_always_on', 'otp_always_off',
+        )
+
+        # ── OTP activity KPIs (30d) ─────────────────────────────────────
+        otp_event_counts_30d = dict(
+            SecurityEvent.objects
+            .filter(created_at__gte=since_30d, event_type__in=OTP_EVENT_TYPES)
+            .values_list('event_type')
+            .annotate(c=Count('id'))
+            .values_list('event_type', 'c')
+        )
+        ctx['otp_sent_30d']     = otp_event_counts_30d.get('otp_sent', 0)
+        ctx['otp_success_30d']  = otp_event_counts_30d.get('otp_success', 0)
+        ctx['otp_failed_30d']   = otp_event_counts_30d.get('otp_failed', 0)
+        ctx['otp_expired_30d']  = otp_event_counts_30d.get('otp_expired', 0)
+        ctx['otp_failed_24h']   = SecurityEvent.objects.filter(
+            created_at__gte=since_24h, event_type='otp_failed'
+        ).count()
+
+        # Verification rate: verified / (verified + failed + expired).
+        # Only meaningful when something actually happened.
+        otp_attempts = (
+            ctx['otp_success_30d']
+            + ctx['otp_failed_30d']
+            + ctx['otp_expired_30d']
+        )
+        ctx['otp_verify_rate'] = (
+            round(100.0 * ctx['otp_success_30d'] / otp_attempts, 1)
+            if otp_attempts else None
+        )
+
+        # ── OTP events by type (donut chart, 30d) ───────────────────────
+        otp_label_map = {k: str(v) for k, v in SecurityEvent.EventType.choices}
+        otp_events_by_type = [
+            {
+                'event_type': et,
+                'label': otp_label_map.get(et, et),
+                'count': otp_event_counts_30d[et],
+            }
+            for et in OTP_EVENT_TYPES if otp_event_counts_30d.get(et)
+        ]
+        otp_events_by_type.sort(key=lambda r: r['count'], reverse=True)
+        ctx['otp_events_by_type'] = otp_events_by_type
+        ctx['otp_events_by_type_json'] = json.dumps(otp_events_by_type)
+
+        # ── Daily OTP trend (sent / verified / failed) over 30d ─────────
+        otp_daily_qs = (
+            SecurityEvent.objects
+            .filter(
+                created_at__gte=since_30d,
+                event_type__in=['otp_sent', 'otp_success', 'otp_failed'],
+            )
+            .annotate(d=TruncDate('created_at'))
+            .values('d', 'event_type')
+            .annotate(c=Count('id'))
+            .order_by('d')
+        )
+        otp_bucket = {}
+        for row in otp_daily_qs:
+            day = row['d'].isoformat() if row['d'] else 'unknown'
+            otp_bucket.setdefault(day, {'sent': 0, 'success': 0, 'failed': 0})
+            if row['event_type'] == 'otp_sent':
+                otp_bucket[day]['sent'] = row['c']
+            elif row['event_type'] == 'otp_success':
+                otp_bucket[day]['success'] = row['c']
+            elif row['event_type'] == 'otp_failed':
+                otp_bucket[day]['failed'] = row['c']
+        otp_trend = [
+            {'date': d, 'sent': v['sent'], 'success': v['success'], 'failed': v['failed']}
+            for d, v in sorted(otp_bucket.items())
+        ]
+        ctx['otp_trend_json'] = json.dumps(otp_trend)
+
+        # ── OTP STATUS posture (current snapshot) ───────────────────────
+        # User import is local — keeps the import surface of this module
+        # unchanged and mirrors the SecurityEvent pattern used above.
+        from apps.core.models import User, OTPChallenge
+
+        active_users = User.objects.filter(is_active=True)
+
+        # Counts
+        ctx['otp_users_total']        = active_users.count()
+        ctx['otp_always_on_count']    = active_users.filter(otp_always_required=True).count()
+        ctx['otp_force_next_count']   = active_users.filter(force_otp_next_login=True).count()
+        ctx['otp_bypass_active_count'] = active_users.filter(
+            otp_disabled_until__gt=now
+        ).count()
+
+        # Live (in-flight) challenges: issued recently, not yet used,
+        # not yet expired. A high number here can flag a brute-force
+        # attempt in progress or a mail-delivery problem.
+        ctx['otp_live_challenges'] = OTPChallenge.objects.filter(
+            created_at__gte=since_24h,
+            is_used=False,
+            expires_at__gt=now,
+        ).count()
+
+        # ── OTP Status detail table (non-default users only) ────────────
+        # Combine the three "non-default" populations into a single list
+        # the template can render. Each row gets a list of state tags so
+        # one user with multiple flags shows up once.
+        status_rows = {}
+
+        def _ensure_row(u):
+            row = status_rows.get(u.pk)
+            if row is None:
+                row = {
+                    'user_id': u.pk,
+                    'email': u.email,
+                    'full_name': u.get_full_name() or u.email,
+                    'flags': [],          # list of (code, label) tuples
+                    'bypass_until': None,
+                    'bypass_remaining_hours': None,
+                    'recent_failures': 0,
+                }
+                status_rows[u.pk] = row
+            return row
+
+        # Bypass active
+        for u in active_users.filter(otp_disabled_until__gt=now):
+            row = _ensure_row(u)
+            row['flags'].append(('bypass', 'OTP Bypass Active'))
+            row['bypass_until'] = u.otp_disabled_until
+            remaining = u.otp_disabled_until - now
+            row['bypass_remaining_hours'] = round(
+                remaining.total_seconds() / 3600.0, 1
+            )
+
+        # Always-on
+        for u in active_users.filter(otp_always_required=True):
+            _ensure_row(u)['flags'].append(('always', 'OTP Always-On'))
+
+        # Force OTP on next login
+        for u in active_users.filter(force_otp_next_login=True):
+            _ensure_row(u)['flags'].append(('force', 'Forced Next Login'))
+
+        # Recent OTP failure counts (30d) — attached to whichever rows
+        # already exist AND folded in for any user with ≥3 failures even
+        # if they have no other flag, since that's worth surfacing.
+        recent_fail_qs = (
+            SecurityEvent.objects
+            .filter(created_at__gte=since_30d, event_type='otp_failed')
+            .values('user_id', 'user__email', 'user__first_name', 'user__last_name')
+            .annotate(c=Count('id'))
+            .filter(c__gte=1)
+        )
+        FAIL_THRESHOLD = 3
+        for r in recent_fail_qs:
+            uid = r['user_id']
+            if uid in status_rows:
+                status_rows[uid]['recent_failures'] = r['c']
+            elif r['c'] >= FAIL_THRESHOLD:
+                # No flag yet but worth surfacing for review.
+                full_name = (
+                    f"{r['user__first_name'] or ''} {r['user__last_name'] or ''}"
+                    .strip() or r['user__email']
+                )
+                status_rows[uid] = {
+                    'user_id': uid,
+                    'email': r['user__email'],
+                    'full_name': full_name,
+                    'flags': [('failures', 'Repeated OTP Failures')],
+                    'bypass_until': None,
+                    'bypass_remaining_hours': None,
+                    'recent_failures': r['c'],
+                }
+
+        # Sort: bypass-active first (most time-sensitive), then always-on,
+        # then forced-next, then high-failure-only rows. Within a tier,
+        # most recent / highest count first.
+        def _sort_key(row):
+            codes = {f[0] for f in row['flags']}
+            if 'bypass' in codes:
+                tier = 0
+            elif 'always' in codes:
+                tier = 1
+            elif 'force' in codes:
+                tier = 2
+            else:
+                tier = 3
+            # Negative so descending; bypass_remaining_hours is small
+            # for "about to expire" → those bubble up within tier 0.
+            return (
+                tier,
+                -(row['bypass_remaining_hours'] or 0)
+                    if tier == 0 else -row['recent_failures'],
+            )
+
+        ctx['otp_status_rows'] = sorted(status_rows.values(), key=_sort_key)
+
         return ctx
 
 

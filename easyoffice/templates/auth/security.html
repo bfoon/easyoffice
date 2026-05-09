@@ -38,14 +38,43 @@
         {% endif %}
       </div>
 
+      <!-- Posture chips: surface always-on / forced-next so the user
+           knows the rules being applied to their account. Only render
+           a chip when the corresponding state is non-default. -->
+      {% if request.user.otp_always_required or request.user.force_otp_next_login %}
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+          {% if request.user.otp_always_required %}
+            <span style="background:#ede9fe;color:#5b21b6;font-weight:600;padding:3px 10px;border-radius:999px;font-size:.7rem">
+              <i class="bi bi-shield-fill-check"></i> Always-On OTP
+            </span>
+          {% endif %}
+          {% if request.user.force_otp_next_login %}
+            <span style="background:#fed7aa;color:#9a3412;font-weight:600;padding:3px 10px;border-radius:999px;font-size:.7rem">
+              <i class="bi bi-lightning-charge-fill"></i> Forced on Next Login
+            </span>
+          {% endif %}
+        </div>
+      {% endif %}
+
       {% if request.user.otp_enabled %}
         <div style="background:var(--eo-bg);padding:14px 16px;border-radius:9px">
           <div style="font-size:.85rem;color:var(--eo-text);margin-bottom:6px">
             <strong>Your account is protected with OTP.</strong>
           </div>
           <div style="font-size:.78rem;color:var(--eo-text-muted);line-height:1.55">
-            When you log in from a new or unrecognised device, a 6-digit code
-            is emailed to you. You must enter it to access your account.
+            {% if request.user.otp_always_required %}
+              OTP is required <strong>every time</strong> you log in — even
+              from already-trusted devices. A 6-digit code will be emailed
+              to you on every sign-in.
+            {% elif request.user.force_otp_next_login %}
+              Your <strong>next login</strong> will require a fresh OTP
+              even on a trusted device. After that single challenge, normal
+              behaviour resumes.
+            {% else %}
+              When you log in from a new or unrecognised device, a 6-digit
+              code is emailed to you. You must enter it to access your
+              account.
+            {% endif %}
           </div>
         </div>
       {% else %}
@@ -60,6 +89,52 @@
             knows your password can log in from any device with no email
             verification. After that time, OTP turns back on automatically.
           </div>
+        </div>
+      {% endif %}
+
+      <!-- ── OTP activity stats (30d, scoped to this user) ──────────── -->
+      <div style="margin-top:14px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+        <div style="background:var(--eo-bg);padding:10px 12px;border-radius:8px;text-align:center">
+          <div style="font-size:1.1rem;font-weight:700;color:var(--eo-text);line-height:1">{{ my_otp_sent_30d|default:0 }}</div>
+          <div style="font-size:.65rem;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.04em;margin-top:4px;font-weight:600">Sent</div>
+        </div>
+        <div style="background:var(--eo-bg);padding:10px 12px;border-radius:8px;text-align:center">
+          <div style="font-size:1.1rem;font-weight:700;color:#16a34a;line-height:1">{{ my_otp_success_30d|default:0 }}</div>
+          <div style="font-size:.65rem;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.04em;margin-top:4px;font-weight:600">Verified</div>
+        </div>
+        <div style="background:var(--eo-bg);padding:10px 12px;border-radius:8px;text-align:center">
+          <div style="font-size:1.1rem;font-weight:700;color:#dc2626;line-height:1">{{ my_otp_failed_30d|default:0 }}</div>
+          <div style="font-size:.65rem;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.04em;margin-top:4px;font-weight:600">Failed</div>
+        </div>
+        <div style="background:var(--eo-bg);padding:10px 12px;border-radius:8px;text-align:center">
+          <div style="font-size:1.1rem;font-weight:700;color:#f59e0b;line-height:1">{{ my_otp_expired_30d|default:0 }}</div>
+          <div style="font-size:.65rem;color:var(--eo-text-muted);text-transform:uppercase;letter-spacing:.04em;margin-top:4px;font-weight:600">Expired</div>
+        </div>
+      </div>
+      <div style="margin-top:8px;font-size:.7rem;color:var(--eo-text-muted);text-align:center">
+        OTP activity, last 30 days
+        {% if my_last_otp_success %}
+          · last verified {{ my_last_otp_success|timesince }} ago
+        {% endif %}
+      </div>
+
+      {% if otp_live_challenges %}
+        <div style="margin-top:10px;padding:10px 14px;background:#fef9c3;border:1px solid #fde68a;border-radius:9px;font-size:.76rem;color:#854d0e;line-height:1.5">
+          <i class="bi bi-hourglass-split"></i>
+          You have <strong>{{ otp_live_challenges }}</strong> OTP
+          {{ otp_live_challenges|pluralize:"challenge,challenges" }} in
+          progress (issued, not yet used, not yet expired). If you weren't
+          expecting this, change your password immediately.
+        </div>
+      {% endif %}
+
+      {% if my_otp_failed_30d and my_otp_failed_30d >= 3 %}
+        <div style="margin-top:10px;padding:10px 14px;background:#fee2e2;border:1px solid #fecaca;border-radius:9px;font-size:.76rem;color:#991b1b;line-height:1.5">
+          <i class="bi bi-exclamation-octagon-fill"></i>
+          <strong>{{ my_otp_failed_30d }} OTP failures</strong> on your
+          account in the last 30 days
+          {% if my_last_otp_failure %} · last one {{ my_last_otp_failure|timesince }} ago{% endif %}.
+          If these weren't you, change your password and contact your administrator.
         </div>
       {% endif %}
 

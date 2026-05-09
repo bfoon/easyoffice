@@ -1,5 +1,6 @@
 from django.urls import path
 from apps.core import views
+from django.views.generic import RedirectView
 
 urlpatterns = [
     # ── Authentication ────────────────────────────────────────────────────────
@@ -32,6 +33,7 @@ urlpatterns = [
 
     # ── Security dashboard ────────────────────────────────────────────────────
     path('security/',           views.SecurityDashboardView.as_view(),    name='security_dashboard'),
+    path('security/', RedirectView.as_view(pattern_name='security_dashboard', permanent=False)),
 
     # ── Profile & settings ────────────────────────────────────────────────────
     path('profile/',            views.ProfileView.as_view(),              name='profile'),

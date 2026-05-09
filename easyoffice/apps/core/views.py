@@ -10,6 +10,7 @@ from django.contrib.auth.forms import AuthenticationForm, PasswordChangeForm
 from django.views.generic import View, TemplateView
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
+from django.db.models import Count
 from django.http import JsonResponse, HttpResponseForbidden
 from django.utils import timezone
 from django.core.mail import send_mail
@@ -959,6 +960,59 @@ class SecurityDashboardView(LoginRequiredMixin, TemplateView):
         ).order_by('-trusted_at')
         ctx['current_cookie_device_id'] = _get_device_id(self.request)
         ctx['current_active_device_pk'] = user.active_device_id
+
+        # ── Per-user OTP details ────────────────────────────────────────
+        # Surface everything the model already knows about THIS user's
+        # OTP posture — bypass timer, always-on flag, force-next flag,
+        # plus a short activity rollup pulled from their own
+        # SecurityEvent rows. We only look at the current user's events
+        # (user.security_events), so this is naturally scoped — no
+        # privacy concerns about leaking org-wide data here.
+        now = timezone.now()
+        since_30d = now - timedelta(days=30)
+
+        # Live (in-flight) OTP challenges for this user — issued
+        # recently, not yet used, not yet expired. Useful when an email
+        # is delayed: the user can see "yes, a code was actually issued".
+        ctx['otp_live_challenges'] = OTPChallenge.objects.filter(
+            user=user,
+            is_used=False,
+            expires_at__gt=now,
+        ).count()
+
+        # Per-event-type counts over the last 30 days, scoped to this
+        # user's events. dict.get() with a default keeps the template
+        # quiet when a particular type has zero rows.
+        OTP_TYPES_30D = (
+            'otp_sent', 'otp_success', 'otp_failed', 'otp_expired',
+        )
+        otp_counts = dict(
+            user.security_events
+            .filter(created_at__gte=since_30d, event_type__in=OTP_TYPES_30D)
+            .values_list('event_type')
+            .annotate(c=Count('id'))
+            .values_list('event_type', 'c')
+        )
+        ctx['my_otp_sent_30d']    = otp_counts.get('otp_sent', 0)
+        ctx['my_otp_success_30d'] = otp_counts.get('otp_success', 0)
+        ctx['my_otp_failed_30d']  = otp_counts.get('otp_failed', 0)
+        ctx['my_otp_expired_30d'] = otp_counts.get('otp_expired', 0)
+
+        # Last successful and last failed OTP timestamps — handy
+        # "you last verified X" line on the card.
+        ctx['my_last_otp_success'] = (
+            user.security_events
+            .filter(event_type='otp_success')
+            .values_list('created_at', flat=True)
+            .first()
+        )
+        ctx['my_last_otp_failure'] = (
+            user.security_events
+            .filter(event_type='otp_failed')
+            .values_list('created_at', flat=True)
+            .first()
+        )
+
         return ctx
 
 

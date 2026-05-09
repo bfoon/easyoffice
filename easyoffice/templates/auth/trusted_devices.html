@@ -1,0 +1,293 @@
+{% extends "base.html" %}
+{% block title %}Trusted Devices{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'security_dashboard' %}">Security</a>
+  <span>/</span>
+  <span>Trusted Devices</span>
+{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">
+      <i class="bi bi-laptop me-2" style="color:var(--eo-accent)"></i>
+      Trusted Devices
+    </h1>
+    <p class="eo-page-subtitle">
+      Devices that can sign in to your account without an OTP challenge.
+      Revoke any device you don't recognise.
+    </p>
+  </div>
+  <div>
+    <a href="{% url 'security_dashboard' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+      <i class="bi bi-arrow-left"></i> Back to Security
+    </a>
+  </div>
+</div>
+
+{# Django messages — surfaces the success/error feedback the view emits #}
+{% if messages %}
+  <div style="margin-bottom:14px;display:flex;flex-direction:column;gap:8px">
+    {% for m in messages %}
+      <div style="padding:10px 14px;border-radius:9px;font-size:.82rem;
+        {% if 'success' in m.tags %}background:#dcfce7;color:#166534;border:1px solid #bbf7d0
+        {% elif 'error' in m.tags or 'danger' in m.tags %}background:#fee2e2;color:#991b1b;border:1px solid #fecaca
+        {% else %}background:var(--eo-bg);color:var(--eo-text);border:1px solid var(--eo-border){% endif %}">
+        {{ m }}
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% comment %} Sort the queryset by is_revoked into a fresh variable, then
+   {% regroup %} it into two clean groups. We can't pipe filters
+   directly into the regroup expression (Django parses regroup token
+   positions strictly), so we do the sort in a {% with %} first.
+   `dictsort` sorts ascending and Python's False < True, so active
+   devices come first. We then iterate the groups twice — once to
+   render the active card, once to render the revoked card — keying
+   off `grp.grouper`. {% endcomment %}
+{% with sorted_devices=devices|dictsort:"is_revoked" %}
+{% regroup sorted_devices by is_revoked as device_groups %}
+
+<div class="row g-4">
+  <div class="col-lg-8">
+
+    {% comment %} ╔══════════════════════════════════════════════════════════════════╗
+       ║   Active devices                                                  ║
+       ╚══════════════════════════════════════════════════════════════════╝ {% endcomment %}
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-shield-check me-2" style="color:#16a34a"></i>
+            Active Devices
+          </h2>
+          <p class="eo-card-subtitle">
+            Sign-ins from these devices skip the OTP step until they expire.
+          </p>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px">
+        {% comment %} Locate the active group (grouper == False). If absent, the
+           inner block doesn't render, and the empty-state message
+           below kicks in. {% endcomment %}
+        {% for grp in device_groups %}{% if not grp.grouper %}
+          {% for d in grp.list %}
+            <div style="padding:14px;background:var(--eo-bg);border-radius:9px;border:1px solid var(--eo-border)">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
+                <div style="min-width:0;flex:1">
+                  <div style="font-size:.9rem;font-weight:700;color:var(--eo-text);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <i class="bi bi-hdd-network" style="color:var(--eo-text-muted)"></i>
+                    {{ d.device_name|default:"Unknown device" }}
+                    {% if d.pk == current_active_device_pk or d.device_id == current_cookie_device_id %}
+                      <span style="background:var(--eo-accent);color:#fff;font-size:.62rem;font-weight:700;padding:2px 8px;border-radius:999px;letter-spacing:.04em">
+                        <i class="bi bi-broadcast"></i> CURRENT
+                      </span>
+                    {% endif %}
+                  </div>
+
+                  {# Location & network info #}
+                  <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:6px;line-height:1.5">
+                    {% if d.city or d.country %}
+                      <i class="bi bi-geo-alt"></i>
+                      {{ d.city }}{% if d.city and d.country %}, {% endif %}{{ d.country }}
+                    {% endif %}
+                    {% if d.ip_address %}
+                      {% if d.city or d.country %} · {% endif %}
+                      <span style="font-family:var(--eo-mono)">{{ d.ip_address }}</span>
+                    {% endif %}
+                  </div>
+
+                  {# Trust lifecycle #}
+                  <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:4px;line-height:1.5">
+                    Trusted {{ d.trusted_at|date:"M j, Y H:i" }}
+                    · Expires {{ d.expires_at|date:"M j, Y" }}
+                    {% if d.last_used %}
+                      · Last used {{ d.last_used|timesince }} ago
+                    {% else %}
+                      · Never used
+                    {% endif %}
+                  </div>
+
+                  {# User agent — hidden by default, expandable #}
+                  {% if d.user_agent %}
+                    <details style="margin-top:6px">
+                      <summary style="font-size:.7rem;color:var(--eo-text-muted);cursor:pointer">
+                        Browser details
+                      </summary>
+                      <div style="font-size:.7rem;color:var(--eo-text-muted);margin-top:4px;font-family:var(--eo-mono);word-break:break-all">
+                        {{ d.user_agent }}
+                      </div>
+                    </details>
+                  {% endif %}
+                </div>
+
+                {% comment %} Revoke action — disabled on the current device to
+                   prevent the user from kicking themselves out and
+                   getting confused about why they were just logged out. {% endcomment %}
+                <div style="flex-shrink:0">
+                  {% if d.pk == current_active_device_pk or d.device_id == current_cookie_device_id %}
+                    <button type="button"
+                            class="eo-btn eo-btn-secondary eo-btn-sm"
+                            disabled
+                            title="You can't revoke the device you're currently using. Log in elsewhere first.">
+                      <i class="bi bi-slash-circle"></i> Current device
+                    </button>
+                  {% else %}
+                    <form method="post" style="margin:0">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="revoke">
+                      <input type="hidden" name="device_id" value="{{ d.pk }}">
+                      <button type="submit"
+                              class="eo-btn eo-btn-secondary eo-btn-sm"
+                              style="color:#dc2626;border-color:#fecaca"
+                              onclick="return confirm('Revoke &quot;{{ d.device_name|default:'this device'|escapejs }}&quot;? You will need to verify with OTP next time you sign in from it.')">
+                        <i class="bi bi-x-circle"></i> Revoke
+                      </button>
+                    </form>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+        {% endif %}{% endfor %}
+
+        {% comment %} Empty-state messages. We have two cases:
+           1. No devices at all → "you don't have any yet"
+           2. Devices exist but they're all revoked → "all revoked"
+           We detect case 2 by checking whether the first regroup'd
+           grouper is True (meaning only the True group exists). {% endcomment %}
+        {% if not devices %}
+          <div style="font-size:.85rem;color:var(--eo-text-muted);text-align:center;padding:24px 0">
+            You don't have any trusted devices yet. They'll appear here
+            after you successfully verify an OTP from a new device.
+          </div>
+        {% else %}
+          {% for grp in device_groups %}
+            {% if forloop.first and grp.grouper %}
+              {# Only group is the True (revoked) group → no active devices. #}
+              <div style="font-size:.85rem;color:var(--eo-text-muted);text-align:center;padding:24px 0">
+                You have no active trusted devices — all of them have been
+                revoked. See the list below for your records.
+              </div>
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+      </div>
+    </div>
+
+    {% comment %} ╔══════════════════════════════════════════════════════════════════╗
+       ║   Revoked devices (audit trail)                                   ║
+       ║   Card only renders if at least one revoked device exists.        ║
+       ╚══════════════════════════════════════════════════════════════════╝ {% endcomment %}
+    {% for grp in device_groups %}{% if grp.grouper %}
+      <div class="eo-card" style="margin-top:18px">
+        <div class="eo-card-header">
+          <div>
+            <h2 class="eo-card-title">
+              <i class="bi bi-archive me-2" style="color:var(--eo-text-muted)"></i>
+              Revoked Devices <span style="font-weight:500;color:var(--eo-text-muted);font-size:.78rem">({{ grp.list|length }})</span>
+            </h2>
+            <p class="eo-card-subtitle">
+              Past trusted devices that have been revoked. Kept here for your records.
+            </p>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          {% for d in grp.list %}
+            <div style="padding:10px 14px;background:var(--eo-bg);border-radius:8px;opacity:.7">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                <div style="min-width:0;flex:1">
+                  <div style="font-size:.82rem;font-weight:600;color:var(--eo-text);text-decoration:line-through">
+                    <i class="bi bi-hdd-network"></i>
+                    {{ d.device_name|default:"Unknown device" }}
+                  </div>
+                  <div style="font-size:.7rem;color:var(--eo-text-muted);margin-top:3px">
+                    {{ d.city }}{% if d.city and d.country %}, {% endif %}{{ d.country }}
+                    {% if d.ip_address %} · {{ d.ip_address }}{% endif %}
+                    · trusted {{ d.trusted_at|date:"M j, Y" }}
+                  </div>
+                </div>
+                <span style="background:#fee2e2;color:#991b1b;font-size:.65rem;font-weight:700;padding:3px 8px;border-radius:999px;white-space:nowrap">
+                  <i class="bi bi-x-circle-fill"></i> Revoked
+                </span>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}{% endfor %}
+
+  </div>
+
+  {# ─── RIGHT COLUMN: bulk actions + helpful info ─── #}
+  <div class="col-lg-4">
+
+    {# Revoke-all card — destructive action, visually set apart. #}
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-shield-fill-x me-2" style="color:#dc2626"></i>
+            Revoke All Devices
+          </h2>
+          <p class="eo-card-subtitle">
+            Useful if you've lost a device or suspect your account has been accessed.
+          </p>
+        </div>
+      </div>
+
+      <div style="background:#fef2f2;border:1px solid #fecaca;padding:12px 14px;border-radius:9px;margin-bottom:12px">
+        <div style="font-size:.78rem;color:#991b1b;line-height:1.55">
+          <i class="bi bi-exclamation-triangle-fill"></i>
+          This revokes <strong>every</strong> trusted device on your account
+          — including the one you're using right now. You'll be challenged
+          with OTP on your next sign-in from any device.
+        </div>
+      </div>
+
+      <form method="post" style="margin:0">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="revoke_all">
+        <button type="submit"
+                class="eo-btn eo-btn-sm"
+                style="background:#dc2626;color:#fff;border-color:#dc2626;width:100%"
+                onclick="return confirm('Revoke ALL trusted devices? You will need OTP on every device on your next sign-in.')">
+          <i class="bi bi-shield-fill-x"></i> Revoke All Trusted Devices
+        </button>
+      </form>
+    </div>
+
+    {# Help card #}
+    <div class="eo-card" style="margin-top:18px">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-info-circle me-2" style="color:var(--eo-text-muted)"></i>
+            About Trusted Devices
+          </h2>
+        </div>
+      </div>
+      <div style="font-size:.78rem;color:var(--eo-text-muted);line-height:1.6">
+        <p style="margin:0 0 10px">
+          When you sign in from a new device and successfully verify the
+          OTP code emailed to you, that device is added here so you don't
+          have to verify again every time.
+        </p>
+        <p style="margin:0 0 10px">
+          Trusted devices expire automatically after a set period — after
+          which OTP will be required again on that device.
+        </p>
+        <p style="margin:0">
+          If you see a device you don't recognise,
+          <strong>revoke it immediately</strong> and change your password.
+        </p>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endwith %}
+{% endblock %}

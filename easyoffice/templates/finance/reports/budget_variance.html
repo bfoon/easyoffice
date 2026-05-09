@@ -1,0 +1,356 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Budget vs Actual{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'finance_dashboard' %}">Finance</a> <span>›</span>
+<a href="{% url 'financial_control_center' %}">Control Center</a> <span>›</span>
+<span>Budget Variance</span>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  :root {
+    --bv-ink: #0f172a; --bv-ink-soft: #334155; --bv-grey: #64748b;
+    --bv-bg: #fafaf7; --bv-card: #fff; --bv-line: #e2e8f0; --bv-line-soft: #f1f5f9;
+    --bv-gold: #b08d57; --bv-green: #059669; --bv-amber: #d97706; --bv-red: #dc2626;
+  }
+  .bv-shell { background: var(--bv-bg); margin: -16px -16px 0; padding: 24px 24px 60px; min-height: calc(100vh - 60px); }
+  .bv-wrap  { max-width: 1280px; margin: 0 auto; }
+
+  .bv-header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 1px solid var(--bv-ink); padding-bottom: 16px; margin-bottom: 24px;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .bv-eyebrow {
+    font-family: 'Georgia', serif; font-size: 11px; letter-spacing: .25em;
+    text-transform: uppercase; color: var(--bv-gold); margin-bottom: 4px;
+  }
+  .bv-title {
+    font-family: 'Georgia', serif; font-size: 30px; font-weight: 400;
+    color: var(--bv-ink); letter-spacing: -.02em; margin: 0;
+  }
+  .bv-subtitle { color: var(--bv-grey); font-size: 13px; margin-top: 6px; font-style: italic; }
+
+  .bv-btn {
+    background: white; border: 1px solid var(--bv-line);
+    padding: 7px 14px; border-radius: 3px; font-size: 12px;
+    color: var(--bv-ink); text-decoration: none; cursor: pointer;
+    font-family: inherit; transition: all .15s; white-space: nowrap;
+  }
+  .bv-btn:hover { background: var(--bv-ink); color: white; border-color: var(--bv-ink); }
+  .bv-btn.primary { background: var(--bv-gold); color: white; border-color: var(--bv-gold); }
+  .bv-btn.primary:hover { background: #8c6f44; border-color: #8c6f44; }
+
+  .bv-filters {
+    background: var(--bv-card); border: 1px solid var(--bv-line); border-radius: 4px;
+    padding: 14px 18px; margin-bottom: 20px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;
+    align-items: end;
+  }
+  .bv-filters label {
+    display: block; font-size: 10px; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--bv-grey); font-weight: 600; margin-bottom: 4px;
+  }
+  .bv-filters select, .bv-filters input {
+    width: 100%; border: 1px solid var(--bv-line); border-radius: 3px;
+    padding: 7px 10px; font-size: 13px; color: var(--bv-ink); background: white;
+    font-family: inherit;
+  }
+
+  /* Headline summary */
+  .bv-summary {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px; margin-bottom: 24px;
+  }
+  .bv-sum-card {
+    background: var(--bv-card); border: 1px solid var(--bv-line); border-radius: 4px;
+    padding: 18px 20px; position: relative; overflow: hidden;
+  }
+  .bv-sum-card::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--bv-gold);
+  }
+  .bv-sum-card.spent::before   { background: var(--bv-amber); }
+  .bv-sum-card.bal::before     { background: var(--bv-green); }
+  .bv-sum-card.util::before    { background: var(--bv-ink); }
+  .bv-sum-card .k {
+    font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--bv-grey); font-weight: 600; margin-bottom: 8px;
+  }
+  .bv-sum-card .v {
+    font-family: 'Georgia', serif; font-size: 26px; color: var(--bv-ink);
+    font-feature-settings: 'tnum'; font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+  }
+  .bv-sum-card .v.over { color: var(--bv-red); }
+  .bv-sum-card .v.warn { color: var(--bv-amber); }
+  .bv-sum-card .v.ok   { color: var(--bv-green); }
+  .bv-sum-card .sub { font-size: 11px; color: var(--bv-grey); margin-top: 4px; }
+
+  /* Big main bar */
+  .bv-grand-bar {
+    background: var(--bv-card); border: 1px solid var(--bv-line); border-radius: 4px;
+    padding: 20px 24px; margin-bottom: 24px;
+  }
+  .bv-grand-bar .head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 10px;
+  }
+  .bv-grand-bar .head .label {
+    font-family: 'Georgia', serif; font-size: 13px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--bv-grey);
+  }
+  .bv-grand-bar .head .pct {
+    font-family: 'Georgia', serif; font-size: 24px; color: var(--bv-ink);
+    font-feature-settings: 'tnum'; font-variant-numeric: tabular-nums;
+  }
+  .bv-grand-bar .head .pct.over  { color: var(--bv-red); }
+  .bv-grand-bar .head .pct.warn  { color: var(--bv-amber); }
+  .bv-grand-bar .track {
+    height: 14px; background: var(--bv-line-soft); border-radius: 2px; overflow: hidden;
+    position: relative;
+  }
+  .bv-grand-bar .fill {
+    height: 100%; background: linear-gradient(90deg, var(--bv-gold), #c9a574);
+    transition: width .4s;
+  }
+  .bv-grand-bar .fill.warn { background: linear-gradient(90deg, var(--bv-amber), #f59e0b); }
+  .bv-grand-bar .fill.over { background: linear-gradient(90deg, var(--bv-red), #ef4444); }
+  .bv-grand-bar .legend {
+    display: flex; justify-content: space-between; margin-top: 8px;
+    font-size: 12px; color: var(--bv-grey);
+  }
+  .bv-grand-bar .legend strong { color: var(--bv-ink); font-feature-settings: 'tnum'; }
+
+  /* Main table */
+  .bv-table-wrap {
+    background: var(--bv-card); border: 1px solid var(--bv-line); border-radius: 4px; overflow: hidden;
+  }
+  .bv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .bv-table thead {
+    background: var(--bv-ink); color: white;
+  }
+  .bv-table th {
+    text-align: left; padding: 12px 14px; font-weight: 500;
+    font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .bv-table th.num { text-align: right; }
+  .bv-table th.center { text-align: center; }
+  .bv-table td {
+    padding: 12px 14px; border-bottom: 1px solid var(--bv-line-soft);
+    vertical-align: middle;
+  }
+  .bv-table tr:hover td { background: var(--bv-line-soft); }
+  .bv-table tr:last-child td { border-bottom: none; }
+  .bv-table .name { font-weight: 600; color: var(--bv-ink); }
+  .bv-table .name .meta {
+    display: block; font-weight: 400; color: var(--bv-grey); font-size: 11px;
+    margin-top: 2px;
+  }
+  .bv-table .num {
+    text-align: right; font-feature-settings: 'tnum'; font-variant-numeric: tabular-nums;
+    color: var(--bv-ink); white-space: nowrap;
+  }
+  .bv-table .num.over   { color: var(--bv-red); font-weight: 600; }
+  .bv-table .num.warn   { color: var(--bv-amber); }
+  .bv-table .num.ok     { color: var(--bv-green); }
+
+  /* Inline utilization bar */
+  .util-cell { min-width: 160px; }
+  .util-cell .bar-track {
+    height: 8px; background: var(--bv-line-soft); border-radius: 2px; overflow: hidden;
+    margin-bottom: 4px;
+  }
+  .util-cell .bar-fill {
+    height: 100%; background: var(--bv-gold);
+    transition: width .3s;
+  }
+  .util-cell .bar-fill.warn { background: var(--bv-amber); }
+  .util-cell .bar-fill.over { background: var(--bv-red); }
+  .util-cell .pct {
+    font-size: 11px; font-feature-settings: 'tnum'; color: var(--bv-grey);
+    display: flex; justify-content: space-between;
+  }
+  .util-cell .pct strong { color: var(--bv-ink); }
+  .util-cell .pct strong.over { color: var(--bv-red); }
+  .util-cell .pct strong.warn { color: var(--bv-amber); }
+
+  .status-tag {
+    display: inline-block; font-size: 10px; padding: 2px 7px; border-radius: 2px;
+    text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
+    background: var(--bv-line-soft); color: var(--bv-ink-soft);
+  }
+  .status-tag.over { background: rgba(220,38,38,.12); color: #991b1b; }
+
+  .bv-totals-row { background: var(--bv-line-soft); }
+  .bv-totals-row td {
+    border-top: 2px solid var(--bv-ink); border-bottom: 4px double var(--bv-ink);
+    font-family: 'Georgia', serif; font-size: 14px; padding: 14px;
+  }
+  .bv-totals-row .name {
+    text-transform: uppercase; letter-spacing: .1em; font-size: 11px;
+    color: var(--bv-ink); font-weight: 700;
+  }
+
+  .bv-empty {
+    padding: 80px 20px; text-align: center; color: var(--bv-grey);
+  }
+  .bv-empty i { font-size: 32px; color: var(--bv-line); display: block; margin-bottom: 12px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="bv-shell">
+  <div class="bv-wrap">
+
+    <div class="bv-header">
+      <div>
+        <div class="bv-eyebrow">Budgeting · Variance Analysis</div>
+        <h1 class="bv-title">Budget vs Actual</h1>
+        <div class="bv-subtitle">Allocation, spend, and headroom for fiscal year {{ data.fiscal_year }}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <a href="{% url 'export_budget_variance_pdf' %}?{{ request.GET.urlencode }}" class="bv-btn primary">
+          <i class="bi bi-file-earmark-pdf"></i> PDF
+        </a>
+        <a href="{% url 'export_budget_variance_xlsx' %}?{{ request.GET.urlencode }}" class="bv-btn">
+          <i class="bi bi-file-earmark-spreadsheet"></i> Excel
+        </a>
+        <a href="{% url 'budget_list' %}" class="bv-btn">
+          <i class="bi bi-list-ul"></i> All Budgets
+        </a>
+        <a href="{% url 'financial_control_center' %}" class="bv-btn">← Dashboard</a>
+      </div>
+    </div>
+
+    <form method="get" class="bv-filters">
+      <div>
+        <label>Fiscal Year</label>
+        <input type="number" name="fy" value="{{ data.fiscal_year }}" min="2000" max="2100">
+      </div>
+      <div>
+        <button type="submit" class="bv-btn primary" style="width:100%">Apply</button>
+        <a href="{% url 'report_budget_variance' %}" class="bv-btn" style="width:100%;display:inline-block;text-align:center;margin-top:6px">Reset</a>
+      </div>
+    </form>
+
+    <!-- Summary cards -->
+    <div class="bv-summary">
+      <div class="bv-sum-card">
+        <div class="k">Total Allocated</div>
+        <div class="v">{{ data.grand_total|floatformat:0|intcomma }}</div>
+        <div class="sub">FY {{ data.fiscal_year }} · GMD</div>
+      </div>
+      <div class="bv-sum-card spent">
+        <div class="k">Total Spent</div>
+        <div class="v">{{ data.grand_spent|floatformat:0|intcomma }}</div>
+        <div class="sub">All budgets, year-to-date</div>
+      </div>
+      <div class="bv-sum-card bal">
+        <div class="k">Remaining Balance</div>
+        <div class="v {% if data.grand_balance < 0 %}over{% else %}ok{% endif %}">
+          {{ data.grand_balance|floatformat:0|intcomma }}
+        </div>
+        <div class="sub">Available headroom</div>
+      </div>
+      <div class="bv-sum-card util">
+        <div class="k">Utilization</div>
+        <div class="v {% if data.grand_utilization > 100 %}over{% elif data.grand_utilization > 85 %}warn{% else %}ok{% endif %}">
+          {{ data.grand_utilization|floatformat:1 }}%
+        </div>
+        <div class="sub">{{ data.rows|length }} budget{{ data.rows|length|pluralize }} tracked</div>
+      </div>
+    </div>
+
+    <!-- Grand utilization bar -->
+    <div class="bv-grand-bar">
+      <div class="head">
+        <span class="label">Overall fiscal-year utilization</span>
+        <span class="pct {% if data.grand_utilization > 100 %}over{% elif data.grand_utilization > 85 %}warn{% endif %}">
+          {{ data.grand_utilization|floatformat:1 }}%
+        </span>
+      </div>
+      <div class="track">
+        <div class="fill {% if data.grand_utilization > 100 %}over{% elif data.grand_utilization > 85 %}warn{% endif %}"
+             style="width: {% if data.grand_utilization > 100 %}100{% else %}{{ data.grand_utilization|floatformat:0 }}{% endif %}%"></div>
+      </div>
+      <div class="legend">
+        <span>Spent <strong>GMD {{ data.grand_spent|floatformat:0|intcomma }}</strong></span>
+        <span>Allocated <strong>GMD {{ data.grand_total|floatformat:0|intcomma }}</strong></span>
+      </div>
+    </div>
+
+    <!-- Per-budget table -->
+    <div class="bv-table-wrap">
+      <table class="bv-table">
+        <thead>
+          <tr>
+            <th>Budget</th>
+            <th>Department</th>
+            <th>Status</th>
+            <th class="num">Allocated</th>
+            <th class="num">Spent</th>
+            <th class="num">Balance</th>
+            <th>Utilization</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in data.rows %}
+          <tr>
+            <td class="name">
+              {{ r.name }}
+              <span class="meta">Unit: {{ r.unit }}</span>
+            </td>
+            <td>{{ r.department }}</td>
+            <td>
+              <span class="status-tag {% if r.over_budget %}over{% endif %}">
+                {% if r.over_budget %}Over Budget{% else %}{{ r.status|default:"Active" }}{% endif %}
+              </span>
+            </td>
+            <td class="num">{{ r.total|floatformat:0|intcomma }}</td>
+            <td class="num {% if r.over_budget %}over{% elif r.utilization > 85 %}warn{% endif %}">
+              {{ r.spent|floatformat:0|intcomma }}
+            </td>
+            <td class="num {% if r.balance < 0 %}over{% else %}ok{% endif %}">
+              {{ r.balance|floatformat:0|intcomma }}
+            </td>
+            <td class="util-cell">
+              <div class="bar-track">
+                <div class="bar-fill {% if r.utilization > 100 %}over{% elif r.utilization > 85 %}warn{% endif %}"
+                     style="width: {% if r.utilization > 100 %}100{% else %}{{ r.utilization|floatformat:0 }}{% endif %}%"></div>
+              </div>
+              <div class="pct">
+                <span>0%</span>
+                <strong class="{% if r.utilization > 100 %}over{% elif r.utilization > 85 %}warn{% endif %}">
+                  {{ r.utilization|floatformat:1 }}%
+                </strong>
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="7">
+            <div class="bv-empty">
+              <i class="bi bi-folder-x"></i>
+              No budgets defined for fiscal year {{ data.fiscal_year }}.
+            </div>
+          </td></tr>
+          {% endfor %}
+
+          {% if data.rows %}
+          <tr class="bv-totals-row">
+            <td class="name" colspan="3">Total — FY {{ data.fiscal_year }}</td>
+            <td class="num">GMD {{ data.grand_total|floatformat:0|intcomma }}</td>
+            <td class="num">GMD {{ data.grand_spent|floatformat:0|intcomma }}</td>
+            <td class="num {% if data.grand_balance < 0 %}over{% endif %}">GMD {{ data.grand_balance|floatformat:0|intcomma }}</td>
+            <td class="num">{{ data.grand_utilization|floatformat:1 }}%</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

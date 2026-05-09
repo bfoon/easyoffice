@@ -144,20 +144,29 @@
 
   /* Resolution modal */
   .modal-backdrop {
-    position: fixed; inset: 0; background: rgba(15,23,42,.6);
-    display: none; align-items: center; justify-content: center; z-index: 1000;
+    position: fixed !important;
+    top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+    width: 100vw !important; height: 100vh !important;
+    background: rgba(15,23,42,.8) !important;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 99999 !important;
     padding: 20px;
+    box-sizing: border-box;
   }
-  .modal-backdrop.show { display: flex; }
+  .modal-backdrop.show { display: flex !important; }
   .modal-box {
     background: white; border-radius: 6px; max-width: 520px; width: 100%;
     box-shadow: 0 24px 60px rgba(0,0,0,.3);
+    max-height: calc(100vh - 40px); overflow-y: auto; display: flex; flex-direction: column;
   }
   .modal-head {
     padding: 20px 24px; border-bottom: 1px solid var(--an-line);
+    position: sticky; top: 0; background: white; z-index: 1; flex-shrink: 0;
   }
   .modal-head h3 { font-family: 'Georgia', serif; font-weight: 500; margin: 0; color: var(--an-ink); }
-  .modal-body { padding: 20px 24px; }
+  .modal-body { padding: 20px 24px; flex: 1; }
   .modal-body label {
     display: block; font-size: 11px; color: var(--an-grey);
     letter-spacing: .12em; text-transform: uppercase; font-weight: 600; margin: 12px 0 6px;
@@ -165,11 +174,13 @@
   .modal-body select, .modal-body textarea {
     width: 100%; border: 1px solid var(--an-line); border-radius: 3px;
     padding: 8px 10px; font-size: 13px; font-family: inherit;
+    box-sizing: border-box;
   }
   .modal-body textarea { min-height: 100px; resize: vertical; }
   .modal-foot {
     padding: 16px 24px; border-top: 1px solid var(--an-line);
     display: flex; justify-content: flex-end; gap: 8px;
+    position: sticky; bottom: 0; background: white; flex-shrink: 0;
   }
 </style>
 {% endblock %}
@@ -246,7 +257,7 @@
           {% if a.amount %}
           <div class="an-amount">{{ a.currency|default:"GMD" }} {{ a.amount|floatformat:0|intcomma }}</div>
           {% endif %}
-          {% if can_resolve and a.status == 'open' or a.status == 'reviewing' %}
+          {% if can_resolve and a.status == 'open' or can_resolve and a.status == 'reviewing' %}
           <button class="an-action-btn"
                   onclick="openModal('{{ a.pk }}', '{{ a.title|escapejs }}')">
             Mark Reviewed
@@ -280,7 +291,7 @@
   </div>
 </div>
 
-{# ── Resolve modal ──────────────────────────────────────────────────── #}
+{# ── Resolve modal ── #}
 {% if can_resolve %}
 <div class="modal-backdrop" id="resolve-modal">
   <div class="modal-box">
@@ -309,16 +320,31 @@
 </div>
 
 <script>
-  const modal = document.getElementById('resolve-modal');
-  const form = document.getElementById('resolve-form');
-  const titleEl = document.getElementById('modal-anom-title');
+  const _modal = document.getElementById('resolve-modal');
+  const _form  = document.getElementById('resolve-form');
+  const _title = document.getElementById('modal-anom-title');
+  // Move modal to <body> so position:fixed isn't trapped in a stacking context
+  document.body.appendChild(_modal);
+  // Force styles directly on the element to bypass any cascade
+  Object.assign(_modal.style, {
+    position: 'fixed',
+    top: '0', left: '0', right: '0', bottom: '0',
+    width: '100vw', height: '100vh',
+    zIndex: '99999',
+    background: 'rgba(15,23,42,0.8)',
+    display: 'none',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '20px',
+    boxSizing: 'border-box',
+  });
   function openModal(pk, title) {
-    form.action = "{% url 'finance_anomaly_resolve' pk='00000000-0000-0000-0000-000000000000' %}".replace('00000000-0000-0000-0000-000000000000', pk);
-    titleEl.textContent = title;
-    modal.classList.add('show');
+    _form.action = "{% url 'finance_anomaly_resolve' pk='00000000-0000-0000-0000-000000000000' %}".replace('00000000-0000-0000-0000-000000000000', pk);
+    _title.textContent = title;
+    _modal.style.display = 'flex';
   }
-  function closeModal() { modal.classList.remove('show'); }
-  modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+  function closeModal() { _modal.style.display = 'none'; }
+  _modal.addEventListener('click', e => { if (e.target === _modal) closeModal(); });
 </script>
 {% endif %}
 {% endblock %}

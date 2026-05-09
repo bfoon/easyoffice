@@ -1,0 +1,298 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Income Statement{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'finance_dashboard' %}">Finance</a> <span>›</span>
+<a href="{% url 'financial_control_center' %}">Control Center</a> <span>›</span>
+<span>Income Statement</span>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  :root {
+    --is-ink: #0f172a; --is-ink-soft: #334155; --is-grey: #64748b;
+    --is-bg: #fafaf7; --is-card: #fff; --is-line: #e2e8f0; --is-line-soft: #f1f5f9;
+    --is-gold: #b08d57; --is-green: #059669; --is-red: #dc2626;
+  }
+  .is-shell { background: var(--is-bg); margin: -16px -16px 0; padding: 24px 24px 60px; min-height: calc(100vh - 60px); }
+  .is-wrap  { max-width: 960px; margin: 0 auto; }
+
+  .is-header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 1px solid var(--is-ink); padding-bottom: 16px; margin-bottom: 28px;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .is-eyebrow {
+    font-family: 'Georgia', serif; font-size: 11px; letter-spacing: .25em;
+    text-transform: uppercase; color: var(--is-gold); margin-bottom: 4px;
+  }
+  .is-title {
+    font-family: 'Georgia', serif; font-size: 30px; font-weight: 400;
+    color: var(--is-ink); letter-spacing: -.02em; margin: 0;
+  }
+  .is-subtitle { color: var(--is-grey); font-size: 13px; margin-top: 6px; font-style: italic; }
+
+  .is-btn {
+    background: white; border: 1px solid var(--is-line);
+    padding: 7px 14px; border-radius: 3px; font-size: 12px;
+    color: var(--is-ink); text-decoration: none; cursor: pointer;
+    font-family: inherit; transition: all .15s; white-space: nowrap;
+  }
+  .is-btn:hover { background: var(--is-ink); color: white; border-color: var(--is-ink); }
+  .is-btn.primary { background: var(--is-gold); color: white; border-color: var(--is-gold); }
+  .is-btn.primary:hover { background: #8c6f44; border-color: #8c6f44; }
+
+  .is-filters {
+    background: var(--is-card); border: 1px solid var(--is-line); border-radius: 4px;
+    padding: 14px 18px; margin-bottom: 24px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;
+    align-items: end;
+  }
+  .is-filters label {
+    display: block; font-size: 10px; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--is-grey); font-weight: 600; margin-bottom: 4px;
+  }
+  .is-filters select, .is-filters input {
+    width: 100%; border: 1px solid var(--is-line); border-radius: 3px;
+    padding: 7px 10px; font-size: 13px; color: var(--is-ink); background: white;
+    font-family: inherit;
+  }
+
+  /* The statement itself — looks like an actual P&L */
+  .is-doc {
+    background: var(--is-card); border: 1px solid var(--is-line); border-radius: 4px;
+    padding: 40px 48px;
+  }
+  @media (max-width: 700px) { .is-doc { padding: 24px 20px; } }
+
+  .is-doc-head {
+    text-align: center; padding-bottom: 20px; border-bottom: 2px solid var(--is-ink);
+    margin-bottom: 24px;
+  }
+  .is-doc-head h2 {
+    font-family: 'Georgia', serif; font-size: 22px; font-weight: 400; margin: 0 0 6px;
+    letter-spacing: .02em; color: var(--is-ink);
+  }
+  .is-doc-head .period {
+    font-size: 13px; color: var(--is-ink-soft); font-style: italic;
+  }
+  .is-doc-head .basis {
+    display: inline-block; margin-top: 8px; padding: 2px 10px;
+    border: 1px solid var(--is-line); border-radius: 999px;
+    font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--is-grey);
+  }
+
+  .is-section { margin-bottom: 24px; }
+  .is-section-head {
+    font-family: 'Georgia', serif; font-size: 14px; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--is-gold);
+    border-bottom: 1px solid var(--is-line); padding-bottom: 6px; margin-bottom: 8px;
+  }
+
+  .is-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .is-table td {
+    padding: 8px 4px; border-bottom: 1px dotted var(--is-line);
+    vertical-align: baseline;
+  }
+  .is-table td.label { color: var(--is-ink-soft); padding-left: 16px; }
+  .is-table td.amt {
+    text-align: right; font-feature-settings: 'tnum'; color: var(--is-ink);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+    min-width: 140px;
+  }
+  .is-table tr.subtotal td {
+    border-top: 1px solid var(--is-ink); border-bottom: none;
+    padding-top: 10px; font-weight: 600;
+  }
+  .is-table tr.subtotal td.label { padding-left: 0; color: var(--is-ink); }
+
+  .is-total-row {
+    margin-top: 24px; padding: 16px 4px;
+    border-top: 2px solid var(--is-ink); border-bottom: 4px double var(--is-ink);
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .is-total-row .label {
+    font-family: 'Georgia', serif; font-size: 18px; font-weight: 400;
+    letter-spacing: .02em; color: var(--is-ink);
+  }
+  .is-total-row .amt {
+    font-family: 'Georgia', serif; font-size: 22px; font-feature-settings: 'tnum';
+    font-variant-numeric: tabular-nums;
+  }
+  .is-total-row .amt.positive { color: var(--is-green); }
+  .is-total-row .amt.negative { color: var(--is-red); }
+
+  .is-summary {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px; margin-top: 28px;
+  }
+  .is-summary-card {
+    border: 1px solid var(--is-line); border-radius: 3px; padding: 14px 16px;
+    background: var(--is-line-soft);
+  }
+  .is-summary-card .k {
+    font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--is-grey); font-weight: 600; margin-bottom: 6px;
+  }
+  .is-summary-card .v {
+    font-family: 'Georgia', serif; font-size: 20px; color: var(--is-ink);
+    font-feature-settings: 'tnum'; font-variant-numeric: tabular-nums;
+  }
+  .is-summary-card .v.positive { color: var(--is-green); }
+  .is-summary-card .v.negative { color: var(--is-red); }
+
+  .is-empty { padding: 16px 0; text-align: center; color: var(--is-grey); font-style: italic; }
+
+  .is-footnote {
+    margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--is-line);
+    font-size: 11px; color: var(--is-grey); text-align: center; font-style: italic;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="is-shell">
+  <div class="is-wrap">
+
+    <div class="is-header">
+      <div>
+        <div class="is-eyebrow">Statutory Reports</div>
+        <h1 class="is-title">Income Statement</h1>
+        <div class="is-subtitle">Profit &amp; loss summary for the selected reporting window</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <a href="{% url 'export_income_statement_pdf' %}?{{ request.GET.urlencode }}" class="is-btn primary">
+          <i class="bi bi-file-earmark-pdf"></i> PDF
+        </a>
+        <a href="{% url 'export_income_statement_xlsx' %}?{{ request.GET.urlencode }}" class="is-btn">
+          <i class="bi bi-file-earmark-spreadsheet"></i> Excel
+        </a>
+        <a href="{% url 'financial_control_center' %}" class="is-btn">← Dashboard</a>
+      </div>
+    </div>
+
+    <form method="get" class="is-filters">
+      <div>
+        <label>Period</label>
+        <select name="period" onchange="this.form.submit()">
+          <option value="mtd"       {% if request.GET.period == 'mtd' %}selected{% endif %}>Month-to-date</option>
+          <option value="qtd"       {% if request.GET.period == 'qtd' %}selected{% endif %}>Quarter-to-date</option>
+          <option value="ytd"       {% if not request.GET.period or request.GET.period == 'ytd' %}selected{% endif %}>Year-to-date</option>
+          <option value="last_30"   {% if request.GET.period == 'last_30' %}selected{% endif %}>Last 30 days</option>
+          <option value="last_90"   {% if request.GET.period == 'last_90' %}selected{% endif %}>Last 90 days</option>
+          <option value="last_year" {% if request.GET.period == 'last_year' %}selected{% endif %}>Last year</option>
+        </select>
+      </div>
+      <div>
+        <label>Basis</label>
+        <select name="basis" onchange="this.form.submit()">
+          <option value="cash"    {% if basis == 'cash' %}selected{% endif %}>Cash</option>
+          <option value="accrual" {% if basis == 'accrual' %}selected{% endif %}>Accrual</option>
+        </select>
+      </div>
+      <div>
+        <label>From</label>
+        <input type="date" name="from" value="{{ request.GET.from }}">
+      </div>
+      <div>
+        <label>To</label>
+        <input type="date" name="to" value="{{ request.GET.to }}">
+      </div>
+      <div>
+        <button type="submit" class="is-btn primary" style="width:100%">Apply</button>
+      </div>
+    </form>
+
+    <div class="is-doc">
+      <div class="is-doc-head">
+        <h2>Statement of Income</h2>
+        <div class="period">
+          For the period {{ period.start|date:"d F Y" }} &mdash; {{ period.end|date:"d F Y" }}
+          {% if period.label %}<br><span style="font-size:11px;color:var(--is-grey)">({{ period.label }})</span>{% endif %}
+        </div>
+        <span class="basis">{{ basis|title }} basis &middot; GMD</span>
+      </div>
+
+      <!-- REVENUE -->
+      <div class="is-section">
+        <div class="is-section-head">Revenue</div>
+        <table class="is-table">
+          <tbody>
+            {% for line in data.revenue_lines %}
+            <tr>
+              <td class="label">{{ line.label }}</td>
+              <td class="amt">{{ line.amount|floatformat:2|intcomma }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="2" class="is-empty">No revenue recognised in this period.</td></tr>
+            {% endfor %}
+            <tr class="subtotal">
+              <td class="label">Total Revenue</td>
+              <td class="amt">{{ data.revenue|floatformat:2|intcomma }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- EXPENSES -->
+      <div class="is-section">
+        <div class="is-section-head">Expenses</div>
+        <table class="is-table">
+          <tbody>
+            {% for line in data.expense_lines %}
+            <tr>
+              <td class="label">{{ line.label }}</td>
+              <td class="amt">{{ line.amount|floatformat:2|intcomma }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="2" class="is-empty">No expenses recorded in this period.</td></tr>
+            {% endfor %}
+            <tr class="subtotal">
+              <td class="label">Total Expenses</td>
+              <td class="amt">({{ data.total_expenses|floatformat:2|intcomma }})</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- NET INCOME -->
+      <div class="is-total-row">
+        <div class="label">{% if data.net_income >= 0 %}Net Income{% else %}Net Loss{% endif %}</div>
+        <div class="amt {% if data.net_income >= 0 %}positive{% else %}negative{% endif %}">
+          {% if data.net_income < 0 %}({{ data.net_income|floatformat:2|intcomma|cut:"-" }}){% else %}{{ data.net_income|floatformat:2|intcomma }}{% endif %}
+        </div>
+      </div>
+
+      <!-- KEY RATIOS -->
+      <div class="is-summary">
+        <div class="is-summary-card">
+          <div class="k">Revenue</div>
+          <div class="v">{{ data.revenue|floatformat:0|intcomma }}</div>
+        </div>
+        <div class="is-summary-card">
+          <div class="k">Total Expenses</div>
+          <div class="v">{{ data.total_expenses|floatformat:0|intcomma }}</div>
+        </div>
+        <div class="is-summary-card">
+          <div class="k">Net Result</div>
+          <div class="v {% if data.net_income >= 0 %}positive{% else %}negative{% endif %}">
+            {{ data.net_income|floatformat:0|intcomma }}
+          </div>
+        </div>
+        <div class="is-summary-card">
+          <div class="k">Net Margin</div>
+          <div class="v {% if data.margin_pct >= 0 %}positive{% else %}negative{% endif %}">
+            {{ data.margin_pct|floatformat:1 }}%
+          </div>
+        </div>
+      </div>
+
+      <div class="is-footnote">
+        Prepared on {% now "d F Y" %} on a {{ basis }} basis &middot; All figures in Gambian Dalasi (GMD).
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

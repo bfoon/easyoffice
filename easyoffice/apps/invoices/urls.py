@@ -28,4 +28,8 @@ urlpatterns = [
     path('<uuid:pk>/layout/',         views.InvoiceLayoutSaveView.as_view(),   name='invoice_layout'),
     path('<uuid:pk>/preview-pdf/',    views.InvoicePreviewPDFView.as_view(),   name='invoice_preview_pdf'),
     path('<uuid:pk>/finalize/',       views.InvoiceFinalizeView.as_view(),     name='invoice_finalize'),
+    path('<uuid:pk>/mark-paid/',
+             views.InvoiceMarkPaidView.as_view(),
+             name='invoice_mark_paid'),
+
 ]

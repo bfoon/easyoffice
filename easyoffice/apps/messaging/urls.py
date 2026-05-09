@@ -1,6 +1,7 @@
 from django.urls import path
 from apps.messaging import views
 from apps.messaging import floating_chat_views
+from apps.messaging import typing_views
 
 urlpatterns = [
     # ─────────────────────────────────────────────
@@ -113,6 +114,16 @@ urlpatterns = [
     path('<uuid:room_id>/spellcheck/',
          views.SpellCheckView.as_view(),
          name='chat_spellcheck'),
+
+    # ─────────────────────────────────────────────
+    # 🆕 TYPING INDICATOR (floating widget + main chat)
+    # Lightweight POST that fans out a chat.typing event over the
+    # existing chat WebSocket group. The frontend throttles to
+    # ~1 ping per 3 seconds per room.
+    # ─────────────────────────────────────────────
+    path('<uuid:room_id>/typing/',
+         typing_views.TypingPingView.as_view(),
+         name='chat_typing_ping'),
 
     # ─────────────────────────────────────────────
     # PRESENCE

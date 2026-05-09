@@ -114,11 +114,28 @@ def basis_from_request(request) -> str:
 
 # ─── Core revenue / expense aggregators ──────────────────────────────────────
 
+# Directions that represent money LEAVING the company. Anything else
+# (e.g. STAFF_TO_COMPANY repayments, or future client receipts wrongly
+# stored as Payment rows) must NOT count as an expense — that was the
+# bug where invoice receipts ended up in the expense breakdown of the
+# income statement.
+OUTFLOW_DIRECTIONS = (
+    Payment.Direction.COMPANY_TO_STAFF,
+    Payment.Direction.COMPANY_TO_VENDOR,
+)
+
+
 def _payments_qs(period: Period):
-    """All outgoing payments inside the period."""
+    """All OUTGOING payments inside the period.
+
+    Filters by direction so that incoming-money rows (staff repayments,
+    invoice receipts misclassified as Payment rows) do not pollute the
+    expense side of the P&L.
+    """
     return Payment.objects.filter(
         payment_date__gte=period.start,
         payment_date__lte=period.end,
+        direction__in=OUTFLOW_DIRECTIONS,
     )
 
 
@@ -163,29 +180,73 @@ def _expenses_accrual(period: Period) -> Decimal:
 def _revenue_cash(period: Period) -> Decimal:
     """
     Cash basis revenue = invoices marked PAID with paid_at inside the period.
+    Sums InvoiceDocument first (the canonical source); falls back to legacy
+    IncomingPaymentRequest rows that aren't linked to an InvoiceDocument.
     """
-    return IncomingPaymentRequest.objects.filter(
+    total = ZERO
+    seen_receivable_ids = set()
+    try:
+        from apps.invoices.models import InvoiceDocument, DocType
+        inv_qs = InvoiceDocument.objects.filter(
+            doc_type=DocType.INVOICE,
+            status=InvoiceDocument.Status.FINALIZED,
+            paid_at__date__gte=period.start,
+            paid_at__date__lte=period.end,
+        )
+        total += inv_qs.aggregate(t=Sum('total'))['t'] or ZERO
+        seen_receivable_ids.update(
+            inv_qs.exclude(linked_receivable__isnull=True)
+                  .values_list('linked_receivable_id', flat=True)
+        )
+    except Exception:
+        pass
+
+    legacy = IncomingPaymentRequest.objects.filter(
         status=IncomingPaymentRequest.Status.PAID,
         paid_at__date__gte=period.start,
         paid_at__date__lte=period.end,
-    ).aggregate(
+    )
+    if seen_receivable_ids:
+        legacy = legacy.exclude(pk__in=seen_receivable_ids)
+    total += legacy.aggregate(
         t=Sum(F('amount') + F('tax_amount') - F('discount_amount'))
     )['t'] or ZERO
+    return total
 
 
 def _revenue_accrual(period: Period) -> Decimal:
     """
     Accrual revenue = total of invoices ISSUED in the period whose status is
-    anything except cancelled (sent, overdue, paid).
+    anything except cancelled/voided (sent, overdue, paid, finalized).
     """
-    return IncomingPaymentRequest.objects.filter(
+    total = ZERO
+    seen_receivable_ids = set()
+    try:
+        from apps.invoices.models import InvoiceDocument, DocType
+        inv_qs = InvoiceDocument.objects.filter(
+            doc_type=DocType.INVOICE,
+            status=InvoiceDocument.Status.FINALIZED,
+            invoice_date__gte=period.start,
+            invoice_date__lte=period.end,
+        )
+        total += inv_qs.aggregate(t=Sum('total'))['t'] or ZERO
+        seen_receivable_ids.update(
+            inv_qs.exclude(linked_receivable__isnull=True)
+                  .values_list('linked_receivable_id', flat=True)
+        )
+    except Exception:
+        pass
+
+    legacy = IncomingPaymentRequest.objects.filter(
         issue_date__gte=period.start,
         issue_date__lte=period.end,
-    ).exclude(
-        status=IncomingPaymentRequest.Status.CANCELLED
-    ).aggregate(
+    ).exclude(status=IncomingPaymentRequest.Status.CANCELLED)
+    if seen_receivable_ids:
+        legacy = legacy.exclude(pk__in=seen_receivable_ids)
+    total += legacy.aggregate(
         t=Sum(F('amount') + F('tax_amount') - F('discount_amount'))
     )['t'] or ZERO
+    return total
 
 
 def revenue(period: Period, basis: str = 'cash') -> Decimal:
@@ -218,10 +279,34 @@ def headline_kpis(period: Period, basis: str = 'cash') -> dict:
     daily_burn = exp / days
 
     # Cash on hand = total revenue collected to date - total payments to date
-    cash_in_total = IncomingPaymentRequest.objects.filter(
-        status=IncomingPaymentRequest.Status.PAID
-    ).aggregate(t=Sum(F('amount') + F('tax_amount') - F('discount_amount')))['t'] or ZERO
-    cash_out_total = Payment.objects.aggregate(t=Sum('amount'))['t'] or ZERO
+    cash_in_total = ZERO
+    seen_receivable_ids = set()
+    try:
+        from apps.invoices.models import InvoiceDocument, DocType
+        inv_qs = InvoiceDocument.objects.filter(
+            doc_type=DocType.INVOICE,
+            status=InvoiceDocument.Status.FINALIZED,
+            paid_at__isnull=False,
+        )
+        cash_in_total += inv_qs.aggregate(t=Sum('total'))['t'] or ZERO
+        seen_receivable_ids.update(
+            inv_qs.exclude(linked_receivable__isnull=True)
+                  .values_list('linked_receivable_id', flat=True)
+        )
+    except Exception:
+        pass
+    legacy_paid = IncomingPaymentRequest.objects.filter(
+        status=IncomingPaymentRequest.Status.PAID,
+    )
+    if seen_receivable_ids:
+        legacy_paid = legacy_paid.exclude(pk__in=seen_receivable_ids)
+    cash_in_total += legacy_paid.aggregate(
+        t=Sum(F('amount') + F('tax_amount') - F('discount_amount'))
+    )['t'] or ZERO
+
+    cash_out_total = Payment.objects.filter(
+        direction__in=OUTFLOW_DIRECTIONS,
+    ).aggregate(t=Sum('amount'))['t'] or ZERO
     cash_on_hand = cash_in_total - cash_out_total
 
     runway_days = (cash_on_hand / daily_burn) if daily_burn > 0 else None
@@ -272,7 +357,11 @@ def revenue_vs_expense_series(period: Period, basis: str = 'cash') -> dict:
         )
         exp_qs = (
             Payment.objects
-            .filter(payment_date__gte=period.start, payment_date__lte=period.end)
+            .filter(
+                payment_date__gte=period.start,
+                payment_date__lte=period.end,
+                direction__in=OUTFLOW_DIRECTIONS,
+            )
             .annotate(bucket=TruncMonth('payment_date'))
             .values('bucket')
             .annotate(total=Sum('amount'))
@@ -291,7 +380,11 @@ def revenue_vs_expense_series(period: Period, basis: str = 'cash') -> dict:
         )
         exp_qs = (
             Payment.objects
-            .filter(payment_date__gte=period.start, payment_date__lte=period.end)
+            .filter(
+                payment_date__gte=period.start,
+                payment_date__lte=period.end,
+                direction__in=OUTFLOW_DIRECTIONS,
+            )
             .annotate(bucket=TruncMonth('payment_date'))
             .values('bucket')
             .annotate(total=Sum('amount'))
@@ -319,27 +412,77 @@ def revenue_vs_expense_series(period: Period, basis: str = 'cash') -> dict:
 
 def cash_flow_daily(period: Period) -> dict:
     """Daily cash in vs cash out — best for shorter periods (≤90 days)."""
-    cash_in = (
+    in_map = {}
+
+    # InvoiceDocument is the canonical source of paid invoices.
+    seen_receivable_ids = set()
+    try:
+        from apps.invoices.models import InvoiceDocument, DocType
+        inv_qs = (
+            InvoiceDocument.objects
+            .filter(
+                doc_type=DocType.INVOICE,
+                status=InvoiceDocument.Status.FINALIZED,
+                paid_at__date__gte=period.start,
+                paid_at__date__lte=period.end,
+            )
+            .annotate(bucket=TruncDay('paid_at'))
+            .values('bucket')
+            .annotate(total=Sum('total'))
+        )
+        for r in inv_qs:
+            day = r['bucket'].date() if hasattr(r['bucket'], 'date') else r['bucket']
+            in_map[day] = (in_map.get(day) or ZERO) + (r['total'] or ZERO)
+        # Track which legacy receivables we've already counted via InvoiceDocument
+        seen_receivable_ids = set(
+            InvoiceDocument.objects
+            .filter(
+                doc_type=DocType.INVOICE,
+                status=InvoiceDocument.Status.FINALIZED,
+                paid_at__date__gte=period.start,
+                paid_at__date__lte=period.end,
+            )
+            .exclude(linked_receivable__isnull=True)
+            .values_list('linked_receivable_id', flat=True)
+        )
+    except Exception:
+        pass
+
+    legacy_in = (
         IncomingPaymentRequest.objects
         .filter(
             status=IncomingPaymentRequest.Status.PAID,
             paid_at__date__gte=period.start,
             paid_at__date__lte=period.end,
         )
+    )
+    if seen_receivable_ids:
+        legacy_in = legacy_in.exclude(pk__in=seen_receivable_ids)
+    legacy_in = (
+        legacy_in
         .annotate(bucket=TruncDay('paid_at'))
         .values('bucket')
         .annotate(total=Sum(F('amount') + F('tax_amount') - F('discount_amount')))
     )
+    for r in legacy_in:
+        day = r['bucket'].date() if hasattr(r['bucket'], 'date') else r['bucket']
+        in_map[day] = (in_map.get(day) or ZERO) + (r['total'] or ZERO)
+
     cash_out = (
         Payment.objects
-        .filter(payment_date__gte=period.start, payment_date__lte=period.end)
+        .filter(
+            payment_date__gte=period.start,
+            payment_date__lte=period.end,
+            direction__in=OUTFLOW_DIRECTIONS,
+        )
         .annotate(bucket=TruncDay('payment_date'))
         .values('bucket')
         .annotate(total=Sum('amount'))
     )
-    in_map = {r['bucket'].date() if hasattr(r['bucket'], 'date') else r['bucket']: r['total']
-              for r in cash_in}
-    out_map = {r['bucket']: r['total'] for r in cash_out}
+    out_map = {}
+    for r in cash_out:
+        day = r['bucket'].date() if hasattr(r['bucket'], 'date') else r['bucket']
+        out_map[day] = (out_map.get(day) or ZERO) + (r['total'] or ZERO)
 
     labels, in_s, out_s, cum = [], [], [], []
     running = ZERO
@@ -492,48 +635,96 @@ AGEING_BUCKETS = [
 
 def receivables_ageing(today: Optional[date] = None) -> dict:
     """
-    AR ageing — open invoices grouped by how long they've been overdue
-    (or by days until due if not yet due).
+    AR ageing — open finalized billable invoices grouped by overdue bucket.
 
-    Bucket logic:
-    - 'current' = unpaid + due_date >= today (or due_date null = treated as current)
-    - others    = unpaid + days since due_date in range
+    Source of truth is `apps.invoices.InvoiceDocument` (the new flow).
+    Legacy `IncomingPaymentRequest` rows that aren't yet linked to an
+    InvoiceDocument are also included so nothing is double-counted but
+    nothing is missed either.
     """
     today = today or timezone.now().date()
-    open_invoices = IncomingPaymentRequest.objects.filter(
-        status__in=[
-            IncomingPaymentRequest.Status.SENT,
-            IncomingPaymentRequest.Status.OVERDUE,
-        ],
-    ).select_related('project')
 
     buckets = {key: {'label': lbl, 'amount': ZERO, 'count': 0, 'invoices': []}
                for key, lbl, *_ in AGEING_BUCKETS}
     total = ZERO
 
-    for inv in open_invoices:
-        amt = (inv.amount or ZERO) + (inv.tax_amount or ZERO) - (inv.discount_amount or ZERO)
+    def _bucket_for(due_date):
+        if not due_date or due_date >= today:
+            return 'current'
+        days = (today - due_date).days
+        for key, _, lo, hi in AGEING_BUCKETS:
+            if key == 'current':
+                continue
+            if lo <= days <= hi:
+                return key
+        return 'over_90'
+
+    # 1) Primary source: finalized billable invoices, unpaid.
+    seen_receivable_ids = set()
+    try:
+        from apps.invoices.models import InvoiceDocument, DocType
+        invoices = (
+            InvoiceDocument.objects
+            .filter(
+                doc_type=DocType.INVOICE,
+                status=InvoiceDocument.Status.FINALIZED,
+                paid_at__isnull=True,
+            )
+        )
+        for inv in invoices:
+            amt = inv.total or ZERO
+            if amt <= 0:
+                continue
+            total += amt
+            bucket = _bucket_for(inv.due_date)
+            b = buckets[bucket]
+            b['amount'] += amt
+            b['count'] += 1
+            if len(b['invoices']) < 5:
+                b['invoices'].append({
+                    'id':             str(inv.pk),
+                    'invoice_number': inv.number or '—',
+                    'customer':       inv.client_name or '—',
+                    'amount':         amt,
+                    'due_date':       inv.due_date,
+                    'days_overdue':   ((today - inv.due_date).days
+                                       if inv.due_date and inv.due_date < today else 0),
+                })
+            if getattr(inv, 'linked_receivable_id', None):
+                seen_receivable_ids.add(inv.linked_receivable_id)
+    except Exception:
+        # InvoiceDocument may not be installed in some test envs — fall through.
+        pass
+
+    # 2) Fallback / legacy source: IncomingPaymentRequest rows that AREN'T
+    #    already represented by an InvoiceDocument above.
+    legacy = IncomingPaymentRequest.objects.exclude(
+        status__in=[
+            IncomingPaymentRequest.Status.PAID,
+            IncomingPaymentRequest.Status.CANCELLED,
+            IncomingPaymentRequest.Status.DRAFT,
+        ],
+    )
+    if seen_receivable_ids:
+        legacy = legacy.exclude(pk__in=seen_receivable_ids)
+
+    for ipr in legacy:
+        amt = (ipr.amount or ZERO) + (ipr.tax_amount or ZERO) - (ipr.discount_amount or ZERO)
+        if amt <= 0:
+            continue
         total += amt
-        bucket = 'current'
-        if inv.due_date and inv.due_date < today:
-            days = (today - inv.due_date).days
-            for key, _, lo, hi in AGEING_BUCKETS:
-                if key == 'current':
-                    continue
-                if lo <= days <= hi:
-                    bucket = key
-                    break
+        bucket = _bucket_for(ipr.due_date)
         b = buckets[bucket]
         b['amount'] += amt
         b['count'] += 1
         if len(b['invoices']) < 5:
             b['invoices'].append({
-                'id':           str(inv.id),
-                'invoice_number': inv.invoice_number,
-                'customer':     inv.customer_name,
-                'amount':       amt,
-                'due_date':     inv.due_date,
-                'days_overdue': inv.days_overdue,
+                'id':             str(ipr.id),
+                'invoice_number': ipr.invoice_number,
+                'customer':       ipr.customer_name,
+                'amount':         amt,
+                'due_date':       ipr.due_date,
+                'days_overdue':   getattr(ipr, 'days_overdue', 0) or 0,
             })
 
     return {
@@ -548,30 +739,35 @@ def receivables_ageing(today: Optional[date] = None) -> dict:
 
 def payables_ageing(today: Optional[date] = None) -> dict:
     """
-    AP ageing — outgoing PaymentRequests that are SENT but unpaid.
+    AP ageing — outgoing PaymentRequests that aren't yet paid or cancelled.
+    Includes both DRAFT and SENT statuses since both are real obligations.
     """
     today = today or timezone.now().date()
-    open_pr = PaymentRequest.objects.filter(
-        status=PaymentRequest.Status.SENT,
-        linked_payment__isnull=True,
-    )
+    open_pr = PaymentRequest.objects.exclude(
+        status__in=[PaymentRequest.Status.PAID, PaymentRequest.Status.CANCELLED],
+    ).filter(linked_payment__isnull=True)
 
     buckets = {key: {'label': lbl, 'amount': ZERO, 'count': 0, 'items': []}
                for key, lbl, *_ in AGEING_BUCKETS}
     total = ZERO
 
+    def _bucket_for(due_date):
+        if not due_date or due_date >= today:
+            return 'current'
+        days = (today - due_date).days
+        for key, _, lo, hi in AGEING_BUCKETS:
+            if key == 'current':
+                continue
+            if lo <= days <= hi:
+                return key
+        return 'over_90'
+
     for pr in open_pr:
         amt = pr.amount or ZERO
+        if amt <= 0:
+            continue
         total += amt
-        bucket = 'current'
-        if pr.due_date and pr.due_date < today:
-            days = (today - pr.due_date).days
-            for key, _, lo, hi in AGEING_BUCKETS:
-                if key == 'current':
-                    continue
-                if lo <= days <= hi:
-                    bucket = key
-                    break
+        bucket = _bucket_for(pr.due_date)
         b = buckets[bucket]
         b['amount'] += amt
         b['count'] += 1
@@ -579,7 +775,7 @@ def payables_ageing(today: Optional[date] = None) -> dict:
             b['items'].append({
                 'id':       str(pr.id),
                 'title':    pr.title,
-                'recipient': pr.effective_recipient_name,
+                'recipient': getattr(pr, 'effective_recipient_name', '') or pr.recipient_name or '—',
                 'amount':   amt,
                 'due_date': pr.due_date,
             })
@@ -627,10 +823,11 @@ def income_statement(period: Period, basis: str = 'cash') -> dict:
     expense_lines = sorted(
         [
             {
-                'label':  type_labels.get(r['payment_type'], r['payment_type']),
+                'label':  type_labels.get(r['payment_type']) or (r['payment_type'] or 'Uncategorised'),
                 'amount': r['total'] or ZERO,
             }
             for r in rows
+            if (r['total'] or ZERO) > ZERO  # drop empty/zero buckets
         ],
         key=lambda x: x['amount'],
         reverse=True,
@@ -681,6 +878,7 @@ def cash_flow_statement(period: Period) -> dict:
     ).aggregate(t=Sum(F('amount') + F('tax_amount') - F('discount_amount')))['t'] or ZERO
     opening_out = Payment.objects.filter(
         payment_date__lt=period.start,
+        direction__in=OUTFLOW_DIRECTIONS,
     ).aggregate(t=Sum('amount'))['t'] or ZERO
     opening_cash = opening_in - opening_out
     closing_cash = opening_cash + net

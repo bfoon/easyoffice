@@ -186,16 +186,8 @@ def void_invoice(invoice: InvoiceDocument, actor, reason: str = ''):
 
 def create_receivable_for_invoice(invoice: InvoiceDocument, actor):
     """
-    Create an IncomingPaymentRequest mirroring this finalized invoice.
-    Idempotent at TWO levels:
-
-      1. If `invoice.linked_receivable` is already set, return it.
-      2. If an IncomingPaymentRequest with the same `invoice_number` already
-         exists (e.g. a legacy row created via the standalone receivables
-         view, or a prior partially-completed mark-paid that committed the
-         receivable but failed before linking it back to the invoice),
-         adopt that existing row and link it back — DO NOT try to create a
-         duplicate, which would hit the unique constraint on invoice_number.
+    Create an IncomingPaymentRequest mirroring this finalized invoice. Idempotent:
+    if invoice.linked_receivable already exists, returns it.
 
     The receivable is created in SENT status (the invoice has been issued to
     the client). It carries the same customer info, dates, currency, and
@@ -214,27 +206,6 @@ def create_receivable_for_invoice(invoice: InvoiceDocument, actor):
     if not invoice.is_finalized:
         raise ValueError('Only finalized invoices generate receivables.')
 
-    # ── Adoption path ────────────────────────────────────────────────────
-    # An IncomingPaymentRequest with this invoice_number may already exist:
-    #   • Legacy invoices created via IncomingPaymentRequestCreateView
-    #     before the InvoiceDocument bridge was added.
-    #   • A prior mark-paid attempt that committed the receivable, but
-    #     failed before linking it back to the invoice.
-    # In both cases we adopt the existing row instead of creating a new one
-    # (which would violate the unique constraint on invoice_number).
-    existing = (
-        IncomingPaymentRequest.objects
-        .filter(invoice_number=invoice.number)
-        .first()
-    )
-    if existing is not None:
-        InvoiceDocument.objects.filter(pk=invoice.pk).update(
-            linked_receivable=existing,
-        )
-        invoice.linked_receivable = existing
-        return existing
-
-    # ── Create-fresh path ────────────────────────────────────────────────
     # Pre-tax subtotal goes in `amount`, tax in `tax_amount`, discount as-is.
     # `discount_amount` on IncomingPaymentRequest is a positive deduction.
     receivable = IncomingPaymentRequest.objects.create(
@@ -264,6 +235,50 @@ def create_receivable_for_invoice(invoice: InvoiceDocument, actor):
     return receivable
 
 
+def _create_payment_for_invoice(invoice: InvoiceDocument, actor, *,
+                                amount, method, reference, paid_on):
+    """
+    Internal: create a Payment ledger row (PAYMENT_IN) for a paid invoice.
+    Returns the Payment instance.
+    """
+    from apps.finance.models import Payment
+
+    # Pick the correct "incoming" direction value. If your Payment model uses
+    # a Direction enum, prefer that; otherwise fall back to the string 'in'.
+    direction_value = 'in'
+    if hasattr(Payment, 'Direction') and hasattr(Payment.Direction, 'IN'):
+        direction_value = Payment.Direction.IN
+
+    # Build a robust reference. Falls back if either side is missing.
+    payment_ref = reference or f'INV-{invoice.number or invoice.pk}'
+
+    # Build kwargs — only include user field if Payment model supports it.
+    payment_kwargs = dict(
+        reference     = payment_ref[:100],
+        amount        = amount,
+        currency      = invoice.currency,
+        method        = method or 'bank_transfer',
+        direction     = direction_value,
+        payment_type  = 'invoice',
+        recipient     = invoice.client_name or '(unspecified)',
+        payment_date  = paid_on,
+        notes         = (
+            f'Receipt for invoice {invoice.number} '
+            f'(InvoiceDocument id={invoice.pk}).'
+            + (f' Ref: {reference}.' if reference else '')
+        ),
+    )
+    # Payment models vary — try common actor field names in priority order.
+    _field_names = {f.name for f in Payment._meta.get_fields()}
+    for _actor_field in ('processed_by', 'created_by', 'recorded_by', 'paid_by', 'actor'):
+        if _actor_field in _field_names:
+            payment_kwargs[_actor_field] = actor
+            break
+
+    payment = Payment.objects.create(**payment_kwargs)
+    return payment
+
+
 @transaction.atomic
 def mark_invoice_paid(invoice: InvoiceDocument,
                      actor,
@@ -272,7 +287,7 @@ def mark_invoice_paid(invoice: InvoiceDocument,
                      method: str = 'bank_transfer',
                      reference: str = '',
                      paid_on=None,
-                     create_payment: bool = False) -> InvoiceDocument:
+                     create_payment: bool = True) -> InvoiceDocument:
     """
     Mark a finalized billable invoice as paid. Atomically:
         1. Lock the invoice row.
@@ -280,23 +295,8 @@ def mark_invoice_paid(invoice: InvoiceDocument,
         3. If no linked receivable yet (legacy invoices finalized before the
            bridge existed), create one.
         4. Flip the linked IncomingPaymentRequest to PAID and stamp paid_at.
-        5. Update the invoice's denormalized paid_* fields.
-
-    The receipt itself lives in `IncomingPaymentRequest` — that single
-    record IS the receivable AND the receipt. We do NOT also create a
-    Payment row for the receipt (that's an outgoing-money table). Doing
-    so was the source of two production bugs:
-
-      • Receipts showed up as expenses in the income statement.
-      • Re-runs hit unique-constraint failures on Payment.reference and
-        IncomingPaymentRequest.invoice_number.
-
-    Revenue analytics already source from IncomingPaymentRequest.paid_at,
-    so dropping the Payment row has zero analytical cost.
-
-    The `create_payment` parameter is retained ONLY for backward compatibility
-    with any caller that explicitly passes it; it is now ignored. Default
-    is False.
+        5. (Optional) create a Payment ledger entry.
+        6. Update the invoice's denormalized paid_* fields.
 
     All side-effects fire signals — so audit logs and anomaly checks happen
     automatically via apps/finance/signals.py without us calling them here.
@@ -349,16 +349,25 @@ def mark_invoice_paid(invoice: InvoiceDocument,
                 update_fields.append('updated_at')
             receivable.save(update_fields=update_fields)
 
-    # Stamp the invoice. Note: linked_payment is intentionally NOT touched —
-    # the IncomingPaymentRequest is the receipt record.
+    # Optionally create the Payment ledger entry.
+    payment = None
+    if create_payment:
+        payment = _create_payment_for_invoice(
+            invoice, actor,
+            amount=amount, method=method, reference=reference, paid_on=paid_on,
+        )
+
+    # Stamp the invoice
     invoice.paid_at           = timezone.now()
     invoice.paid_by           = actor
     invoice.paid_amount       = amount
     invoice.payment_method    = (method or '')[:30]
     invoice.payment_reference = (reference or '')[:100]
+    if payment:
+        invoice.linked_payment = payment
     invoice.save(update_fields=[
         'paid_at', 'paid_by', 'paid_amount',
-        'payment_method', 'payment_reference',
+        'payment_method', 'payment_reference', 'linked_payment',
         'updated_at',
     ])
 

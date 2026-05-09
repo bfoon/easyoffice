@@ -5,6 +5,7 @@ Three models:
     - InvoiceCounter   : per (doc_type, year) sequence, thread-safe via select_for_update
     - InvoiceDocument  : one row per invoice / proforma / delivery note
     - InvoiceLineItem  : line items for an invoice
+    - InvoiceTemplate  : reusable invoice blueprint
 """
 import uuid
 from decimal import Decimal
@@ -147,6 +148,48 @@ class InvoiceDocument(models.Model):
     voided_by       = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
                                          related_name='voided_invoice_docs')
     void_reason     = models.CharField(max_length=300, blank=True)
+
+    # ── Payment / receivable bridge ──────────────────────────────────────────
+    # When a billable invoice (doc_type=INVOICE) is finalized we auto-create a
+    # matching IncomingPaymentRequest in the finance app so it appears in the
+    # AR ageing, revenue figures, cash-flow statement, etc. Proformas and
+    # Delivery Notes are NOT billable and never get a receivable.
+    linked_receivable = models.OneToOneField(
+        'finance.IncomingPaymentRequest',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='source_invoice_document',
+        help_text='The IncomingPaymentRequest auto-created when this invoice was finalized.',
+    )
+    # Denormalized "is paid" markers — kept on the invoice itself so the
+    # invoice list/detail can show paid status without a join, and so we
+    # have a record even if the receivable row gets deleted later.
+    paid_at         = models.DateTimeField(null=True, blank=True, db_index=True)
+    paid_by         = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='invoices_marked_paid',
+        help_text='User who marked this invoice as paid.',
+    )
+    paid_amount     = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True,
+        help_text='Actual amount received (may differ from total on partial/overpayment).',
+    )
+    payment_method  = models.CharField(
+        max_length=30, blank=True, default='',
+        help_text='Bank transfer, cash, cheque, mobile money, etc.',
+    )
+    payment_reference = models.CharField(
+        max_length=100, blank=True, default='',
+        help_text='Bank reference / cheque number / mobile money txn id.',
+    )
+    # Link to the Payment ledger entry generated when marked paid.
+    linked_payment  = models.ForeignKey(
+        'finance.Payment',
+        on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='source_invoice_documents',
+        help_text='The Payment ledger entry recorded when this invoice was paid.',
+    )
+
     # Template this invoice was created from (if any). SET_NULL on template
     # delete — so the invoice keeps its data and just loses the template link.
     template        = models.ForeignKey(
@@ -252,6 +295,54 @@ class InvoiceDocument(models.Model):
         seq = InvoiceCounter.peek_next(self.doc_type, year)
         return f'{DOC_TYPE_PREFIX[self.doc_type]}-{year}-{seq:04d}'
 
+    # ── Payment-bridge helpers ────────────────────────────────────────────────
+    @property
+    def is_billable(self):
+        """Only Invoices generate receivables; Proformas/Delivery Notes don't."""
+        return self.doc_type == DocType.INVOICE
+
+    @property
+    def is_paid(self):
+        return self.paid_at is not None
+
+    @property
+    def can_be_marked_paid(self):
+        """Finalized billable invoices that aren't already paid or voided."""
+        return (
+            self.is_billable
+            and self.is_finalized
+            and not self.is_paid
+            and not self.is_voided
+        )
+
+    @property
+    def payment_status_label(self):
+        """Human-readable payment state for the UI."""
+        if self.is_voided:
+            return 'Voided'
+        if not self.is_billable:
+            return '—'
+        if not self.is_finalized:
+            return 'Draft'
+        if self.is_paid:
+            return 'Paid'
+        # Finalized + unpaid — check overdue against the due_date
+        if self.due_date and self.due_date < timezone.localdate():
+            return 'Overdue'
+        return 'Unpaid'
+
+    @property
+    def payment_status_color(self):
+        return {
+            'Paid':    '#10b981',
+            'Unpaid':  '#f59e0b',
+            'Overdue': '#ef4444',
+            'Draft':   '#94a3b8',
+            'Voided':  '#6b7280',
+            '—':       '#cbd5e1',
+        }.get(self.payment_status_label, '#94a3b8')
+
+    # ── Calculation / numbering ───────────────────────────────────────────────
     def recalculate_totals(self, save=True):
         """Recompute subtotal, tax, total from line items + current tax/discount."""
         sub = sum((li.line_total for li in self.items.all()), Decimal('0.00'))

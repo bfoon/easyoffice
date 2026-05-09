@@ -3,7 +3,7 @@ from apps.finance import views
 from apps.finance import views_financial_system as fs
 
 urlpatterns = [
-    # ── Existing finance URLs (unchanged) ────────────────────────────────────
+    # ── Existing finance URLs ────────────────────────────────────────────────
     path('', views.FinanceDashboardView.as_view(), name='finance_dashboard'),
     path('budget/', views.BudgetListView.as_view(), name='budget_list'),
 
@@ -45,7 +45,7 @@ urlpatterns = [
     path('contracts/<uuid:pk>/generate-invoice/', views.ContractGenerateInvoiceView.as_view(), name='contract_generate_invoice'),
 
     # ════════════════════════════════════════════════════════════════════════
-    # FINANCIAL CONTROL CENTER — new analytics, reports, audit
+    # FINANCIAL CONTROL CENTER — analytics, reports, audit, anomalies, invoices
     # ════════════════════════════════════════════════════════════════════════
 
     # The new dashboard (CFO view)
@@ -77,4 +77,12 @@ urlpatterns = [
     # Anomalies
     path('anomalies/', fs.AnomalyListView.as_view(), name='finance_anomaly_list'),
     path('anomalies/<uuid:pk>/resolve/', fs.AnomalyResolveView.as_view(), name='finance_anomaly_resolve'),
+
+    # Invoices (finance-side list + mark-paid action)
+    path('control-center/invoices/',
+         fs.FinanceInvoiceListView.as_view(),
+         name='finance_invoice_list'),
+    path('control-center/invoices/<uuid:pk>/mark-paid/',
+         fs.FinanceInvoiceMarkPaidView.as_view(),
+         name='finance_invoice_mark_paid'),
 ]

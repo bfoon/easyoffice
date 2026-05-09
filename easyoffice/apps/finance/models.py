@@ -234,9 +234,10 @@ class Payment(models.Model):
         CARD          = 'card',          'Card'
 
     class Direction(models.TextChoices):
-        COMPANY_TO_STAFF = 'company_to_staff', 'Company to Staff'
-        STAFF_TO_COMPANY = 'staff_to_company', 'Staff to Company'
+        COMPANY_TO_STAFF  = 'company_to_staff',  'Company to Staff'
+        STAFF_TO_COMPANY  = 'staff_to_company',  'Staff to Company'
         COMPANY_TO_VENDOR = 'company_to_vendor', 'Company to Vendor'
+        CLIENT_TO_COMPANY = 'client_to_company', 'Client to Company'
 
     class PaymentType(models.TextChoices):
         SALARY            = 'salary',            'Salary'
@@ -249,6 +250,7 @@ class Payment(models.Model):
         SALARY_ADVANCE    = 'salary_advance',    'Salary Advance'
         REIMBURSEMENT     = 'reimbursement',     'Reimbursement'
         PURCHASE          = 'purchase',          'Purchase'
+        CLIENT_RECEIPT    = 'client_receipt',    'Client Receipt'
         OTHER             = 'other',             'Other'
 
     id                = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

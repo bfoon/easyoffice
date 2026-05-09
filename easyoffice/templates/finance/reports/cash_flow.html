@@ -1,0 +1,340 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Cash Flow Statement{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'finance_dashboard' %}">Finance</a> <span>›</span>
+<a href="{% url 'financial_control_center' %}">Control Center</a> <span>›</span>
+<span>Cash Flow</span>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  :root {
+    --cf-ink: #0f172a; --cf-ink-soft: #334155; --cf-grey: #64748b;
+    --cf-bg: #fafaf7; --cf-card: #fff; --cf-line: #e2e8f0; --cf-line-soft: #f1f5f9;
+    --cf-gold: #b08d57; --cf-green: #059669; --cf-red: #dc2626; --cf-blue: #2563eb;
+  }
+  .cf-shell { background: var(--cf-bg); margin: -16px -16px 0; padding: 24px 24px 60px; min-height: calc(100vh - 60px); }
+  .cf-wrap  { max-width: 960px; margin: 0 auto; }
+
+  .cf-header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 1px solid var(--cf-ink); padding-bottom: 16px; margin-bottom: 28px;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .cf-eyebrow {
+    font-family: 'Georgia', serif; font-size: 11px; letter-spacing: .25em;
+    text-transform: uppercase; color: var(--cf-gold); margin-bottom: 4px;
+  }
+  .cf-title {
+    font-family: 'Georgia', serif; font-size: 30px; font-weight: 400;
+    color: var(--cf-ink); letter-spacing: -.02em; margin: 0;
+  }
+  .cf-subtitle { color: var(--cf-grey); font-size: 13px; margin-top: 6px; font-style: italic; }
+
+  .cf-btn {
+    background: white; border: 1px solid var(--cf-line);
+    padding: 7px 14px; border-radius: 3px; font-size: 12px;
+    color: var(--cf-ink); text-decoration: none; cursor: pointer;
+    font-family: inherit; transition: all .15s; white-space: nowrap;
+  }
+  .cf-btn:hover { background: var(--cf-ink); color: white; border-color: var(--cf-ink); }
+  .cf-btn.primary { background: var(--cf-gold); color: white; border-color: var(--cf-gold); }
+  .cf-btn.primary:hover { background: #8c6f44; border-color: #8c6f44; }
+
+  .cf-filters {
+    background: var(--cf-card); border: 1px solid var(--cf-line); border-radius: 4px;
+    padding: 14px 18px; margin-bottom: 24px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;
+    align-items: end;
+  }
+  .cf-filters label {
+    display: block; font-size: 10px; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--cf-grey); font-weight: 600; margin-bottom: 4px;
+  }
+  .cf-filters select, .cf-filters input {
+    width: 100%; border: 1px solid var(--cf-line); border-radius: 3px;
+    padding: 7px 10px; font-size: 13px; color: var(--cf-ink); background: white;
+    font-family: inherit;
+  }
+
+  /* Headline cash position cards */
+  .cf-position {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px; margin-bottom: 24px;
+  }
+  .cf-pos-card {
+    background: var(--cf-card); border: 1px solid var(--cf-line); border-radius: 4px;
+    padding: 18px 20px; position: relative; overflow: hidden;
+  }
+  .cf-pos-card::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--cf-gold);
+  }
+  .cf-pos-card.in::before     { background: var(--cf-green); }
+  .cf-pos-card.out::before    { background: var(--cf-red); }
+  .cf-pos-card.net::before    { background: var(--cf-blue); }
+  .cf-pos-card .k {
+    font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--cf-grey); font-weight: 600; margin-bottom: 8px;
+  }
+  .cf-pos-card .v {
+    font-family: 'Georgia', serif; font-size: 26px; color: var(--cf-ink);
+    font-feature-settings: 'tnum'; font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+  }
+  .cf-pos-card .v.positive { color: var(--cf-green); }
+  .cf-pos-card .v.negative { color: var(--cf-red); }
+  .cf-pos-card .sub { font-size: 11px; color: var(--cf-grey); margin-top: 4px; }
+
+  /* The statement */
+  .cf-doc {
+    background: var(--cf-card); border: 1px solid var(--cf-line); border-radius: 4px;
+    padding: 40px 48px;
+  }
+  @media (max-width: 700px) { .cf-doc { padding: 24px 20px; } }
+
+  .cf-doc-head {
+    text-align: center; padding-bottom: 20px; border-bottom: 2px solid var(--cf-ink);
+    margin-bottom: 24px;
+  }
+  .cf-doc-head h2 {
+    font-family: 'Georgia', serif; font-size: 22px; font-weight: 400; margin: 0 0 6px;
+    letter-spacing: .02em; color: var(--cf-ink);
+  }
+  .cf-doc-head .period {
+    font-size: 13px; color: var(--cf-ink-soft); font-style: italic;
+  }
+  .cf-doc-head .basis {
+    display: inline-block; margin-top: 8px; padding: 2px 10px;
+    border: 1px solid var(--cf-line); border-radius: 999px;
+    font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--cf-grey);
+  }
+
+  .cf-section { margin-bottom: 22px; }
+  .cf-section-head {
+    font-family: 'Georgia', serif; font-size: 14px; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--cf-gold);
+    border-bottom: 1px solid var(--cf-line); padding-bottom: 6px; margin-bottom: 8px;
+  }
+
+  .cf-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .cf-table td {
+    padding: 8px 4px; border-bottom: 1px dotted var(--cf-line);
+    vertical-align: baseline;
+  }
+  .cf-table td.label { color: var(--cf-ink-soft); padding-left: 16px; }
+  .cf-table td.amt {
+    text-align: right; font-feature-settings: 'tnum'; color: var(--cf-ink);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+    min-width: 140px;
+  }
+  .cf-table tr.subtotal td {
+    border-top: 1px solid var(--cf-ink); border-bottom: none;
+    padding-top: 10px; font-weight: 600;
+  }
+  .cf-table tr.subtotal td.label { padding-left: 0; color: var(--cf-ink); }
+  .cf-table .amt.outflow { color: var(--cf-red); }
+  .cf-table .amt.inflow  { color: var(--cf-green); }
+
+  .cf-stage {
+    margin: 18px 0; padding: 12px 16px; background: var(--cf-line-soft);
+    border-left: 3px solid var(--cf-gold); border-radius: 0 3px 3px 0;
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .cf-stage .label {
+    font-family: 'Georgia', serif; font-size: 14px; font-style: italic;
+    color: var(--cf-ink-soft); letter-spacing: .02em;
+  }
+  .cf-stage .amt {
+    font-family: 'Georgia', serif; font-size: 18px;
+    font-feature-settings: 'tnum'; font-variant-numeric: tabular-nums;
+    color: var(--cf-ink);
+  }
+  .cf-stage .amt.positive { color: var(--cf-green); }
+  .cf-stage .amt.negative { color: var(--cf-red); }
+
+  .cf-total-row {
+    margin-top: 24px; padding: 16px 4px;
+    border-top: 2px solid var(--cf-ink); border-bottom: 4px double var(--cf-ink);
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .cf-total-row .label {
+    font-family: 'Georgia', serif; font-size: 18px; font-weight: 400;
+    letter-spacing: .02em; color: var(--cf-ink);
+  }
+  .cf-total-row .amt {
+    font-family: 'Georgia', serif; font-size: 22px; font-feature-settings: 'tnum';
+    font-variant-numeric: tabular-nums;
+  }
+  .cf-total-row .amt.positive { color: var(--cf-green); }
+  .cf-total-row .amt.negative { color: var(--cf-red); }
+
+  .cf-empty { padding: 14px 0; text-align: center; color: var(--cf-grey); font-style: italic; }
+
+  .cf-footnote {
+    margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--cf-line);
+    font-size: 11px; color: var(--cf-grey); text-align: center; font-style: italic;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="cf-shell">
+  <div class="cf-wrap">
+
+    <div class="cf-header">
+      <div>
+        <div class="cf-eyebrow">Statutory Reports</div>
+        <h1 class="cf-title">Cash Flow Statement</h1>
+        <div class="cf-subtitle">Movement of cash through the business over the selected window</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <a href="{% url 'export_cash_flow_pdf' %}?{{ request.GET.urlencode }}" class="cf-btn primary">
+          <i class="bi bi-file-earmark-pdf"></i> PDF
+        </a>
+        <a href="{% url 'export_cash_flow_xlsx' %}?{{ request.GET.urlencode }}" class="cf-btn">
+          <i class="bi bi-file-earmark-spreadsheet"></i> Excel
+        </a>
+        <a href="{% url 'financial_control_center' %}" class="cf-btn">← Dashboard</a>
+      </div>
+    </div>
+
+    <form method="get" class="cf-filters">
+      <div>
+        <label>Period</label>
+        <select name="period" onchange="this.form.submit()">
+          <option value="mtd"       {% if request.GET.period == 'mtd' %}selected{% endif %}>Month-to-date</option>
+          <option value="qtd"       {% if request.GET.period == 'qtd' %}selected{% endif %}>Quarter-to-date</option>
+          <option value="ytd"       {% if not request.GET.period or request.GET.period == 'ytd' %}selected{% endif %}>Year-to-date</option>
+          <option value="last_30"   {% if request.GET.period == 'last_30' %}selected{% endif %}>Last 30 days</option>
+          <option value="last_90"   {% if request.GET.period == 'last_90' %}selected{% endif %}>Last 90 days</option>
+          <option value="last_year" {% if request.GET.period == 'last_year' %}selected{% endif %}>Last year</option>
+        </select>
+      </div>
+      <div>
+        <label>From</label>
+        <input type="date" name="from" value="{{ request.GET.from }}">
+      </div>
+      <div>
+        <label>To</label>
+        <input type="date" name="to" value="{{ request.GET.to }}">
+      </div>
+      <div>
+        <button type="submit" class="cf-btn primary" style="width:100%">Apply</button>
+      </div>
+    </form>
+
+    <!-- Headline position -->
+    <div class="cf-position">
+      <div class="cf-pos-card">
+        <div class="k">Opening Cash</div>
+        <div class="v {% if data.opening_cash >= 0 %}positive{% else %}negative{% endif %}">
+          {{ data.opening_cash|floatformat:0|intcomma }}
+        </div>
+        <div class="sub">As at {{ period.start|date:"d M Y" }}</div>
+      </div>
+      <div class="cf-pos-card in">
+        <div class="k">Cash Inflows</div>
+        <div class="v positive">{{ data.cash_in|floatformat:0|intcomma }}</div>
+        <div class="sub">During period</div>
+      </div>
+      <div class="cf-pos-card out">
+        <div class="k">Cash Outflows</div>
+        <div class="v negative">{{ data.total_outflows|floatformat:0|intcomma }}</div>
+        <div class="sub">During period</div>
+      </div>
+      <div class="cf-pos-card net">
+        <div class="k">Closing Cash</div>
+        <div class="v {% if data.closing_cash >= 0 %}positive{% else %}negative{% endif %}">
+          {{ data.closing_cash|floatformat:0|intcomma }}
+        </div>
+        <div class="sub">As at {{ period.end|date:"d M Y" }}</div>
+      </div>
+    </div>
+
+    <div class="cf-doc">
+      <div class="cf-doc-head">
+        <h2>Statement of Cash Flows</h2>
+        <div class="period">
+          For the period {{ period.start|date:"d F Y" }} &mdash; {{ period.end|date:"d F Y" }}
+          {% if period.label %}<br><span style="font-size:11px;color:var(--cf-grey)">({{ period.label }})</span>{% endif %}
+        </div>
+        <span class="basis">Operating activities &middot; GMD</span>
+      </div>
+
+      <!-- Opening -->
+      <div class="cf-stage">
+        <div class="label">Cash and equivalents at start of period</div>
+        <div class="amt {% if data.opening_cash >= 0 %}positive{% else %}negative{% endif %}">
+          {{ data.opening_cash|floatformat:2|intcomma }}
+        </div>
+      </div>
+
+      <!-- INFLOWS -->
+      <div class="cf-section">
+        <div class="cf-section-head">Cash inflows</div>
+        <table class="cf-table">
+          <tbody>
+            {% for line in data.inflows %}
+            <tr>
+              <td class="label">{{ line.label }}</td>
+              <td class="amt inflow">{{ line.amount|floatformat:2|intcomma }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="2" class="cf-empty">No cash inflows in this period.</td></tr>
+            {% endfor %}
+            <tr class="subtotal">
+              <td class="label">Total cash received</td>
+              <td class="amt">{{ data.cash_in|floatformat:2|intcomma }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- OUTFLOWS -->
+      <div class="cf-section">
+        <div class="cf-section-head">Cash outflows by direction</div>
+        <table class="cf-table">
+          <tbody>
+            {% for line in data.outflows %}
+            <tr>
+              <td class="label">{{ line.label }}</td>
+              <td class="amt outflow">({{ line.amount|floatformat:2|intcomma }})</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="2" class="cf-empty">No cash outflows in this period.</td></tr>
+            {% endfor %}
+            <tr class="subtotal">
+              <td class="label">Total cash paid</td>
+              <td class="amt">({{ data.total_outflows|floatformat:2|intcomma }})</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- NET -->
+      <div class="cf-total-row">
+        <div class="label">Net change in cash</div>
+        <div class="amt {% if data.net_cash_change >= 0 %}positive{% else %}negative{% endif %}">
+          {% if data.net_cash_change < 0 %}({{ data.net_cash_change|floatformat:2|intcomma|cut:"-" }}){% else %}{{ data.net_cash_change|floatformat:2|intcomma }}{% endif %}
+        </div>
+      </div>
+
+      <!-- Closing -->
+      <div class="cf-stage" style="margin-top:24px;border-left-color:var(--cf-blue)">
+        <div class="label">Cash and equivalents at end of period</div>
+        <div class="amt {% if data.closing_cash >= 0 %}positive{% else %}negative{% endif %}">
+          {{ data.closing_cash|floatformat:2|intcomma }}
+        </div>
+      </div>
+
+      <div class="cf-footnote">
+        Prepared on {% now "d F Y" %} &middot; Operating activities only &middot; All figures in Gambian Dalasi (GMD).
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

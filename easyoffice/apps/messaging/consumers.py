@@ -177,6 +177,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Broadcast pin/unpin events to every open client in the room."""
         await self.send(text_data=json.dumps(event['payload']))
 
+    # ── Add this method to ChatConsumer ────────────────────────────────────────
+    async def chat_typing(self, event):
+        """
+        Forward a 'typing' signal from the channel-layer group out to this
+        WebSocket client. The client filters out its own sender_id so a user
+        never sees their own typing dots.
+        """
+        await self.send(text_data=json.dumps({
+            'type': 'chat_typing',
+            'room_id': event.get('room_id', ''),
+            'sender_id': event.get('sender_id', ''),
+            'sender_name': event.get('sender_name', ''),
+            'sender_initials': event.get('sender_initials', ''),
+            'sender_avatar_url': event.get('sender_avatar_url', ''),
+        }))
+
     # --------------------------------------------------
     # DB HELPERS
     # --------------------------------------------------

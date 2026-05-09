@@ -201,7 +201,7 @@
 
   /* ── Reports nav ─────────────────────────────────────────────────────── */
   .fcc-reports-nav {
-    display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px;
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 1px;
     background: var(--fcc-line); border-radius: 4px; overflow: hidden;
     border: 1px solid var(--fcc-line); margin-bottom: 32px;
   }
@@ -410,6 +410,11 @@
       <span class="name">Audit Trail</span>
       <span class="desc">Who did what, when</span>
     </a>
+    <a href="{% url 'finance_invoice_list' %}">
+      <span class="icon"><i class="bi bi-receipt"></i></span>
+      <span class="name">Invoices</span>
+      <span class="desc">Paid, unpaid &amp; overdue</span>
+    </a>
   </div>
 
   {# ── Charts row 1 ──────────────────────────────────────────────────── #}
@@ -451,8 +456,10 @@
         </div>
       </div>
       <div class="fcc-chart-wrap"><canvas id="chart-cash"></canvas></div>
-      <div id="chart-cash-empty" style="display:none;text-align:center;color:var(--fcc-grey);padding:40px 0;font-size:13px">
-        Daily view available for periods up to 120 days. Switch to a shorter period to see daily cash movement.
+      <div id="chart-cash-empty" style="display:none;text-align:center;color:var(--fcc-grey);padding:40px 20px;font-size:13px">
+        <div style="font-size:24px;color:var(--fcc-line);margin-bottom:8px"><i class="bi bi-graph-up"></i></div>
+        <div style="font-weight:500;color:var(--fcc-ink-soft);margin-bottom:4px">No cash movement in this period</div>
+        <div>Mark invoices paid or record payments to see the daily flow. The daily view also requires a period of 120 days or fewer.</div>
       </div>
     </div>
 
@@ -567,6 +574,49 @@
         </div>
       </div>
     </div>
+  </div>
+
+  {# ── Invoices summary card ─────────────────────────────────────────── #}
+  <div class="fcc-card" style="margin-bottom:20px">
+    <div class="fcc-card-header">
+      <div>
+        <div class="fcc-card-eyebrow">Receivables</div>
+        <h3 class="fcc-card-title">Open Invoices</h3>
+      </div>
+      <div class="fcc-card-action"><a href="{% url 'finance_invoice_list' %}">All invoices →</a></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--fcc-line);border-radius:4px;overflow:hidden;margin-bottom:16px">
+      <a href="{% url 'finance_invoice_list' %}?status=unpaid"
+         style="padding:16px 20px;border-right:1px solid var(--fcc-line);text-decoration:none;transition:background .15s"
+         onmouseover="this.style.background='var(--fcc-line-soft)'" onmouseout="this.style.background=''">
+        <div style="font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--fcc-grey);font-weight:600;margin-bottom:6px">Unpaid</div>
+        <div style="font-family:Georgia,serif;font-size:26px;color:var(--fcc-ink)">{{ invoice_counts.unpaid|default:0 }}</div>
+        <div style="font-size:12px;color:var(--fcc-grey);margin-top:4px">
+          GMD {{ invoice_counts.unpaid_amount|floatformat:0|intcomma }} · View →
+        </div>
+      </a>
+      <a href="{% url 'finance_invoice_list' %}?status=overdue"
+         style="padding:16px 20px;border-right:1px solid var(--fcc-line);text-decoration:none;transition:background .15s"
+         onmouseover="this.style.background='var(--fcc-line-soft)'" onmouseout="this.style.background=''">
+        <div style="font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--fcc-grey);font-weight:600;margin-bottom:6px">Overdue</div>
+        <div style="font-family:Georgia,serif;font-size:26px;color:{% if invoice_counts.overdue %}var(--fcc-red){% else %}var(--fcc-ink){% endif %}">{{ invoice_counts.overdue|default:0 }}</div>
+        <div style="font-size:12px;color:var(--fcc-grey);margin-top:4px">
+          GMD {{ invoice_counts.overdue_amount|floatformat:0|intcomma }} · Review →
+        </div>
+      </a>
+      <a href="{% url 'finance_invoice_list' %}?status=paid"
+         style="padding:16px 20px;text-decoration:none;transition:background .15s"
+         onmouseover="this.style.background='var(--fcc-line-soft)'" onmouseout="this.style.background=''">
+        <div style="font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--fcc-grey);font-weight:600;margin-bottom:6px">Paid</div>
+        <div style="font-family:Georgia,serif;font-size:26px;color:var(--fcc-green)">{{ invoice_counts.paid|default:0 }}</div>
+        <div style="font-size:12px;color:var(--fcc-grey);margin-top:4px">
+          {{ invoice_counts.total|default:0 }} total · History →
+        </div>
+      </a>
+    </div>
+    <a href="{% url 'finance_invoice_list' %}?status=unpaid" class="eo-btn eo-btn-primary" style="font-size:12px">
+      <i class="bi bi-receipt"></i> Manage Invoices
+    </a>
   </div>
 
   {# ── Row 4: budgets + audit stream ─────────────────────────────────── #}
@@ -783,11 +833,19 @@
   function renderCash(s) {
     const ctx = document.getElementById('chart-cash');
     const empty = document.getElementById('chart-cash-empty');
-    if (!s) {
+    const isEmpty = !s
+      || !s.labels || !s.labels.length
+      || (
+        (s.cash_in || []).every(v => !v)
+        && (s.cash_out || []).every(v => !v)
+      );
+    if (isEmpty) {
       if (ctx) ctx.style.display = 'none';
       if (empty) empty.style.display = 'block';
       return;
     }
+    if (empty) empty.style.display = 'none';
+    if (ctx) ctx.style.display = '';
     if (!ctx) return;
     new Chart(ctx, {
       type: 'line',

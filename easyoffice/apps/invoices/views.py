@@ -48,7 +48,7 @@ from .forms import InvoiceMetadataForm, TemplateForm
 from .services import (
     finalize_invoice, build_preview_pdf, void_invoice,
     save_invoice_as_template, create_invoice_from_template,
-    apply_template_update_to_invoices, convert_invoice,
+    apply_template_update_to_invoices, convert_invoice, mark_invoice_paid,
 )
 
 
@@ -715,3 +715,74 @@ class ConvertibleSourcesListView(InvoiceAccessMixin, View):
                 for d in qs
             ],
         })
+
+
+class InvoiceMarkPaidView(InvoiceAccessMixin, View):
+    """
+    Mark-as-paid action for the invoices app side (sales / HR / CEO / admin).
+    POST-only; redirects back to the invoice detail page.
+
+    Form fields:
+        amount     (optional — defaults to invoice.total)
+        method     (default 'bank_transfer')
+        reference  (optional)
+        paid_on    (YYYY-MM-DD, default today)
+    """
+    http_method_names = ['post']
+
+    def post(self, request, pk):
+        invoice = get_object_or_404(InvoiceDocument, pk=pk)
+
+        if not invoice.can_be_marked_paid:
+            messages.error(
+                request,
+                f'This invoice cannot be marked paid '
+                f'({invoice.payment_status_label}).'
+            )
+            return redirect('invoice_detail', pk=invoice.pk)
+
+        raw_amount = (request.POST.get('amount') or '').strip()
+        amount = None
+        if raw_amount:
+            try:
+                amount = Decimal(raw_amount)
+            except InvalidOperation:
+                messages.error(request, 'Invalid amount entered.')
+                return redirect('invoice_detail', pk=invoice.pk)
+
+        method = (request.POST.get('method') or 'bank_transfer').strip()
+        reference = (request.POST.get('reference') or '').strip()
+        raw_paid_on = (request.POST.get('paid_on') or '').strip()
+        paid_on = None
+        if raw_paid_on:
+            try:
+                paid_on = _date.fromisoformat(raw_paid_on)
+            except ValueError:
+                messages.error(request, 'Invalid payment date — use YYYY-MM-DD.')
+                return redirect('invoice_detail', pk=invoice.pk)
+
+        try:
+            mark_invoice_paid(
+                invoice, request.user,
+                amount=amount,
+                method=method,
+                reference=reference,
+                paid_on=paid_on,
+            )
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect('invoice_detail', pk=invoice.pk)
+        except Exception:
+            _log.exception('mark_invoice_paid failed for invoice %s', invoice.pk)
+            messages.error(
+                request,
+                'Could not mark the invoice paid — please contact finance.'
+            )
+            return redirect('invoice_detail', pk=invoice.pk)
+
+        messages.success(
+            request,
+            f'Invoice {invoice.number} marked paid. Recorded in the finance ledger.'
+        )
+        return redirect('invoice_detail', pk=invoice.pk)
+

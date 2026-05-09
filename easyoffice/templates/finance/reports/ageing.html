@@ -1,0 +1,438 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Ageing Report{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'finance_dashboard' %}">Finance</a> <span>›</span>
+<a href="{% url 'financial_control_center' %}">Control Center</a> <span>›</span>
+<span>Ageing</span>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  :root {
+    --ag-ink: #0f172a; --ag-ink-soft: #334155; --ag-grey: #64748b;
+    --ag-bg: #fafaf7; --ag-card: #fff; --ag-line: #e2e8f0; --ag-line-soft: #f1f5f9;
+    --ag-gold: #b08d57; --ag-green: #059669; --ag-amber: #d97706; --ag-red: #dc2626;
+    --ag-blue: #2563eb;
+  }
+  .ag-shell { background: var(--ag-bg); margin: -16px -16px 0; padding: 24px 24px 60px; min-height: calc(100vh - 60px); }
+  .ag-wrap  { max-width: 1280px; margin: 0 auto; }
+
+  .ag-header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 1px solid var(--ag-ink); padding-bottom: 16px; margin-bottom: 24px;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .ag-eyebrow {
+    font-family: 'Georgia', serif; font-size: 11px; letter-spacing: .25em;
+    text-transform: uppercase; color: var(--ag-gold); margin-bottom: 4px;
+  }
+  .ag-title {
+    font-family: 'Georgia', serif; font-size: 30px; font-weight: 400;
+    color: var(--ag-ink); letter-spacing: -.02em; margin: 0;
+  }
+  .ag-subtitle { color: var(--ag-grey); font-size: 13px; margin-top: 6px; font-style: italic; }
+
+  .ag-btn {
+    background: white; border: 1px solid var(--ag-line);
+    padding: 7px 14px; border-radius: 3px; font-size: 12px;
+    color: var(--ag-ink); text-decoration: none; cursor: pointer;
+    font-family: inherit; transition: all .15s; white-space: nowrap;
+  }
+  .ag-btn:hover { background: var(--ag-ink); color: white; border-color: var(--ag-ink); }
+  .ag-btn.primary { background: var(--ag-gold); color: white; border-color: var(--ag-gold); }
+  .ag-btn.primary:hover { background: #8c6f44; border-color: #8c6f44; }
+
+  /* Top-line totals */
+  .ag-totals {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 28px;
+  }
+  @media (max-width: 720px) { .ag-totals { grid-template-columns: 1fr; } }
+  .ag-tot-card {
+    background: var(--ag-card); border: 1px solid var(--ag-line); border-radius: 4px;
+    padding: 22px 26px; position: relative; overflow: hidden;
+  }
+  .ag-tot-card::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  }
+  .ag-tot-card.ar::before { background: var(--ag-green); }
+  .ag-tot-card.ap::before { background: var(--ag-red); }
+  .ag-tot-card .k {
+    font-size: 11px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--ag-grey); font-weight: 600; margin-bottom: 6px;
+  }
+  .ag-tot-card .desc { font-size: 13px; color: var(--ag-ink-soft); margin-bottom: 12px; }
+  .ag-tot-card .v {
+    font-family: 'Georgia', serif; font-size: 32px; color: var(--ag-ink);
+    font-feature-settings: 'tnum'; font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .ag-tot-card.ar .v { color: var(--ag-green); }
+  .ag-tot-card.ap .v { color: var(--ag-red); }
+  .ag-tot-card .as-of { font-size: 11px; color: var(--ag-grey); margin-top: 8px; font-style: italic; }
+
+  /* Two columns AR / AP */
+  .ag-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+  }
+  @media (max-width: 1100px) { .ag-grid { grid-template-columns: 1fr; } }
+
+  .ag-panel {
+    background: var(--ag-card); border: 1px solid var(--ag-line); border-radius: 4px;
+    overflow: hidden;
+  }
+  .ag-panel-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 20px; border-bottom: 1px solid var(--ag-line);
+    background: var(--ag-line-soft);
+  }
+  .ag-panel-head h2 {
+    font-family: 'Georgia', serif; font-size: 16px; font-weight: 500; margin: 0;
+    color: var(--ag-ink); letter-spacing: .02em;
+  }
+  .ag-panel-head .badge {
+    font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 999px; font-weight: 600;
+  }
+  .ag-panel-head .badge.ar { background: rgba(5,150,105,.12); color: #047857; }
+  .ag-panel-head .badge.ap { background: rgba(220,38,38,.12); color: #991b1b; }
+
+  /* Bucket bar — visual breakdown */
+  .ag-buckets-vis {
+    padding: 16px 20px; border-bottom: 1px solid var(--ag-line);
+  }
+  .ag-buckets-vis .bar {
+    height: 24px; display: flex; border-radius: 3px; overflow: hidden;
+    background: var(--ag-line-soft); margin-bottom: 10px;
+  }
+  .ag-buckets-vis .seg {
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-size: 10px; font-weight: 600;
+    transition: flex .3s;
+    min-width: 0;
+  }
+  .ag-buckets-vis .seg.b-current  { background: #10b981; }
+  .ag-buckets-vis .seg.b-1_30     { background: #84cc16; }
+  .ag-buckets-vis .seg.b-31_60    { background: #f59e0b; }
+  .ag-buckets-vis .seg.b-61_90    { background: #f97316; }
+  .ag-buckets-vis .seg.b-over_90  { background: #dc2626; }
+
+  .ag-buckets-vis .legend {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 6px;
+    font-size: 11px;
+  }
+  .ag-buckets-vis .legend-item {
+    display: flex; align-items: center; gap: 6px; color: var(--ag-grey);
+  }
+  .ag-buckets-vis .dot {
+    width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0;
+  }
+  .ag-buckets-vis .dot.b-current  { background: #10b981; }
+  .ag-buckets-vis .dot.b-1_30     { background: #84cc16; }
+  .ag-buckets-vis .dot.b-31_60    { background: #f59e0b; }
+  .ag-buckets-vis .dot.b-61_90    { background: #f97316; }
+  .ag-buckets-vis .dot.b-over_90  { background: #dc2626; }
+
+  /* Bucket table */
+  .ag-bucket-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .ag-bucket-tbl thead th {
+    text-align: left; padding: 10px 16px; background: var(--ag-ink); color: white;
+    font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 500;
+  }
+  .ag-bucket-tbl thead th.num { text-align: right; }
+  .ag-bucket-tbl td {
+    padding: 11px 16px; border-bottom: 1px solid var(--ag-line-soft);
+    vertical-align: middle;
+  }
+  .ag-bucket-tbl tr:last-child td { border-bottom: none; }
+  .ag-bucket-tbl td.label { color: var(--ag-ink); font-weight: 600; }
+  .ag-bucket-tbl td.num {
+    text-align: right; font-feature-settings: 'tnum';
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .ag-bucket-tbl td.cnt { text-align: right; color: var(--ag-grey); width: 80px; }
+
+  .ag-bucket-tbl .pill {
+    display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+    margin-right: 8px; vertical-align: middle;
+  }
+  .ag-bucket-tbl .pill.b-current  { background: #10b981; }
+  .ag-bucket-tbl .pill.b-1_30     { background: #84cc16; }
+  .ag-bucket-tbl .pill.b-31_60    { background: #f59e0b; }
+  .ag-bucket-tbl .pill.b-61_90    { background: #f97316; }
+  .ag-bucket-tbl .pill.b-over_90  { background: #dc2626; }
+
+  .ag-bucket-tbl tr.total-row { background: var(--ag-line-soft); }
+  .ag-bucket-tbl tr.total-row td {
+    border-top: 2px solid var(--ag-ink); font-weight: 700;
+    font-family: 'Georgia', serif; font-size: 14px;
+  }
+
+  /* Top items detail */
+  .ag-detail {
+    padding: 16px 20px; border-top: 1px solid var(--ag-line);
+  }
+  .ag-detail h3 {
+    font-family: 'Georgia', serif; font-size: 12px; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--ag-gold); margin: 0 0 10px;
+  }
+  .ag-detail .group { margin-bottom: 16px; }
+  .ag-detail .group:last-child { margin-bottom: 0; }
+  .ag-detail .group-head {
+    font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ag-grey); font-weight: 600; margin-bottom: 6px;
+    padding-bottom: 4px; border-bottom: 1px dotted var(--ag-line);
+  }
+  .ag-detail-item {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 6px 0; font-size: 12px; gap: 12px;
+  }
+  .ag-detail-item .who { color: var(--ag-ink); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ag-detail-item .who .ref { color: var(--ag-grey); font-size: 11px; }
+  .ag-detail-item .amt {
+    color: var(--ag-ink); font-feature-settings: 'tnum';
+    font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap;
+  }
+  .ag-detail-item .days {
+    font-size: 10px; color: var(--ag-red); font-weight: 600;
+    background: rgba(220,38,38,.1); padding: 1px 6px; border-radius: 2px;
+    white-space: nowrap;
+  }
+  .ag-detail-item .days.ok {
+    color: var(--ag-green); background: rgba(5,150,105,.1);
+  }
+
+  .ag-empty {
+    padding: 30px 20px; text-align: center; color: var(--ag-grey);
+    font-size: 12px; font-style: italic;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="ag-shell">
+  <div class="ag-wrap">
+
+    <div class="ag-header">
+      <div>
+        <div class="ag-eyebrow">Working Capital · Collections</div>
+        <h1 class="ag-title">Ageing Report</h1>
+        <div class="ag-subtitle">Open receivables and payables, bucketed by days outstanding</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <a href="{% url 'export_ageing_pdf' %}?{{ request.GET.urlencode }}" class="ag-btn primary">
+          <i class="bi bi-file-earmark-pdf"></i> PDF
+        </a>
+        <a href="{% url 'export_ageing_xlsx' %}?{{ request.GET.urlencode }}" class="ag-btn">
+          <i class="bi bi-file-earmark-spreadsheet"></i> Excel
+        </a>
+        <a href="{% url 'financial_control_center' %}" class="ag-btn">← Dashboard</a>
+      </div>
+    </div>
+
+    <!-- Top-line totals -->
+    <div class="ag-totals">
+      <div class="ag-tot-card ar">
+        <div class="k">Accounts Receivable</div>
+        <div class="desc">Money owed to us by customers — open invoices.</div>
+        <div class="v">GMD {{ ar.total|floatformat:0|intcomma }}</div>
+        <div class="as-of">As of {{ ar.as_of|date:"d F Y" }}</div>
+      </div>
+      <div class="ag-tot-card ap">
+        <div class="k">Accounts Payable</div>
+        <div class="desc">Money we owe — sent payment requests not yet paid.</div>
+        <div class="v">GMD {{ ap.total|floatformat:0|intcomma }}</div>
+        <div class="as-of">As of {{ ap.as_of|date:"d F Y" }}</div>
+      </div>
+    </div>
+
+    <!-- Side-by-side panels -->
+    <div class="ag-grid">
+
+      <!-- Receivables -->
+      <div class="ag-panel">
+        <div class="ag-panel-head">
+          <h2>Receivables Ageing</h2>
+          <span class="badge ar">A/R</span>
+        </div>
+
+        <div class="ag-buckets-vis">
+          <div class="bar">
+            {% for b in ar.buckets %}
+              {% if ar.total %}
+                {% widthratio b.amount ar.total 100 as pct %}
+                {% if b.amount %}
+                <div class="seg b-{{ b.key }}" style="flex: {{ pct }} 0 auto;" title="{{ b.label }}: GMD {{ b.amount|floatformat:0|intcomma }}">
+                  {% if pct|add:0 > 8 %}{{ pct }}%{% endif %}
+                </div>
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+            {% if not ar.total %}
+            <div class="seg" style="flex: 1; background: var(--ag-line); color: var(--ag-grey)">No open invoices</div>
+            {% endif %}
+          </div>
+          <div class="legend">
+            {% for b in ar.buckets %}
+            <div class="legend-item">
+              <span class="dot b-{{ b.key }}"></span>
+              {{ b.label }}
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <table class="ag-bucket-tbl">
+          <thead>
+            <tr>
+              <th>Bucket</th>
+              <th class="num">Count</th>
+              <th class="num">Amount (GMD)</th>
+              <th class="num">% of Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for b in ar.buckets %}
+            <tr>
+              <td class="label"><span class="pill b-{{ b.key }}"></span>{{ b.label }}</td>
+              <td class="cnt">{{ b.count }}</td>
+              <td class="num">{{ b.amount|floatformat:2|intcomma }}</td>
+              <td class="num">
+                {% if ar.total %}{% widthratio b.amount ar.total 100 %}%{% else %}—{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+            <tr class="total-row">
+              <td>Total Outstanding</td>
+              <td class="cnt">—</td>
+              <td class="num">{{ ar.total|floatformat:2|intcomma }}</td>
+              <td class="num">100%</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="ag-detail">
+          <h3>Top open invoices by bucket</h3>
+          {% for b in ar.buckets %}
+            {% if b.invoices %}
+            <div class="group">
+              <div class="group-head">{{ b.label }} · {{ b.count }} invoice{{ b.count|pluralize }}</div>
+              {% for inv in b.invoices %}
+              <div class="ag-detail-item">
+                <div class="who">
+                  {{ inv.customer|default:"—" }}
+                  <span class="ref">· {{ inv.invoice_number|default:"(no number)" }}</span>
+                </div>
+                {% if inv.days_overdue and inv.days_overdue > 0 %}
+                <div class="days">{{ inv.days_overdue }}d overdue</div>
+                {% else %}
+                <div class="days ok">on time</div>
+                {% endif %}
+                <div class="amt">{{ inv.amount|floatformat:0|intcomma }}</div>
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
+          {% endfor %}
+          {% if not ar.total %}
+            <div class="ag-empty">No open receivables. All clear.</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Payables -->
+      <div class="ag-panel">
+        <div class="ag-panel-head">
+          <h2>Payables Ageing</h2>
+          <span class="badge ap">A/P</span>
+        </div>
+
+        <div class="ag-buckets-vis">
+          <div class="bar">
+            {% for b in ap.buckets %}
+              {% if ap.total %}
+                {% widthratio b.amount ap.total 100 as pct %}
+                {% if b.amount %}
+                <div class="seg b-{{ b.key }}" style="flex: {{ pct }} 0 auto;" title="{{ b.label }}: GMD {{ b.amount|floatformat:0|intcomma }}">
+                  {% if pct|add:0 > 8 %}{{ pct }}%{% endif %}
+                </div>
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+            {% if not ap.total %}
+            <div class="seg" style="flex: 1; background: var(--ag-line); color: var(--ag-grey)">No open payables</div>
+            {% endif %}
+          </div>
+          <div class="legend">
+            {% for b in ap.buckets %}
+            <div class="legend-item">
+              <span class="dot b-{{ b.key }}"></span>
+              {{ b.label }}
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <table class="ag-bucket-tbl">
+          <thead>
+            <tr>
+              <th>Bucket</th>
+              <th class="num">Count</th>
+              <th class="num">Amount (GMD)</th>
+              <th class="num">% of Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for b in ap.buckets %}
+            <tr>
+              <td class="label"><span class="pill b-{{ b.key }}"></span>{{ b.label }}</td>
+              <td class="cnt">{{ b.count }}</td>
+              <td class="num">{{ b.amount|floatformat:2|intcomma }}</td>
+              <td class="num">
+                {% if ap.total %}{% widthratio b.amount ap.total 100 %}%{% else %}—{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+            <tr class="total-row">
+              <td>Total Outstanding</td>
+              <td class="cnt">—</td>
+              <td class="num">{{ ap.total|floatformat:2|intcomma }}</td>
+              <td class="num">100%</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="ag-detail">
+          <h3>Top open payables by bucket</h3>
+          {% for b in ap.buckets %}
+            {% if b.items %}
+            <div class="group">
+              <div class="group-head">{{ b.label }} · {{ b.count }} item{{ b.count|pluralize }}</div>
+              {% for it in b.items %}
+              <div class="ag-detail-item">
+                <div class="who">
+                  {{ it.recipient|default:"—" }}
+                  <span class="ref">· {{ it.title|truncatechars:32 }}</span>
+                </div>
+                {% if it.due_date %}
+                <div class="days {% if it.due_date >= ap.as_of %}ok{% endif %}">
+                  due {{ it.due_date|date:"d M" }}
+                </div>
+                {% endif %}
+                <div class="amt">{{ it.amount|floatformat:0|intcomma }}</div>
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
+          {% endfor %}
+          {% if not ap.total %}
+            <div class="ag-empty">No open payables. Nothing pending.</div>
+          {% endif %}
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+{% endblock %}

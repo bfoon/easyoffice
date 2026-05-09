@@ -1015,6 +1015,23 @@
       notificationSocket.onmessage = function (event) {
         try {
           const data = JSON.parse(event.data);
+
+          // Suppress chat-message notifications for the room the user is
+          // ACTIVELY viewing in the floating widget — they're already seeing
+          // the message land in the open transcript, so a duplicate
+          // notification badge / dropdown row is just noise.
+          // We treat any payload with a chat-ish type OR a data.room_id as
+          // chat-related, and check it against the floating widget's
+          // currently-open room (exposed by the floating-chat IIFE below).
+          const payloadRoomId = (data && data.data && data.data.room_id) || data.room_id || '';
+          const isChatNotif   = payloadRoomId
+                              || (data.type && /chat|message|mention/i.test(data.type));
+          const activeFloatingRoom = (window.eoFcGetActiveRoomId && window.eoFcGetActiveRoomId()) || '';
+          if (isChatNotif && payloadRoomId && String(payloadRoomId) === String(activeFloatingRoom)) {
+            // User is actively chatting in this room — drop the notification.
+            return;
+          }
+
           appendNotificationToDropdown({
             id:       data.id       || '',
             read_url: data.read_url || '',
@@ -1237,6 +1254,81 @@
   [data-bs-theme="dark"] .eo-fc-toast-name{ color:#e5e7eb; }
   .eo-fc-toast-text{ font-size:12px; color:#475569; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   [data-bs-theme="dark"] .eo-fc-toast-text{ color:#cbd5e1; }
+
+
+  /* ── ABOVE-COMPOSER BUBBLE (peek + typing indicator) ─────────────────── */
+  /* A small floating bubble that appears just on top of the textarea.
+     Two modes:
+       • peek    → shows the other person's avatar + preview of a new message
+       • typing  → shows the other person's avatar + 3 animated dots
+     Both share the same shell so transitions are smooth. */
+  .eo-fc-notch{
+    position:relative;
+    margin:0 12px -6px;          /* sits above the composer; -6px so the tail visually merges */
+    padding:8px 12px 8px 10px;
+    background:#fff;
+    border:1px solid #e2e8f0;
+    border-radius:14px;
+    box-shadow:0 6px 18px rgba(15,23,42,.10);
+    display:flex; align-items:center; gap:10px;
+    max-width:calc(100% - 24px);
+    transform:translateY(8px) scale(.96);
+    opacity:0; pointer-events:none;
+    transition:transform .22s cubic-bezier(.2,.9,.3,1.2), opacity .22s ease;
+  }
+  [data-bs-theme="dark"] .eo-fc-notch{
+    background:#1f2937; border-color:#374151; color:#e5e7eb;
+  }
+  .eo-fc-notch.is-shown{ transform:translateY(0) scale(1); opacity:1; pointer-events:auto; }
+  .eo-fc-notch[hidden]{ display:none !important; }
+
+  /* Tail pointing down at the textarea */
+  .eo-fc-notch::after{
+    content:""; position:absolute;
+    left:22px; bottom:-6px;
+    width:12px; height:12px;
+    background:inherit;
+    border-right:1px solid #e2e8f0;
+    border-bottom:1px solid #e2e8f0;
+    transform:rotate(45deg);
+  }
+  [data-bs-theme="dark"] .eo-fc-notch::after{ border-color:#374151; }
+
+  .eo-fc-notch .eo-fc-avatar{
+    width:30px; height:30px; font-size:11px; flex-shrink:0;
+  }
+  .eo-fc-notch-body{ flex:1; min-width:0; }
+  .eo-fc-notch-name{
+    font-size:11px; font-weight:600; color:#4f46e5;
+    margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  [data-bs-theme="dark"] .eo-fc-notch-name{ color:#a5b4fc; }
+  .eo-fc-notch-text{
+    font-size:12px; color:#334155; margin:1px 0 0;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    max-width:240px;
+  }
+  [data-bs-theme="dark"] .eo-fc-notch-text{ color:#cbd5e1; }
+
+  /* Typing dots — only render visibly when notch is in typing mode */
+  .eo-fc-typing-dots{
+    display:none;
+    align-items:center; gap:3px;
+    height:14px; margin-top:2px;
+  }
+  .eo-fc-notch[data-mode="typing"] .eo-fc-typing-dots{ display:inline-flex; }
+  .eo-fc-notch[data-mode="typing"] .eo-fc-notch-text{ display:none; }
+  .eo-fc-typing-dots span{
+    width:5px; height:5px; border-radius:50%;
+    background:#94a3b8;
+    animation:eo-fc-bounce 1.1s infinite ease-in-out;
+  }
+  .eo-fc-typing-dots span:nth-child(2){ animation-delay:.15s; }
+  .eo-fc-typing-dots span:nth-child(3){ animation-delay:.30s; }
+  @keyframes eo-fc-bounce{
+    0%,80%,100%{ transform:translateY(0); opacity:.5; }
+    40%{ transform:translateY(-3px); opacity:1; }
+  }
 
 
   /* ── MESSAGE REPLY / REACTIONS / EMOJI ───────────────────────────────── */
@@ -1463,6 +1555,19 @@
   </div>
   <div class="eo-fc-messages" id="eo-fc-messages"></div>
 
+  <!-- Above-composer bubble: peek for new incoming messages + typing indicator.
+       Sits just on top of the textarea. Mode is switched via [data-mode]. -->
+  <div class="eo-fc-notch" id="eo-fc-notch" data-mode="peek" hidden aria-live="polite">
+    <div class="eo-fc-avatar" id="eo-fc-notch-avatar">?</div>
+    <div class="eo-fc-notch-body">
+      <p class="eo-fc-notch-name" id="eo-fc-notch-name">—</p>
+      <p class="eo-fc-notch-text" id="eo-fc-notch-text">—</p>
+      <div class="eo-fc-typing-dots" aria-hidden="true">
+        <span></span><span></span><span></span>
+      </div>
+    </div>
+  </div>
+
   <div class="eo-fc-reply-preview" id="eo-fc-reply-preview" hidden>
     <div>
       <strong id="eo-fc-reply-name">Replying</strong>
@@ -1521,6 +1626,7 @@
   function messagesUrl(roomId){ return CHAT_LIST_URL + 'floating/' + roomId + '/messages/'; }
   function sendUrl(roomId){     return CHAT_LIST_URL + 'floating/' + roomId + '/send/'; }
   function reactionUrl(roomId, messageId){ return CHAT_LIST_URL + roomId + '/message/' + messageId + '/react/'; }
+  function typingUrl(roomId){   return CHAT_LIST_URL + roomId + '/typing/'; }
   function roomPageUrl(roomId){ return CHAT_LIST_URL + roomId + '/'; }
 
   var CURRENT_USER_ID = "{{ request.user.id }}";
@@ -1556,6 +1662,11 @@
   var toastAvatar    = document.getElementById('eo-fc-toast-avatar');
   var toastName      = document.getElementById('eo-fc-toast-name');
   var toastText      = document.getElementById('eo-fc-toast-text');
+  // Above-composer bubble (peek + typing indicator).
+  var notch          = document.getElementById('eo-fc-notch');
+  var notchAvatar    = document.getElementById('eo-fc-notch-avatar');
+  var notchName      = document.getElementById('eo-fc-notch-name');
+  var notchText      = document.getElementById('eo-fc-notch-text');
 
   // ── State ───────────────────────────────────────────────────────────────
   // We open ONE background WebSocket per DM room the user is a member of,
@@ -1573,6 +1684,10 @@
     toastTimer: null,
     inboxRefreshTimer: null,
     chatPollTimer: null,  // poll the open chat box for new messages (WS fallback / belt-and-braces)
+    notchPeekTimer: null,   // auto-hide timer for the new-message peek bubble
+    notchTypingTimer: null, // auto-hide timer for the typing indicator bubble
+    notchMode: null,        // 'peek' | 'typing' | null
+    lastTypingPingAt: 0,    // ms — throttle outbound typing pings to ~1/3s
   };
 
   // ── Helpers ─────────────────────────────────────────────────────────────
@@ -1806,6 +1921,139 @@
     replyText.textContent = '—';
   }
 
+  // ── Above-composer notch (peek + typing) ────────────────────────────────
+  // Two-mode bubble that lives just above the textarea:
+  //   • peek    → flashed when the OTHER side sends a message while the
+  //               window is open. Avatar + 1-line preview, auto-hides ~3.5s.
+  //   • typing  → shown via window.eoFcShowTyping(roomId, user). Avatar +
+  //               animated dots, auto-hides 4s after last "still typing"
+  //               signal, OR immediately when a real message arrives.
+  // Only one mode is visible at a time; peek wins over typing because a
+  // real message just landed and the dots would be misleading.
+  function _setNotchAvatar(avatarUrl, initials){
+    if(avatarUrl){
+      notchAvatar.style.backgroundImage = 'url(' + avatarUrl + ')';
+      notchAvatar.textContent = '';
+    } else {
+      notchAvatar.style.backgroundImage = '';
+      notchAvatar.textContent = initials || '?';
+    }
+  }
+
+  function hideNotch(){
+    if(state.notchPeekTimer){ clearTimeout(state.notchPeekTimer); state.notchPeekTimer = null; }
+    if(state.notchTypingTimer){ clearTimeout(state.notchTypingTimer); state.notchTypingTimer = null; }
+    notch.classList.remove('is-shown');
+    state.notchMode = null;
+    // Wait for the fade-out before fully hiding so it animates out cleanly.
+    setTimeout(function(){
+      if(!state.notchMode) notch.hidden = true;
+    }, 220);
+  }
+
+  function showPeek(payload){
+    // Don't peek when the window itself isn't visible — the toast handles
+    // that case (and a peek inside a hidden window would just queue up).
+    if(!win.classList.contains('is-open')) return;
+
+    // Cancel any in-flight typing — a real message just arrived.
+    if(state.notchTypingTimer){ clearTimeout(state.notchTypingTimer); state.notchTypingTimer = null; }
+    if(state.notchPeekTimer){ clearTimeout(state.notchPeekTimer); state.notchPeekTimer = null; }
+
+    var room = state.activeRoom || {};
+    var name = payload.sender_name || room.title || 'Message';
+    var preview = payload.message || payload.content || '';
+    if(payload.message_type === 'file')        preview = '📎 ' + (payload.file_name || 'File');
+    else if(payload.message_type === 'image')  preview = '🖼 Image';
+    else if(payload.message_type === 'poll')   preview = '📊 Poll';
+
+    notch.dataset.mode = 'peek';
+    state.notchMode = 'peek';
+    notchName.textContent = name;
+    notchText.textContent = (preview || '').slice(0, 120);
+    _setNotchAvatar(
+      payload.sender_avatar_url || room.avatar_url || '',
+      payload.sender_initials || room.initials || (name ? name.charAt(0).toUpperCase() : '?')
+    );
+    notch.hidden = false;
+    // Force a paint so the transition runs even when toggling from hidden.
+    void notch.offsetWidth;
+    notch.classList.add('is-shown');
+
+    state.notchPeekTimer = setTimeout(hideNotch, 3500);
+  }
+
+  function showTyping(user){
+    // No-op when the window isn't open — typing in a closed window is noise.
+    if(!win.classList.contains('is-open')) return;
+    // If a peek is currently being shown, let it finish — a stale typing
+    // indicator on top of a freshly-arrived message is confusing.
+    if(state.notchMode === 'peek') return;
+
+    var room = state.activeRoom || {};
+    user = user || {};
+    var name = user.name || room.title || 'Typing';
+
+    notch.dataset.mode = 'typing';
+    state.notchMode = 'typing';
+    notchName.textContent = name + ' is typing…';
+    notchText.textContent = '';  // hidden by CSS in typing mode anyway
+    _setNotchAvatar(
+      user.avatar_url || room.avatar_url || '',
+      user.initials || room.initials || (name ? name.charAt(0).toUpperCase() : '?')
+    );
+    notch.hidden = false;
+    void notch.offsetWidth;
+    notch.classList.add('is-shown');
+
+    // Reset the auto-hide on every "still typing" signal so it stays up
+    // as long as the other side keeps tapping. 4s is long enough to
+    // survive the gap between keystrokes for slow typists.
+    if(state.notchTypingTimer) clearTimeout(state.notchTypingTimer);
+    state.notchTypingTimer = setTimeout(hideNotch, 4000);
+  }
+
+  // Public hooks for the rest of the page to drive / inspect the floating
+  // widget. Used by the global notifications WebSocket above to suppress
+  // chat-room notifications while the user is actively chatting in that
+  // same room, and by the typing-indicator transport (a tiny POST endpoint
+  // that fans out a 'chat.typing' event over the existing chat WebSocket).
+  window.eoFcShowTyping = function(roomId, user){
+    if(!state.activeRoom || state.activeRoom.room_id !== roomId) return;
+    showTyping(user || {});
+  };
+  window.eoFcHideTyping = function(roomId){
+    if(!state.activeRoom || state.activeRoom.room_id !== roomId) return;
+    if(state.notchMode === 'typing') hideNotch();
+  };
+  window.eoFcGetActiveRoomId = function(){
+    // Returns the room_id whose chat window is currently open in the
+    // floating widget, or '' if the widget is closed.
+    return (state.activeRoom && win.classList.contains('is-open'))
+      ? state.activeRoom.room_id
+      : '';
+  };
+
+  // Throttled outbound typing ping. Fired on each keystroke in the
+  // composer; coalesces to at most one POST every 3s. The server fans
+  // the event out over the existing chat WebSocket group so the OTHER
+  // party's floating widget renders the typing-dots bubble.
+  function pingTyping(){
+    if(!state.activeRoom) return;
+    var now = Date.now();
+    if(now - state.lastTypingPingAt < 3000) return;  // throttle
+    state.lastTypingPingAt = now;
+
+    var fd = new FormData();
+    fd.append('csrfmiddlewaretoken', getCSRFToken());
+    fetch(typingUrl(state.activeRoom.room_id), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'X-CSRFToken': getCSRFToken(), 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd,
+    }).catch(function(){ /* fire-and-forget; no UI on failure */ });
+  }
+
   function toggleReaction(messageId, emoji){
     if(!state.activeRoom || !messageId || !emoji) return;
 
@@ -1832,6 +2080,8 @@
   }
 
   function openWindow(room){
+    // A room switch invalidates whatever the old room's notch was showing.
+    hideNotch();
     state.activeRoom = room;
     winName.textContent = room.title || 'Chat';
     winSub.textContent  = "Today's recent messages";
@@ -1885,6 +2135,7 @@
     state.activeRoom = null;
     state.lastSeenId = null;
     clearReplyTarget();
+    hideNotch();
     stopChatPoll();
     // Note: we deliberately do NOT close the background socket — it stays
     // open so the inbox + badge + toast keep getting live updates.
@@ -1929,7 +2180,15 @@
         // Guard: if user closed the window or switched rooms mid-flight.
         if(!state.activeRoom || state.activeRoom.room_id !== roomId) return;
         var msgs = data.messages || [];
-        msgs.forEach(appendMessage);
+        msgs.forEach(function(m){
+          var alreadySeen = state.seenIds.has(m.id || m.message_id);
+          appendMessage(m);
+          // Only peek for genuinely-new inbound messages — skip our own
+          // sends (echoed back) and anything we already had locally.
+          if(alreadySeen) return;
+          var fromMe = String(m.sender_id) === String(CURRENT_USER_ID);
+          if(!fromMe) showPeek(m);
+        });
       })
       .catch(function(){ /* silent; next tick will retry */ });
   }
@@ -1978,6 +2237,19 @@
 
           if(data.type === 'chat_reaction'){
             updateReactionDom(data.message_id, data.reactions);
+            return;
+          }
+
+          if(data.type === 'chat_typing'){
+            // Don't show "you are typing" to yourself.
+            if(String(data.sender_id) === String(CURRENT_USER_ID)) return;
+            // Only relevant if the user has THIS room open in the widget.
+            if(!state.activeRoom || state.activeRoom.room_id !== data.room_id) return;
+            showTyping({
+              name: data.sender_name || '',
+              avatar_url: data.sender_avatar_url || '',
+              initials: data.sender_initials || '',
+            });
             return;
           }
 
@@ -2034,6 +2306,10 @@
     // 1) If this room's window is open, append to the live transcript.
     if(windowOpen){
       appendMessage(payload);
+      // Also flash the above-composer peek bubble for inbound messages,
+      // so the user sees who said what without having to glance up at the
+      // (possibly scrolled) message list.
+      if(!fromMe) showPeek(payload);
     }
 
     // 2) Update inbox metadata locally so we don't have to wait for a poll.
@@ -2232,6 +2508,9 @@
   input.addEventListener('input', function(){
     sendBtn.disabled = !input.value.trim();
     autoSize();
+    // Notify the other party we're typing. pingTyping() throttles to
+    // ~1 POST/3s, so even a fast typist generates very little traffic.
+    if(input.value.trim()) pingTyping();
   });
 
   input.addEventListener('keydown', function(e){

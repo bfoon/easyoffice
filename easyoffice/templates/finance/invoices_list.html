@@ -1,0 +1,685 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Invoices — Financial Control Center{% endblock %}
+{% block breadcrumb %}
+<a href="{% url 'finance_dashboard' %}">Finance</a> <span>›</span>
+<a href="{% url 'financial_control_center' %}">Control Center</a> <span>›</span>
+<span>Invoices</span>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  :root {
+    --inv-ink: #0f172a; --inv-ink-soft: #334155; --inv-grey: #64748b;
+    --inv-bg: #fafaf7; --inv-card: #fff; --inv-line: #e2e8f0; --inv-line-soft: #f1f5f9;
+    --inv-gold: #b08d57; --inv-gold-deep: #8c6f44;
+    --inv-green: #059669; --inv-amber: #d97706; --inv-red: #dc2626; --inv-blue: #2563eb;
+  }
+
+  .inv-shell { background: var(--inv-bg); margin: -16px -16px 0; padding: 24px 24px 60px; min-height: calc(100vh - 60px); }
+  .inv-wrap  { max-width: 1320px; margin: 0 auto; }
+
+  /* ── Page header ─────────────────────────────────────────────── */
+  .inv-header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 1px solid var(--inv-ink); padding-bottom: 16px; margin-bottom: 24px;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .inv-eyebrow {
+    font-family: 'Georgia', serif; font-size: 11px; letter-spacing: .25em;
+    text-transform: uppercase; color: var(--inv-gold); margin-bottom: 4px;
+  }
+  .inv-title {
+    font-family: 'Georgia', serif; font-size: 30px; font-weight: 400;
+    color: var(--inv-ink); letter-spacing: -.02em; margin: 0;
+  }
+  .inv-subtitle {
+    color: var(--inv-grey); font-size: 13px; margin-top: 6px; font-style: italic;
+    max-width: 540px;
+  }
+
+  .inv-btn {
+    background: white; border: 1px solid var(--inv-line);
+    padding: 7px 14px; border-radius: 3px; font-size: 12px;
+    color: var(--inv-ink); text-decoration: none; cursor: pointer;
+    font-family: inherit; transition: all .15s; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .inv-btn:hover { background: var(--inv-ink); color: white; border-color: var(--inv-ink); }
+  .inv-btn.primary { background: var(--inv-gold); color: white; border-color: var(--inv-gold); }
+  .inv-btn.primary:hover { background: var(--inv-gold-deep); border-color: var(--inv-gold-deep); }
+
+  /* ── KPI strip — editorial style with left-rule accents ──────── */
+  .inv-kpis {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;
+  }
+  @media (max-width: 1000px) { .inv-kpis { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 540px)  { .inv-kpis { grid-template-columns: 1fr; } }
+
+  .inv-kpi {
+    background: var(--inv-card); border: 1px solid var(--inv-line); border-radius: 4px;
+    padding: 18px 20px; position: relative; overflow: hidden;
+  }
+  .inv-kpi::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--inv-gold);
+  }
+  .inv-kpi.paid::before    { background: var(--inv-green); }
+  .inv-kpi.unpaid::before  { background: var(--inv-amber); }
+  .inv-kpi.overdue::before { background: var(--inv-red); }
+
+  .inv-kpi .k {
+    font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--inv-grey); font-weight: 600; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .inv-kpi .k .currency {
+    font-size: 9px; color: var(--inv-grey); opacity: .7; letter-spacing: .1em;
+  }
+  .inv-kpi .v {
+    font-family: 'Georgia', serif; font-size: 26px; color: var(--inv-ink);
+    font-feature-settings: 'tnum'; font-variant-numeric: tabular-nums;
+    line-height: 1.1; word-break: break-word;
+  }
+  .inv-kpi.paid    .v { color: var(--inv-green); }
+  .inv-kpi.unpaid  .v { color: var(--inv-amber); }
+  .inv-kpi.overdue .v { color: var(--inv-red); }
+  .inv-kpi .sub {
+    font-size: 11px; color: var(--inv-grey); margin-top: 6px;
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .inv-kpi .sub .pct {
+    font-feature-settings: 'tnum'; color: var(--inv-ink-soft); font-weight: 600;
+  }
+
+  /* Collection progress bar in the "Paid" KPI */
+  .inv-kpi .progress-mini {
+    height: 3px; background: var(--inv-line-soft); border-radius: 2px;
+    margin-top: 8px; overflow: hidden;
+  }
+  .inv-kpi .progress-mini .fill {
+    height: 100%; background: var(--inv-green); transition: width .4s;
+  }
+
+  /* ── Status tabs — editorial spine ───────────────────────────── */
+  .inv-tabs {
+    display: flex; gap: 0; border-bottom: 1px solid var(--inv-line); margin-bottom: 0;
+    overflow-x: auto;
+  }
+  .inv-tab {
+    padding: 12px 20px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--inv-grey); text-decoration: none; font-weight: 600;
+    border-bottom: 2px solid transparent; white-space: nowrap;
+    transition: all .15s;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .inv-tab:hover { color: var(--inv-ink); }
+  .inv-tab.active {
+    color: var(--inv-ink); border-bottom-color: var(--inv-gold);
+  }
+  .inv-tab .count {
+    background: var(--inv-line-soft); color: var(--inv-ink-soft);
+    padding: 2px 8px; border-radius: 999px; font-size: 10px;
+    font-feature-settings: 'tnum'; font-weight: 700; letter-spacing: 0;
+  }
+  .inv-tab.active .count { background: var(--inv-gold); color: white; }
+
+  /* ── Filters ─────────────────────────────────────────────────── */
+  .inv-filters {
+    background: var(--inv-card); border: 1px solid var(--inv-line);
+    border-top: none; border-radius: 0 0 4px 4px;
+    padding: 16px 20px; margin-bottom: 20px;
+    display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 12px;
+    align-items: end;
+  }
+  @media (max-width: 900px) {
+    .inv-filters { grid-template-columns: 1fr 1fr; }
+    .inv-filters > *:last-child { grid-column: 1 / -1; }
+  }
+  .inv-filters label {
+    display: block; font-size: 10px; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--inv-grey); font-weight: 600; margin-bottom: 4px;
+  }
+  .inv-filters input, .inv-filters select {
+    width: 100%; border: 1px solid var(--inv-line); border-radius: 3px;
+    padding: 7px 10px; font-size: 13px; color: var(--inv-ink); background: white;
+    font-family: inherit;
+  }
+  .inv-filters input:focus, .inv-filters select:focus {
+    outline: none; border-color: var(--inv-gold);
+    box-shadow: 0 0 0 3px rgba(176,141,87,.12);
+  }
+  .inv-filters .actions { display: flex; gap: 6px; }
+
+  /* ── Table ───────────────────────────────────────────────────── */
+  .inv-table-wrap {
+    background: var(--inv-card); border: 1px solid var(--inv-line); border-radius: 4px;
+    overflow: hidden;
+  }
+  .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .inv-table thead {
+    background: var(--inv-ink); color: white;
+  }
+  .inv-table th {
+    text-align: left; padding: 12px 14px; font-weight: 500;
+    font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .inv-table th.num { text-align: right; }
+  .inv-table th.center { text-align: center; }
+
+  .inv-table td {
+    padding: 14px; border-bottom: 1px solid var(--inv-line-soft);
+    vertical-align: middle;
+  }
+  .inv-table tr:hover td { background: var(--inv-line-soft); }
+  .inv-table tr.overdue-row td { background: linear-gradient(90deg, rgba(220,38,38,.04) 0%, transparent 8%); }
+  .inv-table tr.overdue-row:hover td { background: linear-gradient(90deg, rgba(220,38,38,.07) 0%, var(--inv-line-soft) 8%); }
+  .inv-table tr:last-child td { border-bottom: none; }
+
+  .inv-table .num-link {
+    font-family: 'Georgia', serif; font-weight: 600; color: var(--inv-ink);
+    text-decoration: none; font-size: 14px; letter-spacing: .02em;
+    display: inline-block;
+  }
+  .inv-table .num-link:hover { color: var(--inv-gold); }
+  .inv-table .meta {
+    font-size: 11px; color: var(--inv-grey); margin-top: 2px; font-weight: 400;
+  }
+  .inv-table .client { font-weight: 600; color: var(--inv-ink); }
+  .inv-table .client .email {
+    font-weight: 400; color: var(--inv-grey); font-size: 11px; margin-top: 2px;
+    display: block;
+  }
+  .inv-table .date {
+    font-feature-settings: 'tnum'; font-variant-numeric: tabular-nums;
+    color: var(--inv-ink-soft); white-space: nowrap;
+  }
+  .inv-table .date .relative {
+    display: block; font-size: 10px; color: var(--inv-grey);
+    text-transform: uppercase; letter-spacing: .08em; margin-top: 2px;
+    font-weight: 600;
+  }
+  .inv-table .date .relative.overdue { color: var(--inv-red); }
+  .inv-table .date .relative.upcoming { color: var(--inv-amber); }
+
+  .inv-table .amt {
+    text-align: right; font-feature-settings: 'tnum'; font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .inv-table .amt .currency-code {
+    font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--inv-grey); font-weight: 600; margin-right: 4px;
+  }
+  .inv-table .amt .value {
+    font-family: 'Georgia', serif; font-size: 15px; font-weight: 600;
+    color: var(--inv-ink);
+  }
+
+  /* Status pills — editorial */
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+    font-weight: 700; padding: 4px 10px; border-radius: 2px;
+    white-space: nowrap;
+  }
+  .status-pill::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  }
+  .status-pill.paid     { background: rgba(5,150,105,.12);  color: #047857; }
+  .status-pill.paid::before     { background: var(--inv-green); }
+  .status-pill.unpaid   { background: rgba(217,119,6,.12);  color: #92400e; }
+  .status-pill.unpaid::before   { background: var(--inv-amber); }
+  .status-pill.overdue  { background: rgba(220,38,38,.12);  color: #991b1b; }
+  .status-pill.overdue::before  { background: var(--inv-red); animation: pulse-dot 2s infinite; }
+  .status-pill.draft    { background: rgba(100,116,139,.12); color: var(--inv-grey); }
+  .status-pill.draft::before    { background: var(--inv-grey); }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .35; }
+  }
+
+  .status-detail {
+    display: block; font-size: 10px; color: var(--inv-grey); margin-top: 4px;
+    font-feature-settings: 'tnum'; letter-spacing: .02em;
+  }
+
+  /* Action buttons */
+  .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+  .icon-btn {
+    width: 30px; height: 30px; border-radius: 3px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--inv-line); background: white;
+    color: var(--inv-ink-soft); text-decoration: none; cursor: pointer;
+    font-family: inherit; transition: all .15s;
+    font-size: 14px;
+  }
+  .icon-btn:hover { background: var(--inv-ink); color: white; border-color: var(--inv-ink); }
+  .icon-btn.success { background: var(--inv-green); color: white; border-color: var(--inv-green); }
+  .icon-btn.success:hover { background: #047857; border-color: #047857; }
+
+  .markpaid-btn {
+    background: white; border: 1px solid var(--inv-green); color: var(--inv-green);
+    padding: 5px 10px; border-radius: 3px; font-size: 11px;
+    font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+    font-family: inherit; cursor: pointer; transition: all .15s;
+    display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  }
+  .markpaid-btn:hover { background: var(--inv-green); color: white; }
+
+  /* ── Pagination ──────────────────────────────────────────────── */
+  .inv-pagination {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 20px; background: var(--inv-line-soft); border-top: 1px solid var(--inv-line);
+  }
+  .inv-pagination .info { font-size: 12px; color: var(--inv-grey); font-feature-settings: 'tnum'; }
+  .inv-pagination .info strong { color: var(--inv-ink); font-weight: 600; }
+  .inv-pagination .controls { display: flex; gap: 4px; }
+  .inv-pagination .btn-page {
+    background: white; border: 1px solid var(--inv-line); padding: 5px 12px;
+    border-radius: 3px; font-size: 12px; color: var(--inv-ink); text-decoration: none;
+    font-feature-settings: 'tnum';
+  }
+  .inv-pagination .btn-page:hover { background: var(--inv-ink); color: white; border-color: var(--inv-ink); }
+  .inv-pagination .btn-page.disabled { opacity: .35; pointer-events: none; }
+  .inv-pagination .btn-page.current {
+    background: var(--inv-gold); color: white; border-color: var(--inv-gold);
+  }
+
+  /* ── Empty state ─────────────────────────────────────────────── */
+  .inv-empty {
+    padding: 80px 20px; text-align: center;
+  }
+  .inv-empty .icon {
+    width: 56px; height: 56px; margin: 0 auto 16px;
+    border: 1px solid var(--inv-line); border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--inv-grey); font-size: 24px;
+  }
+  .inv-empty h3 {
+    font-family: 'Georgia', serif; font-size: 18px; color: var(--inv-ink);
+    margin: 0 0 6px; font-weight: 400;
+  }
+  .inv-empty p { color: var(--inv-grey); font-size: 13px; margin: 0; }
+
+  /* ── Mark-paid modal — editorial ─────────────────────────────── */
+  .modal-content {
+    border: 1px solid var(--inv-line); border-radius: 4px;
+    box-shadow: 0 20px 60px rgba(15,23,42,.18);
+  }
+  .modal-header {
+    border-bottom: 1px solid var(--inv-ink); padding: 18px 24px 14px;
+    background: var(--inv-bg);
+  }
+  .modal-header .modal-title {
+    font-family: 'Georgia', serif; font-size: 18px; font-weight: 400;
+    color: var(--inv-ink); letter-spacing: -.01em;
+  }
+  .modal-header .eyebrow {
+    font-size: 10px; letter-spacing: .2em; text-transform: uppercase;
+    color: var(--inv-gold); font-weight: 600; display: block; margin-bottom: 2px;
+  }
+  .modal-body { padding: 22px 24px; }
+  .modal-body .effects {
+    background: var(--inv-line-soft); border-left: 3px solid var(--inv-gold);
+    border-radius: 0 3px 3px 0; padding: 12px 14px; margin-bottom: 18px;
+  }
+  .modal-body .effects-head {
+    font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--inv-gold); font-weight: 700; margin-bottom: 6px;
+  }
+  .modal-body .effects ul {
+    margin: 0; padding-left: 18px; font-size: 12px; color: var(--inv-ink-soft);
+  }
+  .modal-body .effects li { margin-bottom: 3px; }
+  .modal-body .effects li strong { color: var(--inv-ink); }
+
+  .modal-body .field-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  }
+  .modal-body .field-grid .full { grid-column: 1 / -1; }
+  .modal-body label.field-label {
+    display: block; font-size: 10px; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--inv-grey); font-weight: 600; margin-bottom: 4px;
+  }
+  .modal-body input.field-input, .modal-body select.field-input {
+    width: 100%; border: 1px solid var(--inv-line); border-radius: 3px;
+    padding: 8px 12px; font-size: 13px; color: var(--inv-ink);
+    font-family: inherit;
+  }
+  .modal-body input.field-input:focus, .modal-body select.field-input:focus {
+    outline: none; border-color: var(--inv-gold);
+    box-shadow: 0 0 0 3px rgba(176,141,87,.12);
+  }
+  .modal-body .field-help {
+    font-size: 11px; color: var(--inv-grey); margin-top: 4px; font-style: italic;
+  }
+  .modal-footer {
+    border-top: 1px solid var(--inv-line); padding: 14px 24px;
+    background: var(--inv-bg);
+  }
+  .modal-footer .btn { font-family: inherit; font-size: 12px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="inv-shell">
+  <div class="inv-wrap">
+
+    <!-- ── Header ─────────────────────────────────────────────── -->
+    <div class="inv-header">
+      <div>
+        <div class="inv-eyebrow">Receivables · Collections Ledger</div>
+        <h1 class="inv-title">Invoices</h1>
+        <div class="inv-subtitle">
+          Finalised customer invoices. Mark as paid to record a receipt
+          in the ledger and refresh revenue analytics.
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <a href="{% url 'report_ageing' %}" class="inv-btn">
+          <i class="bi bi-stopwatch"></i> Ageing Report
+        </a>
+        <a href="{% url 'financial_control_center' %}" class="inv-btn">← Dashboard</a>
+      </div>
+    </div>
+
+    <!-- ── KPI strip ──────────────────────────────────────────── -->
+    <div class="inv-kpis">
+      <div class="inv-kpi">
+        <div class="k">Total Billed <span class="currency">GMD</span></div>
+        <div class="v">{{ agg.total_amount|default:0|floatformat:0|intcomma }}</div>
+        <div class="sub">
+          <span>{{ agg.total_count|default:0 }} invoice{{ agg.total_count|default:0|pluralize }}</span>
+        </div>
+      </div>
+
+      <div class="inv-kpi paid">
+        <div class="k">Collected <span class="currency">GMD</span></div>
+        <div class="v">{{ agg.paid_amount|default:0|floatformat:0|intcomma }}</div>
+        <div class="sub">
+          <span>{{ agg.paid_count|default:0 }} paid</span>
+          {% if agg.total_amount %}
+            <span class="pct">{% widthratio agg.paid_amount agg.total_amount 100 %}%</span>
+          {% endif %}
+        </div>
+        {% if agg.total_amount %}
+        <div class="progress-mini">
+          <div class="fill" style="width: {% widthratio agg.paid_amount agg.total_amount 100 %}%"></div>
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="inv-kpi unpaid">
+        <div class="k">Outstanding <span class="currency">GMD</span></div>
+        <div class="v">{{ agg.unpaid_amount|default:0|floatformat:0|intcomma }}</div>
+        <div class="sub">
+          <span>Awaiting payment</span>
+          {% if agg.total_amount %}
+            <span class="pct">{% widthratio agg.unpaid_amount agg.total_amount 100 %}%</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="inv-kpi overdue">
+        <div class="k">Overdue <span class="currency">GMD</span></div>
+        <div class="v">{{ agg.overdue_amount|default:0|floatformat:0|intcomma }}</div>
+        <div class="sub">
+          <span>Past due date</span>
+          {% if agg.unpaid_amount and agg.overdue_amount %}
+            <span class="pct">{% widthratio agg.overdue_amount agg.unpaid_amount 100 %}% of unpaid</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tabs ───────────────────────────────────────────────── -->
+    <div class="inv-tabs">
+      {% for tab in status_tabs %}
+        <a href="?status={{ tab.key }}{% if filters.q %}&q={{ filters.q }}{% endif %}{% if filters.from %}&from={{ filters.from }}{% endif %}{% if filters.to %}&to={{ filters.to }}{% endif %}{% if filters.currency %}&currency={{ filters.currency }}{% endif %}"
+           class="inv-tab {% if filters.status == tab.key %}active{% endif %}">
+          {{ tab.label }}
+          <span class="count">{{ tab.count|intcomma }}</span>
+        </a>
+      {% endfor %}
+    </div>
+
+    <!-- ── Filters ────────────────────────────────────────────── -->
+    <form method="get" class="inv-filters">
+      <input type="hidden" name="status" value="{{ filters.status }}">
+      <div>
+        <label>Search</label>
+        <input type="text" name="q" value="{{ filters.q }}"
+               placeholder="Client, invoice number, PO ref, email…">
+      </div>
+      <div>
+        <label>Issued from</label>
+        <input type="date" name="from" value="{{ filters.from }}">
+      </div>
+      <div>
+        <label>Issued to</label>
+        <input type="date" name="to" value="{{ filters.to }}">
+      </div>
+      <div>
+        <label>Currency</label>
+        <select name="currency">
+          <option value="">All</option>
+          {% for c in currencies %}
+            <option value="{{ c }}" {% if filters.currency == c %}selected{% endif %}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="actions">
+        <button type="submit" class="inv-btn primary">Apply</button>
+        <a href="?status={{ filters.status }}" class="inv-btn">Reset</a>
+      </div>
+    </form>
+
+    <!-- ── Table ──────────────────────────────────────────────── -->
+    <div class="inv-table-wrap">
+      <table class="inv-table">
+        <thead>
+          <tr>
+            <th>Invoice</th>
+            <th>Client</th>
+            <th>Issued</th>
+            <th>Due</th>
+            <th class="num">Total</th>
+            <th>Status</th>
+            <th class="num">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for inv in page %}
+          <tr {% if not inv.is_paid and inv.due_date and inv.due_date < today %}class="overdue-row"{% endif %}>
+            <td>
+              <a href="{% url 'incoming_payment_request_detail' inv.pk %}" class="num-link">
+                {{ inv.number|default:"(draft)" }}
+              </a>
+              {% if inv.po_reference %}
+                <div class="meta">PO · {{ inv.po_reference }}</div>
+              {% endif %}
+            </td>
+            <td>
+              <div class="client">
+                {{ inv.client_name|default:"—" }}
+                {% if inv.client_email %}
+                  <span class="email">{{ inv.client_email }}</span>
+                {% endif %}
+              </div>
+            </td>
+            <td class="date">{{ inv.invoice_date|date:"d M Y" }}</td>
+            <td class="date">
+              {% if inv.due_date %}
+                {{ inv.due_date|date:"d M Y" }}
+                {% if not inv.is_paid %}
+                  {% if inv.due_date < today %}
+                    <span class="relative overdue">Overdue</span>
+                  {% else %}
+                    <span class="relative upcoming">Upcoming</span>
+                  {% endif %}
+                {% endif %}
+              {% else %}
+                <span style="color:var(--inv-grey)">—</span>
+              {% endif %}
+            </td>
+            <td class="amt">
+              <span class="currency-code">{{ inv.currency }}</span>
+              <span class="value">{{ inv.total|floatformat:2|intcomma }}</span>
+            </td>
+            <td>
+              {% if inv.is_paid %}
+                <span class="status-pill paid">Paid</span>
+                <span class="status-detail">
+                  {{ inv.paid_at|date:"d M Y" }}{% if inv.payment_method %} · {{ inv.payment_method }}{% endif %}
+                </span>
+              {% elif inv.due_date and inv.due_date < today %}
+                <span class="status-pill overdue">Overdue</span>
+                <span class="status-detail">
+                  Awaiting receipt
+                </span>
+              {% else %}
+                <span class="status-pill unpaid">{{ inv.payment_status_label|default:"Unpaid" }}</span>
+                <span class="status-detail">
+                  {% if inv.due_date %}Due {{ inv.due_date|date:"d M" }}{% else %}No due date{% endif %}
+                </span>
+              {% endif %}
+            </td>
+            <td>
+              <div class="row-actions">
+                {% if inv.can_be_marked_paid %}
+                <button type="button"
+                        class="markpaid-btn"
+                        data-bs-toggle="modal"
+                        data-bs-target="#markPaidModal-{{ inv.pk }}">
+                  <i class="bi bi-check-circle"></i> Mark Paid
+                </button>
+                {% endif %}
+                <a href="{% url 'incoming_payment_request_detail' inv.pk %}"
+                   class="icon-btn" title="Open invoice">
+                  <i class="bi bi-arrow-up-right"></i>
+                </a>
+              </div>
+            </td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="7">
+              <div class="inv-empty">
+                <div class="icon"><i class="bi bi-inbox"></i></div>
+                <h3>No invoices to show</h3>
+                <p>
+                  {% if filters.q or filters.from or filters.to or filters.currency %}
+                    Try adjusting your filters or
+                    <a href="?status={{ filters.status }}" style="color:var(--inv-gold)">resetting the search</a>.
+                  {% else %}
+                    No invoices match the <strong>{{ filters.status }}</strong> filter.
+                  {% endif %}
+                </p>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+
+      {% if page.paginator.num_pages > 1 %}
+        {% with qs="status="|add:filters.status|add:"&q="|add:filters.q|add:"&from="|add:filters.from|add:"&to="|add:filters.to|add:"&currency="|add:filters.currency %}
+        <div class="inv-pagination">
+          <div class="info">
+            Showing <strong>{{ page.start_index }}</strong>–<strong>{{ page.end_index }}</strong>
+            of <strong>{{ page.paginator.count|intcomma }}</strong>
+          </div>
+          <div class="controls">
+            <a href="?{{ qs }}&page=1"
+               class="btn-page {% if page.number == 1 %}disabled{% endif %}">First</a>
+            {% if page.has_previous %}
+              <a href="?{{ qs }}&page={{ page.previous_page_number }}" class="btn-page">‹ Prev</a>
+            {% else %}
+              <span class="btn-page disabled">‹ Prev</span>
+            {% endif %}
+            <span class="btn-page current">{{ page.number }} / {{ page.paginator.num_pages }}</span>
+            {% if page.has_next %}
+              <a href="?{{ qs }}&page={{ page.next_page_number }}" class="btn-page">Next ›</a>
+            {% else %}
+              <span class="btn-page disabled">Next ›</span>
+            {% endif %}
+            <a href="?{{ qs }}&page={{ page.paginator.num_pages }}"
+               class="btn-page {% if page.number == page.paginator.num_pages %}disabled{% endif %}">Last</a>
+          </div>
+        </div>
+        {% endwith %}
+      {% endif %}
+    </div>
+
+  </div>
+</div>
+
+{# ── Mark-paid modals (one per invoice on this page) ──────────────────── #}
+{% for inv in page %}
+  {% if inv.can_be_marked_paid %}
+    <div class="modal fade" id="markPaidModal-{{ inv.pk }}" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <form method="post" action="{% url 'finance_invoice_mark_paid' pk=inv.pk %}" class="modal-content">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+
+          <div class="modal-header d-block">
+            <span class="eyebrow">Receivable · Mark Paid</span>
+            <h5 class="modal-title">Record receipt for {{ inv.number }}</h5>
+            <button type="button" class="btn-close position-absolute end-0 top-0 m-3"
+                    data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+
+          <div class="modal-body">
+            <div class="effects">
+              <div class="effects-head">This action will</div>
+              <ul>
+                <li>Flip the receivable status to <strong>Paid</strong></li>
+                <li>Create an audit-logged <strong>Payment ledger entry</strong></li>
+                <li>Refresh revenue, cash-flow, and ageing analytics</li>
+              </ul>
+            </div>
+
+            <div class="field-grid">
+              <div>
+                <label class="field-label">Amount received <span style="color:var(--inv-grey)">({{ inv.currency }})</span></label>
+                <input type="number" step="0.01" min="0.01" required
+                       name="amount" class="field-input"
+                       value="{{ inv.total|floatformat:2 }}">
+                <div class="field-help">Defaults to invoice total ({{ inv.currency }} {{ inv.total|floatformat:2|intcomma }}).</div>
+              </div>
+              <div>
+                <label class="field-label">Date received</label>
+                <input type="date" name="paid_on" class="field-input" required
+                       value="{{ today|date:'Y-m-d' }}">
+              </div>
+              <div>
+                <label class="field-label">Method</label>
+                <select name="method" class="field-input">
+                  {% for value, label in payment_method_choices %}
+                    <option value="{{ value }}">{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div>
+                <label class="field-label">Reference</label>
+                <input type="text" name="reference" class="field-input"
+                       placeholder="Bank ref, cheque #, txn id…">
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="inv-btn" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="inv-btn" style="background:var(--inv-green);color:white;border-color:var(--inv-green)">
+              <i class="bi bi-check-circle"></i> Confirm payment
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {% endif %}
+{% endfor %}
+{% endblock %}

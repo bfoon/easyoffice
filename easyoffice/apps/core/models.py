@@ -60,6 +60,21 @@ class User(AbstractUser):
     last_login_lng      = models.FloatField(null=True, blank=True)
     last_login_city     = models.CharField(max_length=100, blank=True)
     last_login_country  = models.CharField(max_length=100, blank=True)
+    # Time-limited OTP bypass.
+    # When this is set to a future datetime, OTP is treated as disabled for
+    # this user (so logins from new devices skip the email-code challenge).
+    # Once the timestamp passes, OTP automatically turns back on — no admin
+    # action needed. None means "OTP is enabled" (the normal state).
+    # Maximum allowed duration is enforced in the view layer (7 days).
+    otp_disabled_until  = models.DateTimeField(
+        null=True, blank=True,
+        help_text=(
+            'If set to a future time, OTP is bypassed for this user until '
+            'that moment, after which OTP automatically re-enables. Maximum '
+            'allowed duration is 7 days. Leave blank for normal (OTP-on) '
+            'behaviour.'
+        ),
+    )
 
     USERNAME_FIELD  = 'email'
     REQUIRED_FIELDS = ['username', 'first_name', 'last_name']
@@ -87,6 +102,45 @@ class User(AbstractUser):
             return self.staffprofile
         except Exception:
             return None
+
+    # ── OTP bypass helpers ────────────────────────────────────────────────
+    # `otp_enabled` is computed: True unless an unexpired bypass is in
+    # effect. All callers (login flow, templates, etc.) keep using
+    # `user.otp_enabled` as a boolean — they don't need to know about the
+    # underlying field.
+    @property
+    def otp_enabled(self):
+        if self.otp_disabled_until and self.otp_disabled_until > timezone.now():
+            return False
+        return True
+
+    @property
+    def otp_bypass_active(self):
+        """True iff a time-limited OTP bypass is currently in effect."""
+        return not self.otp_enabled
+
+    @property
+    def otp_bypass_remaining(self):
+        """Timedelta remaining on the bypass, or None if no bypass is active."""
+        if not self.otp_disabled_until:
+            return None
+        remaining = self.otp_disabled_until - timezone.now()
+        return remaining if remaining.total_seconds() > 0 else None
+
+    def disable_otp_until(self, expires_at):
+        """
+        Bypass OTP for this user until `expires_at`. If expires_at is in the
+        past or None, this is a no-op (use enable_otp() to clear).
+        """
+        if expires_at and expires_at > timezone.now():
+            self.otp_disabled_until = expires_at
+            self.save(update_fields=['otp_disabled_until'])
+
+    def enable_otp(self):
+        """Clear any active OTP bypass."""
+        if self.otp_disabled_until is not None:
+            self.otp_disabled_until = None
+            self.save(update_fields=['otp_disabled_until'])
 
     def update_last_seen(self):
         self.last_seen = timezone.now()
@@ -293,6 +347,8 @@ class SecurityEvent(models.Model):
         OTP_SUCCESS       = 'otp_success',        _('OTP — Verified')
         OTP_FAILED        = 'otp_failed',         _('OTP — Wrong Code')
         OTP_EXPIRED       = 'otp_expired',        _('OTP — Expired')
+        OTP_ENABLED       = 'otp_enabled',        _('OTP — Enabled')
+        OTP_DISABLED      = 'otp_disabled',       _('OTP — Disabled')
         DEVICE_TRUSTED    = 'device_trusted',     _('Device Trusted')
         DEVICE_REVOKED    = 'device_revoked',     _('Device Revoked')
         SWITCH_REQUESTED  = 'switch_requested',   _('Device Switch Requested')

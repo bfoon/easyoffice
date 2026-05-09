@@ -1,6 +1,7 @@
 import math
 import secrets
 import logging
+from datetime import timedelta
 
 import requests as http_requests
 from django.contrib.auth import login, logout, update_session_auth_hash
@@ -9,7 +10,7 @@ from django.contrib.auth.forms import AuthenticationForm, PasswordChangeForm
 from django.views.generic import View, TemplateView
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponseForbidden
 from django.utils import timezone
 from django.core.mail import send_mail
 from django.conf import settings
@@ -27,6 +28,12 @@ DEVICE_COOKIE  = '_did'
 SESSION_OTP_ID = '_otp_id'
 SESSION_SWITCH = '_switch_id'
 COOKIE_MAX_AGE = 60 * 60 * 24 * 400   # ~13 months
+
+# OTP bypass: a superuser may temporarily disable OTP on a user's account.
+# These constants bound the maximum bypass window — the view rejects any
+# request that exceeds this. See ToggleOTPView.
+OTP_BYPASS_MAX_HOURS = 168    # 7 days
+OTP_BYPASS_MIN_HOURS = 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -202,6 +209,58 @@ def _send_lockout_email(user, sec):
         )
     except Exception as e:
         logger.warning('Lockout email failed for %s: %s', user.email, e)
+
+
+def _send_otp_changed_email(target_user, actor_user, enabled, until=None):
+    """
+    Notify a user that an admin changed their OTP setting.
+    `until`: datetime when a bypass expires (only meaningful when enabled=False).
+    """
+    if not target_user.email:
+        return
+    try:
+        if enabled:
+            subject = 'EasyOffice — OTP enabled on your account'
+            body = (
+                f'Hi {target_user.first_name or target_user.email},\n\n'
+                f'OTP (one-time-password verification on login) was just '
+                f'enabled on your account by an administrator '
+                f'({actor_user.email}).\n\n'
+                f'From now on, when you log in from a new or unrecognised '
+                f'device, you will receive a 6-digit code by email and must '
+                f'enter it before you can sign in.\n\n'
+                f'If you did not expect this change, contact your administrator.\n'
+            )
+        else:
+            until_line = ''
+            if until:
+                until_line = (
+                    f'\nThe bypass is temporary and will automatically '
+                    f'expire on {until.strftime("%Y-%m-%d at %H:%M UTC")}, '
+                    f'after which OTP turns back on automatically.\n'
+                )
+            subject = 'EasyOffice — OTP temporarily disabled on your account'
+            body = (
+                f'Hi {target_user.first_name or target_user.email},\n\n'
+                f'OTP (one-time-password verification on login) was just '
+                f'temporarily disabled on your account by an administrator '
+                f'({actor_user.email}).\n\n'
+                f'During this window, anyone with your password can log in '
+                f'to your account from any device without an email '
+                f'verification code.\n'
+                f'{until_line}\n'
+                f'If you did not expect this change, contact your '
+                f'administrator immediately.\n'
+            )
+        send_mail(
+            subject=subject,
+            message=body,
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
+            recipient_list=[target_user.email],
+            fail_silently=True,
+        )
+    except Exception:
+        logger.exception('OTP-changed email failed for %s', target_user.email)
 
 
 def _check_geo_velocity(user, ip, geo, sec):
@@ -397,6 +456,31 @@ class LoginView(View):
             if current is None or current.pk == trusted.pk:
                 return _complete_login(request, user, trusted)
 
+            # Trusted device, but a different device is active.
+            # If OTP is disabled, allow the switch silently — otherwise email
+            # the one-click switch link.
+            if not user.otp_enabled:
+                old = current
+                old.is_revoked = True
+                old.save(update_fields=['is_revoked'])
+                SecurityEvent.log(
+                    user=user,
+                    event_type=SecurityEvent.EventType.DEVICE_REVOKED,
+                    device_id=old.device_id,
+                    device_name=old.device_name,
+                    detail='Auto-revoked: switching device for user with OTP disabled.',
+                )
+                _notify_admins(
+                    title=f'⚠️ Device switched without OTP: {user.email}',
+                    message=(
+                        f'{user.email} switched login from "{old.device_name}" '
+                        f'to "{device_name}" ({city}, {country}, {ip}) '
+                        f'without OTP verification (OTP is disabled for this user).'
+                    ),
+                    link='/admin/core/securityevent/'
+                )
+                return _complete_login(request, user, trusted)
+
             sw = DeviceSwitchToken.issue(
                 user=user,
                 new_device_id=device_id,
@@ -424,7 +508,59 @@ class LoginView(View):
                 'current_device': current.device_name if current else 'another device',
             })
 
+        # ── Unrecognised device path ─────────────────────────────────────────
         current = user.active_device
+
+        # If the user has OTP disabled, skip the whole challenge entirely.
+        # We still log/notify on untrusted-device attempts so admins can see
+        # them. We trust the new device immediately (since OTP is off for this
+        # user, we can't ask them to verify it anyway), then complete login.
+        if not user.otp_enabled:
+            if current and current.is_valid():
+                _notify_admins(
+                    title=f'⚠️ Untrusted device attempt: {user.email}',
+                    message=(
+                        f'{user.email}: untrusted "{device_name}" from '
+                        f'{city}, {country} ({ip}) — OTP is disabled for this user.'
+                    ),
+                    link='/admin/core/securityevent/'
+                )
+                SecurityEvent.log(
+                    user=user,
+                    event_type=SecurityEvent.EventType.UNTRUSTED_ATTEMPT,
+                    ip_address=ip,
+                    device_id=device_id,
+                    device_name=device_name,
+                    city=city,
+                    country=country,
+                    detail='OTP disabled — login allowed without verification.',
+                )
+                # Revoke the old session, this device replaces it.
+                current.is_revoked = True
+                current.save(update_fields=['is_revoked'])
+                SecurityEvent.log(
+                    user=user,
+                    event_type=SecurityEvent.EventType.DEVICE_REVOKED,
+                    device_id=current.device_id,
+                    device_name=current.device_name,
+                    detail='Auto-revoked: replaced by new login (OTP disabled).',
+                )
+
+            pending_did = device_id or _new_device_id()
+            new_device = TrustedDevice.create_for(
+                user=user,
+                device_id=pending_did,
+                device_name=device_name,
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                ip_address=ip,
+                city=city,
+                country=country,
+            )
+            response = _complete_login(request, user, new_device)
+            _set_device_cookie(response, pending_did)
+            return response
+
+        # ── Otherwise, fall through to the normal OTP flow ──────────────────
         if current and current.is_valid():
             purpose = OTPChallenge.Purpose.UNTRUSTED_WARN
             _notify_user(
@@ -577,7 +713,6 @@ class OTPVerifyView(View):
         )
 
         sec = SecuritySettings.get()
-        from datetime import timedelta
 
         device = TrustedDevice.create_for(
             user=user,
@@ -778,7 +913,7 @@ class TrustedDevicesView(LoginRequiredMixin, View):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Security Dashboard
+# Security Dashboard (read-only — no OTP toggle here, that's superuser-only)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SecurityDashboardView(LoginRequiredMixin, TemplateView):
@@ -794,6 +929,190 @@ class SecurityDashboardView(LoginRequiredMixin, TemplateView):
         ctx['current_cookie_device_id'] = _get_device_id(self.request)
         ctx['current_active_device_pk'] = user.active_device_id
         return ctx
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OTP enable / disable — SUPERUSER ONLY, target user passed in URL
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ToggleOTPView(LoginRequiredMixin, View):
+    """
+    Superuser-only. Lets a superuser temporarily disable OTP on a user's
+    account, or re-enable it.
+
+    POST /otp/toggle/<uuid:user_id>/
+        action          : 'enable' or 'disable'
+        duration_hours  : (disable only) integer hours, 1..168 (max 7 days)
+        next            : (optional) redirect target after the action
+
+    Disabling is always TIME-LIMITED. The bypass automatically expires after
+    the duration elapses, at which point OTP turns back on without any
+    further admin action. The maximum duration is 7 days (168 hours).
+
+    Non-superusers get 403. Self-toggle is blocked too — superusers cannot
+    use this endpoint to disable OTP on their own account (they'd have to do
+    it via Django admin or the shell). This prevents an attacker who
+    compromises a superuser session from silently disabling OTP on it.
+    """
+
+    def post(self, request, user_id):
+        actor = request.user
+
+        if not actor.is_superuser:
+            return HttpResponseForbidden(
+                'Only superusers can change OTP settings for users.'
+            )
+
+        target = get_object_or_404(User, pk=user_id)
+        action = request.POST.get('action', '').strip().lower()
+
+        if action not in ('enable', 'disable'):
+            messages.error(request, 'Invalid action.')
+            return self._safe_redirect(request, target)
+
+        if target.pk == actor.pk:
+            messages.error(
+                request,
+                'For your own safety, you cannot toggle OTP on your own '
+                'account from here. Use the Django admin if you need to.'
+            )
+            return self._safe_redirect(request, target)
+
+        # ── ENABLE ──────────────────────────────────────────────────────────
+        if action == 'enable':
+            if target.otp_enabled:
+                messages.info(request, f'OTP is already enabled for {target.email}.')
+                return self._safe_redirect(request, target)
+
+            target.enable_otp()
+
+            SecurityEvent.log(
+                user=target,
+                event_type=SecurityEvent.EventType.OTP_ENABLED,
+                ip_address=_get_client_ip(request),
+                detail=f'OTP bypass cleared (re-enabled) by superuser {actor.email}.',
+            )
+            _notify_admins(
+                title=f'⚙️ OTP re-enabled for {target.email}',
+                message=f'{actor.email} re-enabled OTP for {target.email}.',
+                link='/admin/core/securityevent/'
+            )
+            _notify_user(
+                target,
+                title='OTP re-enabled on your account',
+                message=(
+                    f'An administrator ({actor.email}) re-enabled OTP on your '
+                    f'account. You will be asked for an email verification '
+                    f'code on your next login from a new device.'
+                ),
+                link='/security/'
+            )
+            _send_otp_changed_email(target, actor, enabled=True)
+
+            messages.success(
+                request,
+                f'OTP has been re-enabled for {target.email}.'
+            )
+            return self._safe_redirect(request, target)
+
+        # ── DISABLE (time-limited bypass) ───────────────────────────────────
+        # Required: duration_hours, an integer in [OTP_BYPASS_MIN_HOURS,
+        # OTP_BYPASS_MAX_HOURS]. The form normally posts a preset (1, 24,
+        # 72, 168) but a custom value is allowed within the cap.
+        try:
+            hours = int(request.POST.get('duration_hours', '').strip())
+        except (TypeError, ValueError):
+            messages.error(
+                request,
+                'Please choose how long OTP should remain disabled '
+                f'(between {OTP_BYPASS_MIN_HOURS} hour and '
+                f'{OTP_BYPASS_MAX_HOURS} hours / 7 days).'
+            )
+            return self._safe_redirect(request, target)
+
+        if hours < OTP_BYPASS_MIN_HOURS or hours > OTP_BYPASS_MAX_HOURS:
+            messages.error(
+                request,
+                f'OTP can only be disabled for between {OTP_BYPASS_MIN_HOURS} '
+                f'hour and {OTP_BYPASS_MAX_HOURS} hours (7 days). '
+                f'Got {hours}.'
+            )
+            return self._safe_redirect(request, target)
+
+        new_until = timezone.now() + timedelta(hours=hours)
+
+        # If a bypass is already in effect, treat the new request as an
+        # extension/replacement, not an error. We still log it.
+        was_already_bypassed = target.otp_bypass_active
+
+        target.disable_otp_until(new_until)
+
+        # Human-friendly duration label
+        if hours >= 24:
+            days = hours / 24
+            duration_label = (
+                f'{int(days)} days' if days.is_integer() else f'{days:.1f} days'
+            )
+        elif hours == 1:
+            duration_label = '1 hour'
+        else:
+            duration_label = f'{hours} hours'
+
+        until_label = new_until.strftime('%Y-%m-%d %H:%M UTC')
+        verb = 'extended' if was_already_bypassed else 'temporarily disabled'
+
+        SecurityEvent.log(
+            user=target,
+            event_type=SecurityEvent.EventType.OTP_DISABLED,
+            ip_address=_get_client_ip(request),
+            detail=(
+                f'OTP {verb} by superuser {actor.email} for {duration_label} '
+                f'(until {until_label}).'
+            ),
+        )
+        _notify_admins(
+            title=f'⚠️ OTP {verb} for {target.email}',
+            message=(
+                f'{actor.email} {verb} OTP for {target.email} for '
+                f'{duration_label} (until {until_label}). Logins from new '
+                f'devices for this user no longer require email verification '
+                f'until then.'
+            ),
+            link='/admin/core/securityevent/'
+        )
+        _notify_user(
+            target,
+            title='OTP temporarily disabled on your account',
+            message=(
+                f'An administrator ({actor.email}) {verb} OTP on your '
+                f'account for {duration_label}. Until {until_label}, logins '
+                f'from new devices will not require an email verification '
+                f'code. OTP will turn back on automatically after that. '
+                f'If you did not expect this change, contact your '
+                f'administrator immediately.'
+            ),
+            link='/security/'
+        )
+        _send_otp_changed_email(target, actor, enabled=False, until=new_until)
+
+        messages.warning(
+            request,
+            f'OTP has been {verb} for {target.email} for {duration_label} '
+            f'(until {until_label}). It will automatically re-enable after that.'
+        )
+        return self._safe_redirect(request, target)
+
+
+    @staticmethod
+    def _safe_redirect(request, target):
+        nxt = request.POST.get('next', '')
+        if nxt and nxt.startswith('/'):
+            return redirect(nxt)
+        # Try the staff detail page; fall back to dashboard if not configured.
+        try:
+            return redirect('staff_detail', pk=target.pk)
+        except Exception:
+            return redirect('/dashboard/')
 
 
 # ─────────────────────────────────────────────────────────────────────────────

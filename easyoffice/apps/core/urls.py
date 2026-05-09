@@ -10,6 +10,9 @@ urlpatterns = [
     path('otp/verify/',         views.OTPVerifyView.as_view(),            name='otp_verify'),
     path('otp/resend/',         views.ResendOTPView.as_view(),            name='otp_resend'),
 
+    # Superuser-only: enable/disable OTP for any user.
+    path('otp/toggle/<uuid:user_id>/', views.ToggleOTPView.as_view(),     name='toggle_otp'),
+
     # ── Device switch (email one-click link) ──────────────────────────────────
     path('device/switch/<str:token>/', views.DeviceSwitchApproveView.as_view(), name='device_switch_approve'),
     path('device/switch/pending/',     views.SwitchPendingView.as_view(),        name='switch_pending'),

@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}Security{% endblock %}
+{% block breadcrumb %}Security{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Security</h1>
+    <p class="eo-page-subtitle">Your trusted devices and recent account activity</p>
+  </div>
+</div>
+
+<div class="row g-4">
+
+  <!-- ─── LEFT COLUMN ─── -->
+  <div class="col-lg-7 d-flex flex-column gap-4">
+
+    <!-- ╔══════════════════════════════════════════════════════════════════╗
+         ║   OTP status (read-only — only superusers can change this)       ║
+         ╚══════════════════════════════════════════════════════════════════╝ -->
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-shield-lock me-2" style="color:var(--eo-accent)"></i>
+            One-Time Password (OTP)
+          </h2>
+          <p class="eo-card-subtitle">Email verification code required when logging in from a new device</p>
+        </div>
+        {% if request.user.otp_enabled %}
+          <span style="background:#16a34a22;color:#16a34a;font-weight:700;padding:5px 12px;border-radius:999px;font-size:.72rem;white-space:nowrap">
+            <i class="bi bi-check-circle-fill"></i> Enabled
+          </span>
+        {% else %}
+          <span style="background:#dc262622;color:#dc2626;font-weight:700;padding:5px 12px;border-radius:999px;font-size:.72rem;white-space:nowrap">
+            <i class="bi bi-exclamation-triangle-fill"></i> Disabled
+          </span>
+        {% endif %}
+      </div>
+
+      {% if request.user.otp_enabled %}
+        <div style="background:var(--eo-bg);padding:14px 16px;border-radius:9px">
+          <div style="font-size:.85rem;color:var(--eo-text);margin-bottom:6px">
+            <strong>Your account is protected with OTP.</strong>
+          </div>
+          <div style="font-size:.78rem;color:var(--eo-text-muted);line-height:1.55">
+            When you log in from a new or unrecognised device, a 6-digit code
+            is emailed to you. You must enter it to access your account.
+          </div>
+        </div>
+      {% else %}
+        <div style="background:#fef2f2;border:1px solid #fecaca;padding:14px 16px;border-radius:9px">
+          <div style="font-size:.85rem;color:#991b1b;font-weight:700;margin-bottom:6px">
+            <i class="bi bi-exclamation-triangle-fill"></i> OTP is temporarily disabled.
+          </div>
+          <div style="font-size:.78rem;color:#991b1b;line-height:1.55">
+            An administrator has temporarily disabled OTP on your account.
+            Until <strong>{{ request.user.otp_disabled_until|date:"M j, Y H:i" }} UTC</strong>
+            (in {{ request.user.otp_disabled_until|timeuntil }}), anyone who
+            knows your password can log in from any device with no email
+            verification. After that time, OTP turns back on automatically.
+          </div>
+        </div>
+      {% endif %}
+
+      <div style="margin-top:12px;padding:10px 14px;background:var(--eo-bg);border-radius:9px;border-left:3px solid var(--eo-text-muted)">
+        <div style="font-size:.74rem;color:var(--eo-text-muted);line-height:1.5">
+          <i class="bi bi-info-circle"></i>
+          OTP can only be disabled by an administrator, and only for a
+          limited time (maximum 7 days). If you'd like to request a change,
+          contact your administrator.
+        </div>
+      </div>
+    </div>
+
+    <!-- ╔══════════════════════════════════════════════════════════════════╗
+         ║   Trusted devices card                                           ║
+         ╚══════════════════════════════════════════════════════════════════╝ -->
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-laptop me-2" style="color:var(--eo-accent)"></i>
+            Trusted Devices
+          </h2>
+          <p class="eo-card-subtitle">Devices currently allowed to sign in without OTP</p>
+        </div>
+        <a href="{% url 'trusted_devices' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+          Manage <i class="bi bi-arrow-right"></i>
+        </a>
+      </div>
+
+      {% if trusted_devices %}
+        <div style="display:flex;flex-direction:column;gap:8px">
+          {% for d in trusted_devices %}
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:var(--eo-bg);border-radius:9px">
+              <div style="min-width:0;flex:1">
+                <div style="font-size:.86rem;font-weight:600;color:var(--eo-text);display:flex;align-items:center;gap:8px">
+                  <i class="bi bi-hdd-network" style="color:var(--eo-text-muted)"></i>
+                  {{ d.device_name|default:"Unknown device" }}
+                  {% if d.pk == current_active_device_pk %}
+                    <span style="background:var(--eo-accent);color:#fff;font-size:.65rem;font-weight:700;padding:2px 8px;border-radius:999px">CURRENT</span>
+                  {% endif %}
+                </div>
+                <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:3px">
+                  {{ d.city|default:"" }}{% if d.city and d.country %}, {% endif %}{{ d.country|default:"" }}
+                  {% if d.ip_address %} · {{ d.ip_address }}{% endif %}
+                  · last used {% if d.last_used %}{{ d.last_used|timesince }} ago{% else %}—{% endif %}
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div style="font-size:.85rem;color:var(--eo-text-muted);text-align:center;padding:20px 0">
+          You don't have any trusted devices yet.
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- ╔══════════════════════════════════════════════════════════════════╗
+         ║   Password card                                                  ║
+         ╚══════════════════════════════════════════════════════════════════╝ -->
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-key me-2" style="color:var(--eo-accent)"></i>
+            Password
+          </h2>
+          <p class="eo-card-subtitle">Change the password used to sign in to your account</p>
+        </div>
+        <a href="{% url 'change_password' %}" class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-shield-lock"></i> Change Password
+        </a>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ─── RIGHT COLUMN: Recent activity ─── -->
+  <div class="col-lg-5">
+    <div class="eo-card">
+      <div class="eo-card-header">
+        <div>
+          <h2 class="eo-card-title">
+            <i class="bi bi-clock-history me-2" style="color:var(--eo-accent)"></i>
+            Recent Activity
+          </h2>
+          <p class="eo-card-subtitle">The last 50 security events on your account</p>
+        </div>
+      </div>
+
+      {% if events %}
+        <div style="display:flex;flex-direction:column;gap:6px;max-height:600px;overflow-y:auto">
+          {% for e in events %}
+            <div style="padding:10px 12px;background:var(--eo-bg);border-radius:8px;border-left:3px solid
+              {% if e.event_type == 'login_success' or e.event_type == 'otp_success' or e.event_type == 'device_trusted' or e.event_type == 'switch_approved' or e.event_type == 'otp_enabled' %}#16a34a
+              {% elif e.event_type == 'login_failed' or e.event_type == 'otp_failed' or e.event_type == 'otp_expired' or e.event_type == 'untrusted_attempt' or e.event_type == 'geo_alert' or e.event_type == 'account_locked' or e.event_type == 'otp_disabled' %}#dc2626
+              {% else %}var(--eo-text-muted){% endif %}">
+              <div style="display:flex;justify-content:space-between;align-items:start;gap:10px">
+                <div style="font-size:.8rem;font-weight:600;color:var(--eo-text)">
+                  {{ e.get_event_type_display }}
+                </div>
+                <div style="font-size:.68rem;color:var(--eo-text-muted);white-space:nowrap">
+                  {{ e.created_at|timesince }} ago
+                </div>
+              </div>
+              {% if e.detail %}
+                <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:3px">{{ e.detail }}</div>
+              {% endif %}
+              {% if e.city or e.country or e.ip_address %}
+                <div style="font-size:.7rem;color:var(--eo-text-muted);margin-top:3px;font-family:var(--eo-mono)">
+                  {{ e.city }}{% if e.city and e.country %}, {% endif %}{{ e.country }}{% if e.ip_address %} · {{ e.ip_address }}{% endif %}
+                </div>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div style="font-size:.85rem;color:var(--eo-text-muted);text-align:center;padding:20px 0">
+          No security activity recorded yet.
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

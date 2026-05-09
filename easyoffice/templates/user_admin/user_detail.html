@@ -109,6 +109,8 @@
   .ud-btn-primary:hover{ background: var(--ua-accent); border-color: var(--ua-accent); }
   .ud-btn-ghost{ background: transparent; color: var(--ua-ink-2); border-color: var(--ua-line-2); }
   .ud-btn-ghost:hover{ background: var(--ua-paper); border-color: var(--ua-ink); }
+  .ud-btn-ghost:disabled{ opacity:.55; cursor:not-allowed; }
+  .ud-btn-ghost:disabled:hover{ background: transparent; border-color: var(--ua-line-2); }
   .ud-btn-danger{ background: var(--ua-red); color:#fff; border-color: var(--ua-red); }
   .ud-btn-danger:hover{ background:#991b1b; border-color:#991b1b; }
   .ud-btn-warn{ background:#78716c; color:#fff; border-color:#78716c; }
@@ -251,6 +253,19 @@
     font-size: .85rem; color: #78350f;
     margin-bottom: 14px; display:flex; gap:8px; align-items:center;
   }
+  /* Variants used by the OTP card */
+  .ud-warn-box.ok{
+    background: var(--ua-green-soft);
+    border-color:#bbf7d0;
+    border-left-color: var(--ua-green);
+    color: var(--ua-green);
+  }
+  .ud-warn-box.bad{
+    background: var(--ua-red-soft);
+    border-color:#fecaca;
+    border-left-color: var(--ua-red);
+    color: var(--ua-red);
+  }
 
   /* ─── Sidebar event list ─── */
   .ud-event-list{ list-style:none; padding: 0; margin: 0; }
@@ -312,6 +327,7 @@
             <span class="ud-pill" data-s="{{ target.status }}">{{ target.get_status_display }}</span>
             {% if is_locked %}<span class="ud-pill lock"><i class="bi bi-lock-fill"></i> Locked out</span>{% endif %}
             {% if must_change_pw %}<span class="ud-pill" style="background:rgba(251,191,36,.2);color:#fcd34d;border-color:rgba(251,191,36,.35)">Must change password</span>{% endif %}
+            {% if not target.otp_enabled %}<span class="ud-pill" style="background:rgba(239,68,68,.18);color:#fca5a5;border-color:rgba(239,68,68,.3)"><i class="bi bi-shield-slash"></i> OTP off</span>{% endif %}
             {% if target.employee_id %}<span class="ud-pill">ID · {{ target.employee_id }}</span>{% endif %}
           </div>
         </div>
@@ -394,6 +410,16 @@
               {% if target.is_active %}● Enabled{% else %}● Disabled{% endif %}
             </div>
           </div>
+          <div class="ud-ident-item">
+            <div class="ud-ident-k">OTP login</div>
+            <div class="ud-ident-v {% if target.otp_enabled %}pos{% else %}neg{% endif %}">
+              {% if target.otp_enabled %}
+                ● Enabled
+              {% else %}
+                ● Off · {{ target.otp_disabled_until|timeuntil }} left
+              {% endif %}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -426,6 +452,173 @@
             </button>
           </form>
         </div>
+      </div>
+
+      {# OTP (login verification) — always visible on this page #}
+      <div class="ud-card">
+        <div class="ud-card-head">
+          <h3 class="ud-card-title"><i class="bi bi-shield-lock"></i> OTP (login verification)</h3>
+          <span class="ud-card-sub">
+            {% if target.otp_enabled %}Enabled — new devices challenged{% else %}Temporarily disabled{% endif %}
+          </span>
+        </div>
+
+        {% if target.otp_enabled %}
+          <div class="ud-warn-box ok">
+            <i class="bi bi-check-circle-fill"></i>
+            <span>
+              OTP is <strong>enabled</strong> for this user. They are challenged
+              with an emailed 6-digit code when logging in from a new device.
+            </span>
+          </div>
+        {% else %}
+          <div class="ud-warn-box bad">
+            <i class="bi bi-exclamation-triangle-fill"></i>
+            <span>
+              OTP is <strong>temporarily disabled</strong> for this user.
+              Anyone with their password can sign in from any device without
+              an email verification code until
+              <strong>{{ target.otp_disabled_until|date:"M j, Y H:i" }} UTC</strong>
+              (in {{ target.otp_disabled_until|timeuntil }}), after which
+              OTP will turn back on automatically.
+            </span>
+          </div>
+        {% endif %}
+
+        {% if not request.user.is_superuser %}
+          {# Non-superuser: read-only #}
+          <div class="ud-actions">
+            <button class="ud-btn ud-btn-ghost" type="button" disabled
+                    title="Only a superuser can change this setting.">
+              <i class="bi bi-lock"></i> Superuser only
+            </button>
+          </div>
+
+        {% elif target.pk == request.user.pk %}
+          {# Superuser viewing own profile: blocked at view level too #}
+          <div class="ud-actions">
+            <button class="ud-btn ud-btn-ghost" type="button" disabled
+                    title="You cannot toggle OTP on your own account from here. Use Django admin if you need to.">
+              <i class="bi bi-slash-circle"></i> Cannot toggle on yourself
+            </button>
+          </div>
+
+        {% elif target.otp_enabled %}
+          {# OTP currently ON → offer to disable, with duration picker (max 7 days) #}
+          <form method="post" action="{% url 'toggle_otp' target.pk %}"
+                onsubmit="return confirm('Temporarily disable OTP for {{ target.email|escapejs }}?\n\nFor the duration you choose (up to 7 days), they will be able to log in from any device using only their password — no email verification. OTP will then turn back on automatically.\n\nThis action is logged and the user will be notified by email.');"
+                style="margin:0">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="disable">
+            <input type="hidden" name="next" value="{{ request.path }}">
+
+            <div class="ud-field">
+              <label class="ud-label" for="otp_duration_select">Disable for how long</label>
+              <select name="duration_hours" id="otp_duration_select" class="ud-select"
+                      onchange="document.getElementById('otp_custom_wrap').style.display = this.value === 'custom' ? 'block' : 'none';">
+                <option value="1">1 hour</option>
+                <option value="4">4 hours</option>
+                <option value="24" selected>1 day (24 hours)</option>
+                <option value="72">3 days (72 hours)</option>
+                <option value="168">7 days (maximum)</option>
+                <option value="custom">Custom…</option>
+              </select>
+            </div>
+
+            <div class="ud-field" id="otp_custom_wrap" style="display:none">
+              <label class="ud-label" for="otp_custom_hours">Custom duration (hours, max 168)</label>
+              <input type="number" id="otp_custom_hours" class="ud-input"
+                     min="1" max="168" step="1" placeholder="e.g. 12">
+              <span style="font-size:.72rem;color:var(--ua-ink-4);margin-top:4px">
+                Range: 1 hour to 168 hours (7 days). Anything longer is rejected.
+              </span>
+            </div>
+
+            <div class="ud-actions">
+              <button class="ud-btn ud-btn-danger" type="submit">
+                <i class="bi bi-shield-slash"></i> Disable OTP
+              </button>
+            </div>
+          </form>
+
+          <script>
+            // If the user picked "Custom…", overwrite duration_hours with the
+            // value they typed before the form submits.
+            (function () {
+              var sel = document.getElementById('otp_duration_select');
+              var custom = document.getElementById('otp_custom_hours');
+              if (!sel || !custom) return;
+              sel.form.addEventListener('submit', function (e) {
+                if (sel.value === 'custom') {
+                  var v = parseInt(custom.value, 10);
+                  if (!v || v < 1 || v > 168) {
+                    alert('Please enter a custom duration between 1 and 168 hours (7 days).');
+                    e.preventDefault();
+                    return;
+                  }
+                  // Replace the select's submitted value with the custom one.
+                  var hidden = document.createElement('input');
+                  hidden.type = 'hidden';
+                  hidden.name = 'duration_hours';
+                  hidden.value = v;
+                  sel.name = '';            // stop the select from submitting "custom"
+                  sel.form.appendChild(hidden);
+                }
+              });
+            })();
+          </script>
+
+        {% else %}
+          {# OTP currently OFF (bypass active) → offer to extend or re-enable now #}
+          <form method="post" action="{% url 'toggle_otp' target.pk %}" style="margin:0;margin-bottom:14px">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="disable">
+            <input type="hidden" name="next" value="{{ request.path }}">
+
+            <div class="ud-field">
+              <label class="ud-label" for="otp_extend_select">Extend / replace the bypass</label>
+              <select name="duration_hours" id="otp_extend_select" class="ud-select">
+                <option value="1">1 hour from now</option>
+                <option value="4">4 hours from now</option>
+                <option value="24" selected>1 day (24 hours) from now</option>
+                <option value="72">3 days (72 hours) from now</option>
+                <option value="168">7 days (maximum) from now</option>
+              </select>
+              <span style="font-size:.72rem;color:var(--ua-ink-4);margin-top:4px">
+                Submitting replaces the existing bypass with a new one starting now.
+              </span>
+            </div>
+
+            <div class="ud-actions">
+              <button class="ud-btn ud-btn-warn" type="submit">
+                <i class="bi bi-arrow-clockwise"></i> Extend bypass
+              </button>
+            </div>
+          </form>
+
+          <form method="post" action="{% url 'toggle_otp' target.pk %}" style="margin:0">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="enable">
+            <input type="hidden" name="next" value="{{ request.path }}">
+            <div class="ud-actions">
+              <button class="ud-btn ud-btn-primary" type="submit">
+                <i class="bi bi-shield-check"></i> Re-enable OTP now
+              </button>
+            </div>
+          </form>
+        {% endif %}
+
+        <p class="ud-danger-desc" style="margin-top:14px;color:var(--ua-ink-3)">
+          {% if request.user.is_superuser %}
+            Only superusers can change this setting. Disabling is always
+            time-limited (max 7 days) — OTP turns back on automatically when
+            the bypass expires. Every change is logged and the user is
+            notified by email.
+          {% else %}
+            This setting can only be changed by a superuser. Disabling is
+            always time-limited and capped at 7 days.
+          {% endif %}
+        </p>
       </div>
 
       {# Access & status #}
@@ -535,6 +728,9 @@
                   <span class="ud-event-action">{{ e.get_event_type_display }}</span>
                   <span class="ud-event-time">{{ e.created_at|naturaltime }}</span>
                 </div>
+                {% if e.detail %}
+                  <div class="ud-event-note">{{ e.detail }}</div>
+                {% endif %}
                 {% if e.city or e.country %}
                   <div class="ud-event-meta">
                     {{ e.city }}{% if e.city and e.country %}, {% endif %}{{ e.country }}

@@ -76,6 +76,31 @@ class User(AbstractUser):
         ),
     )
 
+    # One-shot OTP requirement: when True, the next login is forced to go
+    # through OTP regardless of whether the device is already trusted.
+    # The flag is consumed (set back to False) the first time OTP is
+    # successfully verified, so it only fires once.
+    force_otp_next_login = models.BooleanField(
+        default=False,
+        help_text=(
+            'If True, the very next login will require OTP even on an '
+            'already-trusted device. Cleared automatically after a single '
+            'successful OTP challenge.'
+        ),
+    )
+
+    # Sticky OTP requirement: when True, every login from every device
+    # always requires OTP — trusted-device fast path is disabled for this
+    # user. Useful for high-privilege accounts.
+    otp_always_required = models.BooleanField(
+        default=False,
+        help_text=(
+            'If True, OTP is required on every login from every device, '
+            'even devices marked as trusted. Trusted-device fast path is '
+            'disabled while this is on.'
+        ),
+    )
+
     USERNAME_FIELD  = 'email'
     REQUIRED_FIELDS = ['username', 'first_name', 'last_name']
 
@@ -141,6 +166,87 @@ class User(AbstractUser):
         if self.otp_disabled_until is not None:
             self.otp_disabled_until = None
             self.save(update_fields=['otp_disabled_until'])
+
+    # ── Force OTP / device reset helpers ──────────────────────────────────
+    def set_force_otp_next_login(self, value=True):
+        """Mark this user so the next login must go through OTP."""
+        if self.force_otp_next_login != value:
+            self.force_otp_next_login = value
+            self.save(update_fields=['force_otp_next_login'])
+
+    def consume_force_otp_flag(self):
+        """Clear the one-shot force-OTP flag after a successful challenge."""
+        if self.force_otp_next_login:
+            self.force_otp_next_login = False
+            self.save(update_fields=['force_otp_next_login'])
+
+    def set_otp_always_required(self, value):
+        """Toggle the sticky 'OTP every login' requirement."""
+        value = bool(value)
+        if self.otp_always_required != value:
+            self.otp_always_required = value
+            self.save(update_fields=['otp_always_required'])
+
+    @property
+    def otp_required_this_login(self):
+        """
+        True iff OTP must be enforced on this login attempt regardless of
+        device trust. Combines the one-shot flag and the sticky flag.
+        Has no effect when OTP is currently bypassed (otp_disabled_until in
+        the future) — that bypass still wins, since the user literally
+        cannot receive a code in that window.
+        """
+        if not self.otp_enabled:
+            return False
+        return bool(self.force_otp_next_login or self.otp_always_required)
+
+    def revoke_all_trusted_devices(self):
+        """
+        Revoke every trusted device for this user and detach the active
+        device pointer. Returns the number of devices revoked. The user
+        will be challenged with OTP on their next login from any device.
+        """
+        n = self.trusted_devices.filter(is_revoked=False).update(is_revoked=True)
+        if self.active_device_id is not None:
+            self.active_device = None
+            self.save(update_fields=['active_device'])
+        return n
+
+    def force_logout_everywhere(self):
+        """
+        Clear server-side state that would let an existing browser session
+        keep the user logged in: drop the active_device pointer, mark them
+        offline, and delete every Django session that points at this user.
+        Returns the number of sessions destroyed.
+        """
+        from django.contrib.sessions.models import Session
+        from django.contrib.auth import SESSION_KEY
+
+        # Drop active-device pointer + presence.
+        update_fields = []
+        if self.active_device_id is not None:
+            self.active_device = None
+            update_fields.append('active_device')
+        if self.is_online:
+            self.is_online = False
+            update_fields.append('is_online')
+        if update_fields:
+            self.save(update_fields=update_fields)
+
+        # Walk the session table and drop any session whose decoded payload
+        # references this user. This is O(n_sessions) but n is small in
+        # practice and there is no FK from Session to User to filter on.
+        killed = 0
+        my_pk = str(self.pk)
+        for sess in Session.objects.all():
+            try:
+                data = sess.get_decoded()
+            except Exception:
+                continue
+            if str(data.get(SESSION_KEY, '')) == my_pk:
+                sess.delete()
+                killed += 1
+        return killed
 
     def update_last_seen(self):
         self.last_seen = timezone.now()
@@ -349,8 +455,13 @@ class SecurityEvent(models.Model):
         OTP_EXPIRED       = 'otp_expired',        _('OTP — Expired')
         OTP_ENABLED       = 'otp_enabled',        _('OTP — Enabled')
         OTP_DISABLED      = 'otp_disabled',       _('OTP — Disabled')
+        OTP_FORCED_NEXT   = 'otp_forced_next',    _('OTP — Forced for next login')
+        OTP_ALWAYS_ON     = 'otp_always_on',      _('OTP — Always-on enabled')
+        OTP_ALWAYS_OFF    = 'otp_always_off',     _('OTP — Always-on disabled')
         DEVICE_TRUSTED    = 'device_trusted',     _('Device Trusted')
         DEVICE_REVOKED    = 'device_revoked',     _('Device Revoked')
+        DEVICES_RESET     = 'devices_reset',      _('Trusted Devices Reset')
+        FORCED_LOGOUT     = 'forced_logout',      _('Forced Logout (admin)')
         SWITCH_REQUESTED  = 'switch_requested',   _('Device Switch Requested')
         SWITCH_APPROVED   = 'switch_approved',    _('Device Switch Approved')
         UNTRUSTED_ATTEMPT = 'untrusted_attempt',  _('Untrusted Device Attempt')

@@ -621,6 +621,192 @@
         </p>
       </div>
 
+      {# ════════════════════════════════════════════════════════════════════ #}
+      {#   Device & login enforcement (superuser only)                        #}
+      {# ════════════════════════════════════════════════════════════════════ #}
+      {% if request.user.is_superuser %}
+      <div class="ud-card">
+        <div class="ud-card-head">
+          <h3 class="ud-card-title"><i class="bi bi-shield-fill-exclamation"></i> Device &amp; login enforcement</h3>
+          <span class="ud-card-sub">Trusted devices · sessions · OTP policy</span>
+        </div>
+
+        {# ── Status pills ────────────────────────────────────────────── #}
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px">
+          <span class="ud-pill" style="color:var(--ua-ink);background:var(--ua-paper-2);border-color:var(--ua-line-2)">
+            Trusted devices: {{ target.trusted_devices.count|default:"0" }}
+          </span>
+
+          {% if target.otp_always_required %}
+            <span class="ud-pill" style="color:#fff;background:var(--ua-red);border-color:var(--ua-red)">
+              OTP required every login
+            </span>
+          {% endif %}
+
+          {% if target.force_otp_next_login %}
+            <span class="ud-pill" style="color:#fff;background:var(--ua-amber);border-color:var(--ua-amber)">
+              OTP forced on next login
+            </span>
+          {% endif %}
+
+          {% if not target.otp_always_required and not target.force_otp_next_login and target.otp_enabled %}
+            <span class="ud-pill" style="color:var(--ua-green);background:var(--ua-green-soft);border-color:var(--ua-green-soft)">
+              Default OTP policy
+            </span>
+          {% endif %}
+        </div>
+
+        {# ── 1. Reset trusted devices ───────────────────────────────── #}
+        <div style="padding:14px 16px;background:var(--ua-paper);border:1px solid var(--ua-line);border-radius:10px;margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+            <div style="flex:1;min-width:220px">
+              <div style="font-weight:600;color:var(--ua-ink);font-size:.92rem;margin-bottom:4px">
+                <i class="bi bi-laptop"></i> Reset trusted devices
+              </div>
+              <div style="font-size:.78rem;color:var(--ua-ink-3);line-height:1.5">
+                Revokes every trusted device for this user. Their next login
+                from any device — even one they have used before — will go
+                through OTP verification. Does not log them out of their
+                current session.
+              </div>
+            </div>
+            <form method="post" action="{% url 'admin_reset_trusted_devices' target.pk %}" style="margin:0"
+                  onsubmit="return confirm('Revoke ALL trusted devices for {{ target.email|escapejs }}?\n\nThey will be challenged with OTP on their next login from any device.');">
+              {% csrf_token %}
+              <input type="hidden" name="next" value="{{ request.path }}">
+              <button class="ud-btn ud-btn-warn" type="submit">
+                <i class="bi bi-arrow-counterclockwise"></i> Reset devices
+              </button>
+            </form>
+          </div>
+        </div>
+
+        {# ── 2. Force logout everywhere ─────────────────────────────── #}
+        <div style="padding:14px 16px;background:var(--ua-paper);border:1px solid var(--ua-line);border-radius:10px;margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+            <div style="flex:1;min-width:220px">
+              <div style="font-weight:600;color:var(--ua-ink);font-size:.92rem;margin-bottom:4px">
+                <i class="bi bi-box-arrow-right"></i> Force logout (all devices)
+              </div>
+              <div style="font-size:.78rem;color:var(--ua-ink-3);line-height:1.5">
+                Destroys every active Django session for this user and clears
+                their active-device pointer. They will be bounced to the login
+                page on their next request. Trusted-device records remain in
+                place — combine with “Reset devices” to require OTP too.
+              </div>
+            </div>
+            {% if target.pk == request.user.pk %}
+              <button class="ud-btn ud-btn-ghost" type="button" disabled
+                      title="You cannot force-logout your own account here.">
+                <i class="bi bi-slash-circle"></i> Not on yourself
+              </button>
+            {% else %}
+              <form method="post" action="{% url 'admin_force_logout' target.pk %}" style="margin:0"
+                    onsubmit="return confirm('Forcibly sign out {{ target.email|escapejs }} from EVERY device?\n\nAll active sessions will be terminated. They will need to log in again.');">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.path }}">
+                <button class="ud-btn ud-btn-danger" type="submit">
+                  <i class="bi bi-power"></i> Force logout
+                </button>
+              </form>
+            {% endif %}
+          </div>
+        </div>
+
+        {# ── 3. Force OTP on next login (one-shot) ──────────────────── #}
+        <div style="padding:14px 16px;background:var(--ua-paper);border:1px solid var(--ua-line);border-radius:10px;margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+            <div style="flex:1;min-width:220px">
+              <div style="font-weight:600;color:var(--ua-ink);font-size:.92rem;margin-bottom:4px">
+                <i class="bi bi-shield-lock"></i> Force OTP on next login
+                {% if target.force_otp_next_login %}
+                  <span style="background:var(--ua-amber-soft);color:var(--ua-amber);font-size:.65rem;font-weight:700;padding:2px 8px;border-radius:999px;margin-left:6px;letter-spacing:.04em">ARMED</span>
+                {% endif %}
+              </div>
+              <div style="font-size:.78rem;color:var(--ua-ink-3);line-height:1.5">
+                One-shot flag: the very next login attempt will require an
+                emailed 6-digit code, even if the device is already trusted.
+                Clears itself automatically after one successful verification.
+                Does nothing while OTP is bypassed.
+              </div>
+            </div>
+            {% if target.force_otp_next_login %}
+              <form method="post" action="{% url 'admin_force_otp_next' target.pk %}" style="margin:0">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="clear">
+                <input type="hidden" name="next" value="{{ request.path }}">
+                <button class="ud-btn ud-btn-ghost" type="submit">
+                  <i class="bi bi-x-circle"></i> Clear flag
+                </button>
+              </form>
+            {% else %}
+              <form method="post" action="{% url 'admin_force_otp_next' target.pk %}" style="margin:0"
+                    onsubmit="return confirm('Force {{ target.email|escapejs }} to verify OTP on their next login?\n\nThis fires once and then clears itself.');">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="set">
+                <input type="hidden" name="next" value="{{ request.path }}">
+                <button class="ud-btn ud-btn-warn" type="submit"
+                        {% if not target.otp_enabled %}disabled
+                        title="OTP is currently bypassed for this user. Re-enable OTP first."{% endif %}>
+                  <i class="bi bi-shield-exclamation"></i> Force OTP next time
+                </button>
+              </form>
+            {% endif %}
+          </div>
+        </div>
+
+        {# ── 4. Always require OTP on every login (sticky) ──────────── #}
+        <div style="padding:14px 16px;background:var(--ua-paper);border:1px solid var(--ua-line);border-radius:10px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+            <div style="flex:1;min-width:220px">
+              <div style="font-weight:600;color:var(--ua-ink);font-size:.92rem;margin-bottom:4px">
+                <i class="bi bi-shield-check"></i> Always require OTP on every login
+                {% if target.otp_always_required %}
+                  <span style="background:var(--ua-red-soft);color:var(--ua-red);font-size:.65rem;font-weight:700;padding:2px 8px;border-radius:999px;margin-left:6px;letter-spacing:.04em">ON</span>
+                {% else %}
+                  <span style="background:var(--ua-paper-2);color:var(--ua-ink-3);font-size:.65rem;font-weight:700;padding:2px 8px;border-radius:999px;margin-left:6px;letter-spacing:.04em">OFF</span>
+                {% endif %}
+              </div>
+              <div style="font-size:.78rem;color:var(--ua-ink-3);line-height:1.5">
+                Sticky setting. While ON, every login from every device — even
+                trusted ones — requires an emailed code. Use for high-privilege
+                accounts. Stays on until a superuser turns it off.
+              </div>
+            </div>
+            {% if target.otp_always_required %}
+              <form method="post" action="{% url 'admin_otp_always' target.pk %}" style="margin:0"
+                    onsubmit="return confirm('Turn OFF always-require-OTP for {{ target.email|escapejs }}?\n\nTrusted devices will skip OTP again.');">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="off">
+                <input type="hidden" name="next" value="{{ request.path }}">
+                <button class="ud-btn ud-btn-ghost" type="submit">
+                  <i class="bi bi-toggle-off"></i> Turn off
+                </button>
+              </form>
+            {% else %}
+              <form method="post" action="{% url 'admin_otp_always' target.pk %}" style="margin:0"
+                    onsubmit="return confirm('Require OTP on EVERY login for {{ target.email|escapejs }}?\n\nThis disables the trusted-device fast path for this user until a superuser turns it back off.');">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="on">
+                <input type="hidden" name="next" value="{{ request.path }}">
+                <button class="ud-btn ud-btn-danger" type="submit"
+                        {% if not target.otp_enabled %}disabled
+                        title="OTP is currently bypassed for this user. Re-enable OTP first."{% endif %}>
+                  <i class="bi bi-toggle-on"></i> Turn on
+                </button>
+              </form>
+            {% endif %}
+          </div>
+        </div>
+
+        <p class="ud-danger-desc" style="margin-top:14px;color:var(--ua-ink-3)">
+          All four actions above are superuser-only, fully logged in the
+          security event timeline, and the user is notified in-app and by
+          admin email. “Force logout” cannot be used on your own account.
+        </p>
+      </div>
+      {% endif %}
+
       {# Access & status #}
       <div class="ud-card">
         <div class="ud-card-head">

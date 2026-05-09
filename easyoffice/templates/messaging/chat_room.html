@@ -103,7 +103,31 @@
 .bubble-file-meta{min-width:0;flex:1;}
 .bubble-file-name{font-size:.88rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .bubble-file-subtext{font-size:.73rem;color:#6b7280 !important;margin-top:2px;}
-.bubble-file-download{font-size:.95rem;flex-shrink:0;opacity:.9;}
+.bubble-file-download{font-size:.95rem;flex-shrink:0;opacity:.9;padding:6px 8px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;transition:background .12s,opacity .12s;}
+.bubble-file-download:hover{opacity:1;background:rgba(0,0,0,.06);}
+
+/* File preview modal */
+.file-preview-modal{width:min(1100px,95vw);max-width:95vw;max-height:92vh;display:flex;flex-direction:column;overflow:hidden;}
+.file-preview-modal .msg-modal-head{padding:14px 18px;gap:12px;flex-shrink:0;}
+.file-preview-modal .msg-modal-body{padding:0;flex:1;display:flex;align-items:center;justify-content:center;background:#0f172a;overflow:auto;min-height:60vh;}
+.file-preview-title{font-size:.95rem;font-weight:700;color:var(--eo-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;}
+.file-preview-sub{font-size:.72rem;color:var(--eo-text-muted);margin-top:1px;}
+.file-preview-actions{display:flex;align-items:center;gap:6px;flex-shrink:0;}
+.file-preview-actions .eo-btn{text-decoration:none;}
+.file-preview-content{width:100%;height:75vh;display:flex;align-items:center;justify-content:center;}
+.file-preview-content img{max-width:100%;max-height:100%;object-fit:contain;display:block;}
+.file-preview-content video,.file-preview-content audio{max-width:100%;max-height:100%;}
+.file-preview-content iframe{width:100%;height:100%;border:0;background:#fff;}
+.file-preview-fallback{padding:36px 28px;text-align:center;color:#e5e7eb;background:#0f172a;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;}
+.file-preview-fallback .fp-fallback-icon{font-size:3rem;opacity:.7;}
+.file-preview-fallback .fp-fallback-name{font-size:1rem;font-weight:600;color:#f1f5f9;word-break:break-all;}
+.file-preview-fallback .fp-fallback-hint{font-size:.85rem;opacity:.75;max-width:420px;}
+.file-preview-fallback .fp-fallback-buttons{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:6px;}
+@media (max-width:720px){
+  .file-preview-modal{width:100vw;max-width:100vw;height:100vh;max-height:100vh;border-radius:0;}
+  .file-preview-content{height:calc(100vh - 64px);}
+  .file-preview-modal .msg-modal-body{min-height:0;}
+}
 .bubble-file-caption{margin-top:6px;font-size:.84rem;line-height:1.45;color:var(--eo-text);max-width:360px;}
 .chat-msg.own .bubble-file-caption{text-align:right;}
 
@@ -1887,20 +1911,22 @@
             {% with furl=msg.effective_file_url fname=msg.effective_file_name fsize=msg.effective_file_size %}
               {% if msg.message_type == 'image' and furl %}
                 <div class="bubble {% if msg.sender == request.user %}bubble-out{% else %}bubble-in{% endif %} bubble-image">
-                  <a href="{{ furl }}" download="{{ fname|default:'image' }}"><img src="{{ furl }}" alt="{{ fname }}"/></a>
+                  <a href="{{ furl }}" onclick="openFilePreview('{{ furl|escapejs }}', '{{ fname|default:"image"|escapejs }}'); return false;" title="Click to preview"><img src="{{ furl }}" alt="{{ fname }}"/></a>
                   {% if msg.content %}<div style="margin-top:6px;font-size:.85rem">{{ msg.content }}</div>{% endif %}
                 </div>
 
               {% elif msg.message_type == 'file' and furl %}
                 <div>
-                  <a href="{{ furl }}" download="{{ fname|default:'attachment' }}" class="bubble-file-card {% if msg.sender == request.user %}outgoing{% else %}incoming{% endif %}">
-                    <div class="bubble-file-iconbox"><i class="bi bi-file-earmark-arrow-down"></i></div>
-                    <div class="bubble-file-meta">
-                      <div class="bubble-file-name">{{ fname|default:"Attachment" }}</div>
-                      <div class="bubble-file-subtext">{% if fsize %}{{ fsize|filesizeformat }}{% else %}File{% endif %}</div>
-                    </div>
-                    <div class="bubble-file-download"><i class="bi bi-download"></i></div>
-                  </a>
+                  <div class="bubble-file-card {% if msg.sender == request.user %}outgoing{% else %}incoming{% endif %}" style="cursor:default">
+                    <a href="{{ furl }}" onclick="openFilePreview('{{ furl|escapejs }}', '{{ fname|default:"Attachment"|escapejs }}', '{% if fsize %}{{ fsize|filesizeformat|escapejs }}{% endif %}'); return false;" class="bubble-file-preview-link" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;color:inherit;text-decoration:none;cursor:pointer" title="Click to preview">
+                      <div class="bubble-file-iconbox"><i class="bi bi-file-earmark-arrow-down"></i></div>
+                      <div class="bubble-file-meta">
+                        <div class="bubble-file-name">{{ fname|default:"Attachment" }}</div>
+                        <div class="bubble-file-subtext">{% if fsize %}{{ fsize|filesizeformat }}{% else %}File{% endif %}</div>
+                      </div>
+                    </a>
+                    <a href="{{ furl }}" download="{{ fname|default:'attachment' }}" class="bubble-file-download" title="Download" style="text-decoration:none;cursor:pointer"><i class="bi bi-download"></i></a>
+                  </div>
                   {% if msg.content %}<div class="bubble-file-caption">{{ msg.content }}</div>{% endif %}
                 </div>
 
@@ -2027,20 +2053,22 @@
                 {% with furl=msg.effective_file_url fname=msg.effective_file_name fsize=msg.effective_file_size %}
                   {% if msg.message_type == 'image' and furl %}
                     <div class="bubble {% if msg.sender == request.user %}bubble-out{% else %}bubble-in{% endif %} bubble-image">
-                      <a href="{{ furl }}" download="{{ fname|default:'image' }}"><img src="{{ furl }}" alt="{{ fname }}"/></a>
+                      <a href="{{ furl }}" onclick="openFilePreview('{{ furl|escapejs }}', '{{ fname|default:"image"|escapejs }}'); return false;" title="Click to preview"><img src="{{ furl }}" alt="{{ fname }}"/></a>
                       {% if msg.content %}<div style="margin-top:6px;font-size:.85rem">{{ msg.content }}</div>{% endif %}
                     </div>
 
                   {% elif msg.message_type == 'file' and furl %}
                     <div>
-                      <a href="{{ furl }}" download="{{ fname|default:'attachment' }}" class="bubble-file-card {% if msg.sender == request.user %}outgoing{% else %}incoming{% endif %}">
-                        <div class="bubble-file-iconbox"><i class="bi bi-file-earmark-arrow-down"></i></div>
-                        <div class="bubble-file-meta">
-                          <div class="bubble-file-name">{{ fname|default:"Attachment" }}</div>
-                          <div class="bubble-file-subtext">{% if fsize %}{{ fsize|filesizeformat }}{% else %}File{% endif %}</div>
-                        </div>
-                        <div class="bubble-file-download"><i class="bi bi-download"></i></div>
-                      </a>
+                      <div class="bubble-file-card {% if msg.sender == request.user %}outgoing{% else %}incoming{% endif %}" style="cursor:default">
+                        <a href="{{ furl }}" onclick="openFilePreview('{{ furl|escapejs }}', '{{ fname|default:"Attachment"|escapejs }}', '{% if fsize %}{{ fsize|filesizeformat|escapejs }}{% endif %}'); return false;" class="bubble-file-preview-link" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;color:inherit;text-decoration:none;cursor:pointer" title="Click to preview">
+                          <div class="bubble-file-iconbox"><i class="bi bi-file-earmark-arrow-down"></i></div>
+                          <div class="bubble-file-meta">
+                            <div class="bubble-file-name">{{ fname|default:"Attachment" }}</div>
+                            <div class="bubble-file-subtext">{% if fsize %}{{ fsize|filesizeformat }}{% else %}File{% endif %}</div>
+                          </div>
+                        </a>
+                        <a href="{{ furl }}" download="{{ fname|default:'attachment' }}" class="bubble-file-download" title="Download" style="text-decoration:none;cursor:pointer"><i class="bi bi-download"></i></a>
+                      </div>
                       {% if msg.content %}<div class="bubble-file-caption">{{ msg.content }}</div>{% endif %}
                     </div>
 
@@ -2152,20 +2180,22 @@
                 {% with furl=msg.effective_file_url fname=msg.effective_file_name fsize=msg.effective_file_size %}
                   {% if msg.message_type == 'image' and furl %}
                     <div class="bubble {% if msg.sender == request.user %}bubble-out{% else %}bubble-in{% endif %} bubble-image">
-                      <a href="{{ furl }}" download="{{ fname|default:'image' }}"><img src="{{ furl }}" alt="{{ fname }}"/></a>
+                      <a href="{{ furl }}" onclick="openFilePreview('{{ furl|escapejs }}', '{{ fname|default:"image"|escapejs }}'); return false;" title="Click to preview"><img src="{{ furl }}" alt="{{ fname }}"/></a>
                       {% if msg.content %}<div style="margin-top:6px;font-size:.85rem">{{ msg.content }}</div>{% endif %}
                     </div>
 
                   {% elif msg.message_type == 'file' and furl %}
                     <div>
-                      <a href="{{ furl }}" download="{{ fname|default:'attachment' }}" class="bubble-file-card {% if msg.sender == request.user %}outgoing{% else %}incoming{% endif %}">
-                        <div class="bubble-file-iconbox"><i class="bi bi-file-earmark-arrow-down"></i></div>
-                        <div class="bubble-file-meta">
-                          <div class="bubble-file-name">{{ fname|default:"Attachment" }}</div>
-                          <div class="bubble-file-subtext">{% if fsize %}{{ fsize|filesizeformat }}{% else %}File{% endif %}</div>
-                        </div>
-                        <div class="bubble-file-download"><i class="bi bi-download"></i></div>
-                      </a>
+                      <div class="bubble-file-card {% if msg.sender == request.user %}outgoing{% else %}incoming{% endif %}" style="cursor:default">
+                        <a href="{{ furl }}" onclick="openFilePreview('{{ furl|escapejs }}', '{{ fname|default:"Attachment"|escapejs }}', '{% if fsize %}{{ fsize|filesizeformat|escapejs }}{% endif %}'); return false;" class="bubble-file-preview-link" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;color:inherit;text-decoration:none;cursor:pointer" title="Click to preview">
+                          <div class="bubble-file-iconbox"><i class="bi bi-file-earmark-arrow-down"></i></div>
+                          <div class="bubble-file-meta">
+                            <div class="bubble-file-name">{{ fname|default:"Attachment" }}</div>
+                            <div class="bubble-file-subtext">{% if fsize %}{{ fsize|filesizeformat }}{% else %}File{% endif %}</div>
+                          </div>
+                        </a>
+                        <a href="{{ furl }}" download="{{ fname|default:'attachment' }}" class="bubble-file-download" title="Download" style="text-decoration:none;cursor:pointer"><i class="bi bi-download"></i></a>
+                      </div>
                       {% if msg.content %}<div class="bubble-file-caption">{{ msg.content }}</div>{% endif %}
                     </div>
 
@@ -2483,7 +2513,7 @@
             <i class="{{ f.icon_class|default:'bi bi-file-earmark' }}"></i>
           </div>
           <div style="flex:1;min-width:0;">
-            <a href="{{ f.url }}" download="{{ f.name }}" style="font-size:.8rem;font-weight:600;color:var(--eo-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;text-decoration:none;" title="{{ f.name }}">
+            <a href="{{ f.url }}" onclick="openFilePreview('{{ f.url|escapejs }}', '{{ f.name|escapejs }}', '{{ f.size|default:''|escapejs }}'); return false;" style="font-size:.8rem;font-weight:600;color:var(--eo-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;text-decoration:none;cursor:pointer;" title="Click to preview · {{ f.name }}">
               {{ f.name }}
             </a>
             <div style="font-size:.68rem;color:var(--eo-text-muted);margin-top:2px;display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
@@ -2492,6 +2522,9 @@
               {% if f.room_pinned %}<span class="room-badge">ROOM</span>{% endif %}
             </div>
           </div>
+          <a href="{{ f.url }}" download="{{ f.name }}" class="eo-btn eo-btn-secondary eo-btn-icon" style="width:22px;height:22px;padding:0;flex-shrink:0;opacity:.55;text-decoration:none;color:inherit;" title="Download">
+            <i class="bi bi-download" style="font-size:.7rem;"></i>
+          </a>
           {% if can_manage_room and f.room_pinned %}
           <button type="button" onclick="unpinRoomFile('{{ f.id }}')" class="eo-btn eo-btn-secondary eo-btn-icon" style="width:22px;height:22px;padding:0;flex-shrink:0;opacity:.55;" title="Remove from room">
             <i class="bi bi-x" style="font-size:.7rem;"></i>
@@ -2593,6 +2626,32 @@
 
   {# Shared backdrop — clicking it closes whichever drawer is open. #}
   <div class="chat-drawer-backdrop" id="chatDrawerBackdrop" aria-hidden="true"></div>
+</div>
+
+<!-- File preview modal -->
+<div class="msg-modal-backdrop" id="filePreviewModal" aria-hidden="true">
+  <div class="msg-modal file-preview-modal" role="dialog" aria-modal="true" aria-labelledby="filePreviewTitle">
+    <div class="msg-modal-head">
+      <div style="flex:1;min-width:0">
+        <div class="file-preview-title" id="filePreviewTitle">Preview</div>
+        <div class="file-preview-sub" id="filePreviewSub"></div>
+      </div>
+      <div class="file-preview-actions">
+        <a href="#" id="filePreviewOpenBtn" target="_blank" rel="noopener" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" title="Open in new tab">
+          <i class="bi bi-box-arrow-up-right"></i>
+        </a>
+        <a href="#" id="filePreviewDownloadBtn" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" title="Download">
+          <i class="bi bi-download"></i>
+        </a>
+        <button type="button" onclick="closeFilePreview()" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" title="Close">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
+    </div>
+    <div class="msg-modal-body">
+      <div class="file-preview-content" id="filePreviewContent"></div>
+    </div>
+  </div>
 </div>
 
 <div class="msg-modal-backdrop" id="filePickerModal">
@@ -4307,6 +4366,118 @@ function stopPollStatePolling(){
     if(id === 'pollModal') resetPollForm();
   };
 
+  // ---------- File preview modal ----------
+  // Opens an in-page preview for files shared in chat. Falls back to a
+  // friendly "open in new tab / download" panel for types browsers can't
+  // render natively (Office docs, archives, unknown binaries).
+  function _filePreviewKind(name, url){
+    var ext = '';
+    var src = (name || url || '').toLowerCase().split('?')[0].split('#')[0];
+    var dot = src.lastIndexOf('.');
+    if(dot >= 0) ext = src.substring(dot + 1);
+    if(['png','jpg','jpeg','gif','webp','bmp','svg','avif','ico'].indexOf(ext) >= 0) return 'image';
+    if(['mp4','webm','ogg','mov','m4v'].indexOf(ext) >= 0) return 'video';
+    if(['mp3','wav','m4a','aac','flac','oga'].indexOf(ext) >= 0) return 'audio';
+    if(ext === 'pdf') return 'pdf';
+    if(['txt','md','log','csv','tsv','json','xml','yaml','yml','ini','conf','html','htm','css','js','ts','py','java','c','cpp','h','sh','sql','rs','go','rb','php'].indexOf(ext) >= 0) return 'text';
+    return 'other';
+  }
+
+  window.openFilePreview = function(url, name, sizeText){
+    if(!url) return;
+    var modal = byId('filePreviewModal');
+    var titleEl = byId('filePreviewTitle');
+    var subEl = byId('filePreviewSub');
+    var contentEl = byId('filePreviewContent');
+    var openBtn = byId('filePreviewOpenBtn');
+    var dlBtn = byId('filePreviewDownloadBtn');
+    if(!modal || !contentEl) return;
+
+    var fname = name || 'Attachment';
+    if(titleEl) titleEl.textContent = fname;
+    if(subEl) subEl.textContent = sizeText || '';
+    if(openBtn) openBtn.setAttribute('href', url);
+    if(dlBtn){
+      dlBtn.setAttribute('href', url);
+      dlBtn.setAttribute('download', fname);
+    }
+
+    var kind = _filePreviewKind(fname, url);
+    contentEl.innerHTML = '';
+
+    var node;
+    if(kind === 'image'){
+      node = document.createElement('img');
+      node.src = url;
+      node.alt = fname;
+    } else if(kind === 'video'){
+      node = document.createElement('video');
+      node.src = url;
+      node.controls = true;
+      node.preload = 'metadata';
+    } else if(kind === 'audio'){
+      node = document.createElement('audio');
+      node.src = url;
+      node.controls = true;
+      node.preload = 'metadata';
+      node.style.width = '80%';
+    } else if(kind === 'pdf' || kind === 'text'){
+      node = document.createElement('iframe');
+      node.src = url;
+      node.title = fname;
+      node.setAttribute('loading', 'lazy');
+    } else {
+      // Unknown / Office docs etc — show fallback panel.
+      node = document.createElement('div');
+      node.className = 'file-preview-fallback';
+      node.innerHTML =
+        '<div class="fp-fallback-icon"><i class="bi bi-file-earmark-text"></i></div>' +
+        '<div class="fp-fallback-name"></div>' +
+        '<div class="fp-fallback-hint">This file type can\'t be previewed in the browser. ' +
+          'Open it in a new tab or download it to view.</div>' +
+        '<div class="fp-fallback-buttons">' +
+          '<a href="' + url.replace(/"/g, '&quot;') + '" target="_blank" rel="noopener" class="eo-btn eo-btn-primary eo-btn-sm" style="text-decoration:none">' +
+            '<i class="bi bi-box-arrow-up-right me-1"></i>Open in new tab</a>' +
+          '<a href="' + url.replace(/"/g, '&quot;') + '" download="' + fname.replace(/"/g, '&quot;') + '" class="eo-btn eo-btn-secondary eo-btn-sm" style="text-decoration:none">' +
+            '<i class="bi bi-download me-1"></i>Download</a>' +
+        '</div>';
+      var nameSlot = node.querySelector('.fp-fallback-name');
+      if(nameSlot) nameSlot.textContent = fname;
+    }
+    contentEl.appendChild(node);
+
+    modal.classList.add('open');
+    modal.setAttribute('aria-hidden', 'false');
+  };
+
+  window.closeFilePreview = function(){
+    var modal = byId('filePreviewModal');
+    var contentEl = byId('filePreviewContent');
+    if(modal){
+      modal.classList.remove('open');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+    // Stop any playing media + free memory.
+    if(contentEl) contentEl.innerHTML = '';
+  };
+
+  // Close on Escape when preview is open.
+  document.addEventListener('keydown', function(e){
+    if(e.key !== 'Escape') return;
+    var modal = byId('filePreviewModal');
+    if(modal && modal.classList.contains('open')) closeFilePreview();
+  });
+
+  // Backdrop click: clear content too (the generic backdrop handler below
+  // only toggles the class, which would leave a video playing).
+  (function(){
+    var modal = byId('filePreviewModal');
+    if(!modal) return;
+    modal.addEventListener('click', function(e){
+      if(e.target === modal) closeFilePreview();
+    });
+  })();
+
   document.querySelectorAll('.msg-modal-backdrop').forEach(function(el){
     el.addEventListener('click', function(e){
       if(e.target === el) el.classList.remove('open');
@@ -6004,21 +6175,40 @@ function stopPollStatePolling(){
     if(mtype === 'image' && data.file_url){
       var iw = document.createElement('div');
       iw.className = 'bubble ' + (isOwn ? 'bubble-out' : 'bubble-in') + ' bubble-image';
-      iw.innerHTML = '<a href="' + esc(data.file_url) + '" download="' + esc(data.file_name || 'image') + '"><img src="' + esc(data.file_url) + '" alt="' + esc(data.file_name || 'image') + '"></a>' +
+      iw.innerHTML = '<a href="' + esc(data.file_url) + '" title="Click to preview"><img src="' + esc(data.file_url) + '" alt="' + esc(data.file_name || 'image') + '"></a>' +
         (text ? '<div style="margin-top:6px;font-size:.85rem">' + renderRichText(text) + '</div>' : '');
+      var imgAnchor = iw.querySelector('a');
+      if(imgAnchor){
+        imgAnchor.addEventListener('click', function(e){
+          e.preventDefault();
+          openFilePreview(data.file_url, data.file_name || 'image');
+        });
+      }
       body.appendChild(iw);
 
     } else if(mtype === 'file' && data.file_url){
       var fw = document.createElement('div');
-      var fc = document.createElement('a');
-      fc.href = data.file_url;
-      fc.setAttribute('download', data.file_name || 'attachment');
+      var fc = document.createElement('div');
       fc.className = 'bubble-file-card ' + (isOwn ? 'outgoing' : 'incoming');
+      fc.style.cursor = 'default';
       fc.innerHTML =
-        '<div class="bubble-file-iconbox"><i class="bi bi-file-earmark-arrow-down"></i></div>' +
-        '<div class="bubble-file-meta"><div class="bubble-file-name">' + esc(data.file_name || 'File') + '</div>' +
-        '<div class="bubble-file-subtext">' + esc(data.file_size || '') + '</div></div>' +
-        '<div class="bubble-file-download"><i class="bi bi-download"></i></div>';
+        '<a href="' + esc(data.file_url) + '" class="bubble-file-preview-link" ' +
+            'style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;color:inherit;text-decoration:none;cursor:pointer" title="Click to preview">' +
+          '<div class="bubble-file-iconbox"><i class="bi bi-file-earmark-arrow-down"></i></div>' +
+          '<div class="bubble-file-meta"><div class="bubble-file-name">' + esc(data.file_name || 'File') + '</div>' +
+          '<div class="bubble-file-subtext">' + esc(data.file_size || '') + '</div></div>' +
+        '</a>' +
+        '<a href="' + esc(data.file_url) + '" download="' + esc(data.file_name || 'attachment') + '" ' +
+            'class="bubble-file-download" title="Download" style="text-decoration:none;cursor:pointer">' +
+          '<i class="bi bi-download"></i>' +
+        '</a>';
+      var previewLink = fc.querySelector('.bubble-file-preview-link');
+      if(previewLink){
+        previewLink.addEventListener('click', function(e){
+          e.preventDefault();
+          openFilePreview(data.file_url, data.file_name || 'File', data.file_size || '');
+        });
+      }
       fw.appendChild(fc);
 
       if(text){

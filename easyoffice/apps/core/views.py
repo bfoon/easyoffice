@@ -450,6 +450,31 @@ class LoginView(View):
                 device_id=device_id
             ).first()
 
+        # If a superuser has forced OTP for this login (one-shot or sticky),
+        # treat the device as untrusted so we fall through to the OTP flow.
+        # We don't touch the trusted-device row itself — once OTP is verified
+        # the user can keep using the device normally.
+        if trusted and trusted.is_valid() and user.otp_required_this_login:
+            reason = (
+                'admin set "always require OTP"'
+                if user.otp_always_required
+                else 'admin set "force OTP on next login"'
+            )
+            SecurityEvent.log(
+                user=user,
+                event_type=SecurityEvent.EventType.UNTRUSTED_ATTEMPT,
+                ip_address=ip,
+                device_id=device_id,
+                device_name=device_name,
+                city=city,
+                country=country,
+                detail=(
+                    f'Trusted device, but OTP forced by admin policy '
+                    f'({reason}). Falling through to OTP challenge.'
+                ),
+            )
+            trusted = None
+
         if trusted and trusted.is_valid():
             current = user.active_device
 
@@ -711,6 +736,12 @@ class OTPVerifyView(View):
             device_id=otp.pending_device_id,
             device_name=otp.pending_device_name
         )
+
+        # If a superuser had forced OTP for "next login", that requirement
+        # is now satisfied — clear it so the next login on a trusted device
+        # goes through the normal fast path again. The sticky
+        # `otp_always_required` flag is intentionally NOT cleared here.
+        user.consume_force_otp_flag()
 
         sec = SecuritySettings.get()
 
@@ -1113,6 +1144,344 @@ class ToggleOTPView(LoginRequiredMixin, View):
             return redirect('staff_detail', pk=target.pk)
         except Exception:
             return redirect('/dashboard/')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Superuser-only device & OTP enforcement endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _safe_redirect_for(request, target, fallback='/dashboard/'):
+    """Shared redirect helper for the superuser-only endpoints below."""
+    nxt = request.POST.get('next', '') or request.GET.get('next', '')
+    if nxt and nxt.startswith('/'):
+        return redirect(nxt)
+    try:
+        return redirect('staff_detail', pk=target.pk)
+    except Exception:
+        return redirect(fallback)
+
+
+class _SuperuserActionMixin(LoginRequiredMixin):
+    """Tiny mixin: 403 unless request.user.is_superuser."""
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect('login')
+        if not request.user.is_superuser:
+            return HttpResponseForbidden(
+                'Only superusers can perform this action.'
+            )
+        return super().dispatch(request, *args, **kwargs)
+
+
+class ResetTrustedDevicesView(_SuperuserActionMixin, View):
+    """
+    Superuser-only. Revokes every trusted device for the target user and
+    detaches their active_device pointer. The user keeps their current
+    browser session (use ForceLogoutView for that), but on their next
+    login from any device they will go through the OTP flow again.
+
+    POST /admin/users/<uuid:user_id>/reset-devices/
+        next : (optional) redirect target
+    """
+
+    def post(self, request, user_id):
+        actor = request.user
+        target = get_object_or_404(User, pk=user_id)
+
+        n = target.revoke_all_trusted_devices()
+
+        SecurityEvent.log(
+            user=target,
+            event_type=SecurityEvent.EventType.DEVICES_RESET,
+            ip_address=_get_client_ip(request),
+            detail=(
+                f'{n} trusted device(s) revoked by superuser {actor.email}. '
+                f'User will be re-challenged on next login from any device.'
+            ),
+        )
+        _notify_admins(
+            title=f'🔐 Trusted devices reset: {target.email}',
+            message=(
+                f'{actor.email} reset all trusted devices for {target.email} '
+                f'({n} device(s) revoked). Next login from any device will '
+                f'go through OTP verification.'
+            ),
+            link='/admin/core/securityevent/',
+        )
+        _notify_user(
+            target,
+            title='Your trusted devices were reset',
+            message=(
+                f'An administrator ({actor.email}) revoked all trusted '
+                f'devices on your account. The next time you log in — even '
+                f'from a device you were using before — you will be asked '
+                f'for a 6-digit code emailed to you.'
+            ),
+            link='/security/',
+        )
+
+        if n:
+            messages.success(
+                request,
+                f'Reset complete — {n} trusted device(s) revoked for '
+                f'{target.email}. They will go through OTP on next login.'
+            )
+        else:
+            messages.info(
+                request,
+                f'{target.email} had no active trusted devices to reset.'
+            )
+        return _safe_redirect_for(request, target)
+
+
+class ForceLogoutView(_SuperuserActionMixin, View):
+    """
+    Superuser-only. Kills every active Django session belonging to the
+    target user, detaches their active_device pointer, and marks them
+    offline. On their next request they will be bounced back to the
+    login page.
+
+    POST /admin/users/<uuid:user_id>/force-logout/
+        next : (optional) redirect target
+    """
+
+    def post(self, request, user_id):
+        actor = request.user
+        target = get_object_or_404(User, pk=user_id)
+
+        if target.pk == actor.pk:
+            messages.error(
+                request,
+                'For your own safety, you cannot force-logout your own '
+                'account from this page. Use the regular Logout link.'
+            )
+            return _safe_redirect_for(request, target)
+
+        killed = target.force_logout_everywhere()
+
+        SecurityEvent.log(
+            user=target,
+            event_type=SecurityEvent.EventType.FORCED_LOGOUT,
+            ip_address=_get_client_ip(request),
+            detail=(
+                f'Force logout by superuser {actor.email}: {killed} '
+                f'session(s) destroyed.'
+            ),
+        )
+        _notify_admins(
+            title=f'🚪 Forced logout: {target.email}',
+            message=(
+                f'{actor.email} forced logout for {target.email} — '
+                f'{killed} session(s) terminated. Active device pointer '
+                f'cleared.'
+            ),
+            link='/admin/core/securityevent/',
+        )
+        _notify_user(
+            target,
+            title='You were signed out by an administrator',
+            message=(
+                f'An administrator ({actor.email}) signed you out of all '
+                f'your active sessions. You will need to log in again. '
+                f'If you did not expect this, contact your administrator.'
+            ),
+            link='/security/',
+        )
+
+        messages.success(
+            request,
+            f'Force logout complete for {target.email} — '
+            f'{killed} session(s) terminated.'
+        )
+        return _safe_redirect_for(request, target)
+
+
+class ForceOTPNextLoginView(_SuperuserActionMixin, View):
+    """
+    Superuser-only. Sets / clears the one-shot "force OTP on next login"
+    flag. While the flag is set, the trusted-device fast path is skipped
+    on the user's next login attempt and they will be challenged with an
+    emailed 6-digit code. The flag clears itself after one successful
+    OTP verification.
+
+    POST /admin/users/<uuid:user_id>/force-otp-next/
+        action : 'set' or 'clear'
+        next   : (optional) redirect target
+    """
+
+    def post(self, request, user_id):
+        actor = request.user
+        target = get_object_or_404(User, pk=user_id)
+        action = request.POST.get('action', '').strip().lower()
+
+        if action not in ('set', 'clear'):
+            messages.error(request, 'Invalid action.')
+            return _safe_redirect_for(request, target)
+
+        if action == 'set':
+            if not target.otp_enabled:
+                messages.warning(
+                    request,
+                    f'Cannot force OTP for {target.email}: OTP is currently '
+                    f'bypassed for this user (until '
+                    f'{target.otp_disabled_until:%Y-%m-%d %H:%M UTC}). '
+                    f'Re-enable OTP first.'
+                )
+                return _safe_redirect_for(request, target)
+
+            target.set_force_otp_next_login(True)
+
+            SecurityEvent.log(
+                user=target,
+                event_type=SecurityEvent.EventType.OTP_FORCED_NEXT,
+                ip_address=_get_client_ip(request),
+                detail=(
+                    f'Force-OTP-on-next-login set by superuser {actor.email}. '
+                    f'Will fire once and auto-clear.'
+                ),
+            )
+            _notify_admins(
+                title=f'🔒 OTP forced on next login: {target.email}',
+                message=(
+                    f'{actor.email} marked {target.email} for one-shot OTP '
+                    f'on their next login attempt (even on trusted devices).'
+                ),
+                link='/admin/core/securityevent/',
+            )
+            _notify_user(
+                target,
+                title='OTP required on your next login',
+                message=(
+                    f'An administrator ({actor.email}) flagged your account '
+                    f'so that your next login requires a 6-digit email '
+                    f'verification code, even from a device you have used '
+                    f'before. After one successful verification, normal '
+                    f'behaviour resumes.'
+                ),
+                link='/security/',
+            )
+            messages.success(
+                request,
+                f'OTP will be required on the next login for {target.email}.'
+            )
+        else:  # clear
+            if not target.force_otp_next_login:
+                messages.info(
+                    request,
+                    f'No force-OTP flag was set for {target.email}.'
+                )
+                return _safe_redirect_for(request, target)
+
+            target.set_force_otp_next_login(False)
+
+            SecurityEvent.log(
+                user=target,
+                event_type=SecurityEvent.EventType.OTP_FORCED_NEXT,
+                ip_address=_get_client_ip(request),
+                detail=(
+                    f'Force-OTP-on-next-login CLEARED by superuser '
+                    f'{actor.email} (manual revert).'
+                ),
+            )
+            messages.success(
+                request,
+                f'Force-OTP flag cleared for {target.email}.'
+            )
+
+        return _safe_redirect_for(request, target)
+
+
+class OTPAlwaysRequiredView(_SuperuserActionMixin, View):
+    """
+    Superuser-only. Toggles the sticky 'OTP every login' requirement.
+    While ON, the trusted-device fast path is permanently disabled for
+    this user — every login from every device requires an emailed code.
+
+    POST /admin/users/<uuid:user_id>/otp-always/
+        action : 'on' or 'off'
+        next   : (optional) redirect target
+    """
+
+    def post(self, request, user_id):
+        actor = request.user
+        target = get_object_or_404(User, pk=user_id)
+        action = request.POST.get('action', '').strip().lower()
+
+        if action not in ('on', 'off'):
+            messages.error(request, 'Invalid action.')
+            return _safe_redirect_for(request, target)
+
+        new_value = (action == 'on')
+        if target.otp_always_required == new_value:
+            messages.info(
+                request,
+                f'Always-require-OTP is already '
+                f'{"on" if new_value else "off"} for {target.email}.'
+            )
+            return _safe_redirect_for(request, target)
+
+        if new_value and not target.otp_enabled:
+            messages.warning(
+                request,
+                f'Cannot turn on always-require-OTP for {target.email}: '
+                f'OTP is currently bypassed for this user. Re-enable OTP '
+                f'first.'
+            )
+            return _safe_redirect_for(request, target)
+
+        target.set_otp_always_required(new_value)
+
+        ev_type = (SecurityEvent.EventType.OTP_ALWAYS_ON if new_value
+                   else SecurityEvent.EventType.OTP_ALWAYS_OFF)
+        SecurityEvent.log(
+            user=target,
+            event_type=ev_type,
+            ip_address=_get_client_ip(request),
+            detail=(
+                f'Always-require-OTP turned '
+                f'{"ON" if new_value else "OFF"} by superuser {actor.email}.'
+            ),
+        )
+        _notify_admins(
+            title=(
+                f'🔐 Always-require-OTP {"enabled" if new_value else "disabled"}: '
+                f'{target.email}'
+            ),
+            message=(
+                f'{actor.email} turned always-require-OTP '
+                f'{"ON" if new_value else "OFF"} for {target.email}. '
+                + ('Every login will now require an emailed code, even on '
+                   'trusted devices.' if new_value else
+                   'Trusted-device fast path restored to normal behaviour.')
+            ),
+            link='/admin/core/securityevent/',
+        )
+        _notify_user(
+            target,
+            title=(
+                'OTP-on-every-login turned '
+                f'{"on" if new_value else "off"}'
+            ),
+            message=(
+                f'An administrator ({actor.email}) '
+                + ('enabled OTP on every login for your account. From now '
+                   'on, every time you sign in — even on a device you have '
+                   'used before — you will need a 6-digit code emailed to '
+                   'you.'
+                   if new_value else
+                   'turned off the always-require-OTP setting on your '
+                   'account. Trusted devices will once again skip the OTP '
+                   'challenge.')
+            ),
+            link='/security/',
+        )
+        messages.success(
+            request,
+            f'Always-require-OTP is now '
+            f'{"ON" if new_value else "OFF"} for {target.email}.'
+        )
+        return _safe_redirect_for(request, target)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

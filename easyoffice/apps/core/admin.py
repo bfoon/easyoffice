@@ -16,7 +16,8 @@ from apps.core.models import (
 class UserAdmin(BaseUserAdmin):
     list_display  = ['email', 'full_name', 'employee_id', 'status',
                      'is_online', 'failed_login_count', 'lockout_status', 'date_joined']
-    list_filter   = ['status', 'is_active', 'is_staff', 'is_online']
+    list_filter   = ['status', 'is_active', 'is_staff', 'is_online',
+                     'force_otp_next_login', 'otp_always_required']
     search_fields = ['email', 'first_name', 'last_name', 'employee_id']
     ordering      = ['last_name', 'first_name']
     readonly_fields = ['last_seen', 'is_online', 'failed_login_count',
@@ -35,7 +36,9 @@ class UserAdmin(BaseUserAdmin):
         ('Security', {
             'fields': ('active_device', 'failed_login_count', 'lockout_until',
                        'last_login_ip', 'last_login_city', 'last_login_country',
-                       'last_seen', 'is_online'),
+                       'last_seen', 'is_online',
+                       'otp_disabled_until', 'force_otp_next_login',
+                       'otp_always_required'),
             'classes': ('collapse',),
         }),
     )
@@ -47,7 +50,8 @@ class UserAdmin(BaseUserAdmin):
     def lockout_status(self, obj):
         return obj.is_locked_out()
 
-    actions = ['unlock_accounts', 'revoke_all_devices']
+    actions = ['unlock_accounts', 'revoke_all_devices',
+               'force_otp_next_login_action', 'force_logout_action']
 
     @admin.action(description='Unlock selected accounts')
     def unlock_accounts(self, request, queryset):
@@ -59,11 +63,29 @@ class UserAdmin(BaseUserAdmin):
     def revoke_all_devices(self, request, queryset):
         count = 0
         for user in queryset:
-            n = user.trusted_devices.filter(is_revoked=False).update(is_revoked=True)
-            user.active_device = None
-            user.save(update_fields=['active_device'])
-            count += n
+            count += user.revoke_all_trusted_devices()
         self.message_user(request, f'Revoked {count} device(s).')
+
+    @admin.action(description='Force OTP on next login for selected users')
+    def force_otp_next_login_action(self, request, queryset):
+        n = 0
+        for user in queryset:
+            if user.otp_enabled:
+                user.set_force_otp_next_login(True)
+                n += 1
+        self.message_user(
+            request,
+            f'Marked {n} user(s) for forced OTP on next login.'
+        )
+
+    @admin.action(description='Force logout (kill all sessions) for selected users')
+    def force_logout_action(self, request, queryset):
+        killed = 0
+        for user in queryset:
+            if user.pk == request.user.pk:
+                continue
+            killed += user.force_logout_everywhere()
+        self.message_user(request, f'Destroyed {killed} session(s).')
 
 
 # ─────────────────────────────────────────────────────────────────────────────

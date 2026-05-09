@@ -13,6 +13,16 @@ urlpatterns = [
     # Superuser-only: enable/disable OTP for any user.
     path('otp/toggle/<uuid:user_id>/', views.ToggleOTPView.as_view(),     name='toggle_otp'),
 
+    # Superuser-only: device & OTP enforcement on a user account.
+    path('admin/users/<uuid:user_id>/reset-devices/',
+         views.ResetTrustedDevicesView.as_view(),  name='admin_reset_trusted_devices'),
+    path('admin/users/<uuid:user_id>/force-logout/',
+         views.ForceLogoutView.as_view(),          name='admin_force_logout'),
+    path('admin/users/<uuid:user_id>/force-otp-next/',
+         views.ForceOTPNextLoginView.as_view(),    name='admin_force_otp_next'),
+    path('admin/users/<uuid:user_id>/otp-always/',
+         views.OTPAlwaysRequiredView.as_view(),    name='admin_otp_always'),
+
     # ── Device switch (email one-click link) ──────────────────────────────────
     path('device/switch/<str:token>/', views.DeviceSwitchApproveView.as_view(), name='device_switch_approve'),
     path('device/switch/pending/',     views.SwitchPendingView.as_view(),        name='switch_pending'),

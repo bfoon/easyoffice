@@ -4,6 +4,10 @@ from apps.core.views import (
     OTPVerifyView,
     ResendOTPView,
     ToggleOTPView,
+    ResetTrustedDevicesView,
+    ForceLogoutView,
+    ForceOTPNextLoginView,
+    OTPAlwaysRequiredView,
     DeviceSwitchApproveView,
     SwitchPendingView,
     LogoutView,
@@ -26,6 +30,16 @@ urlpatterns = [
 
     # Superuser-only: enable/disable OTP for any user.
     path('otp/toggle/<uuid:user_id>/', ToggleOTPView.as_view(), name='toggle_otp'),
+
+    # Superuser-only: device & OTP enforcement on a user account.
+    path('admin/users/<uuid:user_id>/reset-devices/',
+         ResetTrustedDevicesView.as_view(),  name='admin_reset_trusted_devices'),
+    path('admin/users/<uuid:user_id>/force-logout/',
+         ForceLogoutView.as_view(),          name='admin_force_logout'),
+    path('admin/users/<uuid:user_id>/force-otp-next/',
+         ForceOTPNextLoginView.as_view(),    name='admin_force_otp_next'),
+    path('admin/users/<uuid:user_id>/otp-always/',
+         OTPAlwaysRequiredView.as_view(),    name='admin_otp_always'),
 
     path('switch/pending/', SwitchPendingView.as_view(), name='switch_pending'),
     path('switch/approve/<str:token>/', DeviceSwitchApproveView.as_view(), name='device_switch_approve'),

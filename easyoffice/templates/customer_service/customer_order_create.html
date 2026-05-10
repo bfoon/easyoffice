@@ -1,0 +1,307 @@
+{% extends "base.html" %}
+{% block title %}New Order — {{ customer.display_name }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'customer_service_dashboard' %}">Customer Service</a>
+   / <a href="{% url 'customer_service_customer_list' %}">Contacts</a>
+   / <a href="{% url 'customer_service_customer_detail' customer.pk %}">{{ customer.display_name }}</a>
+   / New Order
+{% endblock %}
+
+{% block content %}
+<style>
+  :root {
+    --cs-primary: #6366f1;
+    --cs-primary-dark: #4f46e5;
+    --cs-border: #e2e8f0;
+    --cs-muted: #64748b;
+  }
+  .cs-form-page { max-width: 1080px; margin: 0 auto; }
+
+  .cs-form-hero {
+    background: linear-gradient(135deg, #10b981, #047857);
+    color: #fff; border-radius: 16px; padding: 22px 26px; margin-bottom: 18px;
+    box-shadow: 0 8px 22px rgba(16, 185, 129, .25);
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  }
+  .cs-form-hero .avatar {
+    width: 56px; height: 56px; border-radius: 14px;
+    background: rgba(255,255,255,.2); border: 2px solid rgba(255,255,255,.4);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 1.4rem;
+  }
+  .cs-form-hero h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
+  .cs-form-hero p  { margin: 2px 0 0; opacity: .9; font-size: .85rem; }
+
+  .cs-card {
+    background: #fff; border: 1px solid var(--cs-border);
+    border-radius: 14px; padding: 18px; margin-bottom: 14px;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, .03);
+  }
+  .cs-card-title {
+    font-size: .98rem; font-weight: 700; margin: 0 0 12px;
+    display: flex; align-items: center; gap: 8px; color: #0f172a;
+  }
+  .cs-card-title i { color: var(--cs-primary); }
+
+  .cs-form-grid { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+  .cs-form-grid-3 { display: grid; gap: 12px; grid-template-columns: 1fr 1fr 1fr; }
+  @media (max-width: 720px) {
+    .cs-form-grid, .cs-form-grid-3 { grid-template-columns: 1fr; }
+  }
+
+  .cs-field label {
+    display: block; font-size: .78rem; font-weight: 600;
+    color: #334155; margin-bottom: 4px;
+  }
+
+  input[type="text"], input[type="email"], input[type="number"],
+  select, textarea {
+    width: 100%; padding: 8px 11px; border: 1px solid var(--cs-border);
+    border-radius: 9px; font-size: .88rem; background: #fff;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--cs-primary);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, .14);
+  }
+
+  .items-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0 6px;
+  }
+  .items-table th {
+    font-size: .73rem; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--cs-muted);
+    text-align: left; padding: 4px 8px;
+  }
+  .items-table td { background: #f8fafc; padding: 6px 8px; vertical-align: middle; }
+  .items-table tr td:first-child { border-radius: 10px 0 0 10px; }
+  .items-table tr td:last-child  { border-radius: 0 10px 10px 0; }
+
+  .totals-summary {
+    display: flex; justify-content: flex-end; gap: 24px;
+    padding: 10px 14px; background: #f1f5f9; border-radius: 10px;
+    font-size: .9rem;
+  }
+  .totals-summary .lbl { color: var(--cs-muted); }
+  .totals-summary .val { font-weight: 700; color: #0f172a; }
+  .totals-summary .grand .val { font-size: 1.1rem; color: #047857; }
+
+  .eo-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px;
+            border-radius: 10px; font-weight: 600; font-size: .85rem; border: 1px solid transparent;
+            cursor: pointer; text-decoration: none; transition: transform .1s; }
+  .eo-btn:hover { transform: translateY(-1px); }
+  .eo-btn-primary { background: #10b981; color: #fff; border-color: #047857; }
+  .eo-btn-primary:hover { background: #047857; color: #fff; }
+  .eo-btn-secondary { background: #fff; color: #0f172a; border-color: var(--cs-border); }
+  .eo-btn-secondary:hover { background: #f8fafc; }
+  .eo-btn-ghost { background: transparent; color: var(--cs-muted); border: none; }
+  .eo-btn-ghost:hover { color: #dc2626; }
+
+  .actions-bar { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+
+  .pulled-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0;
+    padding: 2px 8px; border-radius: 999px;
+    font-size: .68rem; font-weight: 600;
+  }
+</style>
+
+<div class="cs-form-page">
+  <div class="cs-form-hero">
+    <div class="avatar">
+      {{ customer.full_name|slice:":1"|upper }}{% if customer.full_name|length > 1 %}{{ customer.full_name|slice:"1:2"|upper }}{% endif %}
+    </div>
+    <div style="flex:1;min-width:0">
+      <h1><i class="bi bi-cart-plus-fill"></i> New Order — {{ customer.display_name }}</h1>
+      <p>
+        Customer details have been pre-filled from the contact card.
+        You can override them below if this particular order needs different
+        delivery info.
+      </p>
+    </div>
+    <a href="{% url 'customer_service_customer_detail' customer.pk %}"
+       class="eo-btn eo-btn-secondary"
+       style="background:rgba(255,255,255,.18);color:#fff;border-color:rgba(255,255,255,.3)">
+      <i class="bi bi-arrow-left"></i> Back to contact
+    </a>
+  </div>
+
+  <form method="post" id="orderForm" novalidate>
+    {% csrf_token %}
+
+    <!-- Contact snapshot (auto-filled, editable) -->
+    <div class="cs-card">
+      <h3 class="cs-card-title">
+        <i class="bi bi-person-vcard"></i> Contact Snapshot
+        <span class="pulled-badge ms-auto"><i class="bi bi-check2"></i> auto-filled</span>
+      </h3>
+
+      <div class="cs-form-grid-3">
+        <div class="cs-field">
+          <label>Contact name</label>
+          <input type="text" name="contact_name"
+                 value="{{ customer.full_name }}" autocomplete="off">
+        </div>
+        <div class="cs-field">
+          <label>Phone</label>
+          <input type="text" name="contact_phone" autocomplete="off"
+                 value="{% for ph in customer.phones.all %}{% if ph.is_primary %}{{ ph.phone_number }}{% endif %}{% endfor %}{% if not customer.phones.all|dictsort:'is_primary' %}{% for ph in customer.phones.all %}{% if forloop.first %}{{ ph.phone_number }}{% endif %}{% endfor %}{% endif %}">
+        </div>
+        <div class="cs-field">
+          <label>Email</label>
+          <input type="email" name="contact_email"
+                 value="{{ customer.email }}" autocomplete="off">
+        </div>
+      </div>
+
+      <div class="cs-field" style="margin-top:8px">
+        <label>Delivery address</label>
+        <textarea name="delivery_address" rows="2">{{ customer.address }}</textarea>
+      </div>
+    </div>
+
+    <!-- Order metadata -->
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-tag"></i> Order Information</h3>
+      <div class="cs-form-grid-3">
+        <div class="cs-field">
+          <label>Source</label>
+          <select name="source">
+            {% for code, label in sources %}
+              <option value="{{ code }}" {% if code == 'walk_in' %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="cs-field">
+          <label>Currency</label>
+          <input type="text" name="currency" value="{{ default_currency }}" maxlength="3">
+        </div>
+        <div class="cs-field">
+          <label>Tax rate (%)</label>
+          <input type="number" step="0.01" min="0" name="tax_rate" value="0" id="taxRate">
+        </div>
+      </div>
+
+      <div class="cs-field" style="margin-top:8px">
+        <label>Notes (visible on the order, optional)</label>
+        <textarea name="notes" rows="2"
+                  placeholder="Anything the warehouse / accounts team should know"></textarea>
+      </div>
+    </div>
+
+    <!-- Line items -->
+    <div class="cs-card">
+      <h3 class="cs-card-title">
+        <i class="bi bi-list-ul"></i> Line Items
+        <button type="button" id="addRowBtn" class="eo-btn eo-btn-secondary ms-auto">
+          <i class="bi bi-plus-lg"></i> Add row
+        </button>
+      </h3>
+
+      <table class="items-table" id="itemsTable">
+        <thead>
+          <tr>
+            <th style="width:48%">Description *</th>
+            <th style="width:12%">Qty</th>
+            <th style="width:18%">Unit price</th>
+            <th style="width:18%">Line total</th>
+            <th style="width:4%"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="item-row">
+            <td><input type="text" name="item_description" required placeholder="e.g. Toner cartridge HP 26X"></td>
+            <td><input type="number" name="item_quantity" step="0.01" min="0" value="1" class="qty"></td>
+            <td><input type="number" name="item_unit_price" step="0.01" min="0" value="0" class="price"></td>
+            <td><span class="line-total">0.00</span></td>
+            <td><button type="button" class="eo-btn-ghost remove-row" title="Remove"><i class="bi bi-x-lg"></i></button></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="cs-field" style="margin-top:14px">
+        <label>Discount (flat amount)</label>
+        <input type="number" step="0.01" min="0" name="discount_amount" value="0" id="discountAmt" style="max-width:200px">
+      </div>
+
+      <div class="totals-summary mt-3">
+        <div><span class="lbl">Subtotal:</span> <span class="val" id="sumSubtotal">0.00</span></div>
+        <div><span class="lbl">Tax:</span>      <span class="val" id="sumTax">0.00</span></div>
+        <div class="grand"><span class="lbl">Total:</span> <span class="val" id="sumTotal">0.00</span></div>
+      </div>
+    </div>
+
+    <div class="actions-bar">
+      <a href="{% url 'customer_service_customer_detail' customer.pk %}" class="eo-btn eo-btn-secondary">
+        <i class="bi bi-x-lg"></i> Cancel
+      </a>
+      <button type="submit" class="eo-btn eo-btn-primary">
+        <i class="bi bi-check-lg"></i> Create Order
+      </button>
+    </div>
+  </form>
+</div>
+
+<script>
+(function () {
+  const tbody = document.querySelector('#itemsTable tbody');
+  const addBtn = document.getElementById('addRowBtn');
+  const taxEl = document.getElementById('taxRate');
+  const discEl = document.getElementById('discountAmt');
+
+  function fmt(n) {
+    return (Math.round(n * 100) / 100).toFixed(2);
+  }
+
+  function recalc() {
+    let sub = 0;
+    tbody.querySelectorAll('.item-row').forEach(row => {
+      const q = parseFloat(row.querySelector('.qty').value || '0') || 0;
+      const p = parseFloat(row.querySelector('.price').value || '0') || 0;
+      const lt = q * p;
+      row.querySelector('.line-total').textContent = fmt(lt);
+      sub += lt;
+    });
+    const disc = parseFloat(discEl.value || '0') || 0;
+    sub = Math.max(0, sub - disc);
+    const taxPct = parseFloat(taxEl.value || '0') || 0;
+    const tax = sub * taxPct / 100;
+    document.getElementById('sumSubtotal').textContent = fmt(sub);
+    document.getElementById('sumTax').textContent      = fmt(tax);
+    document.getElementById('sumTotal').textContent    = fmt(sub + tax);
+  }
+
+  function attachHandlers(row) {
+    row.querySelectorAll('input').forEach(i => i.addEventListener('input', recalc));
+    const rm = row.querySelector('.remove-row');
+    if (rm) rm.addEventListener('click', () => {
+      if (tbody.querySelectorAll('.item-row').length > 1) row.remove();
+      else row.querySelectorAll('input').forEach(i => { if (i.type === 'number') i.value = 0; else i.value = ''; });
+      recalc();
+    });
+  }
+
+  addBtn.addEventListener('click', () => {
+    const last = tbody.querySelector('.item-row');
+    const clone = last.cloneNode(true);
+    clone.querySelectorAll('input').forEach(i => {
+      if (i.classList.contains('qty')) i.value = 1;
+      else if (i.classList.contains('price')) i.value = 0;
+      else i.value = '';
+    });
+    clone.querySelector('.line-total').textContent = '0.00';
+    tbody.appendChild(clone);
+    attachHandlers(clone);
+    clone.querySelector('input[name="item_description"]').focus();
+  });
+
+  tbody.querySelectorAll('.item-row').forEach(attachHandlers);
+  taxEl.addEventListener('input', recalc);
+  discEl.addEventListener('input', recalc);
+  recalc();
+})();
+</script>
+{% endblock %}

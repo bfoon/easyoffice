@@ -1,0 +1,374 @@
+{% extends "base.html" %}
+{% block title %}{{ page_title }}{% endblock %}
+{% block breadcrumb %}
+  <a href="{% url 'customer_service_dashboard' %}">Customer Service</a>
+   / <a href="{% url 'customer_service_customer_list' %}">Contacts</a>
+   / {% if is_edit %}{{ form.instance.display_name }}{% else %}New{% endif %}
+{% endblock %}
+
+{% block content %}
+<style>
+  :root {
+    --cs-primary: #6366f1;
+    --cs-primary-dark: #4f46e5;
+    --cs-bg: #f8fafc;
+    --cs-card: #ffffff;
+    --cs-border: #e2e8f0;
+    --cs-muted: #64748b;
+    --cs-text: #0f172a;
+  }
+  .cs-form-page { max-width: 980px; margin: 0 auto; }
+  .cs-form-hero {
+    background: linear-gradient(135deg, var(--cs-primary), var(--cs-primary-dark));
+    color: #fff;
+    border-radius: 16px;
+    padding: 22px 26px;
+    margin-bottom: 18px;
+    box-shadow: 0 8px 22px rgba(99, 102, 241, .25);
+  }
+  .cs-form-hero h1 { margin: 0 0 4px 0; font-size: 1.45rem; font-weight: 700; }
+  .cs-form-hero p  { margin: 0; opacity: .9; font-size: .9rem; }
+
+  .cs-card {
+    background: var(--cs-card);
+    border: 1px solid var(--cs-border);
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, .03);
+  }
+  .cs-card-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--cs-text);
+    margin: 0 0 14px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .cs-card-title i { color: var(--cs-primary); }
+
+  .cs-field { margin-bottom: 14px; }
+  .cs-field label {
+    display: block;
+    font-size: .82rem;
+    font-weight: 600;
+    color: #334155;
+    margin-bottom: 4px;
+  }
+  .cs-field .helptext, .cs-field small { color: var(--cs-muted); font-size: .76rem; }
+  .cs-field .errorlist { color: #dc2626; font-size: .78rem; padding-left: 18px; margin: 4px 0 0; }
+
+  .eo-form-control,
+  .cs-form-page input[type="text"],
+  .cs-form-page input[type="email"],
+  .cs-form-page input[type="number"],
+  .cs-form-page select,
+  .cs-form-page textarea {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid var(--cs-border);
+    border-radius: 10px;
+    font-size: .9rem;
+    background: #fff;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .cs-form-page input:focus,
+  .cs-form-page select:focus,
+  .cs-form-page textarea:focus {
+    outline: none;
+    border-color: var(--cs-primary);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, .14);
+  }
+
+  .cs-form-grid { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 720px) { .cs-form-grid { grid-template-columns: 1fr; } }
+
+  .cs-checkbox-row {
+    display: flex; align-items: center; gap: 8px;
+    background: #f1f5f9; padding: 10px 12px; border-radius: 10px;
+  }
+  .cs-checkbox-row input { width: auto; }
+
+  .cs-phones-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+  .cs-phones-table th {
+    text-align: left;
+    font-size: .75rem;
+    color: var(--cs-muted);
+    font-weight: 600;
+    padding: 4px 8px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .cs-phones-table td { padding: 4px 8px; vertical-align: middle; }
+  .cs-phone-row {
+    background: #f8fafc;
+    border-radius: 10px;
+  }
+  .cs-phone-row + .cs-phone-row { margin-top: 6px; }
+  .cs-phone-row td:first-child { border-radius: 10px 0 0 10px; }
+  .cs-phone-row td:last-child  { border-radius: 0 10px 10px 0; }
+  .cs-phone-row.is-deleted { opacity: .4; text-decoration: line-through; }
+
+  .eo-btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px;
+            border-radius: 10px; font-weight: 600; font-size: .88rem; border: 1px solid transparent;
+            cursor: pointer; text-decoration: none; transition: transform .1s, box-shadow .1s; }
+  .eo-btn:hover  { transform: translateY(-1px); }
+  .eo-btn:active { transform: translateY(0); }
+  .eo-btn-primary { background: var(--cs-primary); color: #fff; border-color: var(--cs-primary-dark); }
+  .eo-btn-primary:hover { background: var(--cs-primary-dark); color: #fff; }
+  .eo-btn-secondary { background: #fff; color: var(--cs-text); border-color: var(--cs-border); }
+  .eo-btn-secondary:hover { background: #f8fafc; }
+  .eo-btn-ghost { background: transparent; color: var(--cs-muted); border: none; }
+  .eo-btn-ghost:hover { color: #dc2626; }
+
+  .cs-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+</style>
+
+<div class="cs-form-page">
+  <div class="cs-form-hero">
+    <h1>
+      <i class="bi {% if is_edit %}bi-pencil-square{% else %}bi-person-plus-fill{% endif %}"></i>
+      {{ page_title }}
+    </h1>
+    <p>
+      {% if is_edit %}
+        Update name, contact details, address, or phone numbers.
+        Changes apply immediately and are visible everywhere this contact appears.
+      {% else %}
+        Capture customer details once — phone, email, address — and reuse them
+        across calls, tickets and orders. No service call required.
+      {% endif %}
+    </p>
+  </div>
+
+  <form method="post" novalidate>
+    {% csrf_token %}
+
+    {% if form.non_field_errors %}
+      <div class="cs-card" style="border-color:#fca5a5;background:#fef2f2;color:#991b1b;">
+        {{ form.non_field_errors }}
+      </div>
+    {% endif %}
+
+    <!-- Identity -->
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-person-vcard"></i> Identity</h3>
+
+      <div class="cs-form-grid">
+        <div class="cs-field">
+          <label for="{{ form.customer_type.id_for_label }}">Contact type</label>
+          {{ form.customer_type }}
+          {{ form.customer_type.errors }}
+        </div>
+        <div class="cs-field">
+          <label for="{{ form.preferred_contact_method.id_for_label }}">Preferred contact</label>
+          {{ form.preferred_contact_method }}
+          {{ form.preferred_contact_method.errors }}
+        </div>
+
+        <div class="cs-field">
+          <label for="{{ form.full_name.id_for_label }}">Full name *</label>
+          {{ form.full_name }}
+          <small>Person we’ll speak to. Required.</small>
+          {{ form.full_name.errors }}
+        </div>
+        <div class="cs-field">
+          <label for="{{ form.company_name.id_for_label }}">Company name</label>
+          {{ form.company_name }}
+          <small>Required only for business contacts.</small>
+          {{ form.company_name.errors }}
+        </div>
+
+        <div class="cs-field">
+          <label for="{{ form.email.id_for_label }}">Email</label>
+          {{ form.email }}
+          {{ form.email.errors }}
+        </div>
+        <div class="cs-field">
+          <label for="{{ form.alternate_email.id_for_label }}">Alternate email</label>
+          {{ form.alternate_email }}
+          {{ form.alternate_email.errors }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Phones -->
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-telephone"></i> Phone Numbers</h3>
+
+      {{ phone_formset.management_form }}
+
+      {% if phone_formset.non_form_errors %}
+        <div style="color:#dc2626;font-size:.85rem;margin-bottom:8px">
+          {{ phone_formset.non_form_errors }}
+        </div>
+      {% endif %}
+
+      <div id="phones-wrap">
+        <table class="cs-phones-table">
+          <thead>
+            <tr>
+              <th style="width:120px">Type</th>
+              <th>Number</th>
+              <th style="width:110px">Primary</th>
+              <th style="width:90px">Active</th>
+              <th style="width:60px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for f in phone_formset %}
+            <tr class="cs-phone-row">
+              <td>{{ f.phone_type }}</td>
+              <td>
+                {{ f.phone_number }}
+                {% if f.phone_number.errors %}
+                  <div class="errorlist" style="color:#dc2626;font-size:.75rem">{{ f.phone_number.errors|striptags }}</div>
+                {% endif %}
+              </td>
+              <td style="text-align:center">{{ f.is_primary }}</td>
+              <td style="text-align:center">{{ f.is_active }}</td>
+              <td style="text-align:center">
+                {% if f.instance.pk %}
+                  <label class="eo-btn-ghost" title="Mark for deletion" style="cursor:pointer">
+                    {{ f.DELETE }} <i class="bi bi-trash"></i>
+                  </label>
+                {% endif %}
+                {{ f.id }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div style="margin-top:10px">
+        <button type="button" id="addPhoneBtn" class="eo-btn eo-btn-secondary">
+          <i class="bi bi-plus-lg"></i> Add another number
+        </button>
+        <small class="text-muted ms-2">You can add up to 5 phone numbers.</small>
+      </div>
+    </div>
+
+    <!-- Address -->
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-geo-alt"></i> Address</h3>
+      <div class="cs-form-grid">
+        <div class="cs-field" style="grid-column: 1 / -1">
+          <label for="{{ form.address.id_for_label }}">Street address</label>
+          {{ form.address }}
+          {{ form.address.errors }}
+        </div>
+        <div class="cs-field">
+          <label for="{{ form.city.id_for_label }}">City</label>
+          {{ form.city }}
+          {{ form.city.errors }}
+        </div>
+        <div class="cs-field">
+          <label for="{{ form.area.id_for_label }}">Area / district</label>
+          {{ form.area }}
+          {{ form.area.errors }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Notes & flags -->
+    <div class="cs-card">
+      <h3 class="cs-card-title"><i class="bi bi-sticky"></i> Notes</h3>
+
+      <div class="cs-field">
+        {{ form.notes }}
+        {{ form.notes.errors }}
+      </div>
+
+      <div class="cs-checkbox-row">
+        {{ form.needs_feedback }}
+        <label for="{{ form.needs_feedback.id_for_label }}" style="margin:0">
+          Send this customer satisfaction-feedback emails after their tickets are resolved.
+        </label>
+      </div>
+    </div>
+
+    <div class="cs-actions">
+      {% if is_edit and customer %}
+      <a href="{% url 'customer_service_customer_detail' customer.pk %}" class="eo-btn eo-btn-secondary">
+        <i class="bi bi-x-lg"></i> Cancel
+      </a>
+      {% else %}
+      <a href="{% url 'customer_service_customer_list' %}" class="eo-btn eo-btn-secondary">
+        <i class="bi bi-x-lg"></i> Cancel
+      </a>
+      {% endif %}
+      <button type="submit" class="eo-btn eo-btn-primary">
+        <i class="bi bi-check-lg"></i> {% if is_edit %}Save Changes{% else %}Create Contact{% endif %}
+      </button>
+    </div>
+  </form>
+</div>
+
+<script>
+(function() {
+  // ── "Add another phone" — clones the empty form template the formset
+  //    exposes via __prefix__ ─────────────────────────────────────────
+  const totalForms  = document.querySelector('input[name$="-TOTAL_FORMS"]');
+  const maxForms    = document.querySelector('input[name$="-MAX_NUM_FORMS"]');
+  const tbody       = document.querySelector('#phones-wrap tbody');
+  const addBtn      = document.getElementById('addPhoneBtn');
+  if (!totalForms || !tbody || !addBtn) return;
+
+  // Take the last row as a structural template, but blank its inputs.
+  function cloneRow() {
+    const idx = parseInt(totalForms.value, 10);
+    const max = parseInt((maxForms && maxForms.value) || '5', 10);
+    if (idx >= max) {
+      addBtn.disabled = true;
+      addBtn.textContent = 'Maximum ' + max + ' phones';
+      return;
+    }
+    const last = tbody.querySelector('.cs-phone-row');
+    if (!last) return;
+    const clone = last.cloneNode(true);
+
+    // Rewrite all name="prefix-N-field" → name="prefix-newIdx-field"
+    clone.querySelectorAll('input, select').forEach(el => {
+      if (el.name) {
+        el.name = el.name.replace(/-\d+-/, '-' + idx + '-');
+      }
+      if (el.id) {
+        el.id = el.id.replace(/-\d+-/, '-' + idx + '-');
+      }
+      if (el.type === 'checkbox' || el.type === 'radio') {
+        el.checked = false;
+      } else {
+        el.value = '';
+      }
+    });
+    clone.classList.remove('is-deleted');
+    tbody.appendChild(clone);
+    totalForms.value = idx + 1;
+  }
+
+  addBtn.addEventListener('click', cloneRow);
+
+  // Visually fade rows marked for deletion
+  tbody.addEventListener('change', e => {
+    if (e.target && e.target.name && e.target.name.endsWith('-DELETE')) {
+      const row = e.target.closest('.cs-phone-row');
+      if (row) row.classList.toggle('is-deleted', e.target.checked);
+    }
+  });
+
+  // Only one phone may be primary at once. Auto-uncheck the others when
+  // an `is_primary` is checked. (DB doesn't enforce this; we do it
+  // client-side as a UX nicety.)
+  tbody.addEventListener('change', e => {
+    if (!e.target || !e.target.name) return;
+    if (!e.target.name.endsWith('-is_primary')) return;
+    if (!e.target.checked) return;
+    tbody.querySelectorAll('input[name$="-is_primary"]').forEach(cb => {
+      if (cb !== e.target) cb.checked = false;
+    });
+  });
+})();
+</script>
+{% endblock %}

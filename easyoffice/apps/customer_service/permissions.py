@@ -150,3 +150,52 @@ class CustomerServiceOversightMixin(LoginRequiredMixin):
                 'and Head of Sales.'
             )
         return super().dispatch(request, *args, **kwargs)
+
+
+# ── Customer (contact) management ──────────────────────────────────────────
+#
+# Who may create a customer/contact record OUTSIDE the call-desk flow
+# (i.e. without first logging an inbound call)?
+#
+# Per project decision: CS team, CS Head, Sales Head, CEO, admins,
+# superusers. Front-line agents stay free to add customers from the
+# call desk as before — this predicate exists so that the standalone
+# "+ New Contact" button only appears for people who should see it.
+
+CEO_GROUPS = {'ceo'}
+
+
+def can_create_customer(user) -> bool:
+    """
+    Standalone customer/contact creation (no call required).
+
+    Allowed:
+      • Superuser / Django staff
+      • Anyone in CS team or CS manager groups
+      • Head of Sales
+      • CEO group
+      • StaffProfile titles containing: customer service / sales /
+        supervisor / manager / head of / admin / ceo
+    """
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if user.is_superuser or user.is_staff:
+        return True
+    if _user_group_names(user) & (
+        CS_TEAM_GROUPS | CS_MANAGER_GROUPS | SALES_HEAD_GROUPS | CEO_GROUPS
+    ):
+        return True
+    return _has_position_keyword(
+        user, 'customer service', 'cs', 'sales',
+        'supervisor', 'manager', 'head of', 'admin', 'ceo',
+    )
+
+
+class CustomerManagementMixin(LoginRequiredMixin):
+    """Drop-in dispatch gate for views that create or edit Customer records."""
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated and not can_create_customer(request.user):
+            raise PermissionDenied(
+                "You don't have permission to create or edit customer contacts."
+            )
+        return super().dispatch(request, *args, **kwargs)

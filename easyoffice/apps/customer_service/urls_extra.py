@@ -1,46 +1,16 @@
 """
 apps/customer_service/urls_extra.py
 ───────────────────────────────────
-New URL routes to add to your existing apps/customer_service/urls.py.
+URL routes added on top of your existing urls.py.
 
-OPTION A — paste these lines into your existing urlpatterns:
-
-    from . import views_extra
-
-    path('tickets/<int:pk>/create-order/',
-         views_extra.CreateOrderFromTicketView.as_view(),
-         name='customer_service_create_order_from_ticket'),
-
-    path('tickets/<int:pk>/confirm-close/',
-         views_extra.ConfirmAndCloseTicketView.as_view(),
-         name='customer_service_confirm_close_ticket'),
-
-    path('assignments/<int:pk>/complete/',
-         views_extra.CompleteAssignmentView.as_view(),
-         name='customer_service_complete_assignment'),
-
-    path('oversight/',
-         views_extra.HeadDashboardView.as_view(),
-         name='customer_service_oversight'),
-
-    path('oversight/report.csv',
-         views_extra.HeadReportCSVView.as_view(),
-         name='customer_service_oversight_report_csv'),
-
-    path('tickets/<int:pk>/portal-reply/',
-         views_extra.PortalReplyView.as_view(),
-         name='customer_service_portal_reply'),
-
-
-OPTION B — include this whole module from your existing urls.py:
-
-    from django.urls import include, path
-    urlpatterns += [path('', include('apps.customer_service.urls_extra'))]
+This module is included from urls.py at the bottom — keep it that way so
+that reverse() works for every name defined here.
 """
 from django.urls import path
 from . import views_extra
 
 urlpatterns = [
+    # ── Ticket-driven flows ──────────────────────────────────────────────
     path(
         'tickets/<int:pk>/create-order/',
         views_extra.CreateOrderFromTicketView.as_view(),
@@ -56,6 +26,8 @@ urlpatterns = [
         views_extra.CompleteAssignmentView.as_view(),
         name='customer_service_complete_assignment',
     ),
+
+    # ── Oversight (Head of CS / Head of Sales) ───────────────────────────
     path(
         'oversight/',
         views_extra.HeadDashboardView.as_view(),
@@ -66,10 +38,32 @@ urlpatterns = [
         views_extra.HeadReportCSVView.as_view(),
         name='customer_service_oversight_report_csv',
     ),
-    # ── NEW: staff reply into customer portal thread ─────────────────
+
+    # ── Customer-portal bridge ───────────────────────────────────────────
     path(
         'tickets/<int:pk>/portal-reply/',
         views_extra.PortalReplyView.as_view(),
         name='customer_service_portal_reply',
+    ),
+
+    # ── Standalone contact creation (no call required) ───────────────────
+    # Restricted by views_extra.CustomerCreateView.dispatch — CS team,
+    # CS Head, Sales Head, CEO, admins, superusers only.
+    path(
+        'customers/new/',
+        views_extra.CustomerCreateView.as_view(),
+        name='customer_service_customer_create',
+    ),
+    path(
+        'customers/<int:pk>/edit/',
+        views_extra.CustomerEditView.as_view(),
+        name='customer_service_customer_edit',
+    ),
+
+    # ── Order directly from a customer (no call / no ticket) ─────────────
+    path(
+        'customers/<int:pk>/create-order/',
+        views_extra.CreateOrderFromCustomerView.as_view(),
+        name='customer_service_create_order_from_customer',
     ),
 ]

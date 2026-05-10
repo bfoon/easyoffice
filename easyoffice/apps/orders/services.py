@@ -799,3 +799,187 @@ def attach_customer(order: SalesOrder, customer, actor) -> SalesOrder:
     )
     transaction.on_commit(lambda: notifications.notify_customer_attached(order, actor=actor))
     return order
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Order creation from upstream contexts (ticket / customer-detail)
+# ════════════════════════════════════════════════════════════════════════
+#
+# These thin wrappers around create_order_from_payload exist so that the
+# customer_service module never has to know about OrderSource codes,
+# payload field names, or the "snapshot the customer's contact info"
+# convention. A view just hands us a Ticket or a Customer + a list of
+# items, and we do the rest.
+
+def _customer_primary_phone(customer) -> str:
+    """Best-effort primary phone for a Customer (used to snapshot onto an order).
+
+    Falls back through:
+        1. CustomerPhone.is_primary=True (oldest first if multiple)
+        2. First CustomerPhone marked primary phone_type
+        3. First active CustomerPhone
+        4. Empty string
+    """
+    if not customer or not getattr(customer, 'pk', None):
+        return ''
+    try:
+        phones = customer.phones.all()
+    except Exception:
+        return ''
+
+    primary = next((p for p in phones if getattr(p, 'is_primary', False)), None)
+    if primary:
+        return primary.phone_number or ''
+
+    typed_primary = next(
+        (p for p in phones if getattr(p, 'phone_type', '') == 'primary'),
+        None,
+    )
+    if typed_primary:
+        return typed_primary.phone_number or ''
+
+    active = next((p for p in phones if getattr(p, 'is_active', True)), None)
+    if active:
+        return active.phone_number or ''
+
+    return ''
+
+
+def _payload_from_customer(customer, *, overrides: dict | None = None) -> dict:
+    """Build a contact payload skeleton from a Customer."""
+    overrides = overrides or {}
+    return {
+        'customer_id':      customer.pk,
+        'contact_name':     (overrides.get('contact_name')
+                              or customer.full_name
+                              or customer.display_name
+                              or ''),
+        'contact_phone':    (overrides.get('contact_phone')
+                              or _customer_primary_phone(customer)),
+        'contact_email':    (overrides.get('contact_email')
+                              or customer.email
+                              or ''),
+        'delivery_address': (overrides.get('delivery_address')
+                              or customer.address
+                              or ''),
+    }
+
+
+@transaction.atomic
+def create_order_from_ticket(ticket, *, actor, items: list,
+                              delivery_address: str = '',
+                              notes: str = '',
+                              currency: str = 'GMD',
+                              tax_rate: Decimal = Decimal('0'),
+                              discount_amount: Decimal = Decimal('0'),
+                              contact_overrides: dict | None = None,
+                              link_back: bool = True) -> SalesOrder:
+    """
+    Build a SalesOrder from a customer-service ServiceTicket.
+
+    Customer & contact information are populated from the ticket's linked
+    Customer; anything passed via `contact_overrides` wins. Source is
+    inferred from the ticket type (callback → PHONE, otherwise PHONE for
+    sales/maintenance tickets, OTHER as a fallback).
+
+    `link_back=True` writes the new order's PK onto the ticket so the
+    template can show "Order SO-... created from this ticket".
+    """
+    if not ticket:
+        raise ValueError('A ticket is required to create an order.')
+    if not getattr(ticket, 'customer_id', None):
+        raise ValueError(
+            'This ticket has no linked customer. Attach a customer to the '
+            'ticket before creating an order from it.'
+        )
+    if not items:
+        raise ValueError('Add at least one line item before creating an order.')
+
+    customer = ticket.customer
+    overrides = dict(contact_overrides or {})
+
+    payload = _payload_from_customer(customer, overrides=overrides)
+    payload.update({
+        'delivery_address': (delivery_address or overrides.get('delivery_address')
+                              or customer.address or ''),
+        'notes':           (notes or f'Created from ticket {ticket.ticket_no}'),
+        'currency':        currency or 'GMD',
+        'tax_rate':        tax_rate,
+        'discount_amount': discount_amount,
+        'items':           items,
+        'external_ref':    f'ticket:{ticket.ticket_no}',
+    })
+
+    # Pick a sensible source code.
+    ticket_type = (getattr(ticket, 'ticket_type', '') or '').lower()
+    if ticket_type in {'sales', 'product', 'callback'}:
+        source = OrderSource.PHONE
+    else:
+        source = OrderSource.PHONE  # everything else still came in via the call desk
+
+    order = create_order_from_payload(payload, source=source, actor=actor)
+
+    # Link the order back to the ticket. SalesOrder.ticket FK already exists.
+    if order.ticket_id != ticket.pk:
+        order.ticket = ticket
+        order.save(update_fields=['ticket', 'updated_at'])
+
+    if link_back:
+        try:
+            from apps.customer_service.models import ServiceTicketUpdate
+            ServiceTicketUpdate.objects.create(
+                ticket=ticket,
+                user=actor if (actor and getattr(actor, 'is_authenticated', False)) else None,
+                update_type='note',
+                body=(f'🛒 Sales order {order.order_no} created from this ticket '
+                      f'(total: {order.currency} {order.total}).'),
+            )
+        except Exception:
+            logger.warning(
+                'Could not write ticket update for new order %s',
+                order.order_no, exc_info=True,
+            )
+
+    return order
+
+
+@transaction.atomic
+def create_order_from_customer(customer, *, actor, items: list,
+                                delivery_address: str = '',
+                                notes: str = '',
+                                currency: str = 'GMD',
+                                tax_rate: Decimal = Decimal('0'),
+                                discount_amount: Decimal = Decimal('0'),
+                                contact_overrides: dict | None = None,
+                                source: str = OrderSource.WALK_IN) -> SalesOrder:
+    """
+    Build a SalesOrder directly from a Customer record — no ticket / call.
+
+    Used by:
+        • Customer detail page → "New Order" button
+        • Anywhere else that wants a fast path for a known customer.
+
+    All contact / delivery fields are auto-populated from the customer; the
+    caller can override any of them via `contact_overrides`.
+    """
+    if not customer:
+        raise ValueError('A customer is required to create an order.')
+    if not items:
+        raise ValueError('Add at least one line item before creating an order.')
+
+    overrides = dict(contact_overrides or {})
+    payload = _payload_from_customer(customer, overrides=overrides)
+    payload.update({
+        'delivery_address': (delivery_address or overrides.get('delivery_address')
+                              or customer.address or ''),
+        'notes':           notes or '',
+        'currency':        currency or 'GMD',
+        'tax_rate':        tax_rate,
+        'discount_amount': discount_amount,
+        'items':           items,
+    })
+
+    if source not in {s for s, _ in OrderSource.choices}:
+        source = OrderSource.WALK_IN
+
+    return create_order_from_payload(payload, source=source, actor=actor)

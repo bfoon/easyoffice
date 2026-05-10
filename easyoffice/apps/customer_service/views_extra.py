@@ -234,7 +234,8 @@ class CreateOrderFromTicketView(CustomerServiceAccessMixin, View):
             return redirect('customer_service_ticket_detail', pk=ticket.pk)
 
         try:
-            order = services.create_order_from_ticket(
+            from apps.orders import services as orders_services
+            order = orders_services.create_order_from_ticket(
                 ticket,
                 actor=request.user,
                 items=items,
@@ -249,7 +250,11 @@ class CreateOrderFromTicketView(CustomerServiceAccessMixin, View):
                     'contact_email': request.POST.get('contact_email', '').strip(),
                 },
             )
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect('customer_service_ticket_detail', pk=ticket.pk)
         except Exception as exc:
+            logger.exception('create_order_from_ticket failed for ticket %s', ticket.pk)
             messages.error(request, f'Could not create order: {exc}')
             return redirect('customer_service_ticket_detail', pk=ticket.pk)
 
@@ -728,3 +733,356 @@ class PortalReplyView(CustomerServiceAccessMixin, View):
             )
         except Exception:
             logger.exception('customer_service: portal reply customer notify failed')
+
+# ════════════════════════════════════════════════════════════════════════
+# 6. STANDALONE CUSTOMER (CONTACT) CREATE & EDIT
+#    Anyone with `can_create_customer` permission can create / edit a
+#    Customer record without first logging an inbound call. Used by
+#    CS, CS Head, Sales Head, CEO, admins, superusers.
+# ════════════════════════════════════════════════════════════════════════
+
+from django.views.generic import FormView, UpdateView, CreateView
+
+
+class _CustomerFormBaseView(View):
+    """
+    Shared rendering / save logic for the standalone Customer form.
+
+    Subclasses set:
+        is_edit          — bool; just a context flag for the template
+    and provide a way to fetch / build the Customer instance:
+        _get_instance(request, **kwargs) -> Customer | None
+    """
+    template_name = 'customer_service/customer_form.html'
+    http_method_names = ['get', 'post']
+    is_edit = False
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect('login')
+        from .permissions import can_create_customer
+        if not can_create_customer(request.user):
+            from django.core.exceptions import PermissionDenied
+            raise PermissionDenied(
+                "You don't have permission to create or edit customer contacts."
+            )
+        return super().dispatch(request, *args, **kwargs)
+
+    # ── Subclass hooks ─────────────────────────────────────────────
+    def _get_instance(self, request, **kwargs):
+        return None
+
+    def _page_title(self, instance):
+        if instance and instance.pk:
+            return f'Edit Contact — {instance.display_name}'
+        return 'New Customer Contact'
+
+    # ── Rendering ──────────────────────────────────────────────────
+    def _render(self, request, form, formset, instance, *, status=200):
+        from django.shortcuts import render
+        return render(request, self.template_name, {
+            'form': form,
+            'phone_formset': formset,
+            'is_edit': bool(instance and instance.pk),
+            'page_title': self._page_title(instance),
+            'customer': instance,
+        }, status=status)
+
+    # ── HTTP handlers ──────────────────────────────────────────────
+    def get(self, request, *args, **kwargs):
+        from .forms import CustomerForm, CustomerPhoneFormSet
+        instance = self._get_instance(request, **kwargs)
+        if instance and instance.pk:
+            form = CustomerForm(instance=instance)
+            formset = CustomerPhoneFormSet(instance=instance)
+        else:
+            form = CustomerForm(initial={
+                'customer_type': 'individual',
+                'preferred_contact_method': 'phone',
+                'needs_feedback': True,
+            })
+            formset = CustomerPhoneFormSet()
+        return self._render(request, form, formset, instance)
+
+    def post(self, request, *args, **kwargs):
+        from .forms import CustomerForm, CustomerPhoneFormSet
+        instance = self._get_instance(request, **kwargs)
+
+        if instance and instance.pk:
+            form = CustomerForm(request.POST, instance=instance)
+            formset = CustomerPhoneFormSet(request.POST, instance=instance)
+        else:
+            form = CustomerForm(request.POST)
+            formset = CustomerPhoneFormSet(request.POST)
+
+        if not (form.is_valid() and formset.is_valid()):
+            messages.error(request, 'Please fix the errors below and try again.')
+            return self._render(request, form, formset, instance, status=400)
+
+        try:
+            with transaction.atomic():
+                customer = form.save(commit=False)
+                # Only set created_by on first save — never overwrite on edit.
+                if not customer.pk:
+                    customer.created_by = request.user
+                customer.save()
+
+                formset.instance = customer
+                phones = formset.save(commit=False)
+                for f in formset.deleted_objects:
+                    f.delete()
+
+                # If no phone is flagged primary but at least one phone was
+                # provided, mark the first non-deleted one primary.
+                non_deleted = [p for p in phones if p.phone_number]
+                if non_deleted and not any(p.is_primary for p in non_deleted):
+                    # Don't override existing-saved primaries; only set when
+                    # the customer truly has no primary on file.
+                    has_existing_primary = (
+                        customer.pk
+                        and customer.phones.filter(is_primary=True).exists()
+                    )
+                    if not has_existing_primary:
+                        non_deleted[0].is_primary = True
+
+                for p in phones:
+                    if not p.phone_number:
+                        continue
+                    p.customer = customer
+                    p.save()
+
+        except Exception as exc:
+            logger.exception('Customer form save failed (instance=%s)', getattr(instance, 'pk', None))
+            messages.error(request, f'Could not save the contact: {exc}')
+            return self._render(request, form, formset, instance, status=500)
+
+        if self.is_edit:
+            messages.success(
+                request,
+                f'Contact "{customer.display_name}" updated.',
+            )
+        else:
+            messages.success(
+                request,
+                f'Contact "{customer.display_name}" created '
+                f'({customer.customer_code}).',
+            )
+        return redirect('customer_service_customer_detail', pk=customer.pk)
+
+
+class CustomerCreateView(_CustomerFormBaseView):
+    """
+    GET  /customer-service/customers/new/
+        → renders an empty Customer form + 1-row phone formset.
+    POST same URL
+        → validates both, persists, redirects to the customer detail page.
+    """
+    is_edit = False
+
+
+class CustomerEditView(_CustomerFormBaseView):
+    """
+    GET  /customer-service/customers/<pk>/edit/
+        → renders the Customer form pre-populated with current values
+          and the existing phone records as inline rows.
+    POST same URL
+        → updates the contact, applies phone add/edit/delete, redirects
+          to the customer detail page.
+    """
+    is_edit = True
+
+    def _get_instance(self, request, *, pk, **kwargs):
+        return get_object_or_404(Customer, pk=pk)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 7. CREATE ORDER DIRECTLY FROM A CUSTOMER (no ticket / no call required)
+#    GET → simple form on the customer detail page (or a dedicated page)
+#    POST → builds the order via apps.orders.services.create_order_from_customer
+# ════════════════════════════════════════════════════════════════════════
+
+class CreateOrderFromCustomerView(View):
+    """
+    GET  /customer-service/customers/<pk>/create-order/
+        → render a small order-creation form pre-filled from the customer.
+
+    POST same URL
+        → build the SalesOrder via orders.services and redirect to the
+          order detail page on success, or back to the form on failure.
+
+    Anyone with customer-service access can use this — same gate as the
+    rest of the CS module.
+    """
+    template_name = 'customer_service/customer_order_create.html'
+    http_method_names = ['get', 'post']
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect('login')
+        from .permissions import can_use_customer_service
+        if not can_use_customer_service(request.user):
+            from django.core.exceptions import PermissionDenied
+            raise PermissionDenied("You don't have access to Customer Service.")
+        return super().dispatch(request, *args, **kwargs)
+
+    def _get_customer(self, pk):
+        return get_object_or_404(
+            Customer.objects.prefetch_related('phones'),
+            pk=pk,
+        )
+
+    def get(self, request, pk):
+        customer = self._get_customer(pk)
+        from django.shortcuts import render
+        return render(request, self.template_name, {
+            'customer': customer,
+            'sources': self._source_choices(),
+            'default_currency': 'GMD',
+            'page_title': f'New Order — {customer.display_name}',
+        })
+
+    def post(self, request, pk):
+        customer = self._get_customer(pk)
+
+        items = self._collect_items(request.POST)
+        if not items:
+            messages.error(
+                request,
+                'Add at least one line item before creating an order.',
+            )
+            return redirect(
+                'customer_service_create_order_from_customer',
+                pk=customer.pk,
+            )
+
+        try:
+            from apps.orders import services as orders_services
+            from apps.orders.models import OrderSource
+        except Exception:
+            messages.error(request, 'The orders app is unavailable.')
+            logger.exception('CreateOrderFromCustomerView: orders import failed')
+            return redirect('customer_service_customer_detail', pk=customer.pk)
+
+        try:
+            tax_rate = Decimal(request.POST.get('tax_rate') or '0')
+        except Exception:
+            tax_rate = Decimal('0')
+        try:
+            discount = Decimal(request.POST.get('discount_amount') or '0')
+        except Exception:
+            discount = Decimal('0')
+
+        source = (request.POST.get('source') or 'walk_in').strip()
+        if source not in {s for s, _ in OrderSource.choices}:
+            source = OrderSource.WALK_IN
+
+        try:
+            order = orders_services.create_order_from_customer(
+                customer,
+                actor=request.user,
+                items=items,
+                delivery_address=request.POST.get('delivery_address', '').strip(),
+                notes=request.POST.get('notes', '').strip(),
+                currency=(request.POST.get('currency') or 'GMD').strip()[:3],
+                tax_rate=tax_rate,
+                discount_amount=discount,
+                contact_overrides={
+                    'contact_name':  request.POST.get('contact_name', '').strip(),
+                    'contact_phone': request.POST.get('contact_phone', '').strip(),
+                    'contact_email': request.POST.get('contact_email', '').strip(),
+                    'delivery_address': request.POST.get('delivery_address', '').strip(),
+                },
+                source=source,
+            )
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect(
+                'customer_service_create_order_from_customer',
+                pk=customer.pk,
+            )
+        except Exception as exc:
+            logger.exception('create_order_from_customer failed (customer=%s)', customer.pk)
+            messages.error(request, f'Could not create order: {exc}')
+            return redirect(
+                'customer_service_create_order_from_customer',
+                pk=customer.pk,
+            )
+
+        messages.success(
+            request,
+            f'Order {order.order_no} created for {customer.display_name}.',
+        )
+        try:
+            return redirect(reverse('orders:order_detail', kwargs={'pk': order.pk}))
+        except Exception:
+            return redirect('customer_service_customer_detail', pk=customer.pk)
+
+    @staticmethod
+    def _source_choices():
+        try:
+            from apps.orders.models import OrderSource
+            return list(OrderSource.choices)
+        except Exception:
+            return [
+                ('walk_in', 'Walk-In'),
+                ('phone',   'Phone Call'),
+                ('email',   'Email'),
+                ('other',   'Other'),
+            ]
+
+    @staticmethod
+    def _collect_items(post) -> list:
+        """
+        Same item-parsing convention as CreateOrderFromTicketView — accepts
+        either repeated `item_*` fields or indexed `items-N-*` fields.
+        """
+        items: list = []
+
+        descs  = post.getlist('item_description') or post.getlist('item_description[]')
+        qtys   = post.getlist('item_quantity')    or post.getlist('item_quantity[]')
+        prices = post.getlist('item_unit_price')  or post.getlist('item_unit_price[]')
+        prods  = post.getlist('item_product_id')  or post.getlist('item_product_id[]')
+
+        for i, desc in enumerate(descs):
+            d = (desc or '').strip()
+            try:
+                q = Decimal(qtys[i]) if i < len(qtys) and qtys[i] else Decimal('0')
+            except Exception:
+                q = Decimal('0')
+            try:
+                p = Decimal(prices[i]) if i < len(prices) and prices[i] else Decimal('0')
+            except Exception:
+                p = Decimal('0')
+            if not d and q == 0:
+                continue
+            line = {'description': d, 'quantity': q, 'unit_price': p}
+            if i < len(prods) and prods[i]:
+                line['product_id'] = prods[i]
+            items.append(line)
+
+        if items:
+            return items
+
+        i = 0
+        while True:
+            desc = post.get(f'items-{i}-description')
+            if desc is None:
+                break
+            d = desc.strip()
+            try:
+                q = Decimal(post.get(f'items-{i}-quantity', '0') or '0')
+            except Exception:
+                q = Decimal('0')
+            try:
+                p = Decimal(post.get(f'items-{i}-unit_price', '0') or '0')
+            except Exception:
+                p = Decimal('0')
+            if not (not d and q == 0):
+                line = {'description': d, 'quantity': q, 'unit_price': p}
+                pid = post.get(f'items-{i}-product_id')
+                if pid:
+                    line['product_id'] = pid
+                items.append(line)
+            i += 1
+
+        return items

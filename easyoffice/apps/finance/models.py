@@ -759,6 +759,131 @@ class ContractAlertLog(models.Model):
         ordering = ['-sent_at']
 
 
+class ContractExtension(models.Model):
+    """
+    Tracks an extension/amendment of a parent Contract.
+
+    Each extension is numbered sequentially (1, 2, 3 …) within its parent
+    contract. The human-readable reference is composed of the parent
+    contract's `reference` plus a `-N` suffix, e.g.:
+
+        Parent contract reference : CTR-20260505042707871208
+        Extension #1              : CTR-20260505042707871208-1
+        Extension #2              : CTR-20260505042707871208-2
+
+    Storing the extensions as their own rows (rather than mutating the
+    parent contract in-place) preserves an auditable history of every
+    extension — previous end date, new end date, reason, who approved it,
+    and any optional supporting document or monetary delta.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    contract = models.ForeignKey(
+        Contract,
+        on_delete=models.CASCADE,
+        related_name='extensions',
+    )
+
+    # Sequential number within the parent contract (1, 2, 3 …).
+    # Automatically allocated in save() if left blank.
+    extension_number = models.PositiveIntegerField(
+        help_text='Sequential number of this extension within the parent contract.',
+    )
+
+    # Cached, denormalised display reference: "<parent.reference>-<extension_number>"
+    # Computed in save() — DB column stays in sync with the parent reference.
+    reference = models.CharField(max_length=120, blank=True)
+
+    # Date snapshot — what changed.
+    previous_end_date = models.DateField(
+        help_text='The contract end date before this extension was applied.',
+    )
+    new_end_date = models.DateField(
+        help_text='The contract end date after this extension is applied.',
+    )
+
+    # Optional money delta (e.g. extension fee or revised contract value).
+    additional_amount = models.DecimalField(
+        max_digits=14, decimal_places=2,
+        default=Decimal('0'),
+        help_text='Optional additional monetary value of this extension.',
+    )
+    currency = models.CharField(max_length=10, blank=True)
+
+    # Free-form context.
+    reason = models.TextField(
+        blank=True,
+        help_text='Justification / scope of the extension.',
+    )
+    notes = models.TextField(blank=True)
+
+    # Optional supporting document (signed amendment, addendum, etc.).
+    document = models.FileField(
+        upload_to='contracts/extensions/%Y/%m/',
+        null=True, blank=True,
+    )
+
+    # When this extension takes effect (defaults to today).
+    effective_date = models.DateField(default=timezone.now)
+
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='created_contract_extensions',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['contract', 'extension_number']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['contract', 'extension_number'],
+                name='uniq_contract_extension_number',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.reference or self.contract.reference} (ext #{self.extension_number})'
+
+    # ── Helpers ─────────────────────────────────────────────────────────────
+    @property
+    def days_added(self):
+        """Length of this extension in days (new_end_date − previous_end_date)."""
+        if not (self.previous_end_date and self.new_end_date):
+            return 0
+        return (self.new_end_date - self.previous_end_date).days
+
+    def _compute_reference(self):
+        """Build '<parent.reference>-<N>' on demand."""
+        parent_ref = (self.contract.reference or '').strip()
+        if not parent_ref:
+            parent_ref = f'CTR-{self.contract_id}'
+        return f'{parent_ref}-{self.extension_number}'
+
+    def save(self, *args, **kwargs):
+        # Auto-allocate the next extension_number for this contract if missing.
+        if not self.extension_number:
+            last = (
+                ContractExtension.objects
+                .filter(contract_id=self.contract_id)
+                .order_by('-extension_number')
+                .first()
+            )
+            self.extension_number = (last.extension_number + 1) if last else 1
+
+        # Default the currency from the parent contract.
+        if not self.currency:
+            self.currency = self.contract.currency or 'GMD'
+
+        # Always keep the displayed reference in sync with the parent ref.
+        self.reference = self._compute_reference()
+
+        super().save(*args, **kwargs)
+
+
 # class ContractInvoiceLink(models.Model):
 #     """
 #     Keeps track of invoices generated from contracts.
@@ -776,6 +901,270 @@ class ContractAlertLog(models.Model):
 #
 #     class Meta:
 #         ordering = ['-created_at']
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Contract documents & e-signature
+# ════════════════════════════════════════════════════════════════════════════
+
+class ContractDocument(models.Model):
+    """
+    A renderable artifact tied to a Contract. Two flavours:
+
+      * source='generated' — produced by `contract_document_service` from the
+        contract's structured fields. Stored as the .docx (editable master) and
+        the .pdf (signing/preview copy).
+      * source='uploaded'  — references whatever the user uploaded as
+        `contract.document` (so signing flows can target either the generated
+        artifact or the uploaded one without branching everywhere).
+
+    Multiple documents may exist over time; only the latest 'generated' one is
+    used for new signing requests by default.
+    """
+    class Source(models.TextChoices):
+        GENERATED = 'generated', 'Generated from contract data'
+        UPLOADED  = 'uploaded',  'Uploaded by user'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    contract = models.ForeignKey(
+        Contract,
+        on_delete=models.CASCADE,
+        related_name='documents',
+    )
+    source = models.CharField(
+        max_length=20,
+        choices=Source.choices,
+        default=Source.GENERATED,
+    )
+
+    # Files. The DOCX is the editable/clean master; the PDF is what gets signed.
+    docx_file = models.FileField(
+        upload_to='contracts/docs/%Y/%m/',
+        null=True, blank=True,
+    )
+    pdf_file = models.FileField(
+        upload_to='contracts/docs/%Y/%m/',
+        null=True, blank=True,
+    )
+
+    title = models.CharField(max_length=250, blank=True)
+    version = models.PositiveIntegerField(default=1)
+
+    # Snapshot of contract data at generation time (defensive — ties the
+    # document to what it was at the moment of issuance).
+    snapshot = models.JSONField(default=dict, blank=True)
+
+    generated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='generated_contract_documents',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.contract.title} — {self.get_source_display()} v{self.version}'
+
+    @property
+    def has_pdf(self):
+        return bool(self.pdf_file)
+
+    @property
+    def has_docx(self):
+        return bool(self.docx_file)
+
+    @property
+    def display_name(self):
+        return self.title or f'{self.contract.title} (v{self.version})'
+
+
+class ContractSignatureRequest(models.Model):
+    """
+    A signing session for a ContractDocument.
+
+    The counterparty receives a tokenised public URL ("magic link"), opens the
+    document, draws/types their signature, and submits it. On submission, a
+    ContractSignature row is recorded and a final signed PDF is generated with
+    the signature stamped onto the signature page plus a tamper-evident
+    completion certificate.
+    """
+
+    class Status(models.TextChoices):
+        DRAFT     = 'draft',     'Draft'
+        SENT      = 'sent',      'Sent — awaiting signature'
+        VIEWED    = 'viewed',    'Viewed by signer'
+        SIGNED    = 'signed',    'Signed'
+        DECLINED  = 'declined',  'Declined'
+        VOIDED    = 'voided',    'Voided'
+        EXPIRED   = 'expired',   'Expired'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    contract = models.ForeignKey(
+        Contract,
+        on_delete=models.CASCADE,
+        related_name='signature_requests',
+    )
+    document = models.ForeignKey(
+        ContractDocument,
+        on_delete=models.PROTECT,
+        related_name='signature_requests',
+    )
+
+    # The counterparty being asked to sign.
+    signer_name = models.CharField(max_length=200)
+    signer_email = models.EmailField()
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+    )
+
+    # Random opaque token used in the public signing URL.
+    access_token = models.CharField(max_length=64, unique=True, editable=False)
+
+    expires_at = models.DateTimeField(
+        help_text='After this point the link can no longer be used to sign.',
+    )
+
+    # Optional message from the sender.
+    message = models.TextField(blank=True)
+
+    # Final signed PDF (with signature stamped on it).
+    signed_pdf = models.FileField(
+        upload_to='contracts/signed/%Y/%m/',
+        null=True, blank=True,
+    )
+
+    # Audit timestamps & metadata.
+    sent_at = models.DateTimeField(null=True, blank=True)
+    first_viewed_at = models.DateTimeField(null=True, blank=True)
+    last_viewed_at = models.DateTimeField(null=True, blank=True)
+    signed_at = models.DateTimeField(null=True, blank=True)
+    declined_at = models.DateTimeField(null=True, blank=True)
+    voided_at = models.DateTimeField(null=True, blank=True)
+
+    decline_reason = models.TextField(blank=True)
+
+    # Tamper-evidence: SHA-256 of the original PDF when the request was created.
+    document_hash = models.CharField(max_length=128, blank=True)
+
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='created_contract_signature_requests',
+    )
+    voided_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='voided_contract_signature_requests',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.contract.title} → {self.signer_email} ({self.get_status_display()})'
+
+    def save(self, *args, **kwargs):
+        if not self.access_token:
+            import secrets
+            self.access_token = secrets.token_urlsafe(40)
+        if not self.expires_at:
+            self.expires_at = timezone.now() + timedelta(days=30)
+        super().save(*args, **kwargs)
+
+    # ── Helpers ─────────────────────────────────────────────────────────────
+    @property
+    def is_expired(self):
+        return self.expires_at and timezone.now() >= self.expires_at
+
+    @property
+    def is_open(self):
+        """Can the signer still act on this request?"""
+        if self.is_expired:
+            return False
+        return self.status in [
+            self.Status.SENT,
+            self.Status.VIEWED,
+        ]
+
+    @property
+    def is_complete(self):
+        return self.status == self.Status.SIGNED
+
+    def public_path(self):
+        """The relative URL path for the public signing page."""
+        return f'/finance/contracts/sign/{self.access_token}/'
+
+
+class ContractSignature(models.Model):
+    """
+    The actual signature captured for a ContractSignatureRequest.
+
+    Stored separately so we keep the signing request as the workflow object
+    and the signature as the audit-grade artifact.
+    """
+
+    class Method(models.TextChoices):
+        DRAWN  = 'drawn',  'Drawn'
+        TYPED  = 'typed',  'Typed'
+        UPLOAD = 'upload', 'Uploaded image'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    request = models.OneToOneField(
+        ContractSignatureRequest,
+        on_delete=models.CASCADE,
+        related_name='signature',
+    )
+
+    signer_name_at_signing = models.CharField(max_length=200)
+    signer_email_at_signing = models.EmailField()
+
+    method = models.CharField(
+        max_length=20,
+        choices=Method.choices,
+        default=Method.DRAWN,
+    )
+
+    # The captured mark itself. For DRAWN/UPLOAD we save a PNG; for TYPED we
+    # save the text and render it server-side.
+    signature_image = models.ImageField(
+        upload_to='contracts/signatures/%Y/%m/',
+        null=True, blank=True,
+    )
+    typed_text = models.CharField(max_length=200, blank=True)
+
+    # "I agree to electronic signature" consent.
+    consent_text = models.TextField(blank=True)
+    consent_given = models.BooleanField(default=False)
+
+    # Forensic context.
+    signed_ip = models.GenericIPAddressField(null=True, blank=True)
+    signed_user_agent = models.TextField(blank=True)
+
+    # SHA-256 hash of the document at the moment of signing
+    # (matched against ContractSignatureRequest.document_hash).
+    document_hash_at_signing = models.CharField(max_length=128, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'Signature by {self.signer_name_at_signing}'
 
 
 class ContractInvoiceLink(models.Model):

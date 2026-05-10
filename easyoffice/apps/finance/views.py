@@ -1,3 +1,4 @@
+import os
 from decimal import Decimal, InvalidOperation
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import TemplateView, View, DetailView
@@ -10,11 +11,14 @@ from django.core.mail import send_mail
 from django.conf import settings
 from apps.core.models import User
 from django.urls import reverse
+from apps.tasks.models import Task
+from apps.finance.views_invoice_followup import _can_assign_followup
 
 from apps.finance.models import (
     Budget, PurchaseRequest, Payment,
     EmployeeFinanceRequest, EmployeeLoan, EmployeeLoanPayment,
-    Contract, ContractAlertLog, ContractInvoiceLink, IncomingPaymentRequest,
+    Contract, ContractAlertLog, ContractExtension, ContractInvoiceLink, IncomingPaymentRequest,
+    ContractDocument, ContractSignatureRequest, ContractSignature,
     PaymentRequest, PaymentRequestDocument,
     IncomingPaymentDocument,
 )
@@ -133,6 +137,33 @@ def _validate_decimal(value, field_name='amount'):
 
 def _generate_reference(prefix='PAY'):
     return f'{prefix}-{timezone.now().strftime("%Y%m%d%H%M%S%f")}'
+
+
+def _parse_date(value, field_name='date'):
+    """
+    Coerce a form value into a real datetime.date (or None for empty).
+
+    Required because Django's `auto-cast on save` only runs at the SQL
+    layer — `post_save` signals fire with whatever Python value is on the
+    instance, so if `c.end_date = '2026-12-31'` (a string) is assigned and
+    a signal then does `instance.end_date + timedelta(days=1)`, it blows
+    up with: 'can only concatenate str (not timedelta) to str'.
+    """
+    if value in (None, ''):
+        return None
+    # Already a date / datetime — pass through (datetime → date).
+    if hasattr(value, 'date') and not isinstance(value, str):
+        return value.date() if hasattr(value, 'time') else value
+    s = str(value).strip()
+    if not s:
+        return None
+    from datetime import datetime as _dt
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y'):
+        try:
+            return _dt.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f'Please enter a valid {field_name} (YYYY-MM-DD).')
 
 
 def _apply_payment_to_budget(payment):
@@ -1876,12 +1907,35 @@ class IncomingPaymentRequestDetailView(LoginRequiredMixin, View):
 
     def get(self, request, pk):
         ipr = get_object_or_404(IncomingPaymentRequest, pk=pk)
+
+        # ── Follow-up tasks linked to this invoice ──────────────────────
+        # Open tasks first (todo, in_progress, on_hold, review), with
+        # done/cancelled at the bottom.
+        followup_tasks = list(
+            ipr.followup_tasks
+            .select_related('assigned_to')
+            .order_by('status', 'due_date', '-created_at')
+        )
+
+        # ── Assignee dropdown ───────────────────────────────────────────
+        # Same population strategy as TaskCreateView.
+        assignable_users = (
+            User.objects
+            .filter(is_active=True, status='active')
+            .order_by('first_name', 'last_name')
+        )
+
         return render(request, self.template_name, {
-            'ipr':              ipr,
-            'documents':        ipr.documents.all(),
-            'is_finance':       _is_finance(request.user),
-            'is_ceo':           _is_ceo(request.user),
+            'ipr': ipr,
+            'documents': ipr.documents.all(),
+            'is_finance': _is_finance(request.user),
+            'is_ceo': _is_ceo(request.user),
             'doc_type_choices': IncomingPaymentDocument.DocType.choices,
+
+            # ── New keys for Payment Follow-up card ─────────────────────
+            'followup_tasks': followup_tasks,
+            'assignable_users': assignable_users,
+            'can_assign_followup': _can_assign_followup(request.user, ipr),
         })
 
 
@@ -2153,6 +2207,21 @@ class ContractCreateView(LoginRequiredMixin, View):
         if tmpl_id:
             template = _user_template_qs(request.user).filter(pk=tmpl_id).first()
 
+        # Coerce date fields into real date objects so post_save signals
+        # don't choke on strings.
+        try:
+            start_date        = _parse_date(request.POST.get('start_date'),        'start date')
+            end_date          = _parse_date(request.POST.get('end_date'),          'end date')
+            renewal_date      = _parse_date(request.POST.get('renewal_date'),      'renewal date')
+            next_invoice_date = _parse_date(request.POST.get('next_invoice_date'), 'next invoice date')
+        except ValueError as e:
+            messages.error(request, str(e))
+            return render(request, self.template_name, self._get_form_context())
+
+        if not start_date or not end_date:
+            messages.error(request, 'Both start date and end date are required.')
+            return render(request, self.template_name, self._get_form_context())
+
         contract = Contract.objects.create(
             title                    = title,
             contract_type            = contract_type,
@@ -2164,9 +2233,9 @@ class ContractCreateView(LoginRequiredMixin, View):
             vendor_address           = request.POST.get('vendor_address', '').strip(),
             reference                = request.POST.get('reference', '').strip() or _next_contract_reference(),
             description              = request.POST.get('description', '').strip(),
-            start_date               = request.POST.get('start_date'),
-            end_date                 = request.POST.get('end_date'),
-            renewal_date             = request.POST.get('renewal_date') or None,
+            start_date               = start_date,
+            end_date                 = end_date,
+            renewal_date             = renewal_date,
             status                   = request.POST.get('status') or Contract.Status.ACTIVE,
             project_id               = request.POST.get('project') or None,
             budget_id                = request.POST.get('budget') or None,
@@ -2175,7 +2244,7 @@ class ContractCreateView(LoginRequiredMixin, View):
             billing_cycle            = request.POST.get('billing_cycle', Contract.BillingCycle.ONE_OFF),
             auto_generate_invoice    = request.POST.get('auto_generate_invoice') == 'on',
             auto_send_invoice        = request.POST.get('auto_send_invoice') == 'on',
-            next_invoice_date        = request.POST.get('next_invoice_date') or None,
+            next_invoice_date        = next_invoice_date,
             default_invoice_template = template,
             alert_days_before_end    = request.POST.get('alert_days_before_end') or 30,
             alert_days_before_renewal= request.POST.get('alert_days_before_renewal') or 14,
@@ -2247,6 +2316,21 @@ class ContractUpdateView(LoginRequiredMixin, View):
         if tmpl_id:
             template = _user_template_qs(request.user).filter(pk=tmpl_id).first()
 
+        # Coerce date fields into real date objects so post_save signals
+        # don't choke on raw POST strings.
+        try:
+            start_date        = _parse_date(request.POST.get('start_date'),        'start date')
+            end_date          = _parse_date(request.POST.get('end_date'),          'end date')
+            renewal_date      = _parse_date(request.POST.get('renewal_date'),      'renewal date')
+            next_invoice_date = _parse_date(request.POST.get('next_invoice_date'), 'next invoice date')
+        except ValueError as e:
+            messages.error(request, str(e))
+            return render(request, self.template_name, self._get_form_context(self.contract))
+
+        if not start_date or not end_date:
+            messages.error(request, 'Both start date and end date are required.')
+            return render(request, self.template_name, self._get_form_context(self.contract))
+
         c = self.contract
         c.title                     = title
         c.contract_type             = contract_type
@@ -2258,9 +2342,9 @@ class ContractUpdateView(LoginRequiredMixin, View):
         c.vendor_address            = request.POST.get('vendor_address', '').strip()
         c.reference                 = request.POST.get('reference', '').strip() or c.reference
         c.description               = request.POST.get('description', '').strip()
-        c.start_date                = request.POST.get('start_date')
-        c.end_date                  = request.POST.get('end_date')
-        c.renewal_date              = request.POST.get('renewal_date') or None
+        c.start_date                = start_date
+        c.end_date                  = end_date
+        c.renewal_date              = renewal_date
         c.status                    = request.POST.get('status') or c.status
         c.project_id                = request.POST.get('project') or None
         c.budget_id                 = request.POST.get('budget') or None
@@ -2269,7 +2353,7 @@ class ContractUpdateView(LoginRequiredMixin, View):
         c.billing_cycle             = request.POST.get('billing_cycle', Contract.BillingCycle.ONE_OFF)
         c.auto_generate_invoice     = request.POST.get('auto_generate_invoice') == 'on'
         c.auto_send_invoice         = request.POST.get('auto_send_invoice') == 'on'
-        c.next_invoice_date         = request.POST.get('next_invoice_date') or None
+        c.next_invoice_date         = next_invoice_date
         c.default_invoice_template  = template  # None clears it; a resolved obj sets it
         c.alert_days_before_end     = request.POST.get('alert_days_before_end') or 30
         c.alert_days_before_renewal = request.POST.get('alert_days_before_renewal') or 14
@@ -2307,8 +2391,60 @@ class ContractDetailView(LoginRequiredMixin, DetailView):
             .order_by('-created_at')
         )
 
+        # Extension history — chronological (oldest first) so the user
+        # reads -1, -2, -3 … top to bottom.
+        extensions = (
+            contract.extensions
+            .select_related('created_by')
+            .order_by('extension_number')
+        )
+
+        # Documents (generated + uploaded wrappers) — newest first.
+        documents = (
+            contract.documents
+            .select_related('generated_by')
+            .order_by('-created_at')
+        )
+        latest_generated = documents.filter(
+            source=ContractDocument.Source.GENERATED
+        ).first()
+
+        # Signature requests — newest first.
+        signature_requests = (
+            contract.signature_requests
+            .select_related('document', 'signature', 'created_by', 'voided_by')
+            .order_by('-created_at')
+        )
+        # The "active" signing request, if any (non-final state).
+        active_signature_request = signature_requests.filter(
+            status__in=[
+                ContractSignatureRequest.Status.SENT,
+                ContractSignatureRequest.Status.VIEWED,
+            ]
+        ).first()
+        latest_signed = signature_requests.filter(
+            status=ContractSignatureRequest.Status.SIGNED
+        ).first()
+
         ctx.update({
             'invoice_links':       invoice_links,
+            'extensions':          extensions,
+            'extension_count':     extensions.count(),
+            'next_extension_no':   (extensions.count() + 1),
+            'documents':                 documents,
+            'latest_generated_document': latest_generated,
+            'has_uploaded_document':     bool(contract.document),
+            'signature_requests':        signature_requests,
+            'active_signature_request':  active_signature_request,
+            'latest_signed_request':     latest_signed,
+            'can_extend_contract': (
+                _can_manage_contracts(user)
+                and contract.status not in [
+                    Contract.Status.TERMINATED,
+                    Contract.Status.COMPLETED,
+                ]
+            ),
+            'can_manage_documents': _can_manage_contracts(user),
             'can_generate_invoice': (
                 _user_can_manage_contract_invoices(user)
                 and contract.status == Contract.Status.ACTIVE
@@ -2388,3 +2524,678 @@ class ContractGenerateInvoiceView(LoginRequiredMixin, View):
         return redirect(
             reverse('invoices:invoice_detail', kwargs={'pk': result.invoice.pk})
         )
+
+# ════════════════════════════════════════════════════════════════════════════
+# Contract Extensions
+# ════════════════════════════════════════════════════════════════════════════
+
+class ContractExtendView(LoginRequiredMixin, View):
+    """
+    POST /finance/contracts/<uuid:pk>/extend/
+
+    Creates a ContractExtension row for the contract, advances the parent
+    contract's `end_date` to the new end date, and (optionally) clears
+    the EXPIRED status back to ACTIVE.
+
+    Form fields:
+        new_end_date       — required, ISO date (YYYY-MM-DD); must be > current end_date.
+        effective_date     — optional, ISO date; defaults to today.
+        reason             — optional, free text.
+        notes              — optional, free text.
+        additional_amount  — optional decimal; defaults to 0.
+        currency           — optional; defaults to the contract's currency.
+        document           — optional file upload (signed addendum).
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_contracts(request.user):
+            return HttpResponseForbidden(
+                'You do not have permission to extend contracts.'
+            )
+        self.contract = get_object_or_404(Contract, pk=kwargs['pk'])
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, pk):
+        c = self.contract
+
+        if c.status in [Contract.Status.TERMINATED, Contract.Status.COMPLETED]:
+            messages.error(
+                request,
+                f'Cannot extend a {c.get_status_display().lower()} contract.',
+            )
+            return redirect('contract_detail', pk=c.pk)
+
+        # ── Parse new_end_date ──────────────────────────────────────────────
+        new_end_raw = (request.POST.get('new_end_date') or '').strip()
+        if not new_end_raw:
+            messages.error(request, 'A new end date is required to extend the contract.')
+            return redirect('contract_detail', pk=c.pk)
+
+        from datetime import datetime as _dt
+        try:
+            new_end_date = _dt.strptime(new_end_raw, '%Y-%m-%d').date()
+        except ValueError:
+            messages.error(request, 'Please enter the new end date in YYYY-MM-DD format.')
+            return redirect('contract_detail', pk=c.pk)
+
+        if new_end_date <= c.end_date:
+            messages.error(
+                request,
+                f'New end date must be after the current end date '
+                f'({c.end_date.strftime("%b %-d, %Y")}).',
+            )
+            return redirect('contract_detail', pk=c.pk)
+
+        # ── Parse optional effective_date ───────────────────────────────────
+        eff_raw = (request.POST.get('effective_date') or '').strip()
+        effective_date = timezone.now().date()
+        if eff_raw:
+            try:
+                effective_date = _dt.strptime(eff_raw, '%Y-%m-%d').date()
+            except ValueError:
+                messages.error(request, 'Please enter the effective date in YYYY-MM-DD format.')
+                return redirect('contract_detail', pk=c.pk)
+
+        # ── Parse optional money delta ──────────────────────────────────────
+        try:
+            additional_amount = Decimal(str(request.POST.get('additional_amount') or '0'))
+        except (InvalidOperation, ValueError):
+            messages.error(request, 'Please enter a valid additional amount.')
+            return redirect('contract_detail', pk=c.pk)
+
+        currency = (request.POST.get('currency') or '').strip() or c.currency
+
+        previous_end_date = c.end_date
+
+        # ── Create the extension row ────────────────────────────────────────
+        ext = ContractExtension(
+            contract          = c,
+            previous_end_date = previous_end_date,
+            new_end_date      = new_end_date,
+            effective_date    = effective_date,
+            additional_amount = additional_amount,
+            currency          = currency,
+            reason            = (request.POST.get('reason') or '').strip(),
+            notes             = (request.POST.get('notes') or '').strip(),
+            created_by        = request.user,
+        )
+        if 'document' in request.FILES:
+            ext.document = request.FILES['document']
+        ext.save()
+
+        # ── Advance the parent contract ─────────────────────────────────────
+        c.end_date = new_end_date
+        # If it had already expired, bring it back to ACTIVE.
+        if c.status in [Contract.Status.EXPIRED, Contract.Status.EXPIRING]:
+            c.status = Contract.Status.ACTIVE
+        c.updated_by = request.user
+        c.save(update_fields=['end_date', 'status', 'updated_by', 'updated_at'])
+
+        messages.success(
+            request,
+            f'Contract extended. New reference {ext.reference}, '
+            f'new end date {new_end_date.strftime("%b %-d, %Y")}.',
+        )
+        return redirect('contract_detail', pk=c.pk)
+
+
+class ContractExtensionDeleteView(LoginRequiredMixin, View):
+    """
+    POST /finance/contracts/<uuid:pk>/extensions/<uuid:ext_pk>/delete/
+
+    Allows the most-recent extension to be removed (e.g. created in error).
+    Rolls the parent contract's end_date back to that extension's
+    `previous_end_date`.
+
+    Only the latest extension is deletable, to keep the N-1, N-2, …
+    numbering contiguous.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_contracts(request.user):
+            return HttpResponseForbidden(
+                'You do not have permission to manage contract extensions.'
+            )
+        self.contract = get_object_or_404(Contract, pk=kwargs['pk'])
+        self.extension = get_object_or_404(
+            ContractExtension,
+            pk=kwargs['ext_pk'],
+            contract=self.contract,
+        )
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, pk, ext_pk):
+        c = self.contract
+        ext = self.extension
+
+        latest = (
+            c.extensions.order_by('-extension_number').first()
+        )
+        if not latest or latest.pk != ext.pk:
+            messages.error(
+                request,
+                'Only the most recent extension can be removed. '
+                'Remove later extensions first.',
+            )
+            return redirect('contract_detail', pk=c.pk)
+
+        # Roll the end date back.
+        c.end_date = ext.previous_end_date
+        c.updated_by = request.user
+        c.save(update_fields=['end_date', 'updated_by', 'updated_at'])
+
+        ref = ext.reference
+        ext.delete()
+
+        messages.success(
+            request,
+            f'Extension {ref} removed. Contract end date rolled back to '
+            f'{c.end_date.strftime("%b %-d, %Y")}.',
+        )
+        return redirect('contract_detail', pk=c.pk)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Contract Documents & E-Signature
+# ════════════════════════════════════════════════════════════════════════════
+
+from django.http import FileResponse, Http404, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from django.utils.decorators import method_decorator
+from django.core.files.base import ContentFile
+import base64 as _b64
+import re as _re
+
+from .contract_document_service import (
+    generate_contract_document,
+    register_uploaded_document,
+    build_signature_request,
+    mark_request_sent,
+    mark_request_viewed,
+    stamp_signature_onto_pdf,
+    sha256_of_file,
+    ContractDocumentError,
+)
+
+
+def _send_signature_email(sig_req, request):
+    """Send the magic-link email to the counterparty."""
+    public_url = request.build_absolute_uri(sig_req.public_path())
+    sender_name = (
+        getattr(sig_req.created_by, 'full_name', None)
+        or getattr(sig_req.created_by, 'username', None)
+        or 'The team'
+    )
+    subject = f'Signature requested: {sig_req.contract.title}'
+    body_lines = [
+        f'Hello {sig_req.signer_name},',
+        '',
+        f'{sender_name} has requested your signature on the following contract:',
+        '',
+        f'    {sig_req.contract.title}',
+        f'    Reference: {sig_req.contract.reference or "—"}',
+        '',
+        'You can review and sign the document securely using the link below:',
+        '',
+        f'    {public_url}',
+        '',
+        f'This link expires on {sig_req.expires_at.strftime("%B %d, %Y")}.',
+    ]
+    if sig_req.message:
+        body_lines += ['', '── Message from sender ──', sig_req.message]
+    body_lines += [
+        '',
+        'Thank you,',
+        sender_name,
+    ]
+    _send_contract_email(subject, '\n'.join(body_lines), [sig_req.signer_email])
+
+
+class ContractGenerateDocumentView(LoginRequiredMixin, View):
+    """
+    POST /finance/contracts/<uuid:pk>/generate-document/
+
+    Renders a Word + PDF version of the contract from its structured fields.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_contracts(request.user):
+            return HttpResponseForbidden(
+                'You do not have permission to generate contract documents.'
+            )
+        self.contract = get_object_or_404(Contract, pk=kwargs['pk'])
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, pk):
+        try:
+            doc = generate_contract_document(self.contract, actor=request.user)
+        except ContractDocumentError as e:
+            messages.error(request, str(e))
+            return redirect('contract_detail', pk=self.contract.pk)
+        except Exception as e:
+            messages.error(request, f'Could not generate document: {e}')
+            return redirect('contract_detail', pk=self.contract.pk)
+
+        messages.success(
+            request,
+            f'Contract document generated (v{doc.version}). '
+            'Word and PDF copies are now available.',
+        )
+        return redirect('contract_detail', pk=self.contract.pk)
+
+
+class ContractDocumentDownloadView(LoginRequiredMixin, View):
+    """
+    GET /finance/contracts/<uuid:pk>/documents/<uuid:doc_pk>/download/?fmt=pdf|docx
+
+    Streams the requested file back to the user.
+    """
+
+    def get(self, request, pk, doc_pk):
+        if not _can_view_contracts(request.user):
+            return HttpResponseForbidden('You do not have permission to view contracts.')
+
+        contract = get_object_or_404(Contract, pk=pk)
+        doc = get_object_or_404(ContractDocument, pk=doc_pk, contract=contract)
+
+        fmt = (request.GET.get('fmt') or 'pdf').lower()
+        if fmt == 'docx':
+            f = doc.docx_file
+            mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        else:
+            f = doc.pdf_file
+            mime = 'application/pdf'
+
+        if not f:
+            raise Http404(f'No {fmt.upper()} version is available for this document.')
+
+        f.open('rb')
+        return FileResponse(f, as_attachment=True, filename=os.path.basename(f.name),
+                            content_type=mime)
+
+
+class ContractSendForSignatureView(LoginRequiredMixin, View):
+    """
+    POST /finance/contracts/<uuid:pk>/send-for-signature/
+
+    Form fields:
+        document_choice  — 'generated' or 'uploaded'
+        signer_name      — required
+        signer_email     — required
+        expires_in_days  — optional integer (default 30)
+        message          — optional free-form note
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_contracts(request.user):
+            return HttpResponseForbidden(
+                'You do not have permission to send contracts for signature.'
+            )
+        self.contract = get_object_or_404(Contract, pk=kwargs['pk'])
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, pk):
+        c = self.contract
+        choice = (request.POST.get('document_choice') or 'generated').strip().lower()
+
+        # ── Block if there's already an open request ───────────────────────
+        already_open = c.signature_requests.filter(
+            status__in=[
+                ContractSignatureRequest.Status.SENT,
+                ContractSignatureRequest.Status.VIEWED,
+            ]
+        ).exists()
+        if already_open:
+            messages.error(
+                request,
+                'A signature request is already open on this contract. '
+                'Void it first before sending another.',
+            )
+            return redirect('contract_detail', pk=c.pk)
+
+        # ── Resolve the document to be signed ──────────────────────────────
+        if choice == 'uploaded':
+            if not c.document:
+                messages.error(request, 'No uploaded document is attached to this contract.')
+                return redirect('contract_detail', pk=c.pk)
+            try:
+                doc = register_uploaded_document(c, actor=request.user)
+            except ContractDocumentError as e:
+                messages.error(request, str(e))
+                return redirect('contract_detail', pk=c.pk)
+            if not doc.pdf_file:
+                messages.error(
+                    request,
+                    'The uploaded file could not be turned into a signable PDF. '
+                    'Generate the document instead, or upload a PDF.',
+                )
+                return redirect('contract_detail', pk=c.pk)
+        else:
+            # Generated: use the latest generated document, or generate one now.
+            doc = (
+                c.documents
+                .filter(source=ContractDocument.Source.GENERATED)
+                .order_by('-version')
+                .first()
+            )
+            if not doc:
+                try:
+                    doc = generate_contract_document(c, actor=request.user)
+                except ContractDocumentError as e:
+                    messages.error(request, str(e))
+                    return redirect('contract_detail', pk=c.pk)
+
+        # ── Form fields ────────────────────────────────────────────────────
+        signer_name = (request.POST.get('signer_name') or '').strip()
+        signer_email = (request.POST.get('signer_email') or '').strip()
+        if not signer_name or not signer_email:
+            messages.error(request, 'Signer name and email are required.')
+            return redirect('contract_detail', pk=c.pk)
+
+        try:
+            expires_in_days = int(request.POST.get('expires_in_days') or 30)
+        except (TypeError, ValueError):
+            expires_in_days = 30
+
+        try:
+            sig_req = build_signature_request(
+                c, doc,
+                signer_name=signer_name,
+                signer_email=signer_email,
+                message=(request.POST.get('message') or '').strip(),
+                expires_in_days=expires_in_days,
+                actor=request.user,
+            )
+        except ContractDocumentError as e:
+            messages.error(request, str(e))
+            return redirect('contract_detail', pk=c.pk)
+
+        # Mark sent + dispatch email.
+        mark_request_sent(sig_req)
+        try:
+            _send_signature_email(sig_req, request)
+        except Exception:
+            # Don't fail the request creation if SMTP is misconfigured.
+            messages.warning(
+                request,
+                'Signature request created, but the email could not be sent. '
+                'Use "Resend" to try again, or copy the link manually.',
+            )
+
+        messages.success(
+            request,
+            f'Signature request sent to {sig_req.signer_email}. '
+            f'Link valid until {sig_req.expires_at.strftime("%b %d, %Y")}.',
+        )
+        return redirect('contract_detail', pk=c.pk)
+
+
+class ContractSignatureResendView(LoginRequiredMixin, View):
+    """POST /finance/contracts/<uuid:pk>/signature-requests/<uuid:req_pk>/resend/"""
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_contracts(request.user):
+            return HttpResponseForbidden('Permission denied.')
+        self.contract = get_object_or_404(Contract, pk=kwargs['pk'])
+        self.sig_req = get_object_or_404(
+            ContractSignatureRequest, pk=kwargs['req_pk'], contract=self.contract,
+        )
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, pk, req_pk):
+        if not self.sig_req.is_open:
+            messages.error(request, 'This signature request is no longer active.')
+            return redirect('contract_detail', pk=self.contract.pk)
+        try:
+            _send_signature_email(self.sig_req, request)
+        except Exception as e:
+            messages.error(request, f'Could not send email: {e}')
+            return redirect('contract_detail', pk=self.contract.pk)
+        # Refresh sent_at so the audit trail reflects the resend.
+        self.sig_req.sent_at = timezone.now()
+        self.sig_req.save(update_fields=['sent_at', 'updated_at'])
+        messages.success(
+            request,
+            f'Signature reminder sent to {self.sig_req.signer_email}.',
+        )
+        return redirect('contract_detail', pk=self.contract.pk)
+
+
+class ContractSignatureVoidView(LoginRequiredMixin, View):
+    """POST /finance/contracts/<uuid:pk>/signature-requests/<uuid:req_pk>/void/"""
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _can_manage_contracts(request.user):
+            return HttpResponseForbidden('Permission denied.')
+        self.contract = get_object_or_404(Contract, pk=kwargs['pk'])
+        self.sig_req = get_object_or_404(
+            ContractSignatureRequest, pk=kwargs['req_pk'], contract=self.contract,
+        )
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, pk, req_pk):
+        s = self.sig_req
+        if s.status == ContractSignatureRequest.Status.SIGNED:
+            messages.error(request, 'A completed signature request cannot be voided.')
+            return redirect('contract_detail', pk=self.contract.pk)
+        s.status = ContractSignatureRequest.Status.VOIDED
+        s.voided_at = timezone.now()
+        s.voided_by = request.user
+        s.save(update_fields=['status', 'voided_at', 'voided_by', 'updated_at'])
+        messages.success(request, 'Signature request voided.')
+        return redirect('contract_detail', pk=self.contract.pk)
+
+
+class ContractSignedDownloadView(LoginRequiredMixin, View):
+    """GET /finance/contracts/<uuid:pk>/signature-requests/<uuid:req_pk>/signed.pdf"""
+
+    def get(self, request, pk, req_pk):
+        if not _can_view_contracts(request.user):
+            return HttpResponseForbidden('Permission denied.')
+        contract = get_object_or_404(Contract, pk=pk)
+        sig_req = get_object_or_404(
+            ContractSignatureRequest, pk=req_pk, contract=contract,
+        )
+        if not sig_req.signed_pdf:
+            raise Http404('Signed PDF is not available yet.')
+        sig_req.signed_pdf.open('rb')
+        return FileResponse(
+            sig_req.signed_pdf,
+            as_attachment=True,
+            filename=os.path.basename(sig_req.signed_pdf.name),
+            content_type='application/pdf',
+        )
+
+
+# ── Public signing pages (no login required) ────────────────────────────────
+
+class ContractPublicSignView(View):
+    """
+    GET  /finance/contracts/sign/<token>/             -> show signing page
+    POST /finance/contracts/sign/<token>/             -> submit signature
+    """
+    template_name = 'finance/contract_public_sign.html'
+
+    def _get_request_or_404(self, token):
+        return get_object_or_404(ContractSignatureRequest, access_token=token)
+
+    def _state_context(self, sig_req):
+        """Common context — describes whether the link is still actionable."""
+        return {
+            'sig_req':    sig_req,
+            'contract':   sig_req.contract,
+            'document':   sig_req.document,
+            'is_open':    sig_req.is_open,
+            'is_signed':  sig_req.status == ContractSignatureRequest.Status.SIGNED,
+            'is_voided':  sig_req.status == ContractSignatureRequest.Status.VOIDED,
+            'is_declined':sig_req.status == ContractSignatureRequest.Status.DECLINED,
+            'is_expired': sig_req.is_expired,
+        }
+
+    def get(self, request, token):
+        sig_req = self._get_request_or_404(token)
+        # Track viewing.
+        if sig_req.is_open:
+            mark_request_viewed(sig_req)
+        return render(request, self.template_name, self._state_context(sig_req))
+
+    def post(self, request, token):
+        sig_req = self._get_request_or_404(token)
+
+        if not sig_req.is_open:
+            messages.error(
+                request,
+                'This signing link is no longer active and cannot be used.',
+            )
+            return render(request, self.template_name, self._state_context(sig_req))
+
+        action = (request.POST.get('action') or 'sign').strip().lower()
+
+        # ── Decline path ───────────────────────────────────────────────────
+        if action == 'decline':
+            sig_req.status = ContractSignatureRequest.Status.DECLINED
+            sig_req.declined_at = timezone.now()
+            sig_req.decline_reason = (request.POST.get('decline_reason') or '').strip()
+            sig_req.save(update_fields=['status', 'declined_at', 'decline_reason', 'updated_at'])
+            messages.info(request, 'You have declined to sign this document.')
+            return render(request, self.template_name, self._state_context(sig_req))
+
+        # ── Sign path ──────────────────────────────────────────────────────
+        method_raw = (request.POST.get('method') or 'drawn').strip().lower()
+        method_map = {
+            'drawn': ContractSignature.Method.DRAWN,
+            'typed': ContractSignature.Method.TYPED,
+            'upload': ContractSignature.Method.UPLOAD,
+        }
+        method = method_map.get(method_raw, ContractSignature.Method.DRAWN)
+
+        consent_given = request.POST.get('consent') == 'on'
+        if not consent_given:
+            messages.error(request, 'You must agree to the electronic signature consent.')
+            return render(request, self.template_name, self._state_context(sig_req))
+
+        # Build signature row.
+        signature = ContractSignature(
+            request=sig_req,
+            signer_name_at_signing=sig_req.signer_name,
+            signer_email_at_signing=sig_req.signer_email,
+            method=method,
+            consent_text=(
+                'I agree that my electronic signature is the legal equivalent of my '
+                'handwritten signature and that this contract may be signed electronically.'
+            ),
+            consent_given=True,
+            signed_ip=_client_ip(request),
+            signed_user_agent=request.META.get('HTTP_USER_AGENT', '')[:500],
+        )
+
+        try:
+            if method == ContractSignature.Method.DRAWN:
+                # Expect a base64 data URL from a <canvas>.
+                data_url = (request.POST.get('signature_data') or '').strip()
+                m = _re.match(r'^data:image/(png|jpe?g);base64,(.+)$', data_url, _re.DOTALL)
+                if not m:
+                    messages.error(request, 'Please draw your signature before submitting.')
+                    return render(request, self.template_name, self._state_context(sig_req))
+                ext = 'png' if m.group(1) == 'png' else 'jpg'
+                raw = _b64.b64decode(m.group(2))
+                signature.signature_image.save(
+                    f'sig-{sig_req.id.hex[:8]}.{ext}',
+                    ContentFile(raw),
+                    save=False,
+                )
+            elif method == ContractSignature.Method.TYPED:
+                typed = (request.POST.get('typed_text') or '').strip()
+                if not typed:
+                    messages.error(request, 'Please type your name to sign.')
+                    return render(request, self.template_name, self._state_context(sig_req))
+                signature.typed_text = typed
+            elif method == ContractSignature.Method.UPLOAD:
+                if 'signature_file' not in request.FILES:
+                    messages.error(request, 'Please choose an image of your signature.')
+                    return render(request, self.template_name, self._state_context(sig_req))
+                f = request.FILES['signature_file']
+                signature.signature_image.save(
+                    f'sig-{sig_req.id.hex[:8]}-{f.name}',
+                    f, save=False,
+                )
+
+            # Hash the source PDF at signing time (tamper evidence).
+            signature.document_hash_at_signing = sha256_of_file(sig_req.document.pdf_file)
+            signature.save()
+
+            # Stamp the signature into a new signed PDF and finalise the request.
+            stamp_signature_onto_pdf(sig_req, signature)
+
+        except ContractDocumentError as e:
+            messages.error(request, str(e))
+            return render(request, self.template_name, self._state_context(sig_req))
+        except Exception as e:
+            messages.error(request, f'Could not record your signature: {e}')
+            return render(request, self.template_name, self._state_context(sig_req))
+
+        # Confirmation email to the signer with a copy of the signed PDF.
+        try:
+            _send_contract_email(
+                subject=f'Signed: {sig_req.contract.title}',
+                message=(
+                    f'Hello {sig_req.signer_name},\n\n'
+                    f'Thank you. Your signature has been recorded for:\n\n'
+                    f'    {sig_req.contract.title}\n'
+                    f'    Reference: {sig_req.contract.reference or "—"}\n\n'
+                    f'A signed copy of the document has been added to the contract record.\n'
+                ),
+                recipients=[sig_req.signer_email],
+            )
+        except Exception:
+            pass
+
+        return render(request, self.template_name, self._state_context(sig_req))
+
+
+class ContractPublicSignedDownloadView(View):
+    """
+    GET /finance/contracts/sign/<token>/signed.pdf
+
+    Lets the counterparty download their own signed copy from the public link.
+    """
+    def get(self, request, token):
+        sig_req = get_object_or_404(ContractSignatureRequest, access_token=token)
+        if sig_req.status != ContractSignatureRequest.Status.SIGNED or not sig_req.signed_pdf:
+            raise Http404('Signed PDF is not available.')
+        sig_req.signed_pdf.open('rb')
+        return FileResponse(
+            sig_req.signed_pdf,
+            as_attachment=True,
+            filename=os.path.basename(sig_req.signed_pdf.name),
+            content_type='application/pdf',
+        )
+
+
+class ContractPublicSourceDownloadView(View):
+    """
+    GET /finance/contracts/sign/<token>/document.pdf
+
+    Lets the counterparty preview the source PDF before signing.
+    """
+    def get(self, request, token):
+        sig_req = get_object_or_404(ContractSignatureRequest, access_token=token)
+        if not sig_req.is_open and sig_req.status != ContractSignatureRequest.Status.SIGNED:
+            raise Http404('Document not available.')
+        f = sig_req.document.pdf_file
+        if not f:
+            raise Http404('Source PDF not available.')
+        f.open('rb')
+        return FileResponse(
+            f, as_attachment=False,
+            filename=os.path.basename(f.name),
+            content_type='application/pdf',
+        )
+
+
+def _client_ip(request):
+    xff = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR', '') or None

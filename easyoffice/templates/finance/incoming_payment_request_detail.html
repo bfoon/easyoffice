@@ -220,6 +220,131 @@
     </div>
     {% endif %}
 
+    {# ── Payment follow-up ────────────────────────────────────────────── #}
+    <div class="eo-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <h3 class="eo-card-title" style="margin:0">
+          <i class="bi bi-clipboard-check me-2" style="color:#8b5cf6"></i>Payment Follow-up
+        </h3>
+        {% if followup_tasks %}
+        <span style="font-size:.7rem;font-weight:700;letter-spacing:.04em;
+                     padding:.2rem .55rem;border-radius:8px;
+                     background:#ede9fe;color:#5b21b6">
+          {{ followup_tasks|length }} TASK{{ followup_tasks|length|pluralize }}
+        </span>
+        {% endif %}
+      </div>
+
+      {# List of existing follow-up tasks #}
+      {% if followup_tasks %}
+      <div style="display:flex;flex-direction:column;gap:.5rem;margin-bottom:14px">
+        {% for t in followup_tasks %}
+        <a href="{% url 'task_detail' t.pk %}"
+           style="display:block;padding:.6rem .75rem;border-radius:9px;
+                  border:1px solid var(--eo-border);background:var(--eo-bg);
+                  text-decoration:none;color:inherit;
+                  {% if t.status == 'done' %}opacity:.65{% endif %}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:.5rem">
+            <div style="font-size:.84rem;font-weight:600;color:var(--eo-text);
+                        {% if t.status == 'done' %}text-decoration:line-through{% endif %}">
+              {{ t.title|truncatechars:48 }}
+            </div>
+            <span style="font-size:.65rem;font-weight:700;letter-spacing:.04em;
+                         padding:.12rem .45rem;border-radius:6px;flex-shrink:0;
+                         {% if t.status == 'done' %}background:#d1fae5;color:#065f46
+                         {% elif t.status == 'cancelled' %}background:#f1f5f9;color:#475569
+                         {% elif t.is_overdue %}background:#fee2e2;color:#991b1b
+                         {% else %}background:#dbeafe;color:#1e3a8a{% endif %}">
+              {% if t.is_overdue and t.status not in 'done,cancelled' %}OVERDUE{% else %}{{ t.get_status_display|upper }}{% endif %}
+            </span>
+          </div>
+          <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:.2rem;
+                      display:flex;gap:.5rem;flex-wrap:wrap">
+            <span><i class="bi bi-person"></i> {{ t.assigned_to.full_name|default:"—" }}</span>
+            {% if t.due_date %}
+            <span>·</span>
+            <span><i class="bi bi-calendar-event"></i> Due {{ t.due_date|date:"M j" }}</span>
+            {% endif %}
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {# Assign-new form #}
+      {% if can_assign_followup and ipr.status not in 'paid,cancelled' %}
+      <form method="post" action="{% url 'incoming_payment_request_add_followup' ipr.pk %}"
+            id="followUpForm">
+        {% csrf_token %}
+        <div style="display:flex;flex-direction:column;gap:.55rem">
+          <div>
+            <label class="eo-form-label" style="font-size:.72rem;text-transform:uppercase;
+                                                 letter-spacing:.04em;color:var(--eo-text-muted);
+                                                 margin-bottom:.2rem">
+              Assign to
+            </label>
+            <select name="assigned_to" class="eo-form-select" required style="font-size:.85rem">
+              <option value="">— Pick a person —</option>
+              {% for u in assignable_users %}
+              <option value="{{ u.pk }}">{{ u.full_name|default:u.username }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 110px;gap:.5rem">
+            <div>
+              <label class="eo-form-label" style="font-size:.72rem;text-transform:uppercase;
+                                                   letter-spacing:.04em;color:var(--eo-text-muted);
+                                                   margin-bottom:.2rem">
+                Due date
+              </label>
+              <input type="date" name="due_date" class="eo-form-control" required
+                     style="font-size:.85rem"
+                     value="{% if ipr.due_date and not ipr.is_overdue %}{{ ipr.due_date|date:'Y-m-d' }}{% endif %}">
+            </div>
+            <div>
+              <label class="eo-form-label" style="font-size:.72rem;text-transform:uppercase;
+                                                   letter-spacing:.04em;color:var(--eo-text-muted);
+                                                   margin-bottom:.2rem">
+                Priority
+              </label>
+              <select name="priority" class="eo-form-select" style="font-size:.85rem">
+                <option value="low">Low</option>
+                <option value="medium" {% if not ipr.is_overdue %}selected{% endif %}>Medium</option>
+                <option value="high" {% if ipr.is_overdue %}selected{% endif %}>High</option>
+                <option value="urgent">Urgent</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label class="eo-form-label" style="font-size:.72rem;text-transform:uppercase;
+                                                 letter-spacing:.04em;color:var(--eo-text-muted);
+                                                 margin-bottom:.2rem">
+              Notes (optional)
+            </label>
+            <textarea name="notes" class="eo-form-control" rows="2"
+                      style="font-size:.85rem"
+                      placeholder="What does the assignee need to know?"></textarea>
+          </div>
+
+          <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm" style="width:100%"
+                  onclick="this.disabled=true;this.innerHTML='<i class=&quot;bi bi-hourglass-split&quot;></i> Creating…';this.form.submit()">
+            <i class="bi bi-clipboard-plus"></i> Assign follow-up
+          </button>
+        </div>
+      </form>
+      {% elif ipr.status == 'paid' %}
+      <div style="font-size:.78rem;color:var(--eo-text-muted);font-style:italic">
+        Invoice is paid — no further follow-up needed.
+      </div>
+      {% elif ipr.status == 'cancelled' %}
+      <div style="font-size:.78rem;color:var(--eo-text-muted);font-style:italic">
+        Invoice is cancelled — follow-ups disabled.
+      </div>
+      {% endif %}
+    </div>
+
   </div>
 </div>
 

@@ -33,7 +33,7 @@ from django.http import (
     Http404, HttpResponse, HttpResponseForbidden, FileResponse,
 )
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse
+from django.urls import reverse, NoReverseMatch
 from django.utils import timezone
 from django.views.generic import View, TemplateView
 
@@ -826,6 +826,26 @@ def _notify_dispute(dispute_event, original_event):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class RequestNewLinkView(View):
+    """
+    Customer's portal link is dead (expired, revoked, lost) and they want
+    a new one. We can't issue the link automatically — that would let
+    anyone with an email address farm valid tokens — so we hand it off to
+    customer service:
+
+      1. Look up active ContractContact rows matching the email and create
+         a ticket per matching contact, attached to the right customer.
+      2. If NO active contact matches (off-boarded, typo, never on file),
+         we still create ONE generic "needs triage" ticket so the request
+         is visible in the CS queue. Staff can then verify and decide.
+      3. Notify the heads of customer service in-app, linking to the
+         ticket(s). Falls back to superusers if no heads are configured,
+         so a fresh deployment doesn't silently swallow requests.
+
+    Crucially, the customer-visible response is IDENTICAL whether or not
+    the email is on file ("if your email is on file..."). That's the
+    same anti-enumeration behaviour we had before; we're just doing more
+    work behind the scenes when it IS on file.
+    """
     http_method_names = ['get', 'post']
 
     def get(self, request):
@@ -833,30 +853,333 @@ class RequestNewLinkView(View):
 
     def post(self, request):
         email = (request.POST.get('email') or '').strip().lower()
+        logger.info('customer_portal: request-new-link POST email=%r', email)
+
+        tickets = []
+        ticket_creation_error = None
         try:
-            self._notify_cs(email)
+            tickets = self._create_tickets_for_email(request, email)
+        except Exception as exc:
+            # Capture the message so we can surface it to CS heads in-app.
+            ticket_creation_error = repr(exc)
+            logger.exception('customer_portal: request-new-link ticket creation failed')
+
+        # If we found no matching contacts, still create ONE generic
+        # triage ticket so the request appears in the CS queue. This is
+        # the path that previously silently dropped requests.
+        if not tickets and email:
+            try:
+                fallback = self._create_triage_ticket(request, email)
+                if fallback:
+                    tickets.append(fallback)
+            except Exception as exc:
+                ticket_creation_error = ticket_creation_error or repr(exc)
+                logger.exception('customer_portal: triage ticket creation failed')
+
+        logger.info(
+            'customer_portal: request-new-link finished email=%r tickets_created=%d',
+            email, len(tickets),
+        )
+
+        try:
+            self._notify_cs(email, tickets, error=ticket_creation_error)
         except Exception:
             logger.exception('customer_portal: request-new-link CS notify failed')
+
         messages.success(
             request,
             'If your email is on file, our customer service team will get back to you with a fresh link.',
         )
         return render(request, 'customer_portal/request_new_link.html', {'submitted': True})
 
-    def _notify_cs(self, email):
+    # ── Ticket creation ────────────────────────────────────────────────
+    def _create_tickets_for_email(self, request, email):
+        """
+        Create a ServiceTicket for every active ContractContact matching
+        the email. Returns the list of created tickets (may be empty).
+
+        We deliberately do NOT create a PortalSupportRequest here: there
+        is no valid token to anchor it to, and the staff workflow is "CS
+        sees a ticket → issues a new portal token from the contact admin
+        → emails the customer". The portal-side mirror picks up later
+        once the customer uses their new link.
+        """
+        if not email:
+            logger.info('customer_portal: request-new-link with empty email — bailing')
+            return []
+
+        # NB: we check both is_active=True AND is_active=False contacts.
+        # An off-boarded contact who tries to recover their link is still
+        # something CS should know about — they may need to be reinstated,
+        # or it may be a fraud signal. We log it either way.
+        all_matches = list(
+            ContractContact.objects
+            .filter(email__iexact=email)
+            .select_related('contract', 'customer')
+        )
+        contacts = [c for c in all_matches if c.is_active]
+        inactive = [c for c in all_matches if not c.is_active]
+
+        logger.info(
+            'customer_portal: request-new-link lookup email=%r matched=%d active=%d inactive=%d',
+            email, len(all_matches), len(contacts), len(inactive),
+        )
+        if inactive and not contacts:
+            logger.warning(
+                'customer_portal: request-new-link email=%r matched only INACTIVE contacts (%s) — '
+                'falling through to generic triage ticket. Reactivate the contact if appropriate.',
+                email, [c.pk for c in inactive],
+            )
+
+        if not contacts:
+            return []
+
+        try:
+            from apps.customer_service.models import ServiceTicket
+        except Exception:
+            logger.exception('customer_portal: ServiceTicket model not importable')
+            return []
+
+        ip = devbind._client_ip(request)
+        ua = (request.META.get('HTTP_USER_AGENT') or '')[:300]
+
+        tickets = []
+        for contact in contacts:
+            if not contact.customer_id:
+                logger.warning(
+                    'customer_portal: contact %s has no customer; skipping ticket creation',
+                    contact.pk,
+                )
+                continue
+            try:
+                # NOTE: we deliberately do NOT wrap this in transaction.atomic().
+                # If the caller (post()) is itself in an outer transaction —
+                # which Django's ATOMIC_REQUESTS would do — a nested atomic
+                # block that swallows an exception leaves the outer txn in
+                # a broken state and any later ORM call raises
+                # "TransactionManagementError: An error occurred in the
+                # current transaction. You can't execute queries until..."
+                # Single create() call is already atomic at the DB level.
+                ticket = self._safe_create_ticket(
+                    ServiceTicket,
+                    customer=contact.customer,
+                    subject=f'Portal access request — {contact.full_name}',
+                    description=(
+                        f'{contact.full_name} <{contact.email}> requested a new '
+                        f'customer-portal access link via the public '
+                        f'"Request a new link" page.\n\n'
+                        f'Contract: {contact.contract}\n'
+                        f'Contact role: {contact.get_role_display()}\n'
+                        f'Submitted from IP: {ip or "unknown"}\n'
+                        f'User-Agent: {ua or "unknown"}\n\n'
+                        f'Action required: verify the request is legitimate '
+                        f'(call the contact back on a known number if in doubt), '
+                        f'then issue a fresh PortalAccessToken from the contact '
+                        f'admin and email it to them.'
+                    ),
+                    contract=contact.contract,
+                )
+                if ticket:
+                    logger.info(
+                        'customer_portal: created ServiceTicket %s for contact %s (email=%r)',
+                        ticket.pk, contact.pk, email,
+                    )
+                    tickets.append(ticket)
+            except Exception:
+                logger.exception(
+                    'customer_portal: failed to create ServiceTicket for contact %s (email=%r)',
+                    contact.pk, email,
+                )
+                continue
+
+        return tickets
+
+    def _create_triage_ticket(self, request, email):
+        """
+        Fallback: create a single generic ticket when no active contact
+        matched. This is the path that previously caused requests to
+        silently disappear. The ticket is tagged for triage so CS can
+        verify the email and either reactivate a contact or reject the
+        request as bogus.
+        """
+        try:
+            from apps.customer_service.models import ServiceTicket
+        except Exception:
+            logger.exception('customer_portal: ServiceTicket model not importable for triage')
+            return None
+
+        ip = devbind._client_ip(request)
+        ua = (request.META.get('HTTP_USER_AGENT') or '')[:300]
+
+        # Check if there were inactive matches so we can include them in
+        # the description as a hint for the CS agent.
+        inactive_hint = ''
+        try:
+            inactive = list(
+                ContractContact.objects
+                .filter(email__iexact=email, is_active=False)
+                .select_related('contract', 'customer')
+            )
+            if inactive:
+                lines = [
+                    f'  • {c.full_name} on contract {c.contract} '
+                    f'(customer: {c.customer.display_name if c.customer_id else "—"}, '
+                    f'pk={c.pk})'
+                    for c in inactive
+                ]
+                inactive_hint = (
+                    '\n\nNOTE: This email matches the following INACTIVE '
+                    'contract contacts:\n' + '\n'.join(lines) +
+                    '\n\nIf the request is legitimate, reactivate the '
+                    'appropriate contact and issue a fresh portal token.'
+                )
+        except Exception:
+            logger.warning('customer_portal: triage inactive lookup failed', exc_info=True)
+
+        return self._safe_create_ticket(
+            ServiceTicket,
+            customer=None,  # unknown — CS triages
+            subject=f'Portal access request — needs triage ({email})',
+            description=(
+                f'A portal-link request was submitted for "{email}", but '
+                f'no active contract contact matches that address.\n\n'
+                f'Submitted from IP: {ip or "unknown"}\n'
+                f'User-Agent: {ua or "unknown"}\n\n'
+                f'Action required: verify whether this email belongs to a '
+                f'known customer, reactivate the contact if appropriate, '
+                f'and respond to the customer.'
+                f'{inactive_hint}'
+            ),
+            contract=None,
+        )
+
+    @staticmethod
+    def _safe_create_ticket(ServiceTicket, *, customer, subject, description, contract):
+        """
+        Create a ServiceTicket while shielding the caller from differences
+        in the model schema. If the model requires a non-nullable
+        `customer`, we'll detect it and skip rather than raise.
+
+        Returns the ticket on success, or None on failure (failure is
+        already logged).
+        """
+        try:
+            kwargs = dict(
+                ticket_type='support',
+                priority='medium',
+                status='new',
+                subject=subject[:240],  # most subject fields cap at 255
+                description=description,
+                requires_feedback=False,
+            )
+            if customer is not None:
+                kwargs['customer'] = customer
+            if contract is not None:
+                kwargs['contract'] = contract
+            return ServiceTicket.objects.create(**kwargs)
+        except TypeError:
+            # Model probably doesn't have one of the kwargs (e.g. requires_feedback).
+            # Retry with only the essentials.
+            logger.warning(
+                'customer_portal: ServiceTicket.create rejected kwargs; retrying minimal',
+                exc_info=True,
+            )
+            try:
+                kwargs = dict(
+                    subject=subject[:240],
+                    description=description,
+                    status='new',
+                )
+                if customer is not None:
+                    kwargs['customer'] = customer
+                if contract is not None:
+                    kwargs['contract'] = contract
+                return ServiceTicket.objects.create(**kwargs)
+            except Exception:
+                logger.exception('customer_portal: minimal ServiceTicket.create also failed')
+                return None
+        except Exception:
+            logger.exception('customer_portal: ServiceTicket.create raised')
+            return None
+
+    # ── Notify CS heads ────────────────────────────────────────────────
+    def _notify_cs(self, email, tickets, error=None):
         from apps.customer_service.notifications import (
             _send_inapp, heads_of_customer_service,
         )
         if not email:
             return
-        for u in heads_of_customer_service():
-            _send_inapp(
-                u,
-                title='Customer requests new portal link',
-                body=f'A customer requested a new portal link for: {email}',
-                url='/admin/customer_portal/contractcontact/',
-                kind='customer_portal',
+
+        heads = list(heads_of_customer_service())
+        if not heads:
+            # Fallback: if no heads are configured, alert all superusers
+            # so a fresh deployment doesn't silently swallow these
+            # requests. Better to be noisy than invisible.
+            try:
+                from apps.core.models import User as _U
+                heads = list(_U.objects.filter(is_superuser=True, is_active=True))
+                logger.info(
+                    'customer_portal: no CS heads configured — falling back to %d superuser(s)',
+                    len(heads),
+                )
+            except Exception:
+                logger.exception('customer_portal: superuser fallback failed')
+
+        if not heads:
+            logger.warning(
+                'customer_portal: no heads/superusers to notify about portal-link request '
+                'email=%r — request will be invisible to staff.',
+                email,
             )
+            return
+
+        # Compose a body with the error appended if ticket creation broke.
+        error_suffix = f' (Note: ticket creation hit an error: {error})' if error else ''
+
+        if tickets:
+            # Link directly to the freshly-created ticket(s). When there
+            # are multiple, we send one notification per ticket so each
+            # one is individually clickable.
+            for ticket in tickets:
+                try:
+                    ticket_url = reverse(
+                        'customer_service_ticket_detail',
+                        kwargs={'pk': ticket.pk},
+                    )
+                except NoReverseMatch:
+                    # CS app not mounted or URL renamed — degrade to admin.
+                    ticket_url = (
+                        f'/admin/customer_service/serviceticket/{ticket.pk}/change/'
+                    )
+                for u in heads:
+                    _send_inapp(
+                        u,
+                        title='Customer requests new portal link',
+                        body=(
+                            f'{email} requested a new portal link. '
+                            f'A ticket has been opened — review and issue '
+                            f'a fresh token from the contact admin.'
+                            + error_suffix
+                        ),
+                        url=ticket_url,
+                        kind='customer_portal',
+                    )
+        else:
+            # Couldn't even create a fallback triage ticket — surface
+            # this hard so someone investigates.
+            for u in heads:
+                _send_inapp(
+                    u,
+                    title='⚠️ Portal-link request could NOT create a ticket',
+                    body=(
+                        f'A portal-link request was submitted for "{email}", '
+                        f'but no ticket could be created. Check the server '
+                        f'logs and investigate manually.'
+                        + error_suffix
+                    ),
+                    url='/admin/customer_portal/contractcontact/',
+                    kind='customer_portal',
+                )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

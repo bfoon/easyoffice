@@ -307,12 +307,110 @@
     margin-bottom:.5rem;
     opacity:.3;
   }
+
+  /* ── Extensions list ───────────────────────────────────────────────── */
+  .cdetail-ext-list{
+    display:flex;
+    flex-direction:column;
+    gap:.75rem;
+  }
+  .cdetail-ext-item{
+    display:grid;
+    grid-template-columns: 64px 1fr auto;
+    gap:1rem;
+    align-items:flex-start;
+    padding:1rem 1.1rem;
+    border-radius:18px;
+    background:linear-gradient(180deg,#ffffff,#f8fafc);
+    border:1px solid rgba(148,163,184,.18);
+  }
+  .cdetail-ext-num{
+    width:54px;
+    height:54px;
+    border-radius:14px;
+    background:linear-gradient(135deg,#0f172a,#1e40af);
+    color:#fff;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-weight:800;
+    font-size:1.05rem;
+    box-shadow:0 8px 20px rgba(15,23,42,.18);
+  }
+  .cdetail-ext-num small{
+    font-weight:600;
+    font-size:.62rem;
+    opacity:.78;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    margin-bottom:.12rem;
+  }
+  .cdetail-ext-num-inner{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    line-height:1;
+  }
+  .cdetail-ext-ref{
+    font-size:.95rem;
+    font-weight:800;
+    color:var(--eo-text);
+    word-break:break-all;
+  }
+  .cdetail-ext-meta{
+    font-size:.78rem;
+    color:var(--eo-text-muted);
+    line-height:1.7;
+    margin-top:.3rem;
+  }
+  .cdetail-ext-reason{
+    font-size:.82rem;
+    color:var(--eo-text);
+    margin-top:.5rem;
+    background:#f1f5f9;
+    border-radius:10px;
+    padding:.55rem .75rem;
+    line-height:1.55;
+  }
+  .cdetail-ext-side{
+    text-align:right;
+    display:flex;
+    flex-direction:column;
+    gap:.4rem;
+    align-items:flex-end;
+    min-width:120px;
+  }
+  .cdetail-ext-dates{
+    font-size:.76rem;
+    color:var(--eo-text-muted);
+    line-height:1.55;
+  }
+  .cdetail-ext-dates strong{
+    color:var(--eo-text);
+    font-weight:700;
+  }
+  .cdetail-ext-amount{
+    font-size:.88rem;
+    font-weight:800;
+    color:#059669;
+  }
+
   @media (max-width: 1199px){
     .cdetail-metrics{ grid-template-columns:repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 767px){
     .cdetail-metrics,
     .cdetail-overview-grid{ grid-template-columns:1fr; }
+    .cdetail-ext-item{
+      grid-template-columns: 50px 1fr;
+    }
+    .cdetail-ext-side{
+      grid-column: 1 / -1;
+      text-align:left;
+      align-items:flex-start;
+      border-top:1px dashed rgba(148,163,184,.25);
+      padding-top:.6rem;
+    }
   }
 </style>
 
@@ -342,6 +440,12 @@
             <i class="bi bi-cash-stack"></i>
             {{ contract.get_billing_cycle_display }}
           </span>
+          {% if extension_count %}
+          <span class="cdetail-tag">
+            <i class="bi bi-arrow-repeat"></i>
+            {{ extension_count }} extension{{ extension_count|pluralize }}
+          </span>
+          {% endif %}
         </div>
       </div>
 
@@ -355,6 +459,12 @@
                 {% if not contract.default_invoice_template and not invoice_templates %}disabled title="No invoice templates available"{% endif %}>
           <i class="bi bi-receipt"></i> Generate Invoice
         </button>
+        {% if can_extend_contract %}
+        <button type="button" class="cdetail-btn cdetail-btn-white"
+                onclick="document.getElementById('extendContractModal').style.display='flex'">
+          <i class="bi bi-calendar-plus"></i> Extend
+        </button>
+        {% endif %}
         {% endif %}
         <a href="{% url 'contract_list' %}" class="cdetail-btn cdetail-btn-light">
           <i class="bi bi-arrow-left"></i> Back
@@ -487,6 +597,377 @@
               </div>
             </div>
           </div>
+        </div>
+      </section>
+
+      {# ── Contract Extensions ──────────────────────────────────────────── #}
+      <section class="cdetail-card">
+        <div class="cdetail-card-head">
+          <div>
+            <h2 class="cdetail-card-title">Contract Extensions</h2>
+            <p class="cdetail-card-subtitle">
+              History of all amendments and end-date extensions
+              {% if extension_count %}· {{ extension_count }} on record{% endif %}
+            </p>
+          </div>
+          {% if can_extend_contract %}
+          <button type="button" class="eo-btn eo-btn-primary eo-btn-sm"
+                  onclick="document.getElementById('extendContractModal').style.display='flex'">
+            <i class="bi bi-plus-lg"></i> Extend
+          </button>
+          {% endif %}
+        </div>
+
+        <div class="cdetail-card-body">
+          {% if extensions %}
+          <div class="cdetail-ext-list">
+            {% for ext in extensions %}
+            <div class="cdetail-ext-item">
+              <div class="cdetail-ext-num" title="Extension {{ ext.extension_number }}">
+                <div class="cdetail-ext-num-inner">
+                  <small>EXT</small>
+                  <span>#{{ ext.extension_number }}</span>
+                </div>
+              </div>
+
+              <div>
+                <div class="cdetail-ext-ref">
+                  <i class="bi bi-hash"></i>
+                  {{ ext.reference }}
+                </div>
+                <div class="cdetail-ext-meta">
+                  Effective <strong style="color:var(--eo-text)">{{ ext.effective_date|date:"M j, Y" }}</strong>
+                  {% if ext.created_by %}
+                    · Approved by {{ ext.created_by.full_name|default:ext.created_by.username }}
+                  {% endif %}
+                  · Logged {{ ext.created_at|date:"M j, Y H:i" }}
+                  {% if ext.days_added %}
+                    · <strong style="color:var(--eo-text)">+{{ ext.days_added }} day{{ ext.days_added|pluralize }}</strong>
+                  {% endif %}
+                </div>
+
+                {% if ext.reason %}
+                <div class="cdetail-ext-reason">
+                  <i class="bi bi-chat-left-text"></i>
+                  {{ ext.reason|linebreaksbr }}
+                </div>
+                {% endif %}
+
+                {% if ext.notes %}
+                <div class="cdetail-ext-reason" style="background:#fef9c3">
+                  <i class="bi bi-sticky"></i>
+                  {{ ext.notes|linebreaksbr }}
+                </div>
+                {% endif %}
+
+                <div style="margin-top:.55rem;display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+                  {% if ext.document %}
+                  <a href="{{ ext.document.url }}" target="_blank" rel="noopener"
+                     class="eo-btn eo-btn-ghost eo-btn-sm">
+                    <i class="bi bi-paperclip"></i> View document
+                  </a>
+                  {% endif %}
+
+                  {% if can_extend_contract and forloop.last %}
+                  <form method="post"
+                        action="{% url 'contract_extension_delete' contract.pk ext.pk %}"
+                        style="display:inline"
+                        onsubmit="return confirm('Remove extension {{ ext.reference }}? The contract end date will roll back to {{ ext.previous_end_date|date:"M j, Y" }}.');">
+                    {% csrf_token %}
+                    <button type="submit"
+                            class="eo-btn eo-btn-ghost eo-btn-sm"
+                            style="color:#dc2626">
+                      <i class="bi bi-trash"></i> Remove (latest only)
+                    </button>
+                  </form>
+                  {% endif %}
+                </div>
+              </div>
+
+              <div class="cdetail-ext-side">
+                <div class="cdetail-ext-dates">
+                  <div><strong>From</strong></div>
+                  <div>{{ ext.previous_end_date|date:"M j, Y" }}</div>
+                  <div style="margin:.25rem 0;color:#94a3b8"><i class="bi bi-arrow-down"></i></div>
+                  <div><strong>To</strong></div>
+                  <div>{{ ext.new_end_date|date:"M j, Y" }}</div>
+                </div>
+                {% if ext.additional_amount and ext.additional_amount > 0 %}
+                <div class="cdetail-ext-amount">
+                  +{{ ext.currency }} {{ ext.additional_amount|floatformat:2 }}
+                </div>
+                {% endif %}
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="cdetail-empty">
+            <i class="bi bi-calendar-plus"></i>
+            No extensions recorded for this contract.
+            {% if can_extend_contract %}
+            <div style="margin-top:.75rem">
+              <button type="button" class="eo-btn eo-btn-primary eo-btn-sm"
+                      onclick="document.getElementById('extendContractModal').style.display='flex'">
+                Add first extension
+              </button>
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </section>
+
+      {# ── Document & Signing ──────────────────────────────────────────── #}
+      <section class="cdetail-card">
+        <div class="cdetail-card-head">
+          <div>
+            <h2 class="cdetail-card-title">Document &amp; Signing</h2>
+            <p class="cdetail-card-subtitle">
+              Generate Word/PDF and send for electronic signature
+            </p>
+          </div>
+          {% if can_manage_documents %}
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+            <form method="post"
+                  action="{% url 'contract_generate_document' contract.pk %}"
+                  style="display:inline">
+              {% csrf_token %}
+              <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm">
+                <i class="bi bi-file-earmark-word"></i>
+                {% if latest_generated_document %}Regenerate{% else %}Generate{% endif %}
+              </button>
+            </form>
+            {% if latest_generated_document or has_uploaded_document %}
+            <button type="button" class="eo-btn eo-btn-primary eo-btn-sm"
+                    onclick="document.getElementById('sendSigModal').style.display='flex'"
+                    {% if active_signature_request %}disabled
+                       title="A signing request is already active"{% endif %}>
+              <i class="bi bi-send"></i> Send for signature
+            </button>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+
+        <div class="cdetail-card-body">
+
+          {# ── Status banner ──────────────────────────────────────────── #}
+          {% if active_signature_request %}
+            <div style="padding:1rem 1.1rem;border-radius:14px;
+                        background:linear-gradient(135deg,#fef3c7,#fde68a);
+                        border:1px solid #f59e0b;margin-bottom:1.1rem;
+                        display:flex;justify-content:space-between;
+                        align-items:center;flex-wrap:wrap;gap:.6rem">
+              <div>
+                <div style="font-weight:800;color:#78350f;font-size:.95rem">
+                  <i class="bi bi-clock-history"></i> Awaiting signature
+                </div>
+                <div style="font-size:.82rem;color:#78350f;margin-top:.2rem">
+                  Sent to <strong>{{ active_signature_request.signer_email }}</strong>
+                  · Expires {{ active_signature_request.expires_at|date:"M j, Y" }}
+                  {% if active_signature_request.first_viewed_at %}
+                    · <i class="bi bi-eye-fill"></i> Viewed
+                  {% else %}
+                    · <i class="bi bi-eye-slash"></i> Not yet viewed
+                  {% endif %}
+                </div>
+              </div>
+              {% if can_manage_documents %}
+              <div style="display:flex;gap:.4rem">
+                <form method="post"
+                      action="{% url 'contract_signature_resend' contract.pk active_signature_request.pk %}"
+                      style="display:inline">
+                  {% csrf_token %}
+                  <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm">
+                    <i class="bi bi-arrow-repeat"></i> Resend
+                  </button>
+                </form>
+                <form method="post"
+                      action="{% url 'contract_signature_void' contract.pk active_signature_request.pk %}"
+                      style="display:inline"
+                      onsubmit="return confirm('Void this signature request? The signing link will stop working.');">
+                  {% csrf_token %}
+                  <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm"
+                          style="color:#dc2626">
+                    <i class="bi bi-x-octagon"></i> Void
+                  </button>
+                </form>
+              </div>
+              {% endif %}
+            </div>
+          {% elif latest_signed_request %}
+            <div style="padding:1rem 1.1rem;border-radius:14px;
+                        background:linear-gradient(135deg,#d1fae5,#a7f3d0);
+                        border:1px solid #059669;margin-bottom:1.1rem;
+                        display:flex;justify-content:space-between;
+                        align-items:center;flex-wrap:wrap;gap:.6rem">
+              <div>
+                <div style="font-weight:800;color:#065f46;font-size:.95rem">
+                  <i class="bi bi-patch-check-fill"></i> Contract signed
+                </div>
+                <div style="font-size:.82rem;color:#065f46;margin-top:.2rem">
+                  Signed by <strong>{{ latest_signed_request.signer_name }}</strong>
+                  on {{ latest_signed_request.signed_at|date:"M j, Y H:i" }}
+                </div>
+              </div>
+              <a class="eo-btn eo-btn-primary eo-btn-sm"
+                 href="{% url 'contract_signature_signed_pdf' contract.pk latest_signed_request.pk %}">
+                <i class="bi bi-download"></i> Download signed PDF
+              </a>
+            </div>
+          {% endif %}
+
+          {# ── Documents ──────────────────────────────────────────────── #}
+          <div style="margin-bottom:1rem">
+            <strong style="font-size:.85rem;color:var(--eo-text-muted);
+                           text-transform:uppercase;letter-spacing:.05em">
+              Documents
+            </strong>
+          </div>
+
+          {% if latest_generated_document or has_uploaded_document %}
+          <div style="display:flex;flex-direction:column;gap:.6rem">
+
+            {% if latest_generated_document %}
+            <div style="display:flex;justify-content:space-between;align-items:center;
+                        padding:.85rem 1rem;border-radius:12px;background:#f8fafc;
+                        border:1px solid rgba(148,163,184,.18);flex-wrap:wrap;gap:.5rem">
+              <div>
+                <div style="font-weight:700;font-size:.92rem">
+                  <i class="bi bi-file-earmark-text" style="color:#1e40af"></i>
+                  Generated contract document (v{{ latest_generated_document.version }})
+                </div>
+                <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:.15rem">
+                  Created {{ latest_generated_document.created_at|date:"M j, Y H:i" }}
+                  {% if latest_generated_document.generated_by %}
+                    · by {{ latest_generated_document.generated_by.full_name|default:latest_generated_document.generated_by.username }}
+                  {% endif %}
+                </div>
+              </div>
+              <div style="display:flex;gap:.35rem">
+                {% if latest_generated_document.has_docx %}
+                <a class="eo-btn eo-btn-ghost eo-btn-sm"
+                   href="{% url 'contract_document_download' contract.pk latest_generated_document.pk %}?fmt=docx">
+                  <i class="bi bi-file-earmark-word"></i> Word
+                </a>
+                {% endif %}
+                {% if latest_generated_document.has_pdf %}
+                <a class="eo-btn eo-btn-ghost eo-btn-sm"
+                   href="{% url 'contract_document_download' contract.pk latest_generated_document.pk %}?fmt=pdf">
+                  <i class="bi bi-file-earmark-pdf"></i> PDF
+                </a>
+                {% endif %}
+              </div>
+            </div>
+            {% endif %}
+
+            {% if has_uploaded_document %}
+            <div style="display:flex;justify-content:space-between;align-items:center;
+                        padding:.85rem 1rem;border-radius:12px;background:#f8fafc;
+                        border:1px solid rgba(148,163,184,.18);flex-wrap:wrap;gap:.5rem">
+              <div>
+                <div style="font-weight:700;font-size:.92rem">
+                  <i class="bi bi-paperclip" style="color:#475569"></i>
+                  Uploaded document
+                </div>
+                <div style="font-size:.74rem;color:var(--eo-text-muted);margin-top:.15rem">
+                  {{ contract.document.name }}
+                </div>
+              </div>
+              <a class="eo-btn eo-btn-ghost eo-btn-sm"
+                 href="{{ contract.document.url }}" target="_blank" rel="noopener">
+                <i class="bi bi-box-arrow-up-right"></i> Open
+              </a>
+            </div>
+            {% endif %}
+
+          </div>
+          {% else %}
+            <div class="cdetail-empty" style="padding:1.4rem 1rem">
+              <i class="bi bi-file-earmark-text"></i>
+              No documents available yet.
+              {% if can_manage_documents %}
+              <div style="margin-top:.7rem">
+                <form method="post"
+                      action="{% url 'contract_generate_document' contract.pk %}"
+                      style="display:inline">
+                  {% csrf_token %}
+                  <button type="submit" class="eo-btn eo-btn-primary eo-btn-sm">
+                    <i class="bi bi-magic"></i> Generate from contract data
+                  </button>
+                </form>
+              </div>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          {# ── Signature history ─────────────────────────────────────── #}
+          {% if signature_requests %}
+          <div style="margin-top:1.4rem">
+            <strong style="font-size:.85rem;color:var(--eo-text-muted);
+                           text-transform:uppercase;letter-spacing:.05em">
+              Signature History
+            </strong>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:.55rem;margin-top:.6rem">
+            {% for s in signature_requests %}
+            <div style="display:flex;justify-content:space-between;align-items:center;
+                        padding:.7rem .9rem;border-radius:10px;
+                        background:#fff;border:1px solid rgba(148,163,184,.18);
+                        flex-wrap:wrap;gap:.4rem">
+              <div>
+                <div style="font-weight:700;font-size:.86rem">
+                  {{ s.signer_name }}
+                  <span style="font-weight:400;color:var(--eo-text-muted);font-size:.78rem">
+                    &lt;{{ s.signer_email }}&gt;
+                  </span>
+                </div>
+                <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:.1rem">
+                  {% if s.status == 'signed' %}
+                    Signed {{ s.signed_at|date:"M j, Y H:i" }}
+                  {% elif s.status == 'declined' %}
+                    Declined {{ s.declined_at|date:"M j, Y H:i" }}
+                  {% elif s.status == 'voided' %}
+                    Voided {{ s.voided_at|date:"M j, Y H:i" }}
+                  {% else %}
+                    Sent {{ s.sent_at|date:"M j, Y H:i"|default:"—" }}
+                    · Expires {{ s.expires_at|date:"M j, Y" }}
+                  {% endif %}
+                </div>
+              </div>
+              <div style="display:flex;gap:.4rem;align-items:center">
+                {% if s.status == 'signed' %}
+                  <span class="cdetail-tag" style="background:#d1fae5;color:#065f46">
+                    <i class="bi bi-patch-check-fill"></i> Signed
+                  </span>
+                  <a class="eo-btn eo-btn-ghost eo-btn-sm"
+                     href="{% url 'contract_signature_signed_pdf' contract.pk s.pk %}">
+                    <i class="bi bi-download"></i>
+                  </a>
+                {% elif s.status == 'declined' %}
+                  <span class="cdetail-tag" style="background:#fef3c7;color:#78350f">
+                    <i class="bi bi-hand-thumbs-down"></i> Declined
+                  </span>
+                {% elif s.status == 'voided' %}
+                  <span class="cdetail-tag" style="background:#fee2e2;color:#991b1b">
+                    <i class="bi bi-x-octagon"></i> Voided
+                  </span>
+                {% elif s.status == 'expired' %}
+                  <span class="cdetail-tag" style="background:#f1f5f9;color:#475569">
+                    <i class="bi bi-hourglass-bottom"></i> Expired
+                  </span>
+                {% else %}
+                  <span class="cdetail-tag" style="background:#dbeafe;color:#1e3a8a">
+                    <i class="bi bi-clock"></i> {{ s.get_status_display }}
+                  </span>
+                {% endif %}
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+
         </div>
       </section>
 
@@ -685,18 +1166,18 @@
             {% portal_url_for cp_token as cp_url %}
             <div style="display:flex;flex-direction:column;gap:.85rem">
 
-              <div style="display:flex;align-items:stretch;gap:.5rem">
+              <div style="display:flex;align-items:stretch;gap:.5rem;flex-wrap:wrap">
                 <input type="text"
                        id="cp-portal-url"
                        value="{{ cp_url }}"
                        readonly
                        onclick="this.select()"
-                       style="flex:1;font-family:var(--eo-font-mono,ui-monospace,monospace);
+                       style="flex:1;min-width:240px;font-family:var(--eo-font-mono,ui-monospace,monospace);
                               font-size:.82rem;padding:.65rem .85rem;
                               border:1px solid var(--eo-border,#e2e8f0);border-radius:10px;
-                              background:#fff;color:var(--eo-text);min-width:0">
+                              background:#fff;color:var(--eo-text)">
                 <button type="button"
-                        class="eo-btn eo-btn-primary eo-btn-sm"
+                        class="eo-btn eo-btn-secondary eo-btn-sm"
                         onclick="(function(btn){
                           var i=document.getElementById('cp-portal-url');
                           i.select(); i.setSelectionRange(0,99999);
@@ -716,6 +1197,33 @@
                         style="white-space:nowrap">
                   <i class="bi bi-clipboard"></i> Copy link
                 </button>
+
+<!--                {# Send-via-email — POSTs to customer_portal_send_link.-->
+<!--                   Disabled when there's no email on the contact (nowhere to send to). #}-->
+                {% if cp_token.contact and cp_token.contact.email %}
+                <form method="post"
+                      action="{% url 'customer_portal_send_link' contract.pk %}"
+                      style="margin:0"
+                      onsubmit="var b=this.querySelector('button[type=submit]');
+                                if(b){b.disabled=true;
+                                      b.innerHTML='<i class=&quot;bi bi-hourglass-split&quot;></i> Sending…';}">
+                  {% csrf_token %}
+                  <button type="submit"
+                          class="eo-btn eo-btn-primary eo-btn-sm"
+                          title="Email this portal link to {{ cp_token.contact.email }}"
+                          style="white-space:nowrap">
+                    <i class="bi bi-envelope-arrow-up"></i> Send link
+                  </button>
+                </form>
+                {% else %}
+                <button type="button"
+                        class="eo-btn eo-btn-secondary eo-btn-sm"
+                        disabled
+                        title="No email address on this contact — add one to send the link."
+                        style="white-space:nowrap;opacity:.6;cursor:not-allowed">
+                  <i class="bi bi-envelope-slash"></i> Send link
+                </button>
+                {% endif %}
               </div>
 
               <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.6rem .9rem;
@@ -1042,6 +1550,330 @@ document.getElementById('genFinalize').addEventListener('change', function() {
   if (!this.checked) { sendNow.checked = false; sendNow.disabled = true; }
   else { sendNow.disabled = {{ contract.vendor_email|yesno:"false,true" }}; }
 });
+</script>
+{% endif %}
+
+{# ── Extend Contract Modal ─────────────────────────────────────────────── #}
+{% if can_extend_contract %}
+<div id="extendContractModal" style="
+  display:none;position:fixed;inset:0;z-index:1080;
+  background:rgba(15,23,42,.45);backdrop-filter:blur(4px);
+  align-items:center;justify-content:center;padding:1rem">
+  <div style="
+    width:100%;max-width:560px;border-radius:24px;
+    background:#fff;box-shadow:0 32px 64px rgba(15,23,42,.18);
+    overflow:hidden;max-height:92vh;display:flex;flex-direction:column">
+
+    <div style="
+      padding:1.2rem 1.4rem;
+      background:linear-gradient(135deg,#0f172a,#1e40af);
+      color:#fff;display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-size:.76rem;font-weight:700;opacity:.7;margin-bottom:.3rem">
+          <i class="bi bi-calendar-plus"></i> CONTRACT EXTENSION
+        </div>
+        <div style="font-size:1.05rem;font-weight:800">Extend Contract</div>
+        <div style="font-size:.82rem;opacity:.85;margin-top:.2rem">
+          Will be logged as
+          <code style="background:rgba(255,255,255,.18);padding:.05rem .35rem;border-radius:6px">
+            {{ contract.reference|default:"CTR-?" }}-{{ next_extension_no }}
+          </code>
+        </div>
+      </div>
+      <button type="button" onclick="document.getElementById('extendContractModal').style.display='none'"
+              style="background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);
+                     color:#fff;border-radius:10px;width:36px;height:36px;font-size:1rem;cursor:pointer">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+
+    <form method="post" action="{% url 'contract_extend' contract.pk %}"
+          enctype="multipart/form-data"
+          style="overflow-y:auto">
+      {% csrf_token %}
+      <div style="padding:1.3rem 1.4rem;display:flex;flex-direction:column;gap:1rem">
+
+        {# Current state info #}
+        <div style="padding:.85rem 1rem;background:#f8fafc;border-radius:14px;
+                    border:1px solid rgba(148,163,184,.18);font-size:.83rem">
+          <div style="font-weight:700;color:var(--eo-text);margin-bottom:.4rem">
+            <i class="bi bi-info-circle"></i> Current Contract Status
+          </div>
+          <div style="color:var(--eo-text-muted);line-height:1.7">
+            <strong>Reference:</strong> {{ contract.reference|default:"—" }}<br>
+            <strong>Current end date:</strong>
+            {{ contract.end_date|date:"M j, Y" }}
+            {% if contract.is_expired %}
+              <span style="color:#dc2626;font-weight:700">(Expired)</span>
+            {% endif %}<br>
+            <strong>Existing extensions:</strong> {{ extension_count }}
+          </div>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-12">
+            <label class="eo-form-label" for="extNewEndDate">
+              New end date <span style="color:#dc2626">*</span>
+            </label>
+            <input type="date" name="new_end_date" id="extNewEndDate"
+                   class="eo-form-control" required
+                   min="{{ contract.end_date|date:'Y-m-d' }}">
+            <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:4px">
+              Must be after the current end date ({{ contract.end_date|date:"M j, Y" }}).
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="eo-form-label" for="extEffectiveDate">Effective date</label>
+            <input type="date" name="effective_date" id="extEffectiveDate"
+                   class="eo-form-control"
+                   value="{% now 'Y-m-d' %}">
+            <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:4px">
+              Defaults to today.
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="eo-form-label" for="extAdditionalAmount">Additional amount</label>
+            <div style="display:flex;gap:.4rem">
+              <input type="text" name="currency"
+                     class="eo-form-control"
+                     value="{{ contract.currency }}"
+                     style="max-width:80px;text-align:center">
+              <input type="number" step="0.01" min="0" name="additional_amount"
+                     id="extAdditionalAmount"
+                     class="eo-form-control" value="0">
+            </div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:4px">
+              Optional fee or revised value.
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label class="eo-form-label" for="extReason">Reason / scope</label>
+          <textarea name="reason" id="extReason" rows="3"
+                    class="eo-form-control"
+                    placeholder="e.g. Extension granted to allow completion of Phase 2 deliverables."></textarea>
+        </div>
+
+        <div>
+          <label class="eo-form-label" for="extNotes">Internal notes</label>
+          <textarea name="notes" id="extNotes" rows="2"
+                    class="eo-form-control"
+                    placeholder="Optional internal notes (not shown to counterparty)."></textarea>
+        </div>
+
+        <div>
+          <label class="eo-form-label" for="extDocument">
+            Supporting document <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span>
+          </label>
+          <input type="file" name="document" id="extDocument"
+                 class="eo-form-control"
+                 accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
+          <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:4px">
+            Signed addendum, amendment letter, or approval memo.
+          </div>
+        </div>
+
+        <div style="padding:.7rem .85rem;background:#fef3c7;border-radius:12px;
+                    border:1px solid rgba(217,119,6,.3);font-size:.78rem;color:#78350f;
+                    line-height:1.55">
+          <i class="bi bi-exclamation-triangle-fill"></i>
+          Submitting this form will advance the contract's end date and log
+          a permanent extension record numbered
+          <strong>-{{ next_extension_no }}</strong>.
+        </div>
+
+        <div style="display:flex;gap:.65rem;padding-top:.25rem">
+          <button type="button"
+                  onclick="document.getElementById('extendContractModal').style.display='none'"
+                  class="eo-btn eo-btn-secondary" style="flex:1">
+            Cancel
+          </button>
+          <button type="submit" class="eo-btn eo-btn-primary" style="flex:2">
+            <i class="bi bi-calendar-plus"></i> Confirm Extension
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+// Close extend modal on backdrop click
+(function(){
+  var modal = document.getElementById('extendContractModal');
+  if (!modal) return;
+  modal.addEventListener('click', function(e) {
+    if (e.target === this) this.style.display = 'none';
+  });
+})();
+</script>
+{% endif %}
+
+{# ── Send for Signature Modal ─────────────────────────────────────────── #}
+{% if can_manage_documents and not active_signature_request %}
+<div id="sendSigModal" style="
+  display:none;position:fixed;inset:0;z-index:1080;
+  background:rgba(15,23,42,.45);backdrop-filter:blur(4px);
+  align-items:center;justify-content:center;padding:1rem">
+  <div style="
+    width:100%;max-width:560px;border-radius:24px;
+    background:#fff;box-shadow:0 32px 64px rgba(15,23,42,.18);
+    overflow:hidden;max-height:92vh;display:flex;flex-direction:column">
+
+    <div style="
+      padding:1.2rem 1.4rem;
+      background:linear-gradient(135deg,#0f172a,#1e40af);
+      color:#fff;display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-size:.76rem;font-weight:700;opacity:.7;margin-bottom:.3rem">
+          <i class="bi bi-pen-fill"></i> E-SIGNATURE
+        </div>
+        <div style="font-size:1.05rem;font-weight:800">Send for signature</div>
+        <div style="font-size:.82rem;opacity:.85;margin-top:.2rem">
+          {{ contract.title|truncatechars:50 }}
+        </div>
+      </div>
+      <button type="button"
+              onclick="document.getElementById('sendSigModal').style.display='none'"
+              style="background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);
+                     color:#fff;border-radius:10px;width:36px;height:36px;font-size:1rem;cursor:pointer">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+
+    <form method="post" action="{% url 'contract_send_for_signature' contract.pk %}"
+          style="overflow-y:auto">
+      {% csrf_token %}
+      <div style="padding:1.3rem 1.4rem;display:flex;flex-direction:column;gap:1rem">
+
+        {# Document choice #}
+        <div>
+          <label class="eo-form-label">Which document should be signed?</label>
+          <div style="display:flex;flex-direction:column;gap:.55rem">
+
+            <label style="display:flex;gap:.6rem;align-items:flex-start;
+                          padding:.85rem 1rem;border-radius:12px;
+                          border:1.5px solid {% if latest_generated_document %}#1e40af{% else %}rgba(148,163,184,.3){% endif %};
+                          cursor:{% if latest_generated_document %}pointer{% else %}not-allowed{% endif %};
+                          background:{% if latest_generated_document %}#eff6ff{% else %}#f8fafc{% endif %};
+                          {% if not latest_generated_document %}opacity:.55{% endif %}">
+              <input type="radio" name="document_choice" value="generated"
+                     {% if latest_generated_document %}checked{% else %}disabled{% endif %}
+                     style="margin-top:.25rem;flex-shrink:0">
+              <div>
+                <div style="font-weight:700;font-size:.92rem">
+                  <i class="bi bi-file-earmark-text"></i>
+                  Generated contract document
+                </div>
+                <div style="font-size:.76rem;color:var(--eo-text-muted);margin-top:.15rem">
+                  {% if latest_generated_document %}
+                    Use the auto-generated PDF (v{{ latest_generated_document.version }}) built from this contract's fields.
+                  {% else %}
+                    No generated document yet. Click "Generate" first.
+                  {% endif %}
+                </div>
+              </div>
+            </label>
+
+            <label style="display:flex;gap:.6rem;align-items:flex-start;
+                          padding:.85rem 1rem;border-radius:12px;
+                          border:1.5px solid {% if has_uploaded_document %}rgba(148,163,184,.3){% else %}rgba(148,163,184,.18){% endif %};
+                          cursor:{% if has_uploaded_document %}pointer{% else %}not-allowed{% endif %};
+                          background:#f8fafc;
+                          {% if not has_uploaded_document %}opacity:.55{% endif %}">
+              <input type="radio" name="document_choice" value="uploaded"
+                     {% if not has_uploaded_document %}disabled{% endif %}
+                     {% if not latest_generated_document and has_uploaded_document %}checked{% endif %}
+                     style="margin-top:.25rem;flex-shrink:0">
+              <div>
+                <div style="font-weight:700;font-size:.92rem">
+                  <i class="bi bi-paperclip"></i>
+                  Uploaded document
+                </div>
+                <div style="font-size:.76rem;color:var(--eo-text-muted);margin-top:.15rem">
+                  {% if has_uploaded_document %}
+                    Use the file already attached to this contract ({{ contract.document.name|truncatechars:48 }}).
+                  {% else %}
+                    No file uploaded.
+                  {% endif %}
+                </div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <hr style="margin:.4rem 0;border:none;border-top:1px solid rgba(148,163,184,.2)">
+
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="eo-form-label" for="sigName">
+              Signer name <span style="color:#dc2626">*</span>
+            </label>
+            <input type="text" id="sigName" name="signer_name"
+                   class="eo-form-control" required
+                   value="{{ contract.counterparty_name|default:'' }}"
+                   placeholder="e.g. Jane Vendor">
+          </div>
+          <div class="col-md-6">
+            <label class="eo-form-label" for="sigEmail">
+              Signer email <span style="color:#dc2626">*</span>
+            </label>
+            <input type="email" id="sigEmail" name="signer_email"
+                   class="eo-form-control" required
+                   value="{{ contract.counterparty_email|default:'' }}"
+                   placeholder="signer@example.com">
+          </div>
+          <div class="col-12">
+            <label class="eo-form-label" for="sigExpires">Link expires in (days)</label>
+            <input type="number" id="sigExpires" name="expires_in_days"
+                   class="eo-form-control" value="30" min="1" max="365">
+            <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:4px">
+              After this period, the signing link will stop working.
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label class="eo-form-label" for="sigMessage">Optional message</label>
+          <textarea id="sigMessage" name="message" rows="3"
+                    class="eo-form-control"
+                    placeholder="Optional note shown to the signer in the email and on the signing page."></textarea>
+        </div>
+
+        <div style="padding:.7rem .85rem;background:#dbeafe;border-radius:12px;
+                    border:1px solid rgba(30,64,175,.25);font-size:.78rem;color:#1e3a8a;
+                    line-height:1.55">
+          <i class="bi bi-info-circle-fill"></i>
+          The signer will receive an email with a unique secure link.
+          They don't need an account on this system to sign.
+        </div>
+
+        <div style="display:flex;gap:.65rem;padding-top:.25rem">
+          <button type="button"
+                  onclick="document.getElementById('sendSigModal').style.display='none'"
+                  class="eo-btn eo-btn-secondary" style="flex:1">
+            Cancel
+          </button>
+          <button type="submit" class="eo-btn eo-btn-primary" style="flex:2">
+            <i class="bi bi-send-fill"></i> Send for signature
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function(){
+  var modal = document.getElementById('sendSigModal');
+  if (!modal) return;
+  modal.addEventListener('click', function(e) {
+    if (e.target === this) this.style.display = 'none';
+  });
+})();
 </script>
 {% endif %}
 

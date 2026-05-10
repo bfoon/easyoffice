@@ -64,6 +64,22 @@ class Task(models.Model):
     customer_visible = models.BooleanField(default=False)
     awaiting_cs_verification = models.BooleanField(default=False)
 
+    # ── Follow-up linkage to a finance invoice ───────────────────────────
+    # Set when the task is created via the "Assign follow-up" flow on an
+    # IncomingPaymentRequest. Lets us list a customer's follow-up tasks
+    # on the invoice detail page and show a "Following up on invoice X"
+    # breadcrumb on the task page.
+    #
+    # SET_NULL on delete: if the invoice is purged (cancelled + cleaned
+    # up), don't cascade-delete the task — the assignee may still need
+    # the historical record of the work they did.
+    incoming_payment = models.ForeignKey(
+        'finance.IncomingPaymentRequest',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='followup_tasks',
+    )
+
     # ── Pinning (focus for CEO / Admin / supervisors) ────────────────────
     is_pinned = models.BooleanField(default=False, db_index=True)
     pinned_at = models.DateTimeField(null=True, blank=True)

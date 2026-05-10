@@ -169,8 +169,13 @@
     <div class="cs-kan-body" data-col-body="closed"></div>
   </div>
 
-  <!-- Data source: render all assignments as hidden template, then distribute via JS -->
-  <template id="assignmentsData">
+  <!-- Data source: render all assignments as a hidden DOM block, then distribute via JS.
+       NOTE: This used to be a <template id="assignmentsData"> but content inside a
+       <template> is INERT — it lives in the template's content fragment, not the
+       live DOM, so document.querySelectorAll('#assignmentsData .cs-kan-card-data')
+       returned zero rows and the kanban appeared empty even when assignments existed.
+       Using a plain <div hidden> keeps the nodes queryable while invisible. -->
+  <div id="assignmentsData" hidden aria-hidden="true">
     {% for item in assignments %}
     <div class="cs-kan-card-data"
          data-status="{{ item.status }}"
@@ -188,7 +193,7 @@
          data-overdue="{% if item.is_overdue %}1{% else %}0{% endif %}"
          data-task-ref="{{ item.task_ref.title|default:'' }}"></div>
     {% endfor %}
-  </template>
+  </div>
 </div>
 
 <!-- Table view -->
@@ -273,6 +278,12 @@
   const dataRows = Array.from(document.querySelectorAll('#assignmentsData .cs-kan-card-data'));
   const assignees = new Set();
 
+  // Tiny HTML-escaper — user-supplied subjects/names/etc must not be
+  // injected raw via innerHTML.
+  const esc = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
   // Build kanban cards
   dataRows.forEach(d => {
     const status = d.dataset.status;
@@ -283,11 +294,11 @@
 
     const slaHtml = buildSlaBadge(d.dataset.sla, d.dataset.overdue === '1', d.dataset.slaDisplay);
     const assigneeHtml = d.dataset.assignee ?
-      `<div class="cs-kc-avatar">${d.dataset.assigneeInitials}</div><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${d.dataset.assignee}</span>` :
+      `<div class="cs-kc-avatar">${esc(d.dataset.assigneeInitials)}</div><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.dataset.assignee)}</span>` :
       `<i class="bi bi-person-dash"></i><span style="color:#94a3b8">Unassigned</span>`;
 
     const taskHtml = d.dataset.taskRef ?
-      `<div class="cs-kc-task-badge"><i class="bi bi-link-45deg"></i> ${d.dataset.taskRef}</div>` : '';
+      `<div class="cs-kc-task-badge"><i class="bi bi-link-45deg"></i> ${esc(d.dataset.taskRef)}</div>` : '';
 
     const card = document.createElement('a');
     card.href = d.dataset.ticketUrl;
@@ -295,11 +306,11 @@
     card.dataset.search = (d.dataset.ticketNo + ' ' + d.dataset.subject + ' ' + d.dataset.customer + ' ' + d.dataset.assignee).toLowerCase();
     card.innerHTML = `
       <div class="cs-kc-head">
-        <span class="cs-kc-no">${d.dataset.ticketNo}</span>
+        <span class="cs-kc-no">${esc(d.dataset.ticketNo)}</span>
         ${slaHtml}
       </div>
-      <div class="cs-kc-subject">${d.dataset.subject}</div>
-      <div class="cs-kc-customer"><i class="bi bi-person-circle"></i> ${d.dataset.customer}</div>
+      <div class="cs-kc-subject">${esc(d.dataset.subject)}</div>
+      <div class="cs-kc-customer"><i class="bi bi-person-circle"></i> ${esc(d.dataset.customer)}</div>
       ${taskHtml}
       <div class="cs-kc-foot">
         <div class="cs-kc-assignee">${assigneeHtml}</div>
@@ -323,12 +334,16 @@
     if (countEl) countEl.textContent = count;
   });
 
-  // Summary counts
-  document.getElementById('sumTotal').textContent = dataRows.length;
-  document.getElementById('sumProgress').textContent = dataRows.filter(d => ['in_progress','assigned','new'].includes(d.dataset.status)).length;
-  document.getElementById('sumOverdue').textContent = dataRows.filter(d => d.dataset.overdue === '1').length;
-  document.getElementById('sumResolved').textContent = dataRows.filter(d => ['resolved','closed'].includes(d.dataset.status)).length;
-  document.getElementById('sumAssignees').textContent = assignees.size;
+  // Summary counts (defensive — tiles may not exist on stripped-down embeds)
+  const setSum = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  };
+  setSum('sumTotal',     dataRows.length);
+  setSum('sumProgress',  dataRows.filter(d => ['in_progress','assigned','new'].includes(d.dataset.status)).length);
+  setSum('sumOverdue',   dataRows.filter(d => d.dataset.overdue === '1').length);
+  setSum('sumResolved',  dataRows.filter(d => ['resolved','closed'].includes(d.dataset.status)).length);
+  setSum('sumAssignees', assignees.size);
 
   function buildSlaBadge(iso, overdue, display){
     if (!iso) return '<span class="cs-kc-sla none">No SLA</span>';

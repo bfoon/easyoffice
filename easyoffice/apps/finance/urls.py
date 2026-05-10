@@ -43,6 +43,41 @@ urlpatterns = [
     path('contracts/<uuid:pk>/', views.ContractDetailView.as_view(), name='contract_detail'),
     path('contracts/<uuid:pk>/edit/', views.ContractUpdateView.as_view(), name='contract_update'),
     path('contracts/<uuid:pk>/generate-invoice/', views.ContractGenerateInvoiceView.as_view(), name='contract_generate_invoice'),
+    path('contracts/<uuid:pk>/extend/', views.ContractExtendView.as_view(), name='contract_extend'),
+    path('contracts/<uuid:pk>/extensions/<uuid:ext_pk>/delete/',
+         views.ContractExtensionDeleteView.as_view(),
+         name='contract_extension_delete'),
+
+    # Document generation & e-signature (logged-in)
+    path('contracts/<uuid:pk>/generate-document/',
+         views.ContractGenerateDocumentView.as_view(),
+         name='contract_generate_document'),
+    path('contracts/<uuid:pk>/documents/<uuid:doc_pk>/download/',
+         views.ContractDocumentDownloadView.as_view(),
+         name='contract_document_download'),
+    path('contracts/<uuid:pk>/send-for-signature/',
+         views.ContractSendForSignatureView.as_view(),
+         name='contract_send_for_signature'),
+    path('contracts/<uuid:pk>/signature-requests/<uuid:req_pk>/resend/',
+         views.ContractSignatureResendView.as_view(),
+         name='contract_signature_resend'),
+    path('contracts/<uuid:pk>/signature-requests/<uuid:req_pk>/void/',
+         views.ContractSignatureVoidView.as_view(),
+         name='contract_signature_void'),
+    path('contracts/<uuid:pk>/signature-requests/<uuid:req_pk>/signed.pdf',
+         views.ContractSignedDownloadView.as_view(),
+         name='contract_signature_signed_pdf'),
+
+    # Public counterparty-facing signing page (no login)
+    path('contracts/sign/<str:token>/',
+         views.ContractPublicSignView.as_view(),
+         name='contract_public_sign'),
+    path('contracts/sign/<str:token>/document.pdf',
+         views.ContractPublicSourceDownloadView.as_view(),
+         name='contract_public_source_pdf'),
+    path('contracts/sign/<str:token>/signed.pdf',
+         views.ContractPublicSignedDownloadView.as_view(),
+         name='contract_public_signed_pdf'),
 
     # ════════════════════════════════════════════════════════════════════════
     # FINANCIAL CONTROL CENTER — analytics, reports, audit, anomalies, invoices

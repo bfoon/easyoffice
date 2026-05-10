@@ -12,7 +12,7 @@ emit. <str:> just forbids '/', which is what we want.
 """
 from django.urls import path
 
-from . import views
+from . import views, staff_views
 
 urlpatterns = [
     # Token recovery (no token in URL — used when the link is dead)
@@ -85,4 +85,7 @@ urlpatterns = [
         views.DisputeOnSiteView.as_view(),
         name='customer_portal_dispute',
     ),
+    path('contracts/<uuid:pk>/send-link/',
+         staff_views.SendPortalLinkView.as_view(),
+         name='customer_portal_send_link'),
 ]

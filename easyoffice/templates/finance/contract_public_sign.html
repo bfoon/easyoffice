@@ -1,0 +1,643 @@
+{% load humanize %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign · {{ contract.title }}</title>
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+  <style>
+    :root{
+      --ink:#0f172a;
+      --muted:#64748b;
+      --line:#e2e8f0;
+      --bg:#f1f5f9;
+      --primary:#1e40af;
+      --primary-dark:#0f172a;
+      --success:#059669;
+      --danger:#dc2626;
+      --warning:#d97706;
+    }
+    *{ box-sizing:border-box; }
+    body{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      margin:0;
+      background:var(--bg);
+      color:var(--ink);
+      min-height:100vh;
+    }
+    .topbar{
+      background:linear-gradient(135deg, var(--primary-dark), var(--primary));
+      color:#fff;
+      padding:1.2rem 1.6rem;
+    }
+    .topbar h1{
+      margin:0;
+      font-size:1.05rem;
+      font-weight:800;
+      letter-spacing:.02em;
+    }
+    .topbar p{
+      margin:.2rem 0 0;
+      opacity:.7;
+      font-size:.78rem;
+    }
+    .shell{
+      max-width:980px;
+      margin:0 auto;
+      padding:1.6rem;
+    }
+    .card{
+      background:#fff;
+      border-radius:18px;
+      box-shadow:0 18px 40px rgba(15,23,42,.07);
+      padding:1.6rem;
+      margin-bottom:1.2rem;
+      border:1px solid var(--line);
+    }
+    .lead-row{
+      display:flex;
+      gap:1rem;
+      align-items:flex-start;
+      flex-wrap:wrap;
+    }
+    .lead-row .meta{ flex:1 1 260px; }
+    .lead-row h2{
+      margin:0 0 .25rem;
+      font-size:1.4rem;
+      font-weight:800;
+    }
+    .lead-row .ref{
+      font-size:.78rem;
+      color:var(--muted);
+      letter-spacing:.04em;
+      text-transform:uppercase;
+      margin-bottom:.6rem;
+    }
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:.35rem;
+      padding:.3rem .65rem;
+      border-radius:999px;
+      font-size:.74rem;
+      font-weight:700;
+      background:#f1f5f9;
+      color:var(--ink);
+    }
+    .pill.warning{ background:#fef3c7; color:#78350f; }
+    .pill.success{ background:#d1fae5; color:#065f46; }
+    .pill.danger{ background:#fee2e2; color:#991b1b; }
+    .pill.muted{ background:#f1f5f9; color:#475569; }
+
+    .preview-frame{
+      width:100%;
+      height:580px;
+      border:1px solid var(--line);
+      border-radius:12px;
+      background:#fff;
+    }
+    .field-label{
+      font-size:.78rem;
+      font-weight:700;
+      color:var(--ink);
+      margin-bottom:.4rem;
+      display:block;
+    }
+    .help{
+      font-size:.74rem;
+      color:var(--muted);
+    }
+    .method-tabs{
+      display:flex;
+      gap:.5rem;
+      flex-wrap:wrap;
+      margin-bottom:1rem;
+    }
+    .method-tab{
+      flex:1;
+      min-width:120px;
+      padding:.7rem 1rem;
+      border-radius:12px;
+      border:1px solid var(--line);
+      background:#fff;
+      font-size:.85rem;
+      font-weight:700;
+      color:var(--ink);
+      cursor:pointer;
+      text-align:center;
+      transition:all .15s ease;
+    }
+    .method-tab:hover{ border-color:var(--primary); }
+    .method-tab.active{
+      background:linear-gradient(135deg, var(--primary-dark), var(--primary));
+      color:#fff;
+      border-color:transparent;
+      box-shadow:0 8px 18px rgba(30,64,175,.25);
+    }
+    .method-pane{ display:none; }
+    .method-pane.active{ display:block; }
+
+    .sig-pad-wrap{
+      border:2px dashed var(--line);
+      border-radius:12px;
+      background:#fafbfd;
+      padding:.75rem;
+      position:relative;
+    }
+    #sigCanvas{
+      width:100%;
+      height:200px;
+      background:#fff;
+      border-radius:8px;
+      display:block;
+      cursor:crosshair;
+      touch-action:none;
+    }
+    .sig-tools{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin-top:.6rem;
+      gap:.5rem;
+    }
+    .typed-preview{
+      font-family: "Brush Script MT", "Lucida Handwriting", cursive;
+      font-size:2.4rem;
+      color:var(--ink);
+      padding:1.5rem;
+      border:1px solid var(--line);
+      border-radius:12px;
+      background:#fafbfd;
+      text-align:center;
+      min-height:90px;
+      margin-top:.6rem;
+    }
+    .btn-primary-grad{
+      background:linear-gradient(135deg, var(--primary-dark), var(--primary));
+      color:#fff;
+      border:none;
+      padding:.85rem 1.4rem;
+      border-radius:12px;
+      font-weight:700;
+      cursor:pointer;
+      box-shadow:0 12px 24px rgba(30,64,175,.25);
+      transition:transform .15s ease;
+    }
+    .btn-primary-grad:hover{ transform:translateY(-1px); }
+    .btn-primary-grad:disabled{ opacity:.5; cursor:not-allowed; transform:none; }
+    .btn-ghost{
+      background:transparent;
+      border:1px solid var(--line);
+      padding:.7rem 1.1rem;
+      border-radius:12px;
+      font-weight:600;
+      color:var(--ink);
+      cursor:pointer;
+    }
+    .btn-danger-soft{
+      background:#fee2e2;
+      border:1px solid #fecaca;
+      color:#991b1b;
+      padding:.6rem 1rem;
+      border-radius:10px;
+      font-weight:600;
+      cursor:pointer;
+      font-size:.85rem;
+    }
+
+    .state-banner{
+      padding:1.6rem;
+      border-radius:14px;
+      text-align:center;
+      margin-bottom:1.2rem;
+    }
+    .state-banner.success{
+      background:linear-gradient(135deg,#10b981,#059669);
+      color:#fff;
+    }
+    .state-banner.warn{
+      background:linear-gradient(135deg,#f59e0b,#d97706);
+      color:#fff;
+    }
+    .state-banner.danger{
+      background:linear-gradient(135deg,#ef4444,#dc2626);
+      color:#fff;
+    }
+    .state-banner i{ font-size:2.2rem; display:block; margin-bottom:.5rem; }
+    .state-banner h3{ margin:0; font-size:1.2rem; font-weight:800; }
+    .state-banner p{ margin:.4rem 0 0; opacity:.92; font-size:.92rem; }
+
+    .alert{
+      padding:.8rem 1rem;
+      border-radius:10px;
+      margin-bottom:1rem;
+      font-size:.86rem;
+    }
+    .alert-error{ background:#fee2e2; color:#991b1b; border:1px solid #fecaca; }
+    .alert-info{ background:#dbeafe; color:#1e3a8a; border:1px solid #bfdbfe; }
+
+    .consent-box{
+      background:#f8fafc;
+      border:1px solid var(--line);
+      border-radius:10px;
+      padding:.85rem 1rem;
+      margin:.8rem 0;
+      font-size:.78rem;
+      line-height:1.6;
+      color:#334155;
+    }
+    .footer-note{
+      text-align:center;
+      color:var(--muted);
+      font-size:.74rem;
+      margin-top:2rem;
+      padding-bottom:2rem;
+    }
+
+    @media (max-width: 720px){
+      .preview-frame{ height:360px; }
+      #sigCanvas{ height:160px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="shell" style="padding:0">
+    <h1><i class="bi bi-file-earmark-lock2"></i> Secure Document Signing</h1>
+    <p>You've been invited to review and sign a contract.</p>
+  </div>
+</div>
+
+<div class="shell">
+
+  {% if messages %}
+    {% for m in messages %}
+      <div class="alert {% if m.tags == 'error' %}alert-error{% else %}alert-info{% endif %}">
+        {{ m }}
+      </div>
+    {% endfor %}
+  {% endif %}
+
+  {# ── State banners (already-handled requests) ─────────────────────────── #}
+
+  {% if is_signed %}
+    <div class="state-banner success">
+      <i class="bi bi-patch-check-fill"></i>
+      <h3>This document has been signed</h3>
+      <p>
+        Signed by {{ sig_req.signer_name }}
+        on {{ sig_req.signed_at|date:"F j, Y" }} at {{ sig_req.signed_at|time:"H:i" }} UTC.
+      </p>
+    </div>
+    <div class="card" style="text-align:center">
+      <a class="btn-primary-grad" target="_blank"
+         href="{% url 'contract_public_signed_pdf' sig_req.access_token %}">
+        <i class="bi bi-download"></i> Download signed copy
+      </a>
+    </div>
+
+  {% elif is_voided %}
+    <div class="state-banner danger">
+      <i class="bi bi-x-octagon-fill"></i>
+      <h3>This signing request has been voided</h3>
+      <p>The sender voided this request. Please contact them for a new link.</p>
+    </div>
+
+  {% elif is_declined %}
+    <div class="state-banner warn">
+      <i class="bi bi-hand-thumbs-down-fill"></i>
+      <h3>This signing request was declined</h3>
+      <p>You declined to sign on {{ sig_req.declined_at|date:"F j, Y" }}.</p>
+      {% if sig_req.decline_reason %}
+        <p style="font-style:italic">"{{ sig_req.decline_reason }}"</p>
+      {% endif %}
+    </div>
+
+  {% elif is_expired %}
+    <div class="state-banner warn">
+      <i class="bi bi-hourglass-bottom"></i>
+      <h3>This signing link has expired</h3>
+      <p>Please contact the sender for a renewed link.</p>
+    </div>
+
+  {% else %}
+
+    {# ── Active signing page ─────────────────────────────────────────────── #}
+
+    <div class="card">
+      <div class="lead-row">
+        <div class="meta">
+          <div class="ref">
+            <i class="bi bi-hash"></i>
+            {{ contract.reference|default:"No reference" }}
+          </div>
+          <h2>{{ contract.title }}</h2>
+          <div style="margin-top:.6rem;display:flex;gap:.4rem;flex-wrap:wrap">
+            <span class="pill muted">
+              <i class="bi bi-person"></i> Signer: {{ sig_req.signer_name }}
+            </span>
+            <span class="pill warning">
+              <i class="bi bi-clock"></i>
+              Expires {{ sig_req.expires_at|date:"M j, Y" }}
+            </span>
+          </div>
+          {% if sig_req.message %}
+          <div style="margin-top:1rem;padding:.85rem 1rem;
+                      background:#f8fafc;border-radius:10px;
+                      border-left:3px solid var(--primary);font-size:.86rem">
+            <strong style="display:block;margin-bottom:.25rem">
+              <i class="bi bi-chat-left-quote"></i> Message from sender
+            </strong>
+            {{ sig_req.message|linebreaksbr }}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    {# Preview the PDF #}
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;
+                  margin-bottom:.8rem;flex-wrap:wrap;gap:.5rem">
+        <div>
+          <strong>Document preview</strong>
+          <div class="help">Review the document below before signing.</div>
+        </div>
+        <a class="btn-ghost"
+           href="{% url 'contract_public_source_pdf' sig_req.access_token %}"
+           target="_blank">
+          <i class="bi bi-arrows-fullscreen"></i> Open in new tab
+        </a>
+      </div>
+      <iframe class="preview-frame"
+              src="{% url 'contract_public_source_pdf' sig_req.access_token %}"
+              title="Contract preview"></iframe>
+    </div>
+
+    {# Signing form #}
+    <form method="post" enctype="multipart/form-data" id="signForm">
+      {% csrf_token %}
+      <div class="card">
+        <div style="margin-bottom:1rem">
+          <strong>Sign the document</strong>
+          <div class="help">Choose a signing method below.</div>
+        </div>
+
+        <div class="method-tabs">
+          <div class="method-tab active" data-method="drawn">
+            <i class="bi bi-pen"></i> Draw
+          </div>
+          <div class="method-tab" data-method="typed">
+            <i class="bi bi-type"></i> Type
+          </div>
+          <div class="method-tab" data-method="upload">
+            <i class="bi bi-upload"></i> Upload
+          </div>
+        </div>
+
+        <input type="hidden" name="method" id="methodInput" value="drawn">
+
+        {# Drawn pad #}
+        <div class="method-pane active" data-pane="drawn">
+          <label class="field-label">Draw your signature in the box below</label>
+          <div class="sig-pad-wrap">
+            <canvas id="sigCanvas" width="800" height="200"></canvas>
+            <input type="hidden" name="signature_data" id="sigDataInput">
+            <div class="sig-tools">
+              <span class="help"><i class="bi bi-info-circle"></i>
+                Use your finger on touch devices, or your mouse on desktop.
+              </span>
+              <button type="button" class="btn-danger-soft" id="clearSig">
+                <i class="bi bi-eraser"></i> Clear
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {# Typed #}
+        <div class="method-pane" data-pane="typed">
+          <label class="field-label" for="typedInput">Type your full name</label>
+          <input type="text" id="typedInput" name="typed_text"
+                 class="form-control"
+                 value="{{ sig_req.signer_name }}"
+                 placeholder="Your full name"
+                 style="padding:.85rem 1rem;font-size:1rem;border-radius:12px">
+          <div id="typedPreview" class="typed-preview">{{ sig_req.signer_name }}</div>
+        </div>
+
+        {# Upload #}
+        <div class="method-pane" data-pane="upload">
+          <label class="field-label" for="uploadInput">Upload an image of your signature</label>
+          <input type="file" id="uploadInput" name="signature_file"
+                 class="form-control"
+                 accept="image/png,image/jpeg"
+                 style="padding:.7rem 1rem;border-radius:12px">
+          <div class="help" style="margin-top:.4rem">
+            PNG or JPEG only. Transparent background works best.
+          </div>
+        </div>
+
+        {# Consent #}
+        <div class="consent-box">
+          <label style="display:flex;gap:.6rem;align-items:flex-start;cursor:pointer">
+            <input type="checkbox" name="consent" id="consentChk"
+                   style="margin-top:.2rem;flex-shrink:0">
+            <span>
+              <strong>I consent to sign electronically.</strong>
+              I agree that my electronic signature is the legal equivalent of my
+              handwritten signature and that this contract may be signed by
+              electronic means.
+            </span>
+          </label>
+        </div>
+
+        <div style="display:flex;gap:.8rem;justify-content:flex-end;flex-wrap:wrap">
+          <button type="button" class="btn-ghost" id="declineBtn">
+            <i class="bi bi-x-lg"></i> Decline
+          </button>
+          <button type="submit" name="action" value="sign"
+                  class="btn-primary-grad" id="signBtn">
+            <i class="bi bi-pen-fill"></i> Sign &amp; Submit
+          </button>
+        </div>
+      </div>
+    </form>
+
+    {# Decline modal — minimal, in-page #}
+    <form method="post" id="declineForm" style="display:none">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="decline">
+      <div class="card" id="declinePanel" style="display:none">
+        <strong><i class="bi bi-x-circle"></i> Decline to sign</strong>
+        <div class="help" style="margin-bottom:.6rem">
+          The sender will be notified that you declined.
+        </div>
+        <textarea name="decline_reason" rows="3" class="form-control"
+                  placeholder="Optional: tell them why"
+                  style="border-radius:12px;padding:.7rem 1rem"></textarea>
+        <div style="display:flex;gap:.6rem;margin-top:.8rem;justify-content:flex-end">
+          <button type="button" class="btn-ghost" id="cancelDecline">Cancel</button>
+          <button type="submit" class="btn-danger-soft" style="padding:.8rem 1.2rem">
+            Confirm decline
+          </button>
+        </div>
+      </div>
+    </form>
+
+  {% endif %}
+
+  <p class="footer-note">
+    Secured by signed token URL · This page never asks for your password.
+  </p>
+</div>
+
+<script>
+(function(){
+  // ── Method tabs ────────────────────────────────────────────────────────
+  var tabs = document.querySelectorAll('.method-tab');
+  var panes = document.querySelectorAll('.method-pane');
+  var methodInput = document.getElementById('methodInput');
+  tabs.forEach(function(tab){
+    tab.addEventListener('click', function(){
+      tabs.forEach(function(t){ t.classList.remove('active'); });
+      tab.classList.add('active');
+      var m = tab.getAttribute('data-method');
+      methodInput.value = m;
+      panes.forEach(function(p){
+        p.classList.toggle('active', p.getAttribute('data-pane') === m);
+      });
+    });
+  });
+
+  // ── Signature canvas ───────────────────────────────────────────────────
+  var canvas = document.getElementById('sigCanvas');
+  var sigInput = document.getElementById('sigDataInput');
+  if (canvas) {
+    var ctx = canvas.getContext('2d');
+    function resizeCanvas(){
+      // Match the canvas backing store to the rendered size for crispness
+      var rect = canvas.getBoundingClientRect();
+      var dpr = window.devicePixelRatio || 1;
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 2.4;
+      ctx.strokeStyle = '#0f172a';
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    var drawing = false;
+    var hasStrokes = false;
+    function pos(e){
+      var rect = canvas.getBoundingClientRect();
+      var t = (e.touches && e.touches[0]) ? e.touches[0] : e;
+      return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+    }
+    function start(e){
+      e.preventDefault();
+      drawing = true;
+      hasStrokes = true;
+      var p = pos(e);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+    }
+    function move(e){
+      if (!drawing) return;
+      e.preventDefault();
+      var p = pos(e);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    }
+    function end(e){
+      if (!drawing) return;
+      drawing = false;
+      ctx.closePath();
+    }
+    canvas.addEventListener('mousedown', start);
+    canvas.addEventListener('mousemove', move);
+    canvas.addEventListener('mouseup', end);
+    canvas.addEventListener('mouseleave', end);
+    canvas.addEventListener('touchstart', start, {passive:false});
+    canvas.addEventListener('touchmove', move, {passive:false});
+    canvas.addEventListener('touchend', end);
+
+    document.getElementById('clearSig').addEventListener('click', function(){
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      hasStrokes = false;
+    });
+
+    // ── Form submit: serialise canvas to base64 ─────────────────────────
+    var form = document.getElementById('signForm');
+    form.addEventListener('submit', function(e){
+      // Only validate signature on the "sign" submit (not declines).
+      var submitter = e.submitter || document.activeElement;
+      if (submitter && submitter.value === 'decline') return;
+
+      var consent = document.getElementById('consentChk').checked;
+      if (!consent) {
+        e.preventDefault();
+        alert('Please tick the consent box to continue.');
+        return;
+      }
+
+      var method = methodInput.value;
+      if (method === 'drawn') {
+        if (!hasStrokes) {
+          e.preventDefault();
+          alert('Please draw your signature before submitting.');
+          return;
+        }
+        sigInput.value = canvas.toDataURL('image/png');
+      } else if (method === 'typed') {
+        var v = (document.getElementById('typedInput').value || '').trim();
+        if (!v) {
+          e.preventDefault();
+          alert('Please type your name.');
+          return;
+        }
+      } else if (method === 'upload') {
+        var fi = document.getElementById('uploadInput');
+        if (!fi.files || fi.files.length === 0) {
+          e.preventDefault();
+          alert('Please choose an image of your signature.');
+          return;
+        }
+      }
+    });
+  }
+
+  // ── Typed preview ──────────────────────────────────────────────────────
+  var typedInput = document.getElementById('typedInput');
+  var typedPreview = document.getElementById('typedPreview');
+  if (typedInput && typedPreview) {
+    typedInput.addEventListener('input', function(){
+      typedPreview.textContent = typedInput.value || 'Your signature';
+    });
+  }
+
+  // ── Decline panel ──────────────────────────────────────────────────────
+  var declineBtn = document.getElementById('declineBtn');
+  var declinePanel = document.getElementById('declinePanel');
+  var cancelDecline = document.getElementById('cancelDecline');
+  if (declineBtn) {
+    declineBtn.addEventListener('click', function(){
+      declinePanel.style.display = 'block';
+      declinePanel.scrollIntoView({behavior:'smooth', block:'center'});
+    });
+    cancelDecline.addEventListener('click', function(){
+      declinePanel.style.display = 'none';
+    });
+  }
+})();
+</script>
+
+</body>
+</html>

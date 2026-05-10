@@ -72,3 +72,39 @@ def auto_create_task_for_non_cs_assignee(sender, instance, created, **kwargs):
             'auto_create_task_for_non_cs_assignee failed for assignment %s',
             instance.pk,
         )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Auto-deactivate live chat when its ticket closes or is cancelled.
+# ════════════════════════════════════════════════════════════════════════
+
+from .models import ServiceTicket  # placed at end to avoid app-load ordering issues
+
+
+@receiver(post_save, sender=ServiceTicket)
+def deactivate_live_chat_on_ticket_close(sender, instance, created, **kwargs):
+    """
+    When a ticket transitions to closed/cancelled, kill any live chat
+    session attached to it. The customer page will show a "ticket
+    closed" notice instead of a chat panel.
+
+    Idempotent: if there's no LiveChatSession, or it's already
+    deactivated, this is a no-op.
+    """
+    if created:
+        return
+    if instance.status not in {'closed', 'cancelled'}:
+        return
+
+    try:
+        from .models import LiveChatSession
+        session = LiveChatSession.objects.filter(ticket=instance, is_active=True).first()
+        if not session:
+            return
+        from . import live_chat_services as lcs
+        lcs.deactivate_session(instance, actor=None, reason='ticket_closed')
+    except Exception:
+        logger.exception(
+            'deactivate_live_chat_on_ticket_close failed for ticket %s',
+            instance.pk,
+        )

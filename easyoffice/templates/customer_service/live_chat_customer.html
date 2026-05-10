@@ -1,0 +1,357 @@
+{# apps/customer_service/templates/customer_service/live_chat_customer.html #}
+{# Real customer chat panel — replaces live_chat_stub.html.                 #}
+{# Anonymous, tokenised. Talks to LiveChatConsumer over WebSocket.           #}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live chat — ticket {{ ticket.ticket_no }}</title>
+  <style>
+    :root {
+      --p:#0ea5e9; --pd:#0369a1; --bg:#f1f5f9; --card:#fff; --muted:#64748b;
+      --text:#0f172a; --border:#e2e8f0; --me:#dcfce7; --them:#e0f2fe;
+      --sys:#fef3c7; --danger:#fee2e2;
+    }
+    *,*::before,*::after { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+      background:var(--bg);color:var(--text);display:flex;flex-direction:column;
+      min-height:100vh;
+    }
+    header {
+      background:linear-gradient(135deg,var(--p),var(--pd));color:#fff;
+      padding:14px 18px;display:flex;align-items:center;gap:12px;
+      box-shadow:0 2px 8px rgba(2,132,199,.18);
+    }
+    header .avatar {
+      width:42px;height:42px;border-radius:50%;
+      background:rgba(255,255,255,.18);display:flex;align-items:center;
+      justify-content:center;font-size:1.2rem;
+    }
+    header h1 { margin:0;font-size:1rem;font-weight:600;line-height:1.2; }
+    header .sub { font-size:.78rem;opacity:.85; }
+    header .status { margin-left:auto;display:flex;align-items:center;gap:6px;font-size:.78rem; }
+    .dot { width:8px;height:8px;border-radius:50%;background:#94a3b8; }
+    .dot.live { background:#22c55e;box-shadow:0 0 0 0 rgba(34,197,94,.7);animation:pulse 1.8s infinite; }
+    @keyframes pulse {
+      0%   { box-shadow:0 0 0 0   rgba(34,197,94,.7); }
+      70%  { box-shadow:0 0 0 8px rgba(34,197,94,0);   }
+      100% { box-shadow:0 0 0 0   rgba(34,197,94,0);   }
+    }
+
+    #chat {
+      flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;
+    }
+    .msg {
+      max-width:75%;padding:9px 13px;border-radius:14px;font-size:.9rem;
+      line-height:1.4;word-wrap:break-word;white-space:pre-wrap;
+    }
+    .msg .meta {
+      display:block;font-size:.68rem;color:var(--muted);margin-top:3px;
+    }
+    .msg.customer { background:var(--me);align-self:flex-end;border-bottom-right-radius:4px; }
+    .msg.agent    { background:var(--them);align-self:flex-start;border-bottom-left-radius:4px; }
+    .msg.system {
+      background:var(--sys);align-self:center;font-size:.78rem;color:#78350f;
+      max-width:90%;text-align:center;
+    }
+
+    .typing {
+      align-self:flex-start;color:var(--muted);font-size:.78rem;font-style:italic;
+      padding:2px 4px;display:none;
+    }
+    .typing.show { display:block; }
+
+    footer {
+      background:var(--card);border-top:1px solid var(--border);padding:10px 12px;
+    }
+    .composer { display:flex;gap:8px;align-items:flex-end; }
+    .composer textarea {
+      flex:1;resize:none;border:1px solid var(--border);border-radius:12px;
+      padding:9px 12px;font:inherit;font-size:.9rem;min-height:42px;max-height:120px;
+      outline:none;background:var(--bg);
+    }
+    .composer textarea:focus { background:#fff;border-color:var(--p); }
+    .composer button {
+      background:var(--p);color:#fff;border:none;border-radius:12px;
+      padding:10px 16px;font-weight:600;font-size:.85rem;cursor:pointer;
+      display:flex;align-items:center;gap:6px;
+    }
+    .composer button:disabled { background:#94a3b8;cursor:not-allowed; }
+    .composer button:hover:not(:disabled) { background:var(--pd); }
+
+    .banner {
+      padding:10px 14px;font-size:.82rem;text-align:center;
+      background:var(--danger);color:#7f1d1d;border-bottom:1px solid #fecaca;
+      display:none;
+    }
+    .banner.show { display:block; }
+
+    .footnote {
+      text-align:center;font-size:.7rem;color:var(--muted);padding:6px 12px 10px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="avatar">💬</div>
+    <div>
+      <h1>Customer Service</h1>
+      <div class="sub">Ticket {{ ticket.ticket_no }} — {{ ticket.subject }}</div>
+    </div>
+    <div class="status">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">Connecting…</span>
+    </div>
+  </header>
+
+  <div class="banner" id="banner"></div>
+
+  <div id="chat" aria-live="polite"></div>
+  <div class="typing" id="typing"></div>
+
+  <footer>
+    <div class="composer">
+      <textarea id="input"
+                placeholder="Type your message…"
+                rows="1"
+                aria-label="Message"
+                disabled></textarea>
+      <button id="sendBtn" disabled aria-label="Send">
+        Send
+      </button>
+    </div>
+    <div class="footnote">
+      🔒 This chat is private to your device. Closing it will end the session.
+    </div>
+  </footer>
+
+<script>
+(function () {
+  // ── Config ───────────────────────────────────────────────────────────
+  var WS_PATH = {{ ws_path|escapejs|default:'""' }};
+  var FINALIZE_URL = {{ finalize_url|escapejs|default:'""' }};
+  // Build the absolute WS URL — protocol from page protocol.
+  var WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://')
+             + location.host + WS_PATH;
+
+  // ── Elements ─────────────────────────────────────────────────────────
+  var chat       = document.getElementById('chat');
+  var input      = document.getElementById('input');
+  var sendBtn    = document.getElementById('sendBtn');
+  var banner     = document.getElementById('banner');
+  var statusDot  = document.getElementById('statusDot');
+  var statusText = document.getElementById('statusText');
+
+  var lastMessageIds = new Set();
+  var ws = null;
+  var reconnectDelay = 1000;
+  var heartbeatTimer = null;
+
+  // ── Fingerprint (lightweight, no external libs) ──────────────────────
+  function computeFingerprint() {
+    var parts = [
+      navigator.userAgent || '',
+      navigator.language || '',
+      screen.width + 'x' + screen.height + 'x' + (screen.colorDepth || ''),
+      (new Date()).getTimezoneOffset(),
+      navigator.hardwareConcurrency || '',
+      navigator.platform || '',
+    ];
+    // Canvas signal — many browsers render text subtly differently.
+    try {
+      var c = document.createElement('canvas');
+      c.width = 200; c.height = 50;
+      var ctx = c.getContext('2d');
+      ctx.textBaseline = 'top';
+      ctx.font = '14px Arial';
+      ctx.fillStyle = '#069';
+      ctx.fillText('cs-livechat-' + parts.join('|'), 2, 2);
+      parts.push(c.toDataURL().slice(-64));
+    } catch (e) { /* canvas blocked; skip */ }
+    return parts.join('~');
+  }
+
+  function finalizeFingerprint() {
+    var fp = computeFingerprint();
+    var fd = new FormData();
+    fd.append('fingerprint', fp);
+    return fetch(FINALIZE_URL, { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j.ok) {
+          // Bind rejected (hijack or unknown). The server will already
+          // have locked the session; show a friendly lock state.
+          showLocked(j.reason || 'different_machine');
+          return false;
+        }
+        return true;
+      })
+      .catch(function () { return true; }); // network blip — don't block the user
+  }
+
+  // ── Rendering ────────────────────────────────────────────────────────
+  function fmtTime(iso) {
+    try {
+      var d = new Date(iso);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (e) { return ''; }
+  }
+
+  function appendMessage(m) {
+    if (m.id != null) {
+      if (lastMessageIds.has(m.id)) return;
+      lastMessageIds.add(m.id);
+    }
+    var el = document.createElement('div');
+    el.className = 'msg ' + (m.author_kind || 'system');
+    el.textContent = m.body;
+    var meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = (m.author_kind === 'customer' ? 'You' : (m.author_display || ''))
+                     + ' · ' + fmtTime(m.created_at);
+    el.appendChild(meta);
+    chat.appendChild(el);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function setStatus(kind, label) {
+    statusText.textContent = label;
+    statusDot.classList.toggle('live', kind === 'live');
+  }
+
+  function showLocked(reason) {
+    var labels = {
+      'different_machine': 'This chat is locked — it was opened on another device.',
+      'expired':           'This chat link has expired.',
+      'manually_off':      'Our team has closed this chat.',
+      'ticket_closed':     'This ticket has been closed.',
+      'unknown':           'This link is not recognised.'
+    };
+    banner.textContent = labels[reason] || 'This chat is no longer active.';
+    banner.classList.add('show');
+    input.disabled = true;
+    sendBtn.disabled = true;
+    setStatus('off', 'Closed');
+    if (ws) { try { ws.close(); } catch (e) {} }
+  }
+
+  function showOff(label) {
+    banner.textContent = label || 'Chat is currently off.';
+    banner.classList.add('show');
+    input.disabled = true;
+    sendBtn.disabled = true;
+  }
+  function showOn() {
+    banner.classList.remove('show');
+    input.disabled = false;
+    sendBtn.disabled = false;
+  }
+
+  // ── WebSocket ────────────────────────────────────────────────────────
+  function connect() {
+    setStatus('off', 'Connecting…');
+    ws = new WebSocket(WS_URL);
+
+    ws.addEventListener('open', function () {
+      reconnectDelay = 1000;
+      setStatus('live', 'Connected');
+      // Heartbeat — keeps presence fresh and detects half-open sockets.
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = setInterval(function () {
+        try { ws.send(JSON.stringify({ action: 'ping' })); } catch (e) {}
+      }, 25000);
+    });
+
+    ws.addEventListener('message', function (e) {
+      var data;
+      try { data = JSON.parse(e.data); } catch (err) { return; }
+
+      if (data.type === 'history') {
+        chat.innerHTML = '';
+        lastMessageIds.clear();
+        (data.messages || []).forEach(appendMessage);
+        return;
+      }
+      if (data.type === 'message') {
+        appendMessage(data.message);
+        return;
+      }
+      if (data.type === 'state') {
+        var s = data.state || {};
+        if (s.is_locked) {
+          showLocked(s.lock_reason || 'different_machine');
+        } else if (!s.is_active) {
+          showOff('Our team has closed this chat.');
+          setStatus('off', 'Closed');
+        } else {
+          showOn();
+          setStatus('live', 'Connected');
+        }
+        return;
+      }
+      if (data.type === 'locked') {
+        showLocked(data.reason || 'different_machine');
+        return;
+      }
+      if (data.type === 'error') {
+        // Soft error — surface inline, don't kill the socket.
+        appendMessage({
+          author_kind: 'system',
+          body: '⚠ Message could not be sent. Please try again.',
+          created_at: new Date().toISOString(),
+        });
+      }
+    });
+
+    ws.addEventListener('close', function (e) {
+      clearInterval(heartbeatTimer);
+      // 4001 = server told us we're locked/off; don't reconnect.
+      if (e.code === 4001 || e.code === 4404 || e.code === 4403) {
+        setStatus('off', 'Closed');
+        return;
+      }
+      setStatus('off', 'Reconnecting…');
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+    });
+
+    ws.addEventListener('error', function () {
+      // 'close' handler will run next — let it deal with reconnect.
+    });
+  }
+
+  // ── Send ─────────────────────────────────────────────────────────────
+  function send() {
+    var body = (input.value || '').trim();
+    if (!body) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ action: 'send', body: body }));
+    input.value = '';
+    input.style.height = 'auto';
+    input.focus();
+  }
+
+  sendBtn.addEventListener('click', send);
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+  // Auto-grow textarea.
+  input.addEventListener('input', function () {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  });
+
+  // ── Boot ─────────────────────────────────────────────────────────────
+  finalizeFingerprint().then(function (okToProceed) {
+    if (okToProceed !== false) connect();
+  });
+})();
+</script>
+</body>
+</html>

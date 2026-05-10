@@ -66,4 +66,25 @@ urlpatterns = [
         views_extra.CreateOrderFromCustomerView.as_view(),
         name='customer_service_create_order_from_customer',
     ),
+
+    # ── Live chat (CS-side toggle endpoints) ─────────────────────────────
+    path(
+        'tickets/<int:pk>/live-chat/toggle/',
+        views_extra.LiveChatToggleView.as_view(),
+        name='customer_service_live_chat_toggle',
+    ),
+    path(
+        'tickets/<int:pk>/live-chat/resend/',
+        views_extra.LiveChatResendInviteView.as_view(),
+        name='customer_service_live_chat_resend',
+    ),
+    # ── Live chat (customer-facing, tokenised, anonymous) ────────────────
+    # The actual view is wired up in Pass 2 (live_chat_views.py). The
+    # URL name needs to exist NOW because live_chat_services.reverse()
+    # uses it to build the invite-email URL on every ON-toggle.
+    path(
+        'live-chat/<uuid:token>/',
+        views_extra.LiveChatCustomerStubView.as_view(),
+        name='cs_live_chat_customer',
+    ),
 ]

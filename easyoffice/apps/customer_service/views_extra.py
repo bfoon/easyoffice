@@ -1086,3 +1086,252 @@ class CreateOrderFromCustomerView(View):
             i += 1
 
         return items
+
+# ════════════════════════════════════════════════════════════════════════
+# 9. LIVE CHAT — toggle ON/OFF from the ticket detail page
+#    Customer-facing chat page lives in a separate view that does NOT
+#    inherit from CustomerServiceAccessMixin (anonymous tokenised access).
+# ════════════════════════════════════════════════════════════════════════
+
+class LiveChatToggleView(CustomerServiceAccessMixin, View):
+    """
+    POST /customer-service/tickets/<pk>/live-chat/toggle/
+
+    Form fields:
+        action: 'on' | 'off'   (required)
+
+    On 'on': rotates the session token, emails the customer a fresh link.
+    On 'off': deactivates immediately. No email.
+    """
+    http_method_names = ['post']
+
+    def post(self, request, pk):
+        ticket = get_object_or_404(ServiceTicket, pk=pk)
+        action = (request.POST.get('action') or '').strip().lower()
+
+        if ticket.status in {'closed', 'cancelled'} and action == 'on':
+            messages.error(
+                request,
+                'You can’t open a live chat on a closed or cancelled ticket.',
+            )
+            return redirect('customer_service_ticket_detail', pk=ticket.pk)
+
+        try:
+            from . import live_chat_services as lcs
+        except Exception:
+            messages.error(request, 'Live chat is not available right now.')
+            logger.exception('LiveChatToggleView: import failed')
+            return redirect('customer_service_ticket_detail', pk=ticket.pk)
+
+        try:
+            if action == 'on':
+                session = lcs.activate_session(ticket, actor=request.user, send_email=True)
+                customer_email = ticket.customer.email or '(no email on file)'
+                messages.success(
+                    request,
+                    f'Live chat opened. A fresh link has been emailed to '
+                    f'{customer_email}. The link is bound to the first device '
+                    f'that opens it.',
+                )
+            elif action == 'off':
+                lcs.deactivate_session(ticket, actor=request.user, reason='manually_off')
+                messages.success(
+                    request,
+                    'Live chat closed. The customer link no longer works.',
+                )
+            else:
+                messages.error(request, 'Unknown live-chat action.')
+        except Exception as exc:
+            logger.exception('LiveChatToggleView failed for ticket %s', ticket.pk)
+            messages.error(request, f'Could not toggle live chat: {exc}')
+
+        return redirect('customer_service_ticket_detail', pk=ticket.pk)
+
+
+class LiveChatResendInviteView(CustomerServiceAccessMixin, View):
+    """
+    POST /customer-service/tickets/<pk>/live-chat/resend/
+
+    Resend the invite email without rotating the token. Useful if the
+    customer says they didn't receive the email — saves them from a
+    machine-rebind.
+    """
+    http_method_names = ['post']
+
+    def post(self, request, pk):
+        ticket = get_object_or_404(ServiceTicket, pk=pk)
+        try:
+            from . import live_chat_services as lcs
+            session = lcs.get_or_create_session(ticket)
+            if not session.is_active:
+                messages.warning(
+                    request,
+                    'Live chat is currently OFF — turn it ON to send a fresh link.',
+                )
+                return redirect('customer_service_ticket_detail', pk=ticket.pk)
+            lcs._send_invite_email(session)
+            messages.success(
+                request,
+                f'Invite re-sent to {ticket.customer.email or "(no email)"}.',
+            )
+        except Exception as exc:
+            logger.exception('LiveChatResendInviteView failed')
+            messages.error(request, f'Could not resend invite: {exc}')
+        return redirect('customer_service_ticket_detail', pk=ticket.pk)
+
+
+class LiveChatCustomerStubView(View):
+    """
+    Customer-facing chat page (anonymous, tokenised).
+
+    Pass 2: the REAL implementation. The class keeps its old name
+    because urls_extra.py already references it; what matters is the
+    URL name `cs_live_chat_customer`, which live_chat_services
+    resolves via reverse(). If you'd rather rename the class, do it
+    project-wide — there are only the two references.
+
+    GET:
+        1. Look up the session by token. Unknown → locked screen (404).
+        2. Read the machine cookie. Bind / verify via
+           live_chat_services.bind_first_visit().
+        3. Usable → render live_chat_customer.html with the WS path
+           baked in, set the cookie if newly issued.
+        4. Locked / off / expired → render live_chat_locked.html.
+
+    POST (no CSRF — tokenised endpoint, exempted at urls level):
+        Called by the page once JS has computed the fingerprint. Re-runs
+        bind_first_visit() with the fingerprint, which is where a hijack
+        from a second machine gets caught.
+    """
+    http_method_names = ['get', 'post']
+
+    # CSRF exempt — this endpoint is anonymous and tokenised. The token
+    # itself is the credential.
+    @classmethod
+    def as_view(cls, **kwargs):
+        from django.views.decorators.csrf import csrf_exempt
+        view = super().as_view(**kwargs)
+        return csrf_exempt(view)
+
+    # ── GET ────────────────────────────────────────────────────────────
+    def get(self, request, token):
+        from django.shortcuts import render
+        from .models import LiveChatSession
+        from . import live_chat_services as lcs
+
+        session = LiveChatSession.objects.select_related(
+            'ticket', 'ticket__customer'
+        ).filter(token=token).first()
+
+        if session is None:
+            return _render_locked(request, 'unknown')
+
+        cookie_in = request.COOKIES.get(lcs.MACHINE_COOKIE_NAME, '')
+        issue_new_cookie = False
+        cookie_to_set = cookie_in
+
+        if not session.machine_cookie:
+            # First-ever visit — bind on cookie now; fingerprint finalised by POST.
+            cookie_to_set = cookie_in or lcs.new_machine_cookie_value()
+            issue_new_cookie = not cookie_in
+            lcs.bind_first_visit(
+                session,
+                cookie_value=cookie_to_set,
+                fingerprint_raw='',
+                ip=_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            )
+        else:
+            # Returning visitor — verify cookie if present. If they
+            # cleared cookies, fall through; the POST will try a
+            # fingerprint match before declaring it a hijack.
+            if cookie_in:
+                ok, reason = lcs.bind_first_visit(
+                    session,
+                    cookie_value=cookie_in,
+                    fingerprint_raw='',
+                    ip=_client_ip(request),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                )
+                if not ok:
+                    return _render_locked(request, reason)
+
+        ok, reason = lcs.session_is_usable(session)
+        if not ok:
+            return _render_locked(request, reason)
+
+        ws_path = f'/ws/cs/live-chat/customer/{session.token}/'
+        response = render(request, 'customer_service/live_chat_customer.html', {
+            'session': session,
+            'ticket': session.ticket,
+            'customer': session.ticket.customer,
+            'ws_path': ws_path,
+            'finalize_url': request.path,
+        })
+
+        if issue_new_cookie:
+            response.set_cookie(
+                lcs.MACHINE_COOKIE_NAME,
+                cookie_to_set,
+                max_age=60 * 60 * 24 * 30,
+                path=request.path,
+                httponly=True,
+                samesite='Lax',
+                secure=request.is_secure(),
+            )
+        return response
+
+    # ── POST — finalise fingerprint ────────────────────────────────────
+    def post(self, request, token):
+        from django.http import JsonResponse
+        from .models import LiveChatSession
+        from . import live_chat_services as lcs
+
+        session = LiveChatSession.objects.filter(token=token).first()
+        if session is None:
+            return JsonResponse({'ok': False, 'reason': 'unknown'}, status=404)
+
+        cookie_in = request.COOKIES.get(lcs.MACHINE_COOKIE_NAME, '')
+        fp_raw = (request.POST.get('fingerprint') or '').strip()[:512]
+
+        ok, reason = lcs.bind_first_visit(
+            session,
+            cookie_value=cookie_in,
+            fingerprint_raw=fp_raw,
+            ip=_client_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+        )
+        return JsonResponse({'ok': ok, 'reason': reason})
+
+
+# ── Local helpers for the live-chat customer view ──────────────────────
+
+def _client_ip(request):
+    """Best-effort client IP, trusting X-Forwarded-For if proxied."""
+    xff = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR', '') or ''
+
+
+_LOCK_LABELS = {
+    'different_machine': 'This chat link has already been opened on a different device.',
+    'expired':           'This chat link has expired.',
+    'manually_off':      'The chat has been closed by our team.',
+    'ticket_closed':     'The related ticket has been closed.',
+    'unknown':           'This link is not recognised.',
+}
+
+
+def _render_locked(request, reason):
+    from django.shortcuts import render
+    return render(
+        request,
+        'customer_service/live_chat_locked.html',
+        {
+            'reason': reason or 'manually_off',
+            'reason_label': _LOCK_LABELS.get(reason, 'This chat link is no longer active.'),
+        },
+        status=410 if reason in {'different_machine', 'expired', 'ticket_closed'} else
+               404 if reason == 'unknown' else 200,
+    )

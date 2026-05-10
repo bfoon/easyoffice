@@ -1,4 +1,3 @@
-
 import re
 import uuid
 from datetime import timedelta
@@ -451,3 +450,178 @@ class ServiceRating(TimeStampedModel):
 
     def __str__(self):
         return f"Rating - {self.ticket.ticket_no}"
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Tokenised live-chat sessions (customer ↔ CS agent)
+# ════════════════════════════════════════════════════════════════════════
+#
+# A LiveChatSession represents the chat window opened for ONE ticket. CS
+# toggles it on; the customer receives an email with a tokenised URL.
+# The session is bound to the first machine that hits the link, so a
+# forwarded link won't work on a second device.
+#
+# Lifecycle:
+#     ┌─────────────────────────────────────────────────────────────┐
+#     │  CS toggles ON  →  token generated, email sent to customer  │
+#     │  Customer opens link  →  cookie + fingerprint captured      │
+#     │      ↓ second machine tries the same link  →  LOCKED        │
+#     │  CS toggles OFF  →  is_active=False, token kept for audit    │
+#     │  CS toggles ON again  →  NEW token, email re-sent           │
+#     │  Ticket closed/cancelled  →  session permanently sealed     │
+#     └─────────────────────────────────────────────────────────────┘
+
+class LiveChatSession(TimeStampedModel):
+    """
+    One live-chat session per ticket. Recycled on each ON-toggle:
+    we update the token in-place rather than creating a new row,
+    so the message history survives. The OLD token stops working
+    the moment a new one is issued.
+    """
+    LOCK_REASONS = (
+        ('', 'Not locked'),
+        ('different_machine', 'Opened from a different machine'),
+        ('expired', 'Link expired'),
+        ('manually_off', 'CS turned the chat off'),
+        ('ticket_closed', 'Ticket was closed'),
+    )
+
+    ticket = models.OneToOneField(
+        ServiceTicket,
+        on_delete=models.CASCADE,
+        related_name='live_chat_session',
+    )
+    # Token in the URL the customer clicks. Rotated on each ON-toggle.
+    token = models.UUIDField(default=uuid.uuid4, unique=True, db_index=True)
+
+    # Switched by CS. When False, the customer page shows a "chat off"
+    # screen and the WebSocket consumer rejects new messages.
+    is_active = models.BooleanField(default=False)
+
+    # ── Machine binding (set on first customer visit) ──────────────────
+    # We use BOTH:
+    #   * machine_cookie  — a signed cookie value we issue on first hit.
+    #                       Primary identity; survives WebSocket reconnects.
+    #   * machine_fingerprint — UA + screen size + timezone + canvas hash.
+    #                       Tamper-check fallback when cookies are cleared.
+    # Both are blank until the first hit, then frozen until the next
+    # ON-toggle (which rotates the token AND clears these fields).
+    machine_cookie = models.CharField(max_length=64, blank=True, db_index=True)
+    machine_fingerprint = models.CharField(max_length=128, blank=True)
+    first_visit_at = models.DateTimeField(null=True, blank=True)
+    first_visit_ip = models.GenericIPAddressField(null=True, blank=True)
+    first_visit_ua = models.CharField(max_length=400, blank=True)
+
+    # Lock state — set when a second machine attempts to use the link.
+    is_locked = models.BooleanField(default=False)
+    lock_reason = models.CharField(max_length=30, choices=LOCK_REASONS, blank=True)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    locked_attempt_ip = models.GenericIPAddressField(null=True, blank=True)
+    locked_attempt_ua = models.CharField(max_length=400, blank=True)
+
+    # Audit / housekeeping.
+    activated_at = models.DateTimeField(null=True, blank=True)
+    deactivated_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    invitation_email_sent_at = models.DateTimeField(null=True, blank=True)
+    activated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='live_chat_sessions_activated',
+    )
+
+    # Lightweight presence (we update these from the consumer; they're
+    # advisory only — the source of truth for "online now" is the
+    # Channels groups).
+    customer_last_seen_at = models.DateTimeField(null=True, blank=True)
+    agent_last_seen_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = 'Live chat session'
+
+    def __str__(self):
+        return f'LiveChat({self.ticket.ticket_no}, active={self.is_active})'
+
+    # ── Helpers ────────────────────────────────────────────────────────
+    @property
+    def is_machine_bound(self) -> bool:
+        return bool(self.machine_cookie)
+
+    @property
+    def customer_display_name(self) -> str:
+        return self.ticket.customer.display_name if self.ticket and self.ticket.customer else 'Customer'
+
+    @property
+    def channels_group_name(self) -> str:
+        """Stable Channels group name — used by the consumer."""
+        return f'livechat_{self.pk}'
+
+    def regenerate_token(self):
+        """
+        Rotate the URL token. Called on every ON-toggle. Clears the
+        machine binding so the next visit re-binds to the new machine.
+        Caller must save().
+        """
+        self.token = uuid.uuid4()
+        self.machine_cookie = ''
+        self.machine_fingerprint = ''
+        self.first_visit_at = None
+        self.first_visit_ip = None
+        self.first_visit_ua = ''
+        self.is_locked = False
+        self.lock_reason = ''
+        self.locked_at = None
+        self.locked_attempt_ip = None
+        self.locked_attempt_ua = ''
+
+
+class LiveChatMessage(TimeStampedModel):
+    """Single message in a LiveChatSession."""
+    AUTHOR_KINDS = (
+        ('customer', 'Customer'),
+        ('agent', 'CS Agent'),
+        ('system', 'System'),
+    )
+
+    session = models.ForeignKey(
+        LiveChatSession,
+        on_delete=models.CASCADE,
+        related_name='messages',
+    )
+    author_kind = models.CharField(max_length=10, choices=AUTHOR_KINDS)
+    # Set ONLY for agent messages — customers are anonymous tokenised
+    # users; system messages have neither.
+    agent = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='live_chat_messages_sent',
+    )
+    body = models.TextField()
+
+    # Read receipts: we set this when the OTHER side is observed reading
+    # the message (presence-based, not request-based — see the consumer).
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['session', 'created_at']),
+        ]
+
+    def __str__(self):
+        prefix = {
+            'customer': '👤',
+            'agent': '🎧',
+            'system': '🔔',
+        }.get(self.author_kind, '')
+        return f'{prefix} {self.body[:60]}'
+
+    @property
+    def author_display(self) -> str:
+        if self.author_kind == 'agent':
+            return self.agent.get_full_name() if self.agent else 'CS Agent'
+        if self.author_kind == 'customer':
+            return self.session.customer_display_name
+        return 'System'

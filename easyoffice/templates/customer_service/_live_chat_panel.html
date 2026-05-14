@@ -1,0 +1,129 @@
+{# Include this in apps/customer_service/templates/customer_service/ticket_detail.html #}
+{# Required context: ticket, live_chat_session, live_chat_messages, live_chat_ws_path #}
+
+<style>
+  .cs-live-card{border:1px solid #dbe4f0;border-radius:18px;background:#fff;box-shadow:0 12px 32px rgba(15,23,42,.06);overflow:hidden;margin:18px 0}.cs-live-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 18px;background:linear-gradient(135deg,#0f172a,#1d4ed8);color:#fff}.cs-live-title{display:flex;align-items:center;gap:10px;font-weight:800}.cs-live-dot{width:10px;height:10px;border-radius:50%;background:#94a3b8;box-shadow:0 0 0 4px rgba(148,163,184,.16)}.cs-live-dot.is-on{background:#22c55e;box-shadow:0 0 0 4px rgba(34,197,94,.18)}.cs-live-body{padding:16px 18px}.cs-live-actions{display:flex;gap:8px;flex-wrap:wrap}.cs-live-btn{border:0;border-radius:12px;padding:10px 14px;font-weight:700;font-size:13px;display:inline-flex;align-items:center;gap:8px;cursor:pointer;text-decoration:none}.cs-live-btn-primary{background:#2563eb;color:#fff}.cs-live-btn-danger{background:#fee2e2;color:#991b1b}.cs-live-btn-light{background:#eef2ff;color:#1e40af}.cs-live-meta{font-size:12px;color:#64748b;margin-top:8px}.cs-live-room{border:1px solid #e5e7eb;border-radius:14px;background:#f8fafc;overflow:hidden;margin-top:14px}.cs-live-messages{height:280px;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px}.cs-live-msg{max-width:82%;background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:9px 12px}.cs-live-msg.is-agent{align-self:flex-end;background:#eff6ff;border-color:#bfdbfe}.cs-live-msg.is-customer{align-self:flex-start}.cs-live-msg.is-system{align-self:center;background:#f1f5f9;border-style:dashed;color:#475569}.cs-live-msg strong{display:block;font-size:11px;color:#475569;margin-bottom:3px}.cs-live-msg div{white-space:pre-wrap;word-break:break-word;font-size:13px;color:#0f172a}.cs-live-compose{display:flex;gap:8px;padding:12px;border-top:1px solid #e5e7eb;background:#fff}.cs-live-compose textarea{flex:1;min-height:44px;max-height:120px;border:1px solid #cbd5e1;border-radius:12px;padding:10px 12px;resize:vertical}.cs-live-state{font-size:12px;color:#e0e7ff}
+</style>
+
+<div class="cs-live-card" id="cs-live-chat-card" data-ws-path="{{ live_chat_ws_path }}">
+  <div class="cs-live-head">
+    <div>
+      <div class="cs-live-title">
+        <span class="cs-live-dot {% if live_chat_session and live_chat_session.is_active and not live_chat_session.is_locked %}is-on{% endif %}" id="csLiveDot"></span>
+        <span>Live customer chat</span>
+      </div>
+      <div class="cs-live-state" id="csLiveState">
+        {% if live_chat_session and live_chat_session.is_active and not live_chat_session.is_locked %}
+          Online — customer link is active.
+        {% elif live_chat_session and live_chat_session.is_locked %}
+          Locked — {{ live_chat_session.get_lock_reason_display }}.
+        {% else %}
+          Offline — open a chat to email the customer a secure link.
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="cs-live-actions">
+      {% if live_chat_session and live_chat_session.is_active and not live_chat_session.is_locked %}
+        <form method="post" action="{% url 'cs_live_chat_toggle' ticket.pk %}">
+          {% csrf_token %}<input type="hidden" name="action" value="off">
+          <button class="cs-live-btn cs-live-btn-danger" type="submit"><i class="bi bi-x-circle"></i> Close live chat</button>
+        </form>
+        <form method="post" action="{% url 'cs_live_chat_resend' ticket.pk %}">
+          {% csrf_token %}
+          <button class="cs-live-btn cs-live-btn-light" type="submit"><i class="bi bi-envelope"></i> Re-send link</button>
+        </form>
+      {% else %}
+        <form method="post" action="{% url 'cs_live_chat_toggle' ticket.pk %}">
+          {% csrf_token %}<input type="hidden" name="action" value="on">
+          <button class="cs-live-btn cs-live-btn-primary" type="submit"><i class="bi bi-chat-dots"></i> Open a live chat with this customer</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="cs-live-body">
+    <div class="cs-live-meta">
+      When opened, the customer receives an email with a tokenised link. The link locks to the first device that opens it.
+      {% if live_chat_session and live_chat_session.invitation_email_sent_at %}
+        Last invite: {{ live_chat_session.invitation_email_sent_at|date:"d M Y H:i" }}.
+      {% endif %}
+    </div>
+
+    {% if live_chat_session %}
+    <div class="cs-live-room">
+      <div class="cs-live-messages" id="csLiveMessages">
+        {% for m in live_chat_messages %}
+          <div class="cs-live-msg is-{{ m.author_kind }}">
+            <strong>{{ m.author_display }}</strong>
+            <div>{{ m.body }}</div>
+          </div>
+        {% empty %}
+          <div class="cs-live-msg is-system"><div>No live messages yet.</div></div>
+        {% endfor %}
+      </div>
+      <form class="cs-live-compose" id="csLiveForm">
+        <textarea id="csLiveInput" placeholder="Type a live reply…" {% if not live_chat_session.is_active or live_chat_session.is_locked %}disabled{% endif %}></textarea>
+        <button class="cs-live-btn cs-live-btn-primary" type="submit" {% if not live_chat_session.is_active or live_chat_session.is_locked %}disabled{% endif %}>Send</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+(function(){
+  const card = document.getElementById('cs-live-chat-card');
+  const box = document.getElementById('csLiveMessages');
+  const form = document.getElementById('csLiveForm');
+  const input = document.getElementById('csLiveInput');
+  const state = document.getElementById('csLiveState');
+  const dot = document.getElementById('csLiveDot');
+  const wsPath = card ? card.dataset.wsPath : '';
+  if (!card || !wsPath || !box || !form || !input) return;
+
+  const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const socket = new WebSocket(`${scheme}://${window.location.host}${wsPath}`);
+
+  function addMessage(m){
+    const empty = box.querySelector('.cs-live-msg.is-system div');
+    if (empty && empty.textContent.trim() === 'No live messages yet.') empty.parentElement.remove();
+    const wrap = document.createElement('div');
+    wrap.className = `cs-live-msg is-${m.author_kind || 'system'}`;
+    const name = document.createElement('strong');
+    name.textContent = m.author_display || 'System';
+    const body = document.createElement('div');
+    body.textContent = m.body || '';
+    wrap.appendChild(name); wrap.appendChild(body); box.appendChild(wrap);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  socket.onmessage = function(e){
+    const data = JSON.parse(e.data || '{}');
+    if (data.type === 'history') {
+      box.innerHTML = '';
+      (data.messages || []).forEach(addMessage);
+      if (!(data.messages || []).length) addMessage({author_kind:'system', author_display:'System', body:'No live messages yet.'});
+    }
+    if (data.type === 'message') addMessage(data.message || {});
+    if (data.type === 'state') {
+      const s = data.state || {};
+      if (s.is_active && !s.is_locked) {
+        state.textContent = 'Online — customer link is active.';
+        dot.classList.add('is-on'); input.disabled = false; form.querySelector('button').disabled = false;
+      } else {
+        state.textContent = s.is_locked ? `Locked — ${s.lock_reason || 'security lock'}.` : 'Offline — live chat is closed.';
+        dot.classList.remove('is-on'); input.disabled = true; form.querySelector('button').disabled = true;
+      }
+    }
+  };
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    const body = input.value.trim();
+    if (!body || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({type:'message', body}));
+    input.value = '';
+  });
+})();
+</script>

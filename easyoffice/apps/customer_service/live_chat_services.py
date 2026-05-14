@@ -1,18 +1,6 @@
 """
 apps/customer_service/live_chat_services.py
-────────────────────────────────────────────
-Service layer for the tokenised live-chat between customers and CS agents.
-
-Lives in its own module (rather than services.py) so the existing CS
-services stay untouched. Imported by views_extra, signals, and the
-Channels consumer.
-
-Responsibilities:
-    • Issue / rotate session tokens
-    • Bind a session to the first machine that opens the link
-    • Detect & handle hijack attempts (different machine, locked link)
-    • Send invite / re-issued-link emails
-    • Tear down sessions when tickets close
+Tokenised live-chat service layer.
 """
 from __future__ import annotations
 
@@ -31,108 +19,85 @@ from .models import LiveChatSession, LiveChatMessage, ServiceTicket, ServiceTick
 
 logger = logging.getLogger(__name__)
 
-
-# ── Tunables ───────────────────────────────────────────────────────────
-
-# Length of the machine_cookie value we issue. Long enough that brute-
-# force guessing is hopeless even with no rate limiting.
 MACHINE_COOKIE_BYTES = 24
-
-# Name of the cookie we set on the customer's browser. Path-scoped to
-# the live-chat URL so it doesn't leak elsewhere.
 MACHINE_COOKIE_NAME = 'cs_livechat_mid'
-
-# Sessions auto-expire after this if the ticket is still open. CS can
-# always toggle ON again to issue a fresh link.
 DEFAULT_EXPIRY_DAYS = 14
 
 
-# ════════════════════════════════════════════════════════════════════════
-# Session lifecycle
-# ════════════════════════════════════════════════════════════════════════
+def _safe_customer_email(ticket: ServiceTicket) -> str:
+    customer = getattr(ticket, 'customer', None)
+    return (getattr(customer, 'email', '') or getattr(ticket, 'callback_email', '') or '').strip()
+
+
+def _safe_customer_name(ticket: ServiceTicket) -> str:
+    customer = getattr(ticket, 'customer', None)
+    return (
+        getattr(customer, 'full_name', '')
+        or getattr(customer, 'display_name', '')
+        or getattr(customer, 'name', '')
+        or 'there'
+    )
+
 
 def get_or_create_session(ticket: ServiceTicket) -> LiveChatSession:
-    """Return the LiveChatSession for a ticket, creating one if needed."""
     session, _ = LiveChatSession.objects.get_or_create(ticket=ticket)
     return session
 
 
 @transaction.atomic
-def activate_session(ticket: ServiceTicket, *, actor, send_email: bool = True) -> LiveChatSession:
-    """
-    CS turns the chat ON.
-
-    Always rotates the token (so any previously-shared link stops
-    working) and re-emails the customer. Per project decision: every ON
-    sends a fresh email — no silent re-activations.
-    """
+def activate_session(ticket: ServiceTicket, *, actor, request=None, send_email: bool = True) -> LiveChatSession:
+    """Turn chat ON, rotate token, clear old device binding, and email the customer."""
     session = get_or_create_session(ticket)
     session.regenerate_token()
     session.is_active = True
     session.activated_at = timezone.now()
     session.activated_by = actor if (actor and getattr(actor, 'is_authenticated', False)) else None
     session.expires_at = timezone.now() + timedelta(days=DEFAULT_EXPIRY_DAYS)
-    session.deactivated_at = None
     session.save()
 
     ServiceTicketUpdate.objects.create(
         ticket=ticket,
         user=actor if (actor and getattr(actor, 'is_authenticated', False)) else None,
         update_type='note',
-        body='💬 Live chat enabled. New chat link issued to the customer by email.',
+        body='💬 Live chat enabled. New tokenised chat link issued to the customer by email.',
     )
 
     if send_email:
-        # Defer to commit so we don't email before the row is durable.
-        transaction.on_commit(lambda: _send_invite_email(session))
+        transaction.on_commit(lambda: send_invite_email(session, request=request))
 
-    # Broadcast on the existing channels group so any open agent window
-    # sees the chat refresh without a page reload. Best-effort.
-    transaction.on_commit(lambda: _broadcast_session_state(session, kind='activated'))
-
+    transaction.on_commit(lambda: broadcast_session_state(session, kind='activated'))
     return session
 
 
 @transaction.atomic
 def deactivate_session(ticket: ServiceTicket, *, actor, reason: str = 'manually_off') -> LiveChatSession:
-    """CS turns the chat OFF (or it's killed by ticket close, expiry, etc.)."""
     session = get_or_create_session(ticket)
     session.is_active = False
     session.deactivated_at = timezone.now()
-    # If we're killing it for a reason other than "manually_off", remember why.
     if reason in {'ticket_closed', 'expired', 'different_machine'}:
         session.is_locked = True
         session.lock_reason = reason
         session.locked_at = timezone.now()
     session.save()
 
-    if reason == 'manually_off':
-        body = '💬 Live chat disabled by CS. Customer link no longer works.'
-    elif reason == 'ticket_closed':
-        body = '💬 Live chat closed because the ticket was closed.'
-    elif reason == 'expired':
-        body = '💬 Live chat link expired.'
-    else:
-        body = f'💬 Live chat deactivated ({reason}).'
-
+    body_map = {
+        'manually_off': '💬 Live chat disabled by CS. Customer link no longer works.',
+        'ticket_closed': '💬 Live chat closed because the ticket was closed.',
+        'expired': '💬 Live chat link expired.',
+        'different_machine': '💬 Live chat locked because another device tried to use the link.',
+    }
     ServiceTicketUpdate.objects.create(
         ticket=ticket,
         user=actor if (actor and getattr(actor, 'is_authenticated', False)) else None,
         update_type='note',
-        body=body,
+        body=body_map.get(reason, f'💬 Live chat deactivated ({reason}).'),
     )
 
-    transaction.on_commit(lambda: _broadcast_session_state(session, kind='deactivated'))
+    transaction.on_commit(lambda: broadcast_session_state(session, kind='deactivated'))
     return session
 
 
 def session_is_usable(session: LiveChatSession) -> tuple[bool, str]:
-    """
-    Decide whether a customer hit on the chat URL should be allowed.
-
-    Returns (ok, reason_code). reason_code is one of LiveChatSession.LOCK_REASONS
-    keys when ok is False.
-    """
     if not session.is_active:
         return False, 'manually_off'
     if session.is_locked:
@@ -144,29 +109,15 @@ def session_is_usable(session: LiveChatSession) -> tuple[bool, str]:
     return True, ''
 
 
-# ════════════════════════════════════════════════════════════════════════
-# Machine binding
-# ════════════════════════════════════════════════════════════════════════
-
 def new_machine_cookie_value() -> str:
-    """Generate a random opaque cookie value for the customer's browser."""
     return secrets.token_urlsafe(MACHINE_COOKIE_BYTES)
 
 
 def hash_fingerprint(raw: str) -> str:
-    """
-    Hash a fingerprint string so we don't store identifying browser
-    metadata in plaintext. HMAC keyed on SECRET_KEY so the value is
-    only meaningful within this deployment.
-    """
     if not raw:
         return ''
     key = (getattr(settings, 'SECRET_KEY', '') or '').encode('utf-8')
-    return hmac.new(
-        key,
-        raw.encode('utf-8', errors='ignore'),
-        hashlib.sha256,
-    ).hexdigest()
+    return hmac.new(key, raw.encode('utf-8', errors='ignore'), hashlib.sha256).hexdigest()
 
 
 @transaction.atomic
@@ -178,15 +129,9 @@ def bind_first_visit(
     ip: str,
     user_agent: str,
 ) -> tuple[bool, str]:
-    """
-    Called on every customer hit to the chat page. On the FIRST hit we
-    record the machine binding; on subsequent hits we verify it.
-
-    Returns (allowed, reason_code).
-    """
+    """Bind first browser/device and reject later different devices."""
     fp_hash = hash_fingerprint(fingerprint_raw)
 
-    # First-ever visit — bind.
     if not session.machine_cookie:
         session.machine_cookie = cookie_value or new_machine_cookie_value()
         session.machine_fingerprint = fp_hash
@@ -194,46 +139,23 @@ def bind_first_visit(
         session.first_visit_ip = ip or None
         session.first_visit_ua = (user_agent or '')[:400]
         session.save(update_fields=[
-            'machine_cookie', 'machine_fingerprint',
-            'first_visit_at', 'first_visit_ip', 'first_visit_ua',
-            'updated_at',
+            'machine_cookie', 'machine_fingerprint', 'first_visit_at',
+            'first_visit_ip', 'first_visit_ua', 'updated_at',
         ])
         return True, ''
 
-    # Subsequent visit — verify.
-    cookie_matches = bool(cookie_value) and (cookie_value == session.machine_cookie)
-    fp_matches = bool(fp_hash) and (fp_hash == session.machine_fingerprint)
+    cookie_matches = bool(cookie_value) and cookie_value == session.machine_cookie
+    fp_matches = bool(fp_hash) and fp_hash == session.machine_fingerprint
 
-    if cookie_matches:
-        # Cookie is the primary key. Even if the fingerprint differs
-        # (browser update, screen resize), we trust the cookie.
+    if cookie_matches or fp_matches:
         return True, ''
 
-    if fp_matches:
-        # Cookie was cleared but the device is the same. Re-issue the
-        # cookie under the existing value. (Caller will set the cookie
-        # in the response.)
-        return True, ''
-
-    # ── Hijack attempt ─────────────────────────────────────────────
-    lock_session(
-        session,
-        reason='different_machine',
-        attempt_ip=ip,
-        attempt_ua=user_agent,
-    )
+    lock_session(session, reason='different_machine', attempt_ip=ip, attempt_ua=user_agent)
     return False, 'different_machine'
 
 
 @transaction.atomic
-def lock_session(
-    session: LiveChatSession,
-    *,
-    reason: str,
-    attempt_ip: str = '',
-    attempt_ua: str = '',
-) -> LiveChatSession:
-    """Lock a session — typically called when a 2nd machine tries the link."""
+def lock_session(session: LiveChatSession, *, reason: str, attempt_ip: str = '', attempt_ua: str = '') -> LiveChatSession:
     session.is_active = False
     session.is_locked = True
     session.lock_reason = reason
@@ -247,37 +169,28 @@ def lock_session(
         user=None,
         update_type='note',
         body=(
-            f'⚠️ Live chat LOCKED — a second machine tried to open the chat link.\n'
+            '⚠️ Live chat LOCKED — a second machine tried to open the chat link.\n'
             f'Original visit: {session.first_visit_ip or "—"}\n'
             f'Hijack attempt: {attempt_ip or "—"}\n'
             f'UA: {(attempt_ua or "")[:200]}\n\n'
-            f'The customer link no longer works. Toggle the chat ON again to '
-            f'issue a fresh link.'
+            'The customer link no longer works. Toggle the chat ON again to issue a fresh link.'
         ),
     )
 
-    # Best-effort hijack alert to the assigned agent / current owner.
-    transaction.on_commit(lambda: _send_hijack_alert(session, attempt_ip, attempt_ua))
-    transaction.on_commit(lambda: _broadcast_session_state(session, kind='locked'))
+    transaction.on_commit(lambda: send_hijack_alert(session, attempt_ip, attempt_ua))
+    transaction.on_commit(lambda: broadcast_session_state(session, kind='locked'))
     return session
 
 
-# ════════════════════════════════════════════════════════════════════════
-# Messaging
-# ════════════════════════════════════════════════════════════════════════
-
 @transaction.atomic
-def post_message(
-    session: LiveChatSession,
-    *,
-    author_kind: str,
-    body: str,
-    agent=None,
-) -> LiveChatMessage:
-    """Persist a message and broadcast it on the Channels group."""
+def post_message(session: LiveChatSession, *, author_kind: str, body: str, agent=None) -> LiveChatMessage:
     body = (body or '').strip()
     if not body:
         raise ValueError('Message body is required.')
+
+    ok, reason = session_is_usable(session)
+    if not ok:
+        raise ValueError(f'Live chat is not active: {reason}')
 
     msg = LiveChatMessage.objects.create(
         session=session,
@@ -285,22 +198,15 @@ def post_message(
         agent=agent if author_kind == 'agent' else None,
         body=body,
     )
-
-    transaction.on_commit(lambda: _broadcast_message(session, msg))
+    transaction.on_commit(lambda: broadcast_message(session, msg))
     return msg
 
 
 def post_system_message(session: LiveChatSession, body: str) -> LiveChatMessage:
-    """Convenience for system announcements ('CS turned chat off')."""
     return post_message(session, author_kind='system', body=body)
 
 
-# ════════════════════════════════════════════════════════════════════════
-# URL / email helpers
-# ════════════════════════════════════════════════════════════════════════
-
 def absolute_customer_url(session: LiveChatSession, request=None) -> str:
-    """Build the full customer-facing chat URL with the current token."""
     path = reverse('cs_live_chat_customer', kwargs={'token': str(session.token)})
     if request is not None:
         return request.build_absolute_uri(path)
@@ -308,25 +214,22 @@ def absolute_customer_url(session: LiveChatSession, request=None) -> str:
     return f'{base}{path}' if base else path
 
 
-def _send_invite_email(session: LiveChatSession) -> None:
-    """Email the customer their fresh chat link. Best-effort."""
-    contact = session.ticket.customer
-    to = getattr(contact, 'email', '') or ''
+def send_invite_email(session: LiveChatSession, request=None) -> None:
+    to = _safe_customer_email(session.ticket)
     if not to:
-        logger.info('LiveChat invite skipped — customer %s has no email', getattr(contact, 'pk', None))
+        logger.info('LiveChat invite skipped — ticket/customer has no email')
         return
 
-    url = absolute_customer_url(session)
+    url = absolute_customer_url(session, request=request)
     subject = f'Live chat available — ticket {session.ticket.ticket_no}'
     body = (
-        f'Hello {contact.full_name or contact.display_name or "there"},\n\n'
-        f'Our Customer Service team has opened a live chat for your '
-        f'support ticket {session.ticket.ticket_no}:\n\n'
+        f'Hello {_safe_customer_name(session.ticket)},\n\n'
+        f'Our Customer Service team has opened a live chat for your support ticket '
+        f'{session.ticket.ticket_no}:\n\n'
         f'  "{session.ticket.subject}"\n\n'
-        f'Please use the link below to start chatting with us. The link '
-        f'is tied to the first device you open it on, so open it on the '
-        f'device you intend to use:\n\n'
-        f'    {url}\n\n'
+        f'Please use the link below to start chatting with us. This link is tied '
+        f'to the first device you open it on, so open it on the device you intend to use:\n\n'
+        f'{url}\n\n'
         f'If you do not recognise this ticket, please disregard this email.\n\n'
         f'— Customer Service'
     )
@@ -346,10 +249,13 @@ def _send_invite_email(session: LiveChatSession) -> None:
         logger.exception('LiveChat invite email failed for session %s', session.pk)
 
 
-def _send_hijack_alert(session: LiveChatSession, attempt_ip: str, attempt_ua: str) -> None:
-    """Email the assigned agent / ticket owner about a hijack attempt."""
+# Backward-compatible name for older uploaded views_extra.py code.
+_send_invite_email = send_invite_email
+
+
+def send_hijack_alert(session: LiveChatSession, attempt_ip: str, attempt_ua: str) -> None:
     recipients = set()
-    for u in (session.ticket.current_owner, session.activated_by, session.ticket.created_by):
+    for u in (getattr(session.ticket, 'current_owner', None), session.activated_by, getattr(session.ticket, 'created_by', None)):
         if u and getattr(u, 'email', ''):
             recipients.add(u.email)
     if not recipients:
@@ -357,22 +263,19 @@ def _send_hijack_alert(session: LiveChatSession, attempt_ip: str, attempt_ua: st
 
     subject = f'⚠️ Live chat lock — ticket {session.ticket.ticket_no}'
     body = (
-        f'The live chat for ticket {session.ticket.ticket_no} ('
-        f'{session.ticket.subject}) has been LOCKED.\n\n'
-        f'A second machine tried to open the chat link issued to '
-        f'{session.ticket.customer.display_name}.\n\n'
-        f'  Original visitor:  IP {session.first_visit_ip or "—"}\n'
-        f'                     UA {(session.first_visit_ua or "—")[:200]}\n'
-        f'  Hijack attempt:    IP {attempt_ip or "—"}\n'
-        f'                     UA {(attempt_ua or "—")[:200]}\n\n'
-        f'The customer link has been deactivated. If this was the '
-        f'legitimate customer switching devices, toggle the chat ON '
-        f'again from the ticket page to issue a fresh link.'
+        f'The live chat for ticket {session.ticket.ticket_no} ({session.ticket.subject}) has been LOCKED.\n\n'
+        f'A second machine tried to open the tokenised chat link.\n\n'
+        f'Original visitor: IP {session.first_visit_ip or "—"}\n'
+        f'Original UA: {(session.first_visit_ua or "—")[:200]}\n\n'
+        f'Hijack attempt: IP {attempt_ip or "—"}\n'
+        f'Hijack UA: {(attempt_ua or "—")[:200]}\n\n'
+        'If this was the legitimate customer switching devices, toggle the chat ON again from the ticket page.'
     )
     try:
         from django.core.mail import send_mail
         send_mail(
-            subject, body,
+            subject,
+            body,
             getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'no-reply@localhost',
             list(recipients),
             fail_silently=True,
@@ -380,10 +283,6 @@ def _send_hijack_alert(session: LiveChatSession, attempt_ip: str, attempt_ua: st
     except Exception:
         logger.warning('LiveChat hijack alert email failed for session %s', session.pk, exc_info=True)
 
-
-# ════════════════════════════════════════════════════════════════════════
-# Channels broadcasting (lazy import so models load even if Channels isn't)
-# ════════════════════════════════════════════════════════════════════════
 
 def _get_channel_layer():
     try:
@@ -393,7 +292,7 @@ def _get_channel_layer():
         return None
 
 
-def _broadcast_message(session: LiveChatSession, msg: LiveChatMessage) -> None:
+def broadcast_message(session: LiveChatSession, msg: LiveChatMessage) -> None:
     layer = _get_channel_layer()
     if not layer:
         return
@@ -410,11 +309,10 @@ def _broadcast_message(session: LiveChatSession, msg: LiveChatMessage) -> None:
             },
         })
     except Exception:
-        logger.warning('Channels broadcast (message) failed for session %s', session.pk, exc_info=True)
+        logger.warning('Channels broadcast failed for session %s', session.pk, exc_info=True)
 
 
-def _broadcast_session_state(session: LiveChatSession, *, kind: str) -> None:
-    """Tell anyone connected that the session state changed (on/off/locked)."""
+def broadcast_session_state(session: LiveChatSession, *, kind: str) -> None:
     layer = _get_channel_layer()
     if not layer:
         return
@@ -430,4 +328,9 @@ def _broadcast_session_state(session: LiveChatSession, *, kind: str) -> None:
             },
         })
     except Exception:
-        logger.warning('Channels broadcast (state) failed for session %s', session.pk, exc_info=True)
+        logger.warning('Channels state broadcast failed for session %s', session.pk, exc_info=True)
+
+
+# Backward-compatible names for older uploaded services.py references.
+_broadcast_message = broadcast_message
+_broadcast_session_state = broadcast_session_state

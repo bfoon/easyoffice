@@ -8,6 +8,7 @@ that reverse() works for every name defined here.
 """
 from django.urls import path
 from . import views_extra
+from . import live_chat_views
 
 urlpatterns = [
     # ── Ticket-driven flows ──────────────────────────────────────────────
@@ -85,6 +86,22 @@ urlpatterns = [
     path(
         'live-chat/<uuid:token>/',
         views_extra.LiveChatCustomerStubView.as_view(),
+        name='cs_live_chat_customer',
+    ),
+
+path(
+        'tickets/<int:pk>/live-chat/toggle/',
+        live_chat_views.LiveChatToggleView.as_view(),
+        name='cs_live_chat_toggle',
+    ),
+    path(
+        'tickets/<int:pk>/live-chat/resend/',
+        live_chat_views.LiveChatResendInviteView.as_view(),
+        name='cs_live_chat_resend',
+    ),
+    path(
+        'live-chat/<uuid:token>/',
+        live_chat_views.LiveChatCustomerView.as_view(),
         name='cs_live_chat_customer',
     ),
 ]

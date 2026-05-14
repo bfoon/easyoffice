@@ -27,7 +27,7 @@ import logging
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
-from .models import ServiceTicketAssignment
+from .models import ServiceTicketAssignment, ServiceTicket
 
 logger = logging.getLogger(__name__)
 
@@ -107,4 +107,24 @@ def deactivate_live_chat_on_ticket_close(sender, instance, created, **kwargs):
         logger.exception(
             'deactivate_live_chat_on_ticket_close failed for ticket %s',
             instance.pk,
+        )
+
+@receiver(post_save, sender=ServiceTicket)
+def deactivate_live_chat_on_ticket_close(sender, instance, created, **kwargs):
+    if created:
+        return
+    if instance.status not in {'closed', 'cancelled'}:
+        return
+
+    try:
+        from .models import LiveChatSession
+        session = LiveChatSession.objects.filter(ticket=instance, is_active=True).first()
+        if not session:
+            return
+        from . import live_chat_services as lcs
+        lcs.deactivate_session(instance, actor=None, reason='ticket_closed')
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            'deactivate_live_chat_on_ticket_close failed for ticket %s', instance.pk
         )

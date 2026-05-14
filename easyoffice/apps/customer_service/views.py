@@ -763,6 +763,15 @@ class TicketDetailView(LoginRequiredMixin, DetailView):
             "can_route_ticket": _can_route_ticket(self.request.user, ticket),
             "can_send_feedback": _is_admin_like(self.request.user) or ticket.created_by_id == self.request.user.id,
         })
+        try:
+            from .live_chat_views import get_live_chat_context
+            ctx.update(get_live_chat_context(ticket))
+        except Exception:
+            ctx.update({
+                'live_chat_session': None,
+                'live_chat_messages': [],
+                'live_chat_ws_path': '',
+            })
         return ctx
 
 

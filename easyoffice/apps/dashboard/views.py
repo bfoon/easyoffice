@@ -421,6 +421,21 @@ class TaskFollowUpView(LoginRequiredMixin, View):
         rec_type  = request.POST.get('recipient_type', 'supervisor')
         note      = request.POST.get('note', '').strip()
 
+        # Validate the task reference before hitting the DB. Some follow-up
+        # buttons (e.g. the unit-level "Follow Up" on the overdue-by-unit
+        # table) post without a task_id; an empty/invalid value would
+        # otherwise raise a UUID ValidationError and 500 the request.
+        import uuid
+        try:
+            uuid.UUID(task_id)
+        except (ValueError, TypeError, AttributeError):
+            messages.error(
+                request,
+                'No specific task was selected for this follow-up. '
+                'Open an individual task and use its Follow Up button.',
+            )
+            return redirect(request.META.get('HTTP_REFERER', 'admin_dashboard'))
+
         task = get_object_or_404(Task, pk=task_id)
         org_name  = getattr(settings,'ORGANISATION_NAME',
                             getattr(settings,'OFFICE_NAME','EasyOffice'))

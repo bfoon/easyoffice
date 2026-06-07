@@ -1025,3 +1025,11 @@ class ReopenRequest(TimeStampedModel):
 
     def __str__(self):
         return f'Reopen request for {self.request_id} ({self.decision})'
+
+from apps.customer_portal.models_onsite_report import (  # noqa: F401,E402
+    OnSiteVisitReport, VisitActivity, MonthlyServiceReport,
+)
+
+from apps.customer_portal.models_technician_portal import (  # noqa
+    TechnicianPortalToken, TechnicianTrustedDevice, TechnicianOTP,
+)

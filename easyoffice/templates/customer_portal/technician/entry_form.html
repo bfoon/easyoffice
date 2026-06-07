@@ -1,0 +1,180 @@
+{% extends "customer_portal/technician/_tech_base.html" %}
+{% load humanize %}
+{% block title %}{% if mode == 'create' %}New entry{% else %}Edit entry{% endif %} — Technician Portal{% endblock %}
+
+{% block content %}
+<div style="max-width:820px; margin:0 auto;">
+
+  <a href="{% url 'technician_portal_entries' token=tok.token %}"
+     style="display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--ink-muted);
+            text-decoration:none; margin-bottom:18px;">
+    <i class="bi bi-arrow-left"></i> Back to my entries
+  </a>
+
+  {% if mode == 'create' %}
+  {# ── Create: header fields only; activities added after creation ── #}
+  <div class="p-card">
+    <div class="p-card-header"><h2 class="p-card-title"><i class="bi bi-plus-circle me-1"></i> New entry</h2></div>
+    <form method="post">
+      {% csrf_token %}
+      <div class="tp-form-grid" style="margin-bottom:14px;">
+        <div>
+          <label class="p-label">Visit date</label>
+          <input type="date" name="visit_date" class="p-input" value="{{ today|date:'Y-m-d' }}" required>
+        </div>
+        <div>
+          <label class="p-label">Type</label>
+          <select name="origin" class="p-select">
+            {% for value, label in origin_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="tp-form-grid" style="margin-bottom:14px;">
+        <div>
+          <label class="p-label">Contract (optional)</label>
+          <select name="contract" class="p-select">
+            <option value="">— None / select —</option>
+            {% for c in contracts %}<option value="{{ c.pk }}">{{ c.title }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="p-label">Site / location</label>
+          <input type="text" name="site_location" class="p-input" placeholder="Where the visit took place">
+        </div>
+      </div>
+      <div style="margin-bottom:18px;">
+        <label class="p-label">Summary (optional)</label>
+        <textarea name="summary" class="p-textarea" style="min-height:80px;" placeholder="Short narrative of the visit"></textarea>
+      </div>
+      <button type="submit" class="p-btn p-btn-primary"><i class="bi bi-arrow-right"></i> Create &amp; add activities</button>
+    </form>
+  </div>
+
+  {% else %}
+  {# ── Edit ── #}
+  <div class="p-card">
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+      <div>
+        <p style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-muted); margin:0 0 4px;">
+          {{ visit.get_origin_display }}{% if visit.contract %} · {{ visit.contract.title|truncatechars:40 }}{% endif %}
+        </p>
+        <h2 style="font-family:'DM Serif Display',serif; font-size:22px; letter-spacing:-.02em; margin:0;">
+          Entry — {{ visit.visit_date|date:"j M Y" }}
+        </h2>
+      </div>
+      {% if locked %}
+      <span class="tp-lock-badge" style="margin-top:4px; font-size:12px; padding:5px 12px;">
+        <i class="bi bi-lock-fill"></i> Reported — read only
+      </span>
+      {% endif %}
+    </div>
+
+    {% if locked %}
+    <div class="p-alert p-alert-warning" style="margin-top:16px; margin-bottom:0;">
+      <i class="bi bi-lock-fill"></i>
+      This entry's month has been rolled into a monthly report, so it can no longer be edited or deleted.
+    </div>
+    {% else %}
+    <form method="post" style="margin-top:16px;">
+      {% csrf_token %}
+      <div class="tp-form-grid" style="margin-bottom:14px;">
+        <div>
+          <label class="p-label">Visit date</label>
+          <input type="date" name="visit_date" class="p-input" value="{{ visit.visit_date|date:'Y-m-d' }}">
+        </div>
+        <div>
+          <label class="p-label">Site / location</label>
+          <input type="text" name="site_location" class="p-input" value="{{ visit.site_location }}">
+        </div>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label class="p-label">Summary</label>
+        <textarea name="summary" class="p-textarea" style="min-height:70px;">{{ visit.summary }}</textarea>
+      </div>
+      <button type="submit" class="p-btn p-btn-ghost"><i class="bi bi-save"></i> Save entry details</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {# ── Activity rows ── #}
+  <div class="p-card">
+    <div class="p-card-header"><h2 class="p-card-title"><i class="bi bi-list-ul me-1"></i> Activities</h2></div>
+
+    {% if activities %}
+    <table class="tp-table">
+      <thead>
+        <tr><th>Date</th><th>Device</th><th>Issue / Task</th><th>Tag / Serial / User</th><th>Status</th>{% if not locked %}<th></th>{% endif %}</tr>
+      </thead>
+      <tbody>
+        {% for a in activities %}
+        <tr>
+          <td>{{ a.activity_date|date:"j M" }}</td>
+          <td>{{ a.device|default:"—" }}</td>
+          <td>{{ a.task_description }}{% if a.notes %}<div style="font-size:11.5px; color:var(--ink-muted);">{{ a.notes }}</div>{% endif %}</td>
+          <td>{{ a.serial_or_user|default:"—" }}</td>
+          <td><span class="s-pill s-{{ a.status }}" style="font-size:10px; padding:2px 8px;">{{ a.get_status_display }}</span></td>
+          {% if not locked %}
+          <td>
+            <form method="post" onsubmit="return confirm('Remove this activity?')" style="margin:0;">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="delete_activity">
+              <input type="hidden" name="activity_id" value="{{ a.pk }}">
+              <button class="p-btn p-btn-ghost" style="padding:5px 9px; color:var(--accent); border-color:#f5bfba;"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--ink-muted); font-size:14px; margin:0;">No activities yet{% if not locked %} — add the first row below{% endif %}.</p>
+    {% endif %}
+  </div>
+
+  {% if not locked %}
+  {# ── Add activity row ── #}
+  <div class="p-card">
+    <div class="p-card-header"><h2 class="p-card-title"><i class="bi bi-plus-lg me-1"></i> Add activity</h2></div>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="add_activity">
+      <div class="tp-form-grid" style="margin-bottom:14px;">
+        <div>
+          <label class="p-label">Date</label>
+          <input type="date" name="activity_date" class="p-input" value="{{ visit.visit_date|date:'Y-m-d' }}">
+        </div>
+        <div>
+          <label class="p-label">Device / asset</label>
+          <input type="text" name="device" class="p-input" placeholder="e.g. Lenovo X1, HP Printer">
+        </div>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label class="p-label">Issue / task <span style="color:var(--accent)">*</span></label>
+        <input type="text" name="task_description" class="p-input" required placeholder="What was done / the issue worked on">
+      </div>
+      <div class="tp-form-grid" style="margin-bottom:14px;">
+        <div>
+          <label class="p-label">Tag / serial / user</label>
+          <input type="text" name="serial_or_user" class="p-input" placeholder="Asset tag, serial or user">
+        </div>
+        <div>
+          <label class="p-label">Status</label>
+          <select name="status" class="p-select">
+            {% for value, label in status_choices %}<option value="{{ value }}" {% if value == 'done' %}selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div style="margin-bottom:18px;">
+        <label class="p-label">Notes (optional)</label>
+        <input type="text" name="notes" class="p-input" placeholder="Consumables replaced, faults found, etc.">
+      </div>
+      <button type="submit" class="p-btn p-btn-primary"><i class="bi bi-plus-lg"></i> Add row</button>
+    </form>
+  </div>
+  {% endif %}
+
+  {% endif %}
+
+</div>
+{% endblock %}

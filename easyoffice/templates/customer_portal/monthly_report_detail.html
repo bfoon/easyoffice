@@ -1,0 +1,167 @@
+{% extends "customer_portal/_base.html" %}
+{% load humanize %}
+{% block title %}Monthly Service Report{% endblock %}
+
+{% block extra_head %}
+<style>
+  /* Report-specific status pills (extend the portal's s-pill set). */
+  .s-draft         { background: var(--rule-light); color: var(--ink-soft); }
+  .s-awaiting_sign { background: var(--warn-bg);   color: var(--warn); }
+  .s-signed        { background: #e8f0fe;          color: #1a56db; }
+  .s-sent          { background: var(--go-bg);     color: var(--go); }
+
+  .mr-meta {
+    display: flex; flex-wrap: wrap; gap: 8px 18px;
+    font-size: 13px; color: var(--ink-muted); margin-top: 6px;
+  }
+  .mr-meta span { display: inline-flex; align-items: center; gap: 5px; }
+
+  .mr-table { width: 100%; border-collapse: collapse; }
+  .mr-table th, .mr-table td {
+    padding: 11px 12px; text-align: left; font-size: 14px;
+    border-bottom: 1px solid var(--rule-light);
+  }
+  .mr-table thead th {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--ink-muted); font-weight: 600;
+  }
+  .mr-table tbody tr:last-child td { border-bottom: none; }
+  .mr-table a { color: var(--accent); text-decoration: none; font-weight: 500; }
+  .mr-table a:hover { text-decoration: underline; }
+
+  .mr-form-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px;
+  }
+  @media (max-width: 560px) { .mr-form-grid { grid-template-columns: 1fr; } }
+
+  .mr-empty {
+    text-align: center; padding: 28px 16px; color: var(--ink-muted);
+    font-size: 14px;
+  }
+  .mr-empty i { display: block; font-size: 26px; margin-bottom: 8px; opacity: .6; }
+
+  .mr-sent-flag {
+    margin-top: 14px; padding: 12px 16px; border-radius: var(--radius-sm);
+    background: var(--go-bg); border: 1px solid #b0dfc3; color: var(--go);
+    font-size: 13.5px; display: flex; align-items: center; gap: 8px; font-weight: 500;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div style="max-width:760px; margin:0 auto;">
+
+  {# ── Report header ──────────────────────────────────────────────── #}
+  <div class="p-card">
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+      <div>
+        <p style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-muted); margin:0 0 4px;">Monthly service report</p>
+        <h1 style="font-family:'DM Serif Display',serif; font-size:26px; letter-spacing:-.02em; margin:0;">
+          {{ report.title }}
+        </h1>
+        <div class="mr-meta">
+          <span><i class="bi bi-diagram-3"></i> {{ report.get_scope_display }}</span>
+          <span><i class="bi bi-calendar-range"></i> {{ report.period_start|date:"d M Y" }} – {{ report.period_end|date:"d M Y" }}</span>
+          <span><i class="bi bi-list-check"></i> {{ report.total_activities }} activit{{ report.total_activities|pluralize:"y,ies" }}</span>
+          <span><i class="bi bi-geo-alt"></i> {{ report.total_visits }} visit{{ report.total_visits|pluralize }}</span>
+        </div>
+      </div>
+      <span class="s-pill s-{{ report.status }}" style="margin-top:4px; font-size:12px; padding:5px 14px;">
+        {{ report.get_status_display }}
+      </span>
+    </div>
+
+    <div style="margin-top:20px; padding-top:18px; border-top:1px solid var(--rule-light); display:flex; gap:10px; flex-wrap:wrap;">
+      <a href="{% url 'monthly_report_download' report.pk %}" target="_blank" class="p-btn p-btn-ghost">
+        <i class="bi bi-file-earmark-pdf"></i> View PDF
+      </a>
+    </div>
+  </div>
+
+  {# ── Included visits ────────────────────────────────────────────── #}
+  <div class="p-card">
+    <div class="p-card-header">
+      <h2 class="p-card-title"><i class="bi bi-geo-alt me-1"></i> Included visits</h2>
+    </div>
+    {% if visits %}
+    <table class="mr-table">
+      <thead>
+        <tr><th>Date</th><th>Technician</th><th>Origin</th><th style="text-align:center;">Activities</th></tr>
+      </thead>
+      <tbody>
+        {% for v in visits %}
+        <tr>
+          <td><a href="{% url 'visit_report_detail' v.pk %}">{{ v.visit_date|date:"d M Y" }}</a></td>
+          <td>{{ v.technician.full_name|default:"—" }}</td>
+          <td>{{ v.get_origin_display }}</td>
+          <td style="text-align:center;">{{ v.activity_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="mr-empty">
+      <i class="bi bi-inbox"></i>
+      No visits were included in this report.
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── CEO signature ──────────────────────────────────────────────── #}
+  <div class="p-card">
+    <div class="p-card-header">
+      <h2 class="p-card-title"><i class="bi bi-pen me-1"></i> CEO signature</h2>
+    </div>
+
+    {% if report.status == 'draft' %}
+    <form method="post" action="{% url 'monthly_report_send_for_signature' report.pk %}">
+      {% csrf_token %}
+      <div class="mr-form-grid">
+        <div>
+          <label class="p-label">CEO name</label>
+          <input type="text" name="ceo_name" class="p-input" required placeholder="Full name">
+        </div>
+        <div>
+          <label class="p-label">CEO email</label>
+          <input type="email" name="ceo_email" class="p-input" required placeholder="ceo@company.com">
+        </div>
+      </div>
+      <button type="submit" class="p-btn p-btn-primary">
+        <i class="bi bi-send"></i> Send for signature
+      </button>
+    </form>
+
+    {% elif sig %}
+    <p style="font-size:14px; color:var(--ink-soft); margin:0 0 4px;">
+      Signature request
+      <span class="s-pill s-{{ sig.status }}" style="margin:0 4px; font-size:11px; padding:3px 10px;">{{ sig.get_status_display }}</span>
+      — sent to <strong>{{ sig.signer_name }}</strong>
+      <span style="color:var(--ink-muted);">({{ sig.signer_email }})</span>
+    </p>
+
+    {% if report.status == 'signed' or sig.status == 'signed' or sig.status == 'completed' %}
+    <form method="post" action="{% url 'monthly_report_send' report.pk %}" style="margin-top:16px;">
+      {% csrf_token %}
+      <button type="submit" class="p-btn p-btn-primary">
+        <i class="bi bi-envelope"></i> Email signed report to customer
+      </button>
+    </form>
+    {% else %}
+    <div class="p-alert p-alert-warning" style="margin-top:14px; margin-bottom:0;">
+      <i class="bi bi-hourglass-split"></i>
+      Waiting for the CEO to sign. Once signed, you can email the report to the customer.
+    </div>
+    {% endif %}
+    {% endif %}
+
+    {% if report.status == 'sent' %}
+    <div class="mr-sent-flag">
+      <i class="bi bi-check2-circle"></i>
+      Sent to customer {{ report.sent_at|naturaltime }}.
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

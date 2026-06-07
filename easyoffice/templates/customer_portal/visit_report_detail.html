@@ -1,0 +1,213 @@
+{% extends 'base.html' %}
+{% load humanize %}
+{% block title %}On-Site Visit Report{% endblock %}
+
+{% block content %}
+<style>
+  /* Scoped safety net so the page holds its shape regardless of which
+     eo-* utilities base.html defines. Only targets this page's needs. */
+  .eo-page { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
+  .eo-page .eo-card { margin-bottom: 20px; }
+  .eo-page .eo-card-header { display: flex; align-items: flex-start;
+    justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .eo-page .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .eo-page table.eo-table { border-collapse: collapse; }
+  .eo-page table.eo-table th,
+  .eo-page table.eo-table td { padding: 9px 12px; text-align: left;
+    border-bottom: 1px solid var(--eo-border, #e2e8f0); vertical-align: top; }
+  .eo-page table.eo-table thead th { font-size: .72rem; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--eo-text-muted, #64748b);
+    background: var(--eo-surface-2, #f8fafc); }
+  .eo-page .eo-label { display: block; font-size: .74rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .03em;
+    color: var(--eo-text-muted, #64748b); margin-bottom: 4px; }
+  .eo-page .eo-input, .eo-page .eo-select { width: 100%; padding: 9px 11px;
+    font-size: .9rem; border: 1px solid var(--eo-border, #e2e8f0);
+    border-radius: 8px; background: #fff; font-family: inherit; }
+  .eo-page .eo-input:focus, .eo-page .eo-select:focus { outline: none;
+    border-color: var(--eo-accent, #2563eb);
+    box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+  .eo-page .eo-btn-icon { padding: 6px 9px; }
+</style>
+
+<div class="eo-page">
+
+  {# ── Header ── #}
+  <div class="eo-card">
+    <div class="eo-card-header">
+      <div>
+        <h1 class="eo-card-title">
+          <i class="bi bi-clipboard-check me-2"></i>On-Site Visit Report
+        </h1>
+        <p class="eo-card-subtitle">
+          {{ visit.get_origin_display }} ·
+          {{ visit.visit_date|date:"d M Y" }} ·
+          Technician: {{ visit.technician.full_name|default:"—" }}
+          {% if resolved_contract %} · Contract: {{ resolved_contract.title|truncatechars:40 }}{% endif %}
+        </p>
+      </div>
+      <span class="eo-status eo-status-{{ visit.status }}">{{ visit.get_status_display }}</span>
+    </div>
+
+    {% if resolved_contract %}
+    <div style="font-size:.82rem;color:var(--eo-text-muted);margin-top:4px">
+      <i class="bi bi-building me-1"></i>{{ resolved_contract.counterparty_name }}
+      {% if visit.ticket_assignment %} · <i class="bi bi-ticket-detailed me-1"></i>From customer ticket{% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Activity log (the row items) ── #}
+  <div class="eo-card">
+    <div class="eo-card-header">
+      <div>
+        <h2 class="eo-card-title">Activity Log</h2>
+        <p class="eo-card-subtitle">
+          {{ activities|length }} activit{{ activities|length|pluralize:"y,ies" }} logged for this visit
+        </p>
+      </div>
+    </div>
+
+    {% if activities %}
+    <div class="table-responsive">
+      <table class="eo-table" style="width:100%">
+        <thead>
+          <tr>
+            <th style="width:12%">Date</th>
+            <th style="width:18%">Device / Asset</th>
+            <th style="width:32%">Issue / Task</th>
+            <th style="width:18%">Tag / Serial / User</th>
+            <th style="width:12%">Status</th>
+            {% if can_edit %}<th style="width:8%"></th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in activities %}
+          <tr>
+            <td style="font-size:.82rem">{{ a.activity_date|date:"d M Y" }}</td>
+            <td style="font-size:.82rem">{{ a.device|default:"—" }}</td>
+            <td style="font-size:.82rem">
+              {{ a.task_description }}
+              {% if a.notes %}<div style="font-size:.74rem;color:var(--eo-text-muted)">{{ a.notes }}</div>{% endif %}
+            </td>
+            <td style="font-size:.82rem">{{ a.serial_or_user|default:"—" }}</td>
+            <td><span class="eo-status eo-status-{{ a.status }}" style="font-size:.68rem">{{ a.get_status_display }}</span></td>
+            {% if can_edit %}
+            <td>
+              <form method="post" action="{% url 'visit_activity_delete' visit.pk a.pk %}"
+                    onsubmit="return confirm('Remove this activity?')" style="display:inline">
+                {% csrf_token %}
+                <button class="eo-btn eo-btn-danger eo-btn-sm eo-btn-icon" title="Remove">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+            </td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p style="color:var(--eo-text-muted)">No activities logged yet. Add the first row below.</p>
+    {% endif %}
+  </div>
+
+  {# ── Add-row form ── #}
+  {% if can_edit %}
+  <div class="eo-card">
+    <div class="eo-card-header">
+      <h2 class="eo-card-title">Add Activity</h2>
+    </div>
+    <form method="post" action="{% url 'visit_activity_add' visit.pk %}">
+      {% csrf_token %}
+      {# Row 1 — sums to 12: 3 + 4 + 5 #}
+      <div class="row g-3">
+        <div class="col-12 col-md-3">
+          <label class="eo-label">Date</label>
+          <input type="date" name="activity_date" class="eo-input"
+                 value="{{ visit.visit_date|date:'Y-m-d' }}">
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="eo-label">Device / Asset</label>
+          <input type="text" name="device" class="eo-input" placeholder="e.g. Lenovo X1, HP Printer">
+        </div>
+        <div class="col-12 col-md-5">
+          <label class="eo-label">Issue / Task <span style="color:#dc2626">*</span></label>
+          <input type="text" name="task_description" class="eo-input" required
+                 placeholder="What was done / the issue worked on">
+        </div>
+      </div>
+      {# Row 2 — sums to 12: 5 + 4 + 3 #}
+      <div class="row g-3 mt-0">
+        <div class="col-12 col-md-5">
+          <label class="eo-label">Tag / Serial / User</label>
+          <input type="text" name="serial_or_user" class="eo-input" placeholder="Asset tag, serial or user">
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="eo-label">Notes (optional)</label>
+          <input type="text" name="notes" class="eo-input" placeholder="Consumables replaced, faults found, etc.">
+        </div>
+        <div class="col-12 col-md-3">
+          <label class="eo-label">Status</label>
+          <select name="status" class="eo-input eo-select">
+            {% for value, label in activity_statuses %}
+            <option value="{{ value }}" {% if value == 'done' %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="mt-3">
+        <button type="submit" class="eo-btn eo-btn-primary">
+          <i class="bi bi-plus-lg"></i> Add Row
+        </button>
+      </div>
+    </form>
+  </div>
+
+  {# ── Submit visit ── #}
+  <div class="eo-card">
+    <form method="post" action="{% url 'visit_submit' visit.pk %}">
+      {% csrf_token %}
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="eo-label">Site / Location</label>
+          <input type="text" name="site_location" class="eo-input"
+                 value="{{ visit.site_location }}" placeholder="Where the visit took place">
+        </div>
+        <div class="col-12">
+          <label class="eo-label">Visit summary (optional)</label>
+          <textarea name="summary" class="eo-input" rows="2"
+                    placeholder="Short narrative of the visit">{{ visit.summary }}</textarea>
+        </div>
+      </div>
+      <div class="mt-3 d-flex gap-2">
+        <button type="submit" class="eo-btn eo-btn-success"
+                {% if not activities %}disabled title="Add at least one activity first"{% endif %}>
+          <i class="bi bi-check2-circle"></i> Submit Visit
+        </button>
+      </div>
+      <p style="font-size:.78rem;color:var(--eo-text-muted);margin-top:8px">
+        Once submitted, this visit is locked and will be included in the monthly customer report.
+      </p>
+    </form>
+  </div>
+  {% else %}
+  <div class="eo-card">
+    <div class="d-flex align-items-center justify-content-between">
+      <div>
+        <i class="bi bi-lock-fill me-2" style="color:#f59e0b"></i>
+        This visit is <strong>{{ visit.get_status_display|lower }}</strong> and locked for editing.
+      </div>
+      <form method="post" action="{% url 'visit_reopen' visit.pk %}">
+        {% csrf_token %}
+        <button class="eo-btn eo-btn-secondary eo-btn-sm">
+          <i class="bi bi-unlock"></i> Reopen for editing
+        </button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

@@ -1,0 +1,87 @@
+{% extends "customer_portal/technician/_tech_base.html" %}
+{% load humanize %}
+{% block title %}My Entries — Technician Portal{% endblock %}
+
+{% block content %}
+<div style="max-width:860px; margin:0 auto;">
+
+  {# Tech-branded header strip #}
+  <div class="p-card" style="background:linear-gradient(135deg,#1a56db 0%,#163fa8 100%);
+              border-color:transparent; color:#fff; padding:30px 32px;">
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; flex-wrap:wrap;">
+      <div>
+        <p style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; opacity:.8; margin:0 0 4px;">Technician portal</p>
+        <h1 style="font-family:'DM Serif Display',serif; font-size:26px; letter-spacing:-.02em; margin:0;">
+          {{ technician.full_name }}
+        </h1>
+        <p style="margin:6px 0 0; font-size:13.5px; opacity:.85;">Log and manage your on-site work entries.</p>
+      </div>
+      <a href="{% url 'technician_entry_create' token=tok.token %}"
+         class="p-btn" style="background:#fff; color:#163fa8; flex-shrink:0; margin-top:4px;">
+        <i class="bi bi-plus-lg"></i> New entry
+      </a>
+    </div>
+  </div>
+
+  <div class="p-card">
+    <div class="p-card-header">
+      <h2 class="p-card-title"><i class="bi bi-clipboard-check me-1"></i> Your entries</h2>
+    </div>
+
+    {% if rows %}
+      {% for row in rows %}
+      <div class="tp-entry {% if row.locked %}tp-locked{% endif %}">
+        <div style="min-width:0; flex:1;">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <strong style="font-size:14px;">{{ row.visit.visit_date|date:"D j M Y" }}</strong>
+            <span class="s-pill s-{{ row.visit.status }}" style="font-size:10.5px; padding:2px 9px;">
+              {{ row.visit.get_status_display }}
+            </span>
+            {% if row.locked %}
+            <span class="tp-lock-badge"><i class="bi bi-lock-fill"></i> Reported — locked</span>
+            {% endif %}
+          </div>
+          <div style="font-size:12.5px; color:var(--ink-muted); margin-top:3px;">
+            {{ row.visit.get_origin_display }}
+            {% if row.visit.contract %} · {{ row.visit.contract.title|truncatechars:36 }}{% endif %}
+            · {{ row.visit.activity_count }} activit{{ row.visit.activity_count|pluralize:"y,ies" }}
+            {% if row.visit.site_location %} · {{ row.visit.site_location|truncatechars:28 }}{% endif %}
+          </div>
+        </div>
+        <div class="tp-entry-actions">
+          {% if row.locked %}
+          <a href="{% url 'technician_entry_edit' token=tok.token pk=row.visit.pk %}"
+             class="p-btn p-btn-ghost" style="padding:7px 12px;">
+            <i class="bi bi-eye"></i> View
+          </a>
+          {% else %}
+          <a href="{% url 'technician_entry_edit' token=tok.token pk=row.visit.pk %}"
+             class="p-btn p-btn-ghost" style="padding:7px 12px;">
+            <i class="bi bi-pencil"></i> Edit
+          </a>
+          <form method="post" action="{% url 'technician_entry_delete' token=tok.token pk=row.visit.pk %}"
+                onsubmit="return confirm('Delete this entry and all its activities?')" style="margin:0;">
+            {% csrf_token %}
+            <button class="p-btn p-btn-ghost" style="padding:7px 12px; color:var(--accent); border-color:#f5bfba;">
+              <i class="bi bi-trash"></i>
+            </button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div style="text-align:center; padding:40px 16px; color:var(--ink-muted);">
+        <i class="bi bi-inbox" style="font-size:30px; display:block; margin-bottom:10px; opacity:.5;"></i>
+        No entries yet. Tap <strong>New entry</strong> to log your first on-site visit.
+      </div>
+    {% endif %}
+  </div>
+
+  <p style="text-align:center; font-size:12px; color:var(--ink-muted); margin-top:4px;">
+    <i class="bi bi-info-circle"></i>
+    Entries can be edited or deleted until their month is rolled into a monthly report.
+  </p>
+
+</div>
+{% endblock %}

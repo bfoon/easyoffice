@@ -1125,6 +1125,122 @@
         </div>
       </section>
 
+      {# ── On-Site Maintenance Visits ─────────────────────────────────────── #}
+      <section class="cdetail-card">
+        <div class="cdetail-card-head">
+          <div>
+            <h2 class="cdetail-card-title">On-Site Maintenance Visits</h2>
+            <p class="cdetail-card-subtitle">Routine visits logged by technicians for this contract</p>
+          </div>
+          <form method="post" action="{% url 'visit_start_contract' contract.pk %}" style="margin:0">
+            {% csrf_token %}
+            <button class="eo-btn eo-btn-primary eo-btn-sm" type="submit">
+              <i class="bi bi-geo-alt"></i> Start Routine Visit
+            </button>
+          </form>
+        </div>
+
+        <div class="cdetail-card-body">
+          {% if contract.onsite_visits.all %}
+          <div style="display:flex;flex-direction:column;gap:.75rem">
+            {% for v in contract.onsite_visits.all %}
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;
+                        padding:.85rem 1rem;border-radius:14px;
+                        background:var(--eo-surface-2,#f8fafc);
+                        border:1px solid var(--eo-border,#e2e8f0)">
+              <div style="min-width:0;flex:1">
+                <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+                  <span style="font-weight:700;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;
+                               padding:.15rem .5rem;border-radius:6px;background:#dbeafe;color:#1e40af">
+                    {{ v.get_origin_display }}
+                  </span>
+                  <span style="font-size:.7rem;font-weight:600;padding:.15rem .5rem;border-radius:6px;
+                               {% if v.status == 'reported' %}background:#dcfce7;color:#166534
+                               {% elif v.status == 'submitted' or v.status == 'verified' %}background:#dbeafe;color:#1e40af
+                               {% else %}background:#f1f5f9;color:#475569{% endif %}">
+                    {{ v.get_status_display }}
+                  </span>
+                </div>
+                <div style="margin-top:.3rem;font-weight:600;color:var(--eo-text)">
+                  {{ v.visit_date|date:"M j, Y" }}
+                  <span style="font-weight:400;color:var(--eo-text-muted,#64748b)">
+                    · {{ v.activity_count }} activit{{ v.activity_count|pluralize:"y,ies" }}
+                    {% if v.technician %} · {{ v.technician.full_name }}{% endif %}
+                  </span>
+                </div>
+              </div>
+              <a href="{% url 'visit_report_detail' v.pk %}"
+                 class="eo-btn eo-btn-ghost eo-btn-sm" style="white-space:nowrap">
+                Open <i class="bi bi-arrow-right-short"></i>
+              </a>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="cdetail-empty">
+            <i class="bi bi-geo-alt"></i>
+            No on-site visits have been logged for this contract yet.
+          </div>
+          {% endif %}
+        </div>
+      </section>
+
+      {# ── Monthly Service Report ─────────────────────────────────────────── #}
+      <section class="cdetail-card">
+        <div class="cdetail-card-head">
+          <div>
+            <h2 class="cdetail-card-title">Monthly Service Report</h2>
+            <p class="cdetail-card-subtitle">Roll up visit activities into a CEO-signed report for the customer</p>
+          </div>
+        </div>
+
+        <div class="cdetail-card-body">
+          {% if contract.monthly_reports.all %}
+          <div style="display:flex;flex-direction:column;gap:.6rem;margin-bottom:1rem">
+            {% for r in contract.monthly_reports.all %}
+            <a href="{% url 'monthly_report_detail' r.pk %}"
+               class="d-flex align-items-center justify-content-between text-decoration-none"
+               style="padding:.7rem 1rem;border-radius:12px;background:var(--eo-surface-2,#f8fafc);
+                      border:1px solid var(--eo-border,#e2e8f0);color:inherit">
+              <span style="font-weight:600;color:var(--eo-text)">
+                <i class="bi bi-file-earmark-text"></i> {{ r.period_label }}
+                <span style="font-weight:400;color:var(--eo-text-muted,#64748b)">
+                  · {{ r.total_activities }} activities · {{ r.total_visits }} visits
+                </span>
+              </span>
+              <span style="font-size:.72rem;font-weight:600;padding:.15rem .5rem;border-radius:6px;
+                           {% if r.status == 'sent' %}background:#dcfce7;color:#166534
+                           {% elif r.status == 'signed' %}background:#dbeafe;color:#1e40af
+                           {% elif r.status == 'awaiting_sign' %}background:#fef3c7;color:#92400e
+                           {% else %}background:#f1f5f9;color:#475569{% endif %}">
+                {{ r.get_status_display }}
+              </span>
+            </a>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          <form method="post" action="{% url 'monthly_report_generate' %}"
+                style="display:flex;flex-wrap:wrap;gap:.6rem;align-items:flex-end">
+            {% csrf_token %}
+            <input type="hidden" name="scope" value="contract">
+            <input type="hidden" name="contract" value="{{ contract.pk }}">
+            <div>
+              <label class="cdetail-info-label" style="display:block;margin-bottom:.25rem">Report month</label>
+              <input type="month" name="month" required
+                     style="padding:.5rem .7rem;border-radius:10px;border:1px solid var(--eo-border,#e2e8f0)">
+            </div>
+            <button class="eo-btn eo-btn-primary eo-btn-sm" type="submit">
+              <i class="bi bi-file-earmark-plus"></i> Generate Report
+            </button>
+          </form>
+          <p style="margin-top:.6rem;font-size:.78rem;color:var(--eo-text-muted,#64748b)">
+            Generates a report from submitted visits in the chosen month. You can then send it to the CEO for
+            digital signature and email the signed PDF to the customer.
+          </p>
+        </div>
+      </section>
+
       {# ── Customer Portal Access ────────────────────────────────────────── #}
       {% portal_token_for contract as cp_token %}
       <section class="cdetail-card">

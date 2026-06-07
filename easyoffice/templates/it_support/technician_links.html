@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Technician Portal Links{% endblock %}
+{% block breadcrumb %}<a href="{% url 'it_dashboard' %}">IT Support</a> / <span>Technician Links</span>{% endblock %}
+
+{% block content %}
+{% if denied %}
+<div class="eo-card" style="border-left:4px solid var(--eo-danger)">
+  <p style="margin:0"><i class="bi bi-shield-lock"></i> IT staff only.</p>
+</div>
+{% else %}
+
+<div class="eo-page-head d-flex align-items-center justify-content-between flex-wrap gap-3 mb-4">
+  <div>
+    <h1 class="eo-page-title">Technician Portal Links</h1>
+    <p class="eo-page-subtitle">
+      Create and manage the personal links technicians use to log on-site work ·
+      {{ active_count }} active of {{ total_links }} issued
+    </p>
+  </div>
+  <a href="{% url 'it_dashboard' %}" class="eo-btn eo-btn-secondary">
+    <i class="bi bi-arrow-left"></i> Back to IT
+  </a>
+</div>
+
+<div class="eo-card">
+  <div class="eo-card-header">
+    <div>
+      <h2 class="eo-card-title">Technicians</h2>
+      <p class="eo-card-subtitle">Issue a link, copy it to share, or activate / deactivate access</p>
+    </div>
+  </div>
+
+  {% if rows %}
+  <div class="table-responsive">
+    <table class="eo-table" style="width:100%">
+      <thead>
+        <tr>
+          <th>Technician</th>
+          <th>Status</th>
+          <th>Link</th>
+          <th>Activity</th>
+          <th style="text-align:right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>
+            <div style="font-weight:700">{{ r.user.full_name }}</div>
+            <div style="font-size:.78rem;color:var(--eo-text-muted)">
+              {{ r.user.email|default:"no email on file" }}
+              {% if r.off_roster %} · <span style="color:var(--eo-warning)">not in technician group</span>{% endif %}
+            </div>
+          </td>
+          <td>
+            {% if not r.has_link %}
+              <span class="eo-status" style="background:#f1f5f9;color:#475569">No link</span>
+            {% elif r.is_active %}
+              <span class="eo-status" style="background:#dcfce7;color:#166534"><i class="bi bi-check-circle"></i> Active</span>
+            {% else %}
+              <span class="eo-status" style="background:#fee2e2;color:#991b1b"><i class="bi bi-slash-circle"></i> Deactivated</span>
+            {% endif %}
+            {% if r.has_link %}
+              <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:3px">
+                {% if r.email_bound %}<i class="bi bi-envelope-check"></i> email confirmed{% else %}<i class="bi bi-envelope"></i> email not yet set{% endif %}
+              </div>
+            {% endif %}
+          </td>
+          <td style="max-width:280px">
+            {% if r.has_link %}
+            <div class="d-flex align-items-center gap-2">
+              <input type="text" readonly value="{{ r.link }}"
+                     id="lnk-{{ r.token.pk }}"
+                     class="eo-input"
+                     style="font-size:.74rem;padding:5px 8px"
+                     onclick="this.select()">
+              <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon"
+                      title="Copy link" onclick="copyLink('lnk-{{ r.token.pk }}', this)">
+                <i class="bi bi-clipboard"></i>
+              </button>
+            </div>
+            {% else %}
+            <span style="font-size:.8rem;color:var(--eo-text-muted)">—</span>
+            {% endif %}
+          </td>
+          <td style="font-size:.78rem;color:var(--eo-text-muted)">
+            {% if r.has_link %}
+              {% if r.last_used %}Last used {{ r.last_used|naturaltime }}{% else %}Never used{% endif %}
+              <div>{{ r.trusted_devices }} trusted device{{ r.trusted_devices|pluralize }}</div>
+            {% else %}—{% endif %}
+          </td>
+          <td style="text-align:right">
+            <div class="d-inline-flex gap-1 flex-wrap" style="justify-content:flex-end">
+              {% if not r.has_link %}
+              <form method="post" action="{% url 'technician_link_action' %}" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="issue">
+                <input type="hidden" name="user_id" value="{{ r.user.pk }}">
+                <button class="eo-btn eo-btn-primary eo-btn-sm"><i class="bi bi-link-45deg"></i> Create link</button>
+              </form>
+              {% else %}
+                {% if r.is_active %}
+                <form method="post" action="{% url 'technician_link_action' %}" style="display:inline"
+                      onsubmit="return confirm('Deactivate this link? The technician will lose access until reactivated.')">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="deactivate">
+                  <input type="hidden" name="token_id" value="{{ r.token.pk }}">
+                  <button class="eo-btn eo-btn-secondary eo-btn-sm" style="color:#991b1b"><i class="bi bi-slash-circle"></i> Deactivate</button>
+                </form>
+                {% else %}
+                <form method="post" action="{% url 'technician_link_action' %}" style="display:inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="activate">
+                  <input type="hidden" name="token_id" value="{{ r.token.pk }}">
+                  <button class="eo-btn eo-btn-success eo-btn-sm"><i class="bi bi-check-circle"></i> Activate</button>
+                </form>
+                {% endif %}
+
+                <div class="dropdown" style="display:inline-block">
+                  <button class="eo-btn eo-btn-secondary eo-btn-sm" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-three-dots"></i>
+                  </button>
+                  <ul class="dropdown-menu dropdown-menu-end" style="font-size:.85rem">
+                    <li>
+                      <form method="post" action="{% url 'technician_link_action' %}"
+                            onsubmit="return confirm('Regenerate the link? The current link will stop working and all trusted devices are cleared.')">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="regenerate">
+                        <input type="hidden" name="token_id" value="{{ r.token.pk }}">
+                        <button class="dropdown-item" type="submit"><i class="bi bi-arrow-repeat"></i> Regenerate link</button>
+                      </form>
+                    </li>
+                    <li>
+                      <form method="post" action="{% url 'technician_link_action' %}"
+                            onsubmit="return confirm('Clear trusted devices? The technician will verify by OTP next time.')">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="reset_devices">
+                        <input type="hidden" name="token_id" value="{{ r.token.pk }}">
+                        <button class="dropdown-item" type="submit"><i class="bi bi-phone"></i> Reset trusted devices</button>
+                      </form>
+                    </li>
+                  </ul>
+                </div>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p style="color:var(--eo-text-muted)">
+    No eligible technicians found. Add users to the <strong>Technician</strong> or <strong>IT</strong> group first.
+  </p>
+  {% endif %}
+</div>
+
+<p style="font-size:.8rem;color:var(--eo-text-muted);margin-top:6px">
+  <i class="bi bi-info-circle"></i>
+  Each technician has one permanent link. They confirm their email on first open and verify each new
+  device by one-time code. Deactivating a link blocks access immediately; regenerating issues a brand-new link.
+</p>
+
+<script>
+  function copyLink(id, btn) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.select();
+    el.setSelectionRange(0, 99999);
+    var done = function () {
+      var icon = btn.querySelector('i');
+      if (icon) { icon.className = 'bi bi-check2'; setTimeout(function(){ icon.className = 'bi bi-clipboard'; }, 1400); }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(el.value).then(done).catch(function(){ document.execCommand('copy'); done(); });
+    } else {
+      document.execCommand('copy'); done();
+    }
+  }
+</script>
+{% endif %}
+{% endblock %}

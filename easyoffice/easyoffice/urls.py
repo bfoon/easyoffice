@@ -52,6 +52,8 @@ urlpatterns = [
     path('api/',        include('apps.orders.api.urls')),
 
     path('portal/', include('apps.customer_portal.urls')),
+    path('onsite/', include('apps.customer_portal.urls_onsite_report')),
+    path('tech/', include('apps.customer_portal.urls_technician_portal')),
 
     # API
     path('api/v1/', include('apps.core.urls.api')),

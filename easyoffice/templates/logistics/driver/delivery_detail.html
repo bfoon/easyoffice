@@ -1,0 +1,126 @@
+{% extends "logistics/driver/_driver_base.html" %}
+{% load humanize %}
+{% block title %}{{ shipment.reference }} — Delivery{% endblock %}
+{% block content %}
+
+<header class="drv-header">
+  <div class="drv-header-inner">
+    <a href="{% url 'driver_deliveries' token=tok.token %}" class="drv-brand">
+      <span class="drv-brand-icon"><i class="bi bi-arrow-left"></i></span>
+      <span class="drv-brand-name">Back</span>
+    </a>
+    <span class="s-pill s-{{ shipment.status }}" style="font-size:11px;color:#fff;background:rgba(255,255,255,.2)">{{ shipment.get_status_display }}</span>
+  </div>
+</header>
+
+<div class="drv-wrap">
+
+  <div class="drv-card">
+    <div class="drv-ref">{{ shipment.reference }}</div>
+    <h1 style="font-family:'DM Serif Display',serif;font-size:22px;margin:3px 0 6px">{{ shipment.customer_name }}</h1>
+    <div style="font-size:14px;color:var(--ink);margin-bottom:4px"><i class="bi bi-geo-alt-fill" style="color:var(--drv)"></i> {{ shipment.destination_address }}</div>
+    {% if shipment.contact_name or shipment.contact_phone %}
+    <div style="font-size:13px;color:var(--ink-muted)">
+      <i class="bi bi-person"></i> {{ shipment.contact_name }}
+      {% if shipment.contact_phone %} · <a href="tel:{{ shipment.contact_phone }}" style="color:var(--drv)"><i class="bi bi-telephone"></i> {{ shipment.contact_phone }}</a>{% endif %}
+    </div>
+    {% endif %}
+    {% if shipment.instructions %}
+    <div style="margin-top:10px;padding:10px 12px;background:var(--warn-bg);border:1px solid #f0d9a0;border-radius:8px;font-size:13px;color:var(--warn)">
+      <i class="bi bi-info-circle"></i> {{ shipment.instructions }}
+    </div>
+    {% endif %}
+  </div>
+
+  {# Items #}
+  {% if items %}
+  <div class="drv-card">
+    <p style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-muted);margin:0 0 10px">Items ({{ items|length }})</p>
+    {% for it in items %}
+    <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;{% if not forloop.last %}border-bottom:1px solid var(--rule-light){% endif %}">
+      <span>{{ it.description }}</span>
+      <span style="color:var(--ink-muted);white-space:nowrap">{{ it.quantity|floatformat:"-2" }} {{ it.unit }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {# Actions #}
+  {% if can_act %}
+  <a href="{{ shipment.directions_url }}" target="_blank" rel="noopener" class="big-action ba-map">
+    <i class="bi bi-signpost-2"></i> Get directions
+  </a>
+
+  {% if shipment.status == 'dispatched' or shipment.status == 'ready' %}
+  <form method="post" action="{% url 'driver_status_update' token=tok.token pk=shipment.pk %}">
+    {% csrf_token %}<input type="hidden" name="status" value="en_route">
+    <button class="big-action ba-go"><i class="bi bi-truck"></i> Start trip (En route)</button>
+  </form>
+  {% endif %}
+
+  {% if shipment.status == 'en_route' or shipment.status == 'dispatched' %}
+  <form method="post" action="{% url 'driver_status_update' token=tok.token pk=shipment.pk %}">
+    {% csrf_token %}<input type="hidden" name="status" value="arrived">
+    <button class="big-action ba-ghost"><i class="bi bi-geo"></i> I've arrived on site</button>
+  </form>
+  {% endif %}
+
+  <a href="{% url 'driver_proof_of_delivery' token=tok.token pk=shipment.pk %}" class="big-action ba-sign">
+    <i class="bi bi-pen"></i> Complete &amp; get signature
+  </a>
+
+  <form method="post" action="{% url 'driver_status_update' token=tok.token pk=shipment.pk %}"
+        onsubmit="return confirm('Mark this delivery as failed?')">
+    {% csrf_token %}<input type="hidden" name="status" value="failed">
+    <button class="big-action ba-ghost" style="color:var(--accent)"><i class="bi bi-x-circle"></i> Couldn't deliver</button>
+  </form>
+
+  <p id="gps-status" style="text-align:center;font-size:12px;color:var(--ink-muted);margin-top:6px">
+    <i class="bi bi-broadcast"></i> Location sharing starts when you're en route.
+  </p>
+  {% else %}
+  <div class="drv-card" style="text-align:center">
+    <i class="bi bi-check2-circle" style="font-size:30px;color:var(--drv)"></i>
+    <p style="margin:8px 0 0;font-weight:600">This delivery is {{ shipment.get_status_display|lower }}.</p>
+    {% if shipment.proof %}<p style="font-size:13px;color:var(--ink-muted);margin:4px 0 0">Signed by {{ shipment.proof.received_by_name }} · {{ shipment.delivered_at|naturaltime }}</p>{% endif %}
+  </div>
+  {% endif %}
+
+  {# Timeline #}
+  <div class="drv-card">
+    <p style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-muted);margin:0 0 10px">Timeline</p>
+    {% for ev in events %}
+    <div style="display:grid;grid-template-columns:96px 1fr;gap:12px;padding:7px 0;{% if not forloop.last %}border-bottom:1px solid var(--rule-light){% endif %}">
+      <div style="font-size:11.5px;color:var(--ink-muted)">{{ ev.created_at|date:"j M H:i" }}</div>
+      <div style="font-size:13.5px"><strong>{{ ev.get_status_display }}</strong>{% if ev.note %}<br><span style="font-size:12.5px;color:var(--ink-muted)">{{ ev.note }}</span>{% endif %}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+</div>
+
+{% if can_act and shipment.status == 'en_route' %}
+{% block extra_js %}
+<script>
+(function(){
+  var pingUrl = "{% url 'driver_gps_ping' token=tok.token pk=shipment.pk %}";
+  var statusEl = document.getElementById('gps-status');
+  function csrf(){var m=document.cookie.match(/csrftoken=([^;]+)/);return m?m[1]:'';}
+  function send(pos){
+    var c=pos.coords;
+    fetch(pingUrl,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':csrf()},
+      body:JSON.stringify({lat:c.latitude,lng:c.longitude,accuracy:c.accuracy,speed:c.speed,heading:c.heading})})
+      .then(function(r){ if(statusEl) statusEl.innerHTML='<i class="bi bi-broadcast"></i> Sharing your location with the office.'; })
+      .catch(function(){});
+  }
+  if(navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(send,function(){},{enableHighAccuracy:true});
+    navigator.geolocation.watchPosition(send,function(e){
+      if(statusEl) statusEl.innerHTML='<i class="bi bi-exclamation-triangle"></i> Location off — enable GPS to share your route.';
+    },{enableHighAccuracy:true,maximumAge:15000,timeout:20000});
+  }
+})();
+</script>
+{% endblock %}
+{% endif %}
+{% endblock %}

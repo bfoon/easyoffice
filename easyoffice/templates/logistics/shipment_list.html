@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Shipments{% endblock %}
+{% block breadcrumb %}<a href="{% url 'logistics_dashboard' %}">Logistics</a> / <span>Shipments</span>{% endblock %}
+{% block content %}
+<div class="eo-page-header">
+  <div><h1 class="eo-page-title">Shipments</h1><p class="eo-page-subtitle">All deliveries</p></div>
+  <a href="{% url 'logistics_shipment_create' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus-lg"></i> New Shipment</a>
+</div>
+
+<div class="eo-card">
+  <div class="eo-card-header">
+    <form method="get" style="display:flex;gap:8px;align-items:center">
+      <select name="status" class="eo-input eo-select" onchange="this.form.submit()" style="max-width:220px">
+        <option value="">All statuses</option>
+        {% for value,label in status_choices %}<option value="{{ value }}" {% if value == current_status %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </form>
+  </div>
+  {% if shipments %}
+  <div class="table-responsive">
+    <table class="eo-table" style="width:100%">
+      <thead><tr><th>Reference</th><th>Customer</th><th>Driver / Vehicle</th><th>Status</th><th>Dispatched</th><th></th></tr></thead>
+      <tbody>
+      {% for s in shipments %}
+      <tr>
+        <td style="font-weight:700"><a href="{% url 'logistics_shipment_detail' s.pk %}">{{ s.reference }}</a></td>
+        <td>{{ s.customer_name|truncatechars:34 }}</td>
+        <td style="font-size:.82rem">{{ s.driver.full_name|default:"—" }}<div style="color:var(--eo-text-muted)">{{ s.vehicle.label|default:"—" }}{% if s.vehicle.is_hired %} · hired{% endif %}</div></td>
+        <td><span class="eo-status eo-status-{{ s.status }}">{{ s.get_status_display }}</span></td>
+        <td style="font-size:.82rem;color:var(--eo-text-muted)">{% if s.dispatched_at %}{{ s.dispatched_at|naturaltime }}{% else %}—{% endif %}</td>
+        <td style="text-align:right">{% if s.is_open %}<a href="{% url 'logistics_shipment_track' s.pk %}" class="eo-btn eo-btn-secondary eo-btn-sm"><i class="bi bi-geo-alt"></i> Track</a>{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<p style="color:var(--eo-text-muted)">No shipments found.</p>{% endif %}
+</div>
+{% endblock %}

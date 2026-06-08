@@ -61,6 +61,7 @@ LOCAL_APPS = [
     'apps.orders',
     'apps.inventory',
     'apps.customer_portal',
+    'apps.logistics',
     'apps.admin_security.apps.AdminSecurityConfig',
 ]
 

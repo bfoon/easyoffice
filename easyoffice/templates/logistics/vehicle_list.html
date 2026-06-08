@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Vehicles{% endblock %}
+{% block breadcrumb %}<a href="{% url 'logistics_dashboard' %}">Logistics</a> / <span>Vehicles</span>{% endblock %}
+{% block content %}
+<div class="eo-page-header">
+  <div><h1 class="eo-page-title">Vehicles</h1><p class="eo-page-subtitle">Company-owned and hired delivery vehicles</p></div>
+  <button class="eo-btn eo-btn-primary" onclick="document.getElementById('veh-form').scrollIntoView()"><i class="bi bi-plus-lg"></i> Add Vehicle</button>
+</div>
+
+<div class="eo-card">
+  {% if vehicles %}
+  <div class="table-responsive">
+    <table class="eo-table" style="width:100%">
+      <thead><tr><th>Vehicle</th><th>Ownership</th><th>Status</th><th>Reg</th><th>Hire details</th></tr></thead>
+      <tbody>
+      {% for v in vehicles %}
+      <tr>
+        <td style="font-weight:700">{{ v.label }}<div style="font-size:.76rem;color:var(--eo-text-muted)">{{ v.make }} {{ v.model }} {{ v.capacity_note }}</div></td>
+        <td>{% if v.is_hired %}<span class="eo-status" style="background:#fef3c7;color:#92400e">Hired</span>{% else %}<span class="eo-status" style="background:#dbeafe;color:#1e40af">Company</span>{% endif %}</td>
+        <td><span class="eo-status eo-status-{{ v.status }}">{{ v.get_status_display }}</span></td>
+        <td style="font-size:.82rem">{{ v.registration|default:"—" }}</td>
+        <td style="font-size:.8rem;color:var(--eo-text-muted)">{% if v.is_hired %}{{ v.hire_vendor }}{% if v.hire_rate_note %} · {{ v.hire_rate_note }}{% endif %}{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<p style="color:var(--eo-text-muted)">No vehicles yet.</p>{% endif %}
+</div>
+
+<div class="eo-card" id="veh-form">
+  <div class="eo-card-header"><h2 class="eo-card-title">Add / Edit Vehicle</h2></div>
+  <form method="post" action="{% url 'logistics_vehicle_save' %}">
+    {% csrf_token %}
+    <div class="row g-3">
+      <div class="col-md-6"><label class="eo-label">Label *</label><input name="label" class="eo-input" required placeholder="Toyota Hilux — GAM 1234"></div>
+      <div class="col-md-3"><label class="eo-label">Registration</label><input name="registration" class="eo-input"></div>
+      <div class="col-md-3"><label class="eo-label">Capacity</label><input name="capacity_note" class="eo-input" placeholder="1 tonne"></div>
+      <div class="col-md-3"><label class="eo-label">Make</label><input name="make" class="eo-input"></div>
+      <div class="col-md-3"><label class="eo-label">Model</label><input name="model" class="eo-input"></div>
+      <div class="col-md-3"><label class="eo-label">Ownership</label>
+        <select name="ownership" class="eo-input eo-select" id="own-sel" onchange="toggleHire()">
+          <option value="company">Company-owned</option><option value="hired">Hired</option></select></div>
+      <div class="col-md-3"><label class="eo-label">Status</label>
+        <select name="status" class="eo-input eo-select">
+          {% for value,label in status_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></div>
+    </div>
+    <div class="row g-3 mt-1" id="hire-fields" style="display:none">
+      <div class="col-md-4"><label class="eo-label">Hire vendor</label><input name="hire_vendor" class="eo-input"></div>
+      <div class="col-md-4"><label class="eo-label">Hire contact</label><input name="hire_contact" class="eo-input"></div>
+      <div class="col-md-4"><label class="eo-label">Rate</label><input name="hire_rate_note" class="eo-input" placeholder="D2,500 per trip"></div>
+    </div>
+    <div class="mt-3"><button class="eo-btn eo-btn-primary"><i class="bi bi-save"></i> Save Vehicle</button></div>
+  </form>
+</div>
+<script>
+function toggleHire(){document.getElementById('hire-fields').style.display=document.getElementById('own-sel').value==='hired'?'flex':'none';}
+toggleHire();
+</script>
+{% endblock %}

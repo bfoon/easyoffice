@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ shipment.reference }}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'logistics_dashboard' %}">Logistics</a> / <a href="{% url 'logistics_shipment_list' %}">Shipments</a> / <span>{{ shipment.reference }}</span>{% endblock %}
+{% block content %}
+<div class="eo-page-header">
+  <div><h1 class="eo-page-title">{{ shipment.reference }}</h1>
+    <p class="eo-page-subtitle">{{ shipment.customer_name }} · <span class="eo-status eo-status-{{ shipment.status }}">{{ shipment.get_status_display }}</span></p></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    {% if shipment.is_open %}<a href="{% url 'logistics_shipment_track' shipment.pk %}" class="eo-btn eo-btn-primary"><i class="bi bi-geo-alt"></i> Live Track</a>{% endif %}
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-7 d-flex flex-column gap-4">
+    <div class="eo-card">
+      <div class="eo-card-header"><h2 class="eo-card-title">Destination</h2></div>
+      <p style="margin:0 0 6px"><i class="bi bi-geo-alt-fill" style="color:var(--eo-accent)"></i> {{ shipment.destination_address }}</p>
+      {% if shipment.contact_name %}<p style="font-size:.85rem;color:var(--eo-text-muted);margin:0"><i class="bi bi-person"></i> {{ shipment.contact_name }} {% if shipment.contact_phone %}· {{ shipment.contact_phone }}{% endif %}</p>{% endif %}
+      {% if shipment.purchase_order or shipment.invoice %}
+      <div style="margin-top:10px;font-size:.82rem">
+        {% if shipment.purchase_order %}<span class="eo-status" style="background:#eef2ff;color:#3730a3">PO: {{ shipment.purchase_order }}</span>{% endif %}
+        {% if shipment.invoice %}<span class="eo-status" style="background:#ecfdf5;color:#065f46">Invoice: {{ shipment.invoice }}</span>{% endif %}
+      </div>{% endif %}
+    </div>
+
+    <div class="eo-card">
+      <div class="eo-card-header"><h2 class="eo-card-title">Items</h2></div>
+      {% if items %}<table class="eo-table" style="width:100%"><tbody>
+        {% for it in items %}<tr><td>{{ it.description }}</td><td style="text-align:right;color:var(--eo-text-muted)">{{ it.quantity|floatformat:"-2" }} {{ it.unit }}</td></tr>{% endfor %}
+      </tbody></table>{% else %}<p style="color:var(--eo-text-muted)">No items listed.</p>{% endif %}
+    </div>
+
+    <div class="eo-card">
+      <div class="eo-card-header"><h2 class="eo-card-title">Timeline</h2></div>
+      {% for ev in events %}
+      <div style="display:grid;grid-template-columns:130px 1fr;gap:12px;padding:9px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
+        <div style="font-size:.78rem;color:var(--eo-text-muted)">{{ ev.created_at|date:"j M H:i" }}</div>
+        <div style="font-size:.88rem"><strong>{{ ev.get_status_display }}</strong>{% if ev.by_driver %} <span style="font-size:.7rem;color:var(--eo-text-muted)">(driver)</span>{% endif %}{% if ev.note %}<br><span style="color:var(--eo-text-muted)">{{ ev.note }}</span>{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if proof %}
+    <div class="eo-card" style="border-left:4px solid var(--eo-success)">
+      <div class="eo-card-header"><h2 class="eo-card-title"><i class="bi bi-pen"></i> Proof of Delivery</h2></div>
+      <p style="margin:0 0 6px">Received by <strong>{{ proof.received_by_name }}</strong> · {{ proof.signed_at|naturaltime }}</p>
+      {% if proof.signature_data_url %}<img src="{{ proof.signature_data_url }}" alt="signature" style="max-height:120px;border:1px solid var(--eo-border);border-radius:8px;background:#fff">
+      {% elif proof.signature_typed %}<p style="font-family:cursive;font-size:1.3rem">{{ proof.signature_typed }}</p>{% endif %}
+      {% if proof.note %}<p style="font-size:.85rem;color:var(--eo-text-muted);margin-top:8px">{{ proof.note }}</p>{% endif %}
+      {% if proof.photo %}<div style="margin-top:8px"><a href="{{ proof.photo.url }}" target="_blank"><img src="{{ proof.photo.url }}" style="max-height:160px;border-radius:8px"></a></div>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-5 d-flex flex-column gap-4">
+    <div class="eo-card">
+      <div class="eo-card-header"><h2 class="eo-card-title">Driver & Vehicle</h2></div>
+      <form method="post" action="{% url 'logistics_shipment_assign' shipment.pk %}">
+        {% csrf_token %}
+        <label class="eo-label">Driver</label>
+        <select name="driver" class="eo-input eo-select" style="margin-bottom:10px">
+          <option value="">— None —</option>
+          {% for d in drivers %}<option value="{{ d.pk }}" {% if shipment.driver_id == d.pk %}selected{% endif %}>{{ d.full_name }}{% if d.is_external %} (hired){% endif %}</option>{% endfor %}
+        </select>
+        <label class="eo-label">Vehicle</label>
+        <select name="vehicle" class="eo-input eo-select" style="margin-bottom:12px">
+          <option value="">— None —</option>
+          {% for v in vehicles %}<option value="{{ v.pk }}" {% if shipment.vehicle_id == v.pk %}selected{% endif %}>{{ v.label }}{% if v.is_hired %} (hired){% endif %}</option>{% endfor %}
+        </select>
+        <button class="eo-btn eo-btn-secondary eo-btn-sm"><i class="bi bi-save"></i> Save assignment</button>
+      </form>
+    </div>
+
+    <div class="eo-card">
+      <div class="eo-card-header"><h2 class="eo-card-title">Actions</h2></div>
+      {% if shipment.status == 'ready' or shipment.status == 'draft' %}
+      <form method="post" action="{% url 'logistics_shipment_dispatch' shipment.pk %}" style="margin-bottom:8px">
+        {% csrf_token %}<button class="eo-btn eo-btn-primary" style="width:100%"><i class="bi bi-truck"></i> Dispatch</button>
+      </form>
+      {% endif %}
+      {% if shipment.driver and shipment.driver.portal_token %}
+      <div style="font-size:.8rem;color:var(--eo-text-muted);margin-bottom:8px"><i class="bi bi-link-45deg"></i> Driver has portal access.</div>
+      {% elif shipment.driver %}
+      <div style="font-size:.8rem;color:var(--eo-warning);margin-bottom:8px"><i class="bi bi-exclamation-triangle"></i> Driver has no portal link yet — <a href="{% url 'logistics_driver_list' %}">issue one</a>.</div>
+      {% endif %}
+      {% if not shipment.is_delivered and shipment.status != 'cancelled' %}
+      <form method="post" action="{% url 'logistics_shipment_cancel' shipment.pk %}" onsubmit="return confirm('Cancel this shipment?')">
+        {% csrf_token %}<input name="reason" class="eo-input eo-input-sm" placeholder="Reason (optional)" style="margin-bottom:8px">
+        <button class="eo-btn eo-btn-secondary" style="width:100%;color:#991b1b"><i class="bi bi-x-circle"></i> Cancel shipment</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

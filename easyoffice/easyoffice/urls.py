@@ -55,6 +55,9 @@ urlpatterns = [
     path('onsite/', include('apps.customer_portal.urls_onsite_report')),
     path('tech/', include('apps.customer_portal.urls_technician_portal')),
 
+    path('logistics/', include('apps.logistics.urls')),
+    path('drive/', include('apps.logistics.urls_driver_portal')),
+
     # API
     path('api/v1/', include('apps.core.urls.api')),
     path('letterhead/', include('apps.letterhead.urls')),

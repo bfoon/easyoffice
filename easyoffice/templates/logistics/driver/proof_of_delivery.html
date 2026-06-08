@@ -1,0 +1,90 @@
+{% extends "logistics/driver/_driver_base.html" %}
+{% block title %}Proof of Delivery — {{ shipment.reference }}{% endblock %}
+{% block content %}
+
+<header class="drv-header">
+  <div class="drv-header-inner">
+    <a href="{% url 'driver_shipment_detail' token=tok.token pk=shipment.pk %}" class="drv-brand">
+      <span class="drv-brand-icon"><i class="bi bi-arrow-left"></i></span>
+      <span class="drv-brand-name">Sign-off</span>
+    </a>
+  </div>
+</header>
+
+<div class="drv-wrap" style="max-width:560px">
+  <div class="drv-card">
+    <h1 style="font-family:'DM Serif Display',serif;font-size:22px;margin:0 0 4px">Confirm delivery</h1>
+    <p style="color:var(--ink-muted);font-size:13.5px;margin:0 0 18px">
+      {{ shipment.reference }} · {{ shipment.customer_name }} — ask the customer to sign below.
+    </p>
+
+    <form method="post" enctype="multipart/form-data" id="pod-form">
+      {% csrf_token %}
+      <input type="hidden" name="signature_data_url" id="sig-data">
+      <input type="hidden" name="lat" id="pod-lat">
+      <input type="hidden" name="lng" id="pod-lng">
+
+      <div style="margin-bottom:14px">
+        <label class="p-label">Received by (name) *</label>
+        <input type="text" name="received_by_name" class="p-input" required placeholder="Who received the delivery">
+      </div>
+
+      <label class="p-label">Signature *</label>
+      <div style="border:1.5px solid var(--rule);border-radius:var(--radius-sm);background:#fff;position:relative">
+        <canvas id="sig-pad" style="width:100%;height:180px;display:block;touch-action:none;border-radius:var(--radius-sm)"></canvas>
+        <button type="button" id="sig-clear" style="position:absolute;top:8px;right:8px;background:var(--rule-light);
+                border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer">Clear</button>
+      </div>
+      <p style="font-size:11.5px;color:var(--ink-muted);margin:6px 0 14px">Sign with finger or stylus. Or type the name below as a fallback.</p>
+
+      <div style="margin-bottom:14px">
+        <label class="p-label">Or type full name (fallback)</label>
+        <input type="text" name="signature_typed" class="p-input" placeholder="Typed signature">
+      </div>
+
+      <div style="margin-bottom:14px">
+        <label class="p-label">Photo (optional)</label>
+        <input type="file" name="photo" accept="image/*" capture="environment" class="p-input">
+      </div>
+
+      <div style="margin-bottom:18px">
+        <label class="p-label">Note (optional)</label>
+        <textarea name="note" class="p-textarea" style="min-height:70px" placeholder="Condition, partial delivery, etc."></textarea>
+      </div>
+
+      <button type="submit" class="p-btn drv-btn-primary" style="width:100%;justify-content:center">
+        <i class="bi bi-check2-circle"></i> Complete delivery
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function(){
+  var canvas=document.getElementById('sig-pad'), ctx=canvas.getContext('2d'), drawing=false, dirty=false;
+  function resize(){var r=canvas.getBoundingClientRect(),d=window.devicePixelRatio||1;
+    canvas.width=r.width*d;canvas.height=r.height*d;ctx.scale(d,d);ctx.lineWidth=2.2;ctx.lineCap='round';ctx.strokeStyle='#1a1714';}
+  resize();
+  function pos(e){var r=canvas.getBoundingClientRect();var t=e.touches?e.touches[0]:e;return{x:t.clientX-r.left,y:t.clientY-r.top};}
+  function start(e){drawing=true;dirty=true;var p=pos(e);ctx.beginPath();ctx.moveTo(p.x,p.y);e.preventDefault();}
+  function move(e){if(!drawing)return;var p=pos(e);ctx.lineTo(p.x,p.y);ctx.stroke();e.preventDefault();}
+  function end(){drawing=false;}
+  canvas.addEventListener('mousedown',start);canvas.addEventListener('mousemove',move);
+  window.addEventListener('mouseup',end);
+  canvas.addEventListener('touchstart',start);canvas.addEventListener('touchmove',move);
+  canvas.addEventListener('touchend',end);
+  document.getElementById('sig-clear').addEventListener('click',function(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);dirty=false;});
+
+  document.getElementById('pod-form').addEventListener('submit',function(){
+    if(dirty){document.getElementById('sig-data').value=canvas.toDataURL('image/png');}
+  });
+
+  if(navigator.geolocation){navigator.geolocation.getCurrentPosition(function(p){
+    document.getElementById('pod-lat').value=p.coords.latitude;
+    document.getElementById('pod-lng').value=p.coords.longitude;},function(){});}
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Logistics{% endblock %}
+{% block breadcrumb %}<span>Logistics</span>{% endblock %}
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Logistics & Delivery</h1>
+    <p class="eo-page-subtitle">Track shipments from the office to the customer site</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a href="{% url 'logistics_shipment_create' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus-lg"></i> New Shipment</a>
+    <a href="{% url 'logistics_shipment_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-box-seam"></i> All Shipments</a>
+    <a href="{% url 'logistics_vehicle_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-truck"></i> Vehicles</a>
+    <a href="{% url 'logistics_driver_list' %}" class="eo-btn eo-btn-secondary"><i class="bi bi-person-badge"></i> Drivers</a>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3"><div class="eo-stat eo-stat-warning"><div class="eo-stat-label">Ready</div><div class="eo-stat-value">{{ counts.ready }}</div><i class="bi bi-box eo-stat-icon"></i></div></div>
+  <div class="col-6 col-md-3"><div class="eo-stat eo-stat-primary"><div class="eo-stat-label">In Transit</div><div class="eo-stat-value">{{ counts.in_transit }}</div><i class="bi bi-truck eo-stat-icon"></i></div></div>
+  <div class="col-6 col-md-3"><div class="eo-stat eo-stat-success"><div class="eo-stat-label">Delivered Today</div><div class="eo-stat-value">{{ counts.delivered_today }}</div><i class="bi bi-check2-circle eo-stat-icon"></i></div></div>
+  <div class="col-6 col-md-3"><div class="eo-stat eo-stat-danger"><div class="eo-stat-label">Failed</div><div class="eo-stat-value">{{ counts.failed }}</div><i class="bi bi-exclamation-triangle eo-stat-icon"></i></div></div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-7">
+    <div class="eo-card">
+      <div class="eo-card-header"><div><h2 class="eo-card-title">In Transit</h2><p class="eo-card-subtitle">Dispatched and en route</p></div></div>
+      {% for s in in_transit %}
+      <a href="{% url 'logistics_shipment_detail' s.pk %}" style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 0;text-decoration:none;color:inherit;{% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
+        <div style="min-width:0"><div style="font-weight:700">{{ s.reference }} · {{ s.customer_name|truncatechars:30 }}</div>
+          <div style="font-size:.78rem;color:var(--eo-text-muted)">{{ s.driver.full_name|default:"No driver" }} · {{ s.vehicle.label|default:"No vehicle" }}{% if s.vehicle.is_hired %} (hired){% endif %}</div></div>
+        <span class="eo-status eo-status-{{ s.status }}">{{ s.get_status_display }}</span>
+      </a>
+      {% empty %}<p style="color:var(--eo-text-muted)">Nothing in transit.</p>{% endfor %}
+    </div>
+    <div class="eo-card">
+      <div class="eo-card-header"><div><h2 class="eo-card-title">Ready for Dispatch</h2></div></div>
+      {% for s in ready %}
+      <a href="{% url 'logistics_shipment_detail' s.pk %}" style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 0;text-decoration:none;color:inherit;{% if not forloop.last %}border-bottom:1px solid var(--eo-border){% endif %}">
+        <div><div style="font-weight:700">{{ s.reference }} · {{ s.customer_name|truncatechars:30 }}</div>
+          <div style="font-size:.78rem;color:var(--eo-text-muted)">{{ s.driver.full_name|default:"Unassigned" }}</div></div>
+        <span class="eo-status eo-status-{{ s.status }}">{{ s.get_status_display }}</span>
+      </a>
+      {% empty %}<p style="color:var(--eo-text-muted)">Nothing waiting.</p>{% endfor %}
+    </div>
+  </div>
+  <div class="col-lg-5 d-flex flex-column gap-4">
+    <div class="eo-card">
+      <div class="eo-card-header"><h2 class="eo-card-title">Fleet</h2><a href="{% url 'logistics_vehicle_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">Manage</a></div>
+      <div class="row g-2">
+        <div class="col-4" style="text-align:center"><div style="font-size:1.4rem;font-weight:800;color:var(--eo-accent)">{{ fleet.company }}</div><div style="font-size:.74rem;color:var(--eo-text-muted)">Company</div></div>
+        <div class="col-4" style="text-align:center"><div style="font-size:1.4rem;font-weight:800;color:var(--eo-warning)">{{ fleet.hired }}</div><div style="font-size:.74rem;color:var(--eo-text-muted)">Hired</div></div>
+        <div class="col-4" style="text-align:center"><div style="font-size:1.4rem;font-weight:800;color:var(--eo-success)">{{ fleet.on_delivery }}</div><div style="font-size:.74rem;color:var(--eo-text-muted)">On Delivery</div></div>
+      </div>
+    </div>
+    <div class="eo-card">
+      <div class="eo-card-header"><h2 class="eo-card-title">Drivers</h2><a href="{% url 'logistics_driver_list' %}" class="eo-btn eo-btn-secondary eo-btn-sm">Manage</a></div>
+      <div style="font-size:2rem;font-weight:800;color:var(--eo-accent)">{{ active_drivers }}</div>
+      <div style="font-size:.8rem;color:var(--eo-text-muted)">active drivers with portal access</div>
+    </div>
+  </div>
+</div>
+{% endblock %}

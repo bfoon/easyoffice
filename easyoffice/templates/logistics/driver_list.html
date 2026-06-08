@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Drivers{% endblock %}
+{% block breadcrumb %}<a href="{% url 'logistics_dashboard' %}">Logistics</a> / <span>Drivers</span>{% endblock %}
+{% block content %}
+<div class="eo-page-header">
+  <div><h1 class="eo-page-title">Drivers</h1><p class="eo-page-subtitle">Staff and hired drivers + their portal links</p></div>
+  <button class="eo-btn eo-btn-primary" onclick="document.getElementById('drv-form').scrollIntoView()"><i class="bi bi-plus-lg"></i> Add Driver</button>
+</div>
+
+<div class="eo-card">
+  {% if rows %}
+  <div class="table-responsive">
+    <table class="eo-table" style="width:100%">
+      <thead><tr><th>Driver</th><th>Type</th><th>Portal link</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+      <tr>
+        <td style="font-weight:700">{{ r.driver.full_name }}<div style="font-size:.76rem;color:var(--eo-text-muted)">{{ r.driver.phone }}{% if r.driver.email %} · {{ r.driver.email }}{% endif %}</div></td>
+        <td>{% if r.driver.is_external %}<span class="eo-status" style="background:#fef3c7;color:#92400e">Hired</span>{% else %}<span class="eo-status" style="background:#dbeafe;color:#1e40af">Staff</span>{% endif %}</td>
+        <td style="max-width:260px">
+          {% if r.has_link %}
+          <div class="d-flex gap-2 align-items-center">
+            <input readonly value="{{ r.link }}" id="lnk-{{ r.token.pk }}" class="eo-input" style="font-size:.72rem;padding:5px 8px" onclick="this.select()">
+            <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" onclick="copyLink('lnk-{{ r.token.pk }}',this)"><i class="bi bi-clipboard"></i></button>
+          </div>
+          {% else %}<span style="color:var(--eo-text-muted);font-size:.8rem">—</span>{% endif %}
+        </td>
+        <td>
+          {% if not r.has_link %}<span class="eo-status" style="background:#f1f5f9;color:#475569">No link</span>
+          {% elif r.is_active %}<span class="eo-status" style="background:#dcfce7;color:#166534">Active</span>
+          {% else %}<span class="eo-status" style="background:#fee2e2;color:#991b1b">Off</span>{% endif %}
+          {% if r.has_link %}<div style="font-size:.7rem;color:var(--eo-text-muted);margin-top:3px">{% if r.last_used %}used {{ r.last_used|naturaltime }}{% else %}never used{% endif %}</div>{% endif %}
+        </td>
+        <td style="text-align:right">
+          <div class="d-inline-flex gap-1 flex-wrap" style="justify-content:flex-end">
+          {% if not r.has_link %}
+            <form method="post" action="{% url 'logistics_driver_link_action' %}" style="display:inline">{% csrf_token %}<input type="hidden" name="action" value="issue"><input type="hidden" name="driver_id" value="{{ r.driver.pk }}"><button class="eo-btn eo-btn-primary eo-btn-sm"><i class="bi bi-link-45deg"></i> Create link</button></form>
+          {% elif r.is_active %}
+            <form method="post" action="{% url 'logistics_driver_link_action' %}" style="display:inline" onsubmit="return confirm('Deactivate this link?')">{% csrf_token %}<input type="hidden" name="action" value="deactivate"><input type="hidden" name="token_id" value="{{ r.token.pk }}"><button class="eo-btn eo-btn-secondary eo-btn-sm" style="color:#991b1b">Deactivate</button></form>
+            <form method="post" action="{% url 'logistics_driver_link_action' %}" style="display:inline" onsubmit="return confirm('Regenerate? Old link stops working.')">{% csrf_token %}<input type="hidden" name="action" value="regenerate"><input type="hidden" name="token_id" value="{{ r.token.pk }}"><button class="eo-btn eo-btn-secondary eo-btn-sm" title="Regenerate"><i class="bi bi-arrow-repeat"></i></button></form>
+          {% else %}
+            <form method="post" action="{% url 'logistics_driver_link_action' %}" style="display:inline">{% csrf_token %}<input type="hidden" name="action" value="activate"><input type="hidden" name="token_id" value="{{ r.token.pk }}"><button class="eo-btn eo-btn-success eo-btn-sm">Activate</button></form>
+          {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<p style="color:var(--eo-text-muted)">No drivers yet.</p>{% endif %}
+</div>
+
+<div class="eo-card" id="drv-form">
+  <div class="eo-card-header"><h2 class="eo-card-title">Add / Edit Driver</h2></div>
+  <form method="post" action="{% url 'logistics_driver_save' %}">
+    {% csrf_token %}
+    <div class="row g-3">
+      <div class="col-md-5"><label class="eo-label">Full name *</label><input name="full_name" class="eo-input" required></div>
+      <div class="col-md-4"><label class="eo-label">Phone</label><input name="phone" class="eo-input"></div>
+      <div class="col-md-3"><label class="eo-label">Email (for OTP)</label><input type="email" name="email" class="eo-input"></div>
+      <div class="col-md-4"><label class="eo-label">License number</label><input name="license_number" class="eo-input"></div>
+      <div class="col-md-4"><label class="eo-label">Staff account (if internal)</label>
+        <select name="staff_user" class="eo-input eo-select"><option value="">— External / hired —</option>
+          {% for u in staff_users %}<option value="{{ u.pk }}">{{ u.full_name }}</option>{% endfor %}</select></div>
+      <div class="col-md-4 d-flex align-items-end gap-3">
+        <label style="font-size:.85rem"><input type="checkbox" name="is_external"> Hired (external)</label>
+        <label style="font-size:.85rem"><input type="checkbox" name="is_active" checked> Active</label>
+      </div>
+    </div>
+    <div class="mt-3"><button class="eo-btn eo-btn-primary"><i class="bi bi-save"></i> Save Driver</button></div>
+  </form>
+</div>
+<script>
+function copyLink(id,btn){var el=document.getElementById(id);if(!el)return;el.select();
+  if(navigator.clipboard){navigator.clipboard.writeText(el.value);}else{document.execCommand('copy');}
+  var i=btn.querySelector('i');if(i){i.className='bi bi-check2';setTimeout(function(){i.className='bi bi-clipboard';},1400);}}
+</script>
+{% endblock %}

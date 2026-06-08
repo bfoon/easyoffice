@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Tracking {{ shipment.reference }}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'logistics_dashboard' %}">Logistics</a> / <a href="{% url 'logistics_shipment_detail' shipment.pk %}">{{ shipment.reference }}</a> / <span>Track</span>{% endblock %}
+{% block extra_head %}
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+{% endblock %}
+{% block content %}
+<div class="eo-page-header">
+  <div><h1 class="eo-page-title">Live Tracking</h1>
+    <p class="eo-page-subtitle">{{ shipment.reference }} → {{ shipment.customer_name }} · <span id="t-status" class="eo-status eo-status-{{ shipment.status }}">{{ shipment.get_status_display }}</span></p></div>
+  <a href="{% url 'logistics_shipment_detail' shipment.pk %}" class="eo-btn eo-btn-secondary"><i class="bi bi-arrow-left"></i> Back</a>
+</div>
+<div class="eo-card" style="padding:0;overflow:hidden">
+  <div id="map" style="height:560px;width:100%;background:#eef2f6"></div>
+</div>
+<p id="t-meta" style="font-size:.82rem;color:var(--eo-text-muted);margin-top:8px"><i class="bi bi-broadcast"></i> Waiting for the driver's location…</p>
+{% endblock %}
+{% block extra_js %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function(){
+  var dataUrl="{% url 'logistics_shipment_track_data' shipment.pk %}";
+  var map=L.map('map').setView([13.4549,-16.5790],12);
+  // Carto basemaps don't require a Referer header, unlike osm.org tiles
+  // (which 403 when the browser strips the referrer). Falls back to OSM
+  // if a Carto tile fails to load.
+  var tiles=L.tileLayer(
+    'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    {maxZoom:20, subdomains:'abcd',
+     attribution:'© OpenStreetMap contributors © CARTO'}
+  ).addTo(map);
+  var osmFallbackUsed=false;
+  tiles.on('tileerror', function(){
+    if(osmFallbackUsed) return;
+    osmFallbackUsed=true;
+    map.removeLayer(tiles);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {maxZoom:19, attribution:'© OpenStreetMap contributors'}).addTo(map);
+  });
+  var driverMarker=null, destMarker=null, trail=null, centered=false;
+  function refresh(){
+    fetch(dataUrl).then(function(r){return r.json();}).then(function(d){
+      var st=document.getElementById('t-status'); if(st){st.textContent=d.status_display;st.className='eo-status eo-status-'+d.status;}
+      if(d.destination && d.destination.lat!=null && !destMarker){
+        destMarker=L.marker([d.destination.lat,d.destination.lng],{title:'Destination'}).addTo(map).bindPopup('Customer site');
+      }
+      if(d.pings && d.pings.length){
+        var pts=d.pings.map(function(p){return [p.lat,p.lng];});
+        if(trail)map.removeLayer(trail);
+        trail=L.polyline(pts,{color:'#1a6b3c',weight:4,opacity:.7}).addTo(map);
+        var last=pts[pts.length-1];
+        if(driverMarker){driverMarker.setLatLng(last);}else{driverMarker=L.marker(last,{title:'Driver'}).addTo(map).bindPopup('Driver');}
+        var meta=document.getElementById('t-meta');
+        var t=new Date(d.latest.recorded_at).toLocaleTimeString();
+        meta.innerHTML='<i class="bi bi-broadcast"></i> Last update '+t+(d.latest.speed_kph?(' · '+Math.round(d.latest.speed_kph)+' km/h'):'');
+        if(!centered){var b=[last];if(destMarker)b.push(destMarker.getLatLng());map.fitBounds(b,{padding:[60,60],maxZoom:15});centered=true;}
+      } else {
+        document.getElementById('t-meta').innerHTML='<i class="bi bi-hourglass"></i> No location yet — driver hasn\u2019t started sharing.';
+      }
+      if(d.delivered){document.getElementById('t-meta').innerHTML='<i class="bi bi-check2-circle"></i> Delivered.';}
+    }).catch(function(){});
+  }
+  refresh(); setInterval(refresh, 8000);
+})();
+</script>
+{% endblock %}

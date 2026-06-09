@@ -148,10 +148,42 @@ def bind_first_visit(
     fp_matches = bool(fp_hash) and fp_hash == session.machine_fingerprint
 
     if cookie_matches or fp_matches:
+        # If the cookie matched but we never stored a fingerprint (first
+        # visit bound on GET with no fp yet), backfill it now so future
+        # POSTs can match on either signal.
+        if cookie_matches and fp_hash and not session.machine_fingerprint:
+            session.machine_fingerprint = fp_hash
+            session.save(update_fields=['machine_fingerprint', 'updated_at'])
         return True, ''
 
-    lock_session(session, reason='different_machine', attempt_ip=ip, attempt_ua=user_agent)
-    return False, 'different_machine'
+    # ── No positive match. Decide whether this is genuinely a different
+    #    device, or just a request that carried no identifying signal
+    #    (cookie not sent back yet / fingerprint not collected yet).
+    #
+    #    We ONLY lock when there is a *positive conflict*: a real cookie
+    #    that differs from the stored one. A bare GET/POST that simply
+    #    didn't send the cookie back (different path scope, cookie not yet
+    #    written, etc.) must NOT lock the session — that was the bug that
+    #    locked the customer out the instant they opened their own link.
+    cookie_conflict = bool(cookie_value) and cookie_value != session.machine_cookie
+    fp_conflict = bool(fp_hash) and bool(session.machine_fingerprint) and fp_hash != session.machine_fingerprint
+
+    if cookie_conflict and fp_conflict:
+        # Both strong signals disagree → almost certainly a different device.
+        lock_session(session, reason='different_machine', attempt_ip=ip, attempt_ua=user_agent)
+        return False, 'different_machine'
+
+    if cookie_conflict and not fp_hash:
+        # A different cookie with no fingerprint to corroborate. Could be a
+        # shared/cleared cookie jar. Be conservative: lock only if there is
+        # no fingerprint binding to fall back on.
+        if not session.machine_fingerprint:
+            lock_session(session, reason='different_machine', attempt_ip=ip, attempt_ua=user_agent)
+            return False, 'different_machine'
+
+    # Otherwise: no conclusive evidence of a second device. Allow, and let
+    # the caller re-issue the original cookie so the binding heals itself.
+    return True, ''
 
 
 @transaction.atomic

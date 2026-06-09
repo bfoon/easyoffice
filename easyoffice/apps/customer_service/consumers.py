@@ -106,7 +106,13 @@ class LiveChatConsumer(AsyncJsonWebsocketConsumer):
             return {'ok': False, 'reason': reason}
 
         cookie = self._cookie_value(lcs.MACHINE_COOKIE_NAME)
-        if not session.machine_cookie or not cookie or cookie != session.machine_cookie:
+        # If we have a stored binding AND the handshake carried a cookie,
+        # it must match. A *missing* cookie on the WS handshake is NOT
+        # treated as a different device — the page GET already validated
+        # the device and bound it; the socket simply may not echo the
+        # cookie depending on the client. Posting is still gated by
+        # session_is_usable() inside post_message().
+        if session.machine_cookie and cookie and cookie != session.machine_cookie:
             return {'ok': False, 'reason': 'device_not_bound'}
 
         return {

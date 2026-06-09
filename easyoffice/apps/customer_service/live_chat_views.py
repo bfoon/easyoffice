@@ -111,8 +111,9 @@ class LiveChatCustomerView(View):
         cookie_to_set = cookie_in
 
         if not session.machine_cookie:
+            # First ever visit: bind this device.
             cookie_to_set = cookie_in or lcs.new_machine_cookie_value()
-            issue_cookie = not cookie_in
+            issue_cookie = True
             ok, reason = lcs.bind_first_visit(
                 session,
                 cookie_value=cookie_to_set,
@@ -122,7 +123,12 @@ class LiveChatCustomerView(View):
             )
             if not ok:
                 return _render_locked(request, reason)
-        elif cookie_in:
+        else:
+            # Already bound. Validate the incoming cookie (if any). After
+            # Fix 1, a missing cookie no longer locks — bind_first_visit
+            # returns ok=True and we simply re-issue the stored cookie so
+            # the browser heals its binding (e.g. after the cookie path was
+            # previously too narrow, or the jar was cleared).
             ok, reason = lcs.bind_first_visit(
                 session,
                 cookie_value=cookie_in,
@@ -132,6 +138,10 @@ class LiveChatCustomerView(View):
             )
             if not ok:
                 return _render_locked(request, reason)
+            # Re-affirm the canonical cookie on every GET.
+            if session.machine_cookie and cookie_in != session.machine_cookie:
+                cookie_to_set = session.machine_cookie
+                issue_cookie = True
 
         ok, reason = lcs.session_is_usable(session)
         if not ok:
@@ -178,7 +188,12 @@ def _set_machine_cookie(response, request, name: str, value: str):
         name,
         value,
         max_age=60 * 60 * 24 * 30,
-        path=request.path,
+        # Scope to the whole site, NOT request.path. The same machine cookie
+        # must be sent on the customer page GET/POST *and* on the WebSocket
+        # handshake at /ws/cs/live-chat/customer/<token>/. Scoping to the
+        # narrow token path meant the browser never returned the cookie on
+        # those other requests, which then read as a "different machine".
+        path='/',
         httponly=True,
         samesite='Lax',
         secure=request.is_secure(),

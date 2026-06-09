@@ -28,6 +28,17 @@ class LiveChatConsumer(AsyncJsonWebsocketConsumer):
             result = await self._resolve_agent_session(ticket_pk)
 
         if not result.get('ok'):
+            # Accept first, THEN send a reason and close with a custom code.
+            # Closing *before* accept() makes the browser see a failed
+            # handshake (code 1006), which our reconnect loop can't
+            # distinguish from a transient network drop — so it retries
+            # forever. Accepting first guarantees the client gets the
+            # real reason and a stable 4403 close it can stop on.
+            await self.accept()
+            await self.send_json({
+                'type': 'rejected',
+                'reason': result.get('reason', 'unavailable'),
+            })
             await self.close(code=4403)
             return
 

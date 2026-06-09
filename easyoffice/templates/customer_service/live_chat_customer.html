@@ -45,16 +45,15 @@
     new Date().getTimezoneOffset(), navigator.platform || ''
   ].join('|');
 
-  fetch(finalizeUrl, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: new URLSearchParams({fingerprint})
-  }).catch(function(){});
-
   const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const socket = new WebSocket(`${scheme}://${window.location.host}${wsPath}`);
+  let socket = null;
+  let heartbeat = null;
+  let reconnectDelay = 1000;
+  let manuallyClosed = false;
+  const seenIds = new Set();
 
   function addMessage(m){
+    if (m.id != null) { if (seenIds.has(m.id)) return; seenIds.add(m.id); }
     const empty = messages.querySelector('.msg.system div');
     if (empty && empty.textContent.includes('No messages yet')) empty.parentElement.remove();
     const wrap = document.createElement('div');
@@ -65,35 +64,89 @@
     messages.scrollTop = messages.scrollHeight;
   }
 
-  socket.onopen = function(){ stateText.textContent = 'Connected. You are chatting with our support team.'; };
-  socket.onclose = function(){ stateText.textContent = 'Chat disconnected or no longer active.'; stateText.classList.add('offline'); input.disabled = true; form.querySelector('button').disabled = true; };
-  socket.onmessage = function(e){
-    const data = JSON.parse(e.data || '{}');
-    if (data.type === 'history') {
-      messages.innerHTML = '';
-      (data.messages || []).forEach(addMessage);
-      if (!(data.messages || []).length) addMessage({author_kind:'system', author_display:'System', body:'No messages yet. You can start the chat below.'});
-    }
-    if (data.type === 'message') addMessage(data.message || {});
-    if (data.type === 'state') {
-      const s = data.state || {};
-      if (s.is_active && !s.is_locked) {
-        stateText.textContent = 'Connected. You are chatting with our support team.';
-      } else {
-        stateText.textContent = s.is_locked ? 'This live chat is locked.' : 'This live chat has been closed.';
-        stateText.classList.add('offline'); input.disabled = true; form.querySelector('button').disabled = true;
+  function disable(label){
+    stateText.textContent = label;
+    stateText.classList.add('offline');
+    input.disabled = true;
+    form.querySelector('button').disabled = true;
+  }
+
+  function connect(){
+    socket = new WebSocket(`${scheme}://${window.location.host}${wsPath}`);
+
+    socket.addEventListener('open', function(){
+      reconnectDelay = 1000;
+      stateText.textContent = 'Connected. You are chatting with our support team.';
+      stateText.classList.remove('offline');
+      clearInterval(heartbeat);
+      heartbeat = setInterval(function(){ try { socket.send(JSON.stringify({type:'ping'})); } catch(e){} }, 25000);
+    });
+
+    socket.addEventListener('message', function(e){
+      let data; try { data = JSON.parse(e.data || '{}'); } catch(err){ return; }
+      if (data.type === 'pong') return;
+      if (data.type === 'history') {
+        messages.innerHTML = '';
+        seenIds.clear();
+        (data.messages || []).forEach(addMessage);
+        if (!(data.messages || []).length) addMessage({author_kind:'system', author_display:'System', body:'No messages yet. You can start the chat below.'});
+      } else if (data.type === 'message') {
+        addMessage(data.message || {});
+      } else if (data.type === 'state') {
+        const s = data.state || {};
+        if (s.is_active && !s.is_locked) {
+          stateText.textContent = 'Connected. You are chatting with our support team.';
+          stateText.classList.remove('offline');
+          input.disabled = false; form.querySelector('button').disabled = false;
+        } else {
+          disable(s.is_locked ? 'This live chat is locked.' : 'This live chat has been closed.');
+        }
+      } else if (data.type === 'error') {
+        addMessage({author_kind:'system', author_display:'System', body:data.message || 'Message failed.'});
       }
+    });
+
+    socket.addEventListener('close', function(ev){
+      clearInterval(heartbeat);
+      if (manuallyClosed) return;
+      if (ev.code === 4403) {
+        // Server refused the link (locked / expired / closed / not bound).
+        disable('This chat link is no longer active on this device.');
+        return;
+      }
+      stateText.textContent = 'Reconnecting…';
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+    });
+  }
+
+  // IMPORTANT: bind/refresh the device cookie FIRST, then open the socket.
+  // Opening the WS before the POST completes can race the first-visit
+  // binding and make the handshake look like an unbound device.
+  fetch(finalizeUrl, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: new URLSearchParams({fingerprint})
+  })
+  .then(function(r){ return r.json().catch(function(){ return {ok:true}; }); })
+  .then(function(res){
+    if (res && res.ok === false) {
+      disable('This chat link could not be opened on this device.');
+      return;
     }
-    if (data.type === 'error') addMessage({author_kind:'system', author_display:'System', body:data.message || 'Message failed.'});
-  };
+    connect();
+  })
+  .catch(function(){ connect(); });  // network blip on the POST — try the socket anyway
 
   form.addEventListener('submit', function(e){
     e.preventDefault();
     const body = input.value.trim();
-    if (!body || socket.readyState !== WebSocket.OPEN) return;
+    if (!body || !socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({type:'message', body}));
     input.value = '';
   });
+
+  window.addEventListener('beforeunload', function(){ manuallyClosed = true; });
 })();
 </script>
 </body>

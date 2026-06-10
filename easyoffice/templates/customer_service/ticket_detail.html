@@ -875,12 +875,27 @@
         {% endif %}
 
         <div class="mt-2">
-          <form method="post" action="{% url 'visit_start_ticket' assignment.pk %}" style="display:inline">
+          {# The 'visit_start_ticket' route expects a UUID assignment_pk
+             (from the on-site app), but ServiceTicketAssignment.pk is an
+             integer — passing it raised NoReverseMatch and 500'd the whole
+             ticket page. Using `{% url ... as %}` suppresses the failure
+             (the var is empty on no-match) so the page still renders, and
+             we only show the button when a valid URL is produced.
+             TODO: wire the correct on-site identifier — see chat notes. #}
+          {% url 'visit_start_ticket' assignment.pk as _visit_start_url %}
+          {% if _visit_start_url %}
+          <form method="post" action="{{ _visit_start_url }}" style="display:inline">
             {% csrf_token %}
             <button class="eo-btn eo-btn-primary eo-btn-sm" type="submit">
               <i class="bi bi-geo-alt"></i> Start On-Site Visit
             </button>
           </form>
+          {% else %}
+          <span class="text-muted small">
+            <i class="bi bi-info-circle"></i>
+            On-site visits aren’t linked for this assignment yet.
+          </span>
+          {% endif %}
         </div>
       </div>
       {% empty %}

@@ -8,5 +8,6 @@ _UUID_RE = r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-f
 
 websocket_urlpatterns = [
     re_path(rf'^ws/cs/live-chat/customer/(?P<token>{_UUID_RE})/$', consumers.LiveChatConsumer.as_asgi()),
+    re_path(rf'^ws/cs/live-chat/portal/(?P<portal_token>{_UUID_RE})/$', consumers.LiveChatConsumer.as_asgi()),
     re_path(r'^ws/cs/live-chat/agent/(?P<ticket_pk>\d+)/$', consumers.LiveChatConsumer.as_asgi()),
 ]

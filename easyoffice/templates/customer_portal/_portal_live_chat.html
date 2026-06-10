@@ -1,0 +1,218 @@
+{% comment %}
+apps/customer_portal/templates/customer_portal/_portal_live_chat.html
+=====================================================================
+
+In-portal live chat panel for the customer ticket detail page.
+
+Include it inside the main column of customer_portal/ticket_detail.html:
+
+    {% include "customer_portal/_portal_live_chat.html" %}
+
+Required context (add these in the portal ticket-detail view):
+
+    live_chat_active    bool   — chat session exists, is_active, not locked
+    live_chat_ws_path   str    — '/ws/cs/live-chat/portal/<chat-token>/'
+    live_chat_messages  iter   — optional initial history; each item needs
+                                 .author_kind, .author_display, .body
+
+See the view snippet at the bottom of this file for how to build them.
+
+The panel renders ONLY when live_chat_active is true — i.e. only after a
+CS agent has switched live chat ON for this ticket. When chat is off the
+whole card is omitted, exactly like the agent-controlled rule on the
+staff side.
+{% endcomment %}
+
+{% if live_chat_active and live_chat_ws_path %}
+<style>
+  .plc-card{border:1px solid var(--rule);border-radius:var(--radius);background:#fff;overflow:hidden;margin-bottom:24px}
+  .plc-head{display:flex;align-items:center;gap:10px;padding:14px 18px;background:linear-gradient(135deg,#0f172a,#1d4ed8);color:#fff}
+  .plc-title{font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px}
+  .plc-dot{width:9px;height:9px;border-radius:50%;background:#94a3b8;box-shadow:0 0 0 4px rgba(148,163,184,.16)}
+  .plc-dot.is-on{background:#22c55e;box-shadow:0 0 0 4px rgba(34,197,94,.18)}
+  .plc-state{margin-left:auto;font-size:12px;color:#dbeafe}
+  .plc-messages{height:300px;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px;background:#f8fafc}
+  .plc-msg{max-width:82%;border:1px solid var(--rule);border-radius:14px;padding:9px 13px;background:#fff}
+  .plc-msg.customer{align-self:flex-end;background:var(--accent-bg);border-color:var(--accent)}
+  .plc-msg.agent{align-self:flex-start;background:#fff}
+  .plc-msg.system{align-self:center;background:#eef2f7;border-style:dashed;color:var(--ink-muted)}
+  .plc-msg strong{display:block;font-size:11px;color:var(--ink-muted);margin-bottom:3px}
+  .plc-msg div{white-space:pre-wrap;word-break:break-word;font-size:13.5px;line-height:1.5;color:var(--ink)}
+  .plc-compose{display:flex;gap:8px;padding:12px;border-top:1px solid var(--rule);background:#fff}
+  .plc-compose textarea{flex:1;min-height:46px;max-height:120px;border:1px solid var(--rule);border-radius:12px;padding:10px 12px;resize:vertical;font:inherit;font-size:14px}
+  .plc-compose button{border:0;border-radius:12px;background:var(--accent);color:#fff;font-weight:700;padding:0 18px;cursor:pointer}
+  .plc-compose button:disabled,.plc-compose textarea:disabled{opacity:.55;cursor:not-allowed}
+</style>
+
+<div class="plc-card" id="plc-card" data-ws-path="{{ live_chat_ws_path }}">
+  <div class="plc-head">
+    <span class="plc-title"><span class="plc-dot" id="plcDot"></span> Live chat with Customer Service</span>
+    <span class="plc-state" id="plcState">Connecting…</span>
+  </div>
+
+  <div class="plc-messages" id="plcMessages">
+    {% for m in live_chat_messages %}
+      <div class="plc-msg {{ m.author_kind }}">
+        <strong>{{ m.author_display }}</strong>
+        <div>{{ m.body }}</div>
+      </div>
+    {% empty %}
+      <div class="plc-msg system"><div>No messages yet. Say hello to start the chat.</div></div>
+    {% endfor %}
+  </div>
+
+  <form class="plc-compose" id="plcForm">
+    <textarea id="plcInput" placeholder="Type your message…" disabled></textarea>
+    <button type="submit" disabled>Send</button>
+  </form>
+</div>
+
+<script>
+(function(){
+  const card = document.getElementById('plc-card');
+  const box = document.getElementById('plcMessages');
+  const form = document.getElementById('plcForm');
+  const input = document.getElementById('plcInput');
+  const state = document.getElementById('plcState');
+  const dot = document.getElementById('plcDot');
+  const sendBtn = form ? form.querySelector('button') : null;
+  const wsPath = card ? card.dataset.wsPath : '';
+  if (!card || !wsPath || !box || !form || !input) return;
+
+  const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  let socket = null, heartbeat = null, reconnectDelay = 1000, manuallyClosed = false;
+  const seenIds = new Set();
+
+  function enableCompose(on){ input.disabled = !on; if (sendBtn) sendBtn.disabled = !on; }
+
+  function addMessage(m){
+    if (m.id != null){ if (seenIds.has(m.id)) return; seenIds.add(m.id); }
+    const empty = box.querySelector('.plc-msg.system div');
+    if (empty && empty.textContent.indexOf('No messages yet') !== -1) empty.parentElement.remove();
+    const wrap = document.createElement('div');
+    wrap.className = 'plc-msg ' + (m.author_kind || 'system');
+    const name = document.createElement('strong'); name.textContent = m.author_display || 'Support';
+    const body = document.createElement('div'); body.textContent = m.body || '';
+    wrap.appendChild(name); wrap.appendChild(body); box.appendChild(wrap);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function applyState(s){
+    s = s || {};
+    if (s.is_active && !s.is_locked){
+      state.textContent = 'Connected';
+      dot.classList.add('is-on'); enableCompose(true);
+    } else {
+      state.textContent = s.is_locked ? 'Chat locked' : 'Chat closed';
+      dot.classList.remove('is-on'); enableCompose(false);
+    }
+  }
+
+  function connect(){
+    socket = new WebSocket(scheme + '://' + window.location.host + wsPath);
+
+    socket.addEventListener('open', function(){
+      reconnectDelay = 1000;
+      clearInterval(heartbeat);
+      heartbeat = setInterval(function(){ try { socket.send(JSON.stringify({type:'ping'})); } catch(e){} }, 25000);
+    });
+
+    socket.addEventListener('message', function(e){
+      let data; try { data = JSON.parse(e.data || '{}'); } catch(err){ return; }
+      if (data.type === 'pong') return;
+      if (data.type === 'rejected'){
+        manuallyClosed = true;
+        const labels = {
+          manually_off: 'Live chat is not currently open for this ticket.',
+          ticket_closed: 'This ticket is closed — live chat is unavailable.',
+          expired: 'This live chat link has expired.',
+          unknown: 'Live chat is unavailable.',
+        };
+        state.textContent = labels[data.reason] || 'Live chat unavailable.';
+        dot.classList.remove('is-on'); enableCompose(false);
+        return;
+      }
+      if (data.type === 'history'){
+        box.innerHTML = ''; seenIds.clear();
+        (data.messages || []).forEach(addMessage);
+        if (!(data.messages || []).length) addMessage({author_kind:'system', author_display:'System', body:'No messages yet. Say hello to start the chat.'});
+      } else if (data.type === 'message'){
+        addMessage(data.message || {});
+      } else if (data.type === 'state'){
+        applyState(data.state);
+      } else if (data.type === 'error'){
+        addMessage({author_kind:'system', author_display:'System', body: data.message || 'Message failed.'});
+      }
+    });
+
+    socket.addEventListener('close', function(ev){
+      clearInterval(heartbeat); enableCompose(false);
+      if (manuallyClosed || ev.code === 4403){
+        if (ev.code === 4403 && state.textContent === 'Connecting…') state.textContent = 'Live chat unavailable.';
+        dot.classList.remove('is-on');
+        return;
+      }
+      state.textContent = 'Reconnecting…';
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+    });
+  }
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    const body = input.value.trim();
+    if (!body || !socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({type:'message', body:body}));
+    input.value = ''; input.focus();
+  });
+  input.addEventListener('keydown', function(e){
+    if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit', {cancelable:true})); }
+  });
+  window.addEventListener('beforeunload', function(){ manuallyClosed = true; });
+
+  connect();
+})();
+</script>
+{% endif %}
+
+{% comment %}
+─────────────────────────────────────────────────────────────────────────
+VIEW WIRING — add to the customer_portal ticket-detail view's context.
+`ticket` here is the PortalSupportRequest shown on the page.
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx.update(_portal_live_chat_context(self.object))   # self.object = PortalSupportRequest
+        return ctx
+
+Helper (put in the portal views module):
+
+    def _portal_live_chat_context(portal_req) -> dict:
+        empty = {'live_chat_active': False, 'live_chat_ws_path': '', 'live_chat_messages': []}
+        service_ticket = getattr(portal_req, 'service_ticket', None)
+        if not service_ticket:
+            return empty
+        session = getattr(service_ticket, 'live_chat_session', None)
+        if session is None:
+            return empty
+        # Only expose chat when the agent has it ON and it isn't locked/expired.
+        if not session.is_active or session.is_locked:
+            return empty
+        if session.expires_at and session.expires_at < timezone.now():
+            return empty
+        return {
+            'live_chat_active': True,
+            'live_chat_ws_path': f'/ws/cs/live-chat/portal/{session.token}/',
+            'live_chat_messages': (
+                session.messages.select_related('agent').order_by('created_at')[:80]
+            ),
+        }
+
+Notes:
+  * session.token is the LiveChatSession UUID. It's only ever rendered to
+    an already-authenticated portal page, and the portal WS route skips
+    device binding by design (the portal access token is the auth).
+  * `messages` is the related_name on LiveChatMessage.session — adjust if
+    your model uses a different related_name.
+─────────────────────────────────────────────────────────────────────────
+{% endcomment %}

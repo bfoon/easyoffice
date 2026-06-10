@@ -21,8 +21,11 @@ class LiveChatConsumer(AsyncJsonWebsocketConsumer):
         kwargs = self.scope.get('url_route', {}).get('kwargs', {})
         token = kwargs.get('token')
         ticket_pk = kwargs.get('ticket_pk')
+        portal_token = kwargs.get('portal_token')
 
-        if token:
+        if portal_token:
+            result = await self._resolve_portal_session(str(portal_token))
+        elif token:
             result = await self._resolve_customer_session(str(token))
         else:
             result = await self._resolve_agent_session(ticket_pk)
@@ -135,7 +138,46 @@ class LiveChatConsumer(AsyncJsonWebsocketConsumer):
         }
 
     @database_sync_to_async
-    def _resolve_agent_session(self, ticket_pk) -> dict:
+    def _resolve_portal_session(self, portal_token: str) -> dict:
+        """
+        In-portal customer chat.
+
+        The portal page is already authenticated (the customer reached it
+        through their portal access token), and the page only renders the
+        chat panel when an agent has chat ON. So here we look the session
+        up by its chat token and SKIP the per-device machine-cookie lock —
+        that lock exists only to protect the standalone emailed link, which
+        has no other authentication. Inside the portal the access token is
+        the authentication.
+
+        `portal_token` is the LiveChatSession.token, injected into the
+        portal template from server-side context (never guessable by the
+        client, only rendered for an already-authenticated portal page).
+        """
+        from .models import LiveChatSession
+        from . import live_chat_services as lcs
+
+        session = (
+            LiveChatSession.objects
+            .select_related('ticket', 'ticket__customer')
+            .filter(token=portal_token)
+            .first()
+        )
+        if not session:
+            return {'ok': False, 'reason': 'unknown'}
+
+        ok, reason = lcs.session_is_usable(session)
+        if not ok:
+            return {'ok': False, 'reason': reason}
+
+        # No machine-cookie check — the portal session authenticated the user.
+        return {
+            'ok': True,
+            'mode': 'customer',
+            'session_id': session.pk,
+            'group_name': session.channels_group_name,
+            'state': self._state_payload(session),
+        }
         from .models import ServiceTicket
         from .permissions import can_use_customer_service
         from . import live_chat_services as lcs

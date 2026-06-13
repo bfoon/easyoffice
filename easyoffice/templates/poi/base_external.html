@@ -1,0 +1,135 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="{{ LANGUAGE_CODE|default:'en' }}" data-bs-theme="light">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="csrf-token" content="{{ csrf_token }}"/>
+
+  {# Favicon — reuse the EasyOffice set #}
+  <link rel="icon" type="image/x-icon" href="{% static 'favicon/favicon.ico' %}"/>
+  <link rel="icon" type="image/svg+xml" href="{% static 'favicon/favicon.svg' %}"/>
+  <link rel="apple-touch-icon" sizes="180x180" href="{% static 'favicon/apple-touch-icon.png' %}"/>
+  <meta name="theme-color" content="#1e3a5f"/>
+
+  <title>{% block title %}Portal{% endblock %}</title>
+
+  {# Same asset stack as the staff base so eo-* tokens + bi-* icons work #}
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css"/>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="{% static 'css/easyoffice.css' %}"/>
+
+  <style>
+    /* External portal shell — no staff sidebar/topbar. */
+    html, body { width: 100%; min-height: 100%; }
+    body.poi-ext-body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: var(--eo-bg, #f6f8fc);
+      font-family: 'Outfit', system-ui, sans-serif;
+      color: var(--eo-text, #1e293b);
+    }
+
+    .poi-ext-topbar {
+      height: 60px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      background: var(--eo-surface, #fff);
+      border-bottom: 1px solid var(--eo-border, #e2e8f0);
+    }
+    .poi-ext-brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; font-size: 1.02rem; color: var(--eo-text);
+    }
+    .poi-ext-brand .logo {
+      width: 30px; height: 30px; border-radius: 8px;
+      background: var(--eo-accent, #1e3a5f); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: .9rem;
+    }
+    .poi-ext-user {
+      display: flex; align-items: center; gap: 12px;
+      font-size: .82rem; color: var(--eo-text-muted, #64748b);
+    }
+    .poi-ext-logout {
+      font-size: .8rem; font-weight: 600; text-decoration: none;
+      color: var(--eo-text-muted, #64748b);
+      border: 1px solid var(--eo-border, #e2e8f0);
+      padding: 6px 12px; border-radius: 8px;
+    }
+    .poi-ext-logout:hover { color: var(--eo-text); border-color: var(--eo-accent); }
+
+    .poi-ext-breadcrumb {
+      padding: 10px 20px; font-size: .78rem; color: var(--eo-text-muted);
+      border-bottom: 1px solid var(--eo-border);
+      background: var(--eo-surface);
+    }
+    .poi-ext-main { flex: 1; padding: 22px 20px; min-height: 0; }
+
+    /* Toast-style messages */
+    .poi-ext-messages { max-width: 980px; margin: 0 auto 12px; }
+    .poi-ext-msg {
+      font-size: .82rem; padding: 9px 12px; border-radius: 8px; margin-bottom: 8px;
+    }
+    .poi-ext-msg.success { background: #dcfce7; color: #166534; }
+    .poi-ext-msg.error, .poi-ext-msg.danger { background: #fee2e2; color: #991b1b; }
+    .poi-ext-msg.warning { background: #fef3c7; color: #92400e; }
+    .poi-ext-msg.info { background: #dbeafe; color: #1e40af; }
+
+    .poi-ext-footer {
+      flex-shrink: 0; padding: 14px 20px; text-align: center;
+      font-size: .72rem; color: var(--eo-text-muted);
+      border-top: 1px solid var(--eo-border);
+    }
+  </style>
+  {% block extra_head %}{% endblock %}
+</head>
+<body class="poi-ext-body">
+
+  <header class="poi-ext-topbar">
+    <div class="poi-ext-brand">
+      <span class="logo">{{ OFFICE_CONFIG.NAME|default:"EO"|slice:":1" }}</span>
+      <span>{% block portal_name %}Secure Portal{% endblock %}</span>
+    </div>
+    {% if request.user.is_authenticated and request.user.poi_profile %}
+    <div class="poi-ext-user">
+      <span>{{ request.user.get_full_name|default:request.user.email }}</span>
+      <a class="poi-ext-logout" href="{% url 'poi_logout' %}">Sign out</a>
+    </div>
+    {% endif %}
+  </header>
+
+  {% block breadcrumb_bar %}
+    {% if request.user.is_authenticated and request.user.poi_profile %}
+    <div class="poi-ext-breadcrumb">{% block breadcrumb %}Portal{% endblock %}</div>
+    {% endif %}
+  {% endblock %}
+
+  <main class="poi-ext-main">
+    {% block messages %}
+    {% if messages %}
+    <div class="poi-ext-messages">
+      {% for m in messages %}
+        <div class="poi-ext-msg {{ m.tags }}">{{ m }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% endblock %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="poi-ext-footer">
+    {{ OFFICE_CONFIG.NAME|default:"EasyOffice" }} · Secure external access
+  </footer>
+
+  {% block extra_js %}{% endblock %}
+</body>
+</html>

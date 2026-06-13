@@ -62,6 +62,7 @@ LOCAL_APPS = [
     'apps.inventory',
     'apps.customer_portal',
     'apps.logistics',
+    'apps.poi',
     'apps.admin_security.apps.AdminSecurityConfig',
 ]
 
@@ -401,3 +402,14 @@ SIMPLE_JWT = {
     'USER_ID_FIELD': 'id',
     'USER_ID_CLAIM': 'user_id',
 }
+
+# settings.py — only set the ones whose defaults don't match your models
+POI_TRUSTED_DEVICE_MODEL  = "core.TrustedDevice"  # app_label.ModelName
+POI_TD_USER_FIELD         = "user"                # FK to User on that model
+POI_TD_FINGERPRINT_FIELD  = "device_id"           # the fingerprint column
+POI_TD_TRUSTED_UNTIL_FIELD= None                  # expiry column, or None
+
+POI_NOTIFICATION_MODEL    = "core.Notification"
+POI_NOTIF_RECIPIENT_FIELD = "user"
+POI_NOTIF_READ_FIELD      = "is_read"
+POI_NOTIF_CREATED_FIELD   = "created_at"

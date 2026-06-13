@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Manage POIs{% endblock %}
+{% block breadcrumb %}<span>Persons of Interest</span>{% endblock %}
+{% block content %}
+<style>
+  .poi-mgmt { max-width: 980px; }
+  .poi-mgmt-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
+  .poi-mgmt table { width:100%; border-collapse:collapse; background:var(--eo-surface);
+    border:1px solid var(--eo-border); border-radius:12px; overflow:hidden; }
+  .poi-mgmt th, .poi-mgmt td { padding:11px 14px; text-align:left; font-size:.85rem;
+    border-bottom:1px solid var(--eo-border); color:var(--eo-text); }
+  .poi-mgmt th { background:var(--eo-bg); font-size:.74rem; text-transform:uppercase;
+    letter-spacing:.04em; color:var(--eo-text-muted); }
+  .status { font-size:.72rem; padding:3px 9px; border-radius:20px; font-weight:600; }
+  .status.invited { background:#fef3c7; color:#92400e; }
+  .status.active { background:#dcfce7; color:#166534; }
+  .status.disabled, .status.expired { background:#fee2e2; color:#991b1b; }
+  .poi-btn { border:1px solid var(--eo-border); background:var(--eo-bg); color:var(--eo-text);
+    border-radius:8px; padding:6px 12px; font-size:.78rem; font-weight:600; cursor:pointer; text-decoration:none; }
+  .poi-btn.primary { background:var(--eo-accent); color:#fff; border-color:var(--eo-accent); }
+  .poi-btn.danger { color:#991b1b; }
+</style>
+<div class="poi-mgmt">
+  <div class="poi-mgmt-head">
+    <h2 style="color:var(--eo-text);margin:0">Persons of Interest</h2>
+    <a class="poi-btn primary" href="{% url 'poi_manage_create' %}">+ New POI</a>
+  </div>
+  {% if messages %}{% for m in messages %}
+    <div style="font-size:.82rem;padding:9px 12px;border-radius:8px;background:var(--eo-bg);
+      color:var(--eo-text);margin-bottom:10px">{{ m }}</div>{% endfor %}{% endif %}
+  <table>
+    <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Trusted until</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for p in pois %}
+      <tr>
+        <td>{{ p.user.get_full_name|default:"—" }}</td>
+        <td>{{ p.user.email }}</td>
+        <td><span class="status {{ p.status }}">{{ p.get_status_display }}</span></td>
+        <td>{{ p.trusted_until|date:"M j, Y"|default:"—" }}</td>
+        <td>
+          {% if p.status != 'disabled' %}
+          <form method="post" action="{% url 'poi_manage_disable' p.pk %}" style="display:inline">
+            {% csrf_token %}
+            <button class="poi-btn danger" onclick="return confirm('Disable this POI?')">Disable</button>
+          </form>
+          {% endif %}
+          <form method="post" action="{% url 'poi_manage_reinvite' p.pk %}" style="display:inline">
+            {% csrf_token %}
+            <button class="poi-btn">Re-invite</button>
+          </form>
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="5" style="text-align:center;color:var(--eo-text-muted)">No POIs yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

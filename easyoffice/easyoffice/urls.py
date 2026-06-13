@@ -57,6 +57,7 @@ urlpatterns = [
 
     path('logistics/', include('apps.logistics.urls')),
     path('drive/', include('apps.logistics.urls_driver_portal')),
+    path("poi/", include("apps.poi.urls")),
 
     # API
     path('api/v1/', include('apps.core.urls.api')),

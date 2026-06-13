@@ -1,0 +1,791 @@
+{% extends "poi/base_external.html" %}
+{% comment %}
+apps/poi/templates/poi/portal.html
+The POI portal. Message-style two-pane layout reusing the EasyOffice eo-* design
+tokens so it sits visually inside the product. Three left-rail tabs: Chats,
+Files, Alerts. Right pane swaps between the active conversation, the file list
+(with tools), and the notifications feed.
+
+Device fingerprint: computed client-side, refreshed into the poi_device cookie
+on load, and sent as X-POI-Device on every fetch so the server-side guard
+recognises the device on each request.
+{% endcomment %}
+{% block title %}Portal{% endblock %}
+{% block portal_name %}My Portal{% endblock %}
+{% block breadcrumb %}<span>Portal</span>{% endblock %}
+
+{% block content %}
+<style>
+  /* Portal fills its flex parent (.poi-ext-main) rather than guessing
+     viewport math, so the composer/footer never overlap. */
+  .poi-ext-main { padding: 0 !important; display: flex; min-height: 0; }
+
+  .poi-wrap {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    margin: 14px 20px;
+    border: 1px solid var(--eo-border);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--eo-surface);
+  }
+  .poi-rail { border-right: 1px solid var(--eo-border); display: flex; flex-direction: column; min-width: 0; }
+  .poi-tabs { display: flex; border-bottom: 1px solid var(--eo-border); }
+  .poi-tab {
+    flex: 1; padding: 12px 8px; text-align: center; cursor: pointer;
+    font-size: .8rem; font-weight: 600; color: var(--eo-text-muted);
+    border-bottom: 2px solid transparent; background: none; border-top: none;
+    border-left: none; border-right: none;
+  }
+  .poi-tab.active { color: var(--eo-text); border-bottom-color: var(--eo-accent); }
+  .poi-tab .badge {
+    display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px;
+    font-size: .68rem; line-height: 18px; border-radius: 9px;
+    background: var(--eo-accent); color: #fff;
+  }
+  .poi-rail-body { flex: 1; overflow-y: auto; }
+
+  .poi-list-item {
+    display: flex; align-items: center; gap: 10px; padding: 11px 14px;
+    cursor: pointer; border-bottom: 1px solid var(--eo-border);
+  }
+  .poi-list-item:hover { background: var(--eo-bg); }
+  .poi-list-item.active { background: var(--eo-bg); }
+  .poi-avatar {
+    width: 38px; height: 38px; border-radius: 50%; flex: 0 0 38px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--eo-accent); color: #fff; font-weight: 600; font-size: .82rem;
+    overflow: hidden;
+  }
+  .poi-avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .poi-li-main { min-width: 0; flex: 1; }
+  .poi-li-name { font-weight: 600; font-size: .86rem; color: var(--eo-text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .poi-li-sub { font-size: .76rem; color: var(--eo-text-muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .poi-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+  .poi-main-head {
+    padding: 13px 18px; border-bottom: 1px solid var(--eo-border);
+    display: flex; align-items: center; gap: 10px; font-weight: 600;
+    color: var(--eo-text);
+  }
+  .poi-msgs { flex: 1; min-height: 0; overflow-y: auto; padding: 18px; display: flex;
+    flex-direction: column; gap: 10px; background: var(--eo-bg); }
+  .poi-msg { max-width: 72%; padding: 9px 13px; border-radius: 13px;
+    font-size: .87rem; line-height: 1.4; }
+  .poi-msg.in  { align-self: flex-start; background: var(--eo-surface);
+    border: 1px solid var(--eo-border); color: var(--eo-text); }
+  .poi-msg.out { align-self: flex-end; background: var(--eo-accent); color: #fff; }
+  .poi-msg .meta { display: block; font-size: .68rem; opacity: .7; margin-top: 3px; }
+
+  .poi-composer { display: flex; gap: 8px; padding: 12px; flex-shrink: 0;
+    border-top: 1px solid var(--eo-border); }
+  .poi-composer textarea {
+    flex: 1; resize: none; height: 42px; padding: 10px 12px; font-size: .87rem;
+    border: 1px solid var(--eo-border); border-radius: 10px;
+    background: var(--eo-bg); color: var(--eo-text);
+  }
+  .poi-btn {
+    border: 1px solid var(--eo-border); background: var(--eo-surface);
+    color: var(--eo-text); border-radius: 9px; padding: 8px 14px;
+    font-size: .82rem; font-weight: 600; cursor: pointer;
+  }
+  .poi-btn.primary { background: var(--eo-accent); color: #fff; border-color: var(--eo-accent); }
+  .poi-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* message hover actions */
+  .poi-msg { position: relative; }
+  .poi-msg-actions {
+    position: absolute; top: -10px; display: none; gap: 2px;
+    background: var(--eo-surface); border: 1px solid var(--eo-border);
+    border-radius: 8px; padding: 2px; box-shadow: 0 4px 12px rgba(0,0,0,.1); z-index: 5;
+  }
+  .poi-msg.out .poi-msg-actions { right: 0; }
+  .poi-msg.in  .poi-msg-actions { left: 0; }
+  .poi-msg:hover .poi-msg-actions { display: flex; }
+  .poi-msg-act {
+    border: none; background: none; cursor: pointer; font-size: .82rem;
+    padding: 3px 5px; border-radius: 6px; line-height: 1;
+  }
+  .poi-msg-act:hover { background: var(--eo-bg); }
+
+  /* reply quote inside bubble */
+  .poi-reply-quote {
+    font-size: .76rem; opacity: .85; border-left: 2px solid currentColor;
+    padding: 2px 7px; margin-bottom: 4px; border-radius: 3px;
+  }
+  .poi-msg.out .poi-reply-quote { background: rgba(255,255,255,.15); }
+  .poi-msg.in  .poi-reply-quote { background: var(--eo-bg); }
+
+  /* reactions */
+  .poi-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  .poi-react-chip {
+    font-size: .74rem; padding: 1px 7px; border-radius: 999px; cursor: pointer;
+    background: var(--eo-bg); border: 1px solid var(--eo-border); color: var(--eo-text);
+  }
+  .poi-msg.out .poi-react-chip { background: rgba(255,255,255,.2); color: #fff; border-color: transparent; }
+
+  /* emoji picker popover */
+  .poi-emoji-pop {
+    position: absolute; bottom: 50px; right: 12px; z-index: 20;
+    background: var(--eo-surface); border: 1px solid var(--eo-border);
+    border-radius: 10px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.15);
+    display: none; flex-wrap: wrap; gap: 3px; width: 244px; max-height: 180px; overflow-y: auto;
+  }
+  .poi-emoji-pop.open { display: flex; }
+  .poi-emoji-pop button { border: none; background: none; cursor: pointer;
+    font-size: 1.1rem; padding: 4px; border-radius: 6px; }
+  .poi-emoji-pop button:hover { background: var(--eo-bg); }
+
+  /* reply banner above composer */
+  .poi-reply-banner {
+    display: none; align-items: center; justify-content: space-between;
+    padding: 6px 12px; font-size: .78rem; color: var(--eo-text-muted);
+    background: var(--eo-bg); border-top: 1px solid var(--eo-border);
+    flex-shrink: 0;
+  }
+  .poi-reply-banner.open { display: flex; }
+  .poi-reply-banner button { border: none; background: none; cursor: pointer;
+    color: var(--eo-text-muted); font-size: 1rem; }
+
+  /* file chip preview in composer */
+  .poi-pending-file {
+    display: none; align-items: center; gap: 8px; padding: 6px 12px;
+    font-size: .78rem; color: var(--eo-text); background: var(--eo-bg);
+    border-top: 1px solid var(--eo-border);
+    flex-shrink: 0;
+  }
+  .poi-pending-file.open { display: flex; }
+  .poi-pending-file button { margin-left: auto; border: none; background: none;
+    cursor: pointer; color: var(--eo-text-muted); }
+
+  .poi-composer-icons { display: flex; align-items: center; gap: 2px; }
+  .poi-icon-btn {
+    border: none; background: none; cursor: pointer; font-size: 1.15rem;
+    padding: 6px; border-radius: 8px; color: var(--eo-text-muted); line-height: 1;
+  }
+  .poi-icon-btn:hover { background: var(--eo-bg); color: var(--eo-accent); }
+
+  .poi-file-row, .poi-alert-row {
+    padding: 12px 16px; border-bottom: 1px solid var(--eo-border);
+  }
+  .poi-file-row .name { font-weight: 600; font-size: .85rem; color: var(--eo-text); }
+  .poi-file-row .sub  { font-size: .74rem; color: var(--eo-text-muted); margin-top: 2px; }
+  .poi-file-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .poi-chip {
+    font-size: .72rem; padding: 4px 9px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--eo-border); background: var(--eo-bg); color: var(--eo-text);
+  }
+  .poi-chip:hover { border-color: var(--eo-accent); color: var(--eo-accent); }
+
+  .poi-empty { padding: 40px 20px; text-align: center; color: var(--eo-text-muted);
+    font-size: .85rem; }
+  .poi-banner {
+    padding: 8px 14px; font-size: .76rem; color: var(--eo-text-muted);
+    border-bottom: 1px solid var(--eo-border); background: var(--eo-bg);
+  }
+  .poi-preview-wrap { flex: 1; background: var(--eo-bg); }
+  .poi-preview-wrap iframe { width: 100%; height: 100%; border: 0; }
+
+  @media (max-width: 760px) {
+    .poi-wrap { grid-template-columns: 1fr; margin: 0; border-radius: 0; border-left: 0; border-right: 0; }
+    .poi-rail.hide-mobile { display: none; }
+    .poi-main.hide-mobile { display: none; }
+    .poi-ext-footer { padding: 8px; font-size: .66rem; }
+  }
+</style>
+
+<div class="poi-wrap" id="poiWrap">
+  <!-- LEFT RAIL -->
+  <div class="poi-rail" id="poiRail">
+    <div class="poi-tabs">
+      <button class="poi-tab active" data-tab="chats">Chats</button>
+      <button class="poi-tab" data-tab="files">Files</button>
+      <button class="poi-tab" data-tab="alerts">Alerts <span class="badge" id="alertBadge" style="display:none">0</span></button>
+    </div>
+    <div class="poi-rail-body" id="railBody">
+      <div class="poi-empty">Loading…</div>
+    </div>
+  </div>
+
+  <!-- RIGHT PANE -->
+  <div class="poi-main hide-mobile" id="poiMain">
+    <div class="poi-banner">
+      Access valid until <strong>{{ trusted_until|date:"M j, Y" }}</strong>. You can message the team and work with shared files here.
+    </div>
+    <div id="mainContent" style="flex:1; display:flex; flex-direction:column; min-height:0;">
+      <div class="poi-empty">Select a conversation to begin.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── CSRF + device fingerprint ──────────────────────────────────────────────
+  function getCookie(name) {
+    const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return m ? m.pop() : '';
+  }
+  const CSRF = getCookie('csrftoken');
+
+  // Stable-ish device fingerprint. Mirrors the customer-portal approach:
+  // a hash of a few low-entropy-but-stable signals. Persisted in localStorage
+  // so it's consistent across reloads on the same browser/device.
+  function computeFingerprint() {
+    let fp = localStorage.getItem('poi_fp');
+    if (fp) return fp;
+    const sig = [
+      navigator.userAgent, navigator.language,
+      screen.width + 'x' + screen.height, screen.colorDepth,
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+      navigator.hardwareConcurrency || '', navigator.platform || ''
+    ].join('|');
+    let h = 0;
+    for (let i = 0; i < sig.length; i++) { h = (h * 31 + sig.charCodeAt(i)) | 0; }
+    fp = 'fp_' + (h >>> 0).toString(16) + '_' + Math.random().toString(16).slice(2, 8);
+    localStorage.setItem('poi_fp', fp);
+    return fp;
+  }
+  const DEVICE_FP = computeFingerprint();
+  // Refresh cookie so full-page loads also pass the guard.
+  document.cookie = 'poi_device=' + DEVICE_FP + ';path=/;max-age=' + (60*60*24*30) + ';samesite=Lax';
+
+  async function api(url, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({
+      'X-Requested-With': 'XMLHttpRequest',
+      'X-POI-Device': DEVICE_FP,
+      'X-CSRFToken': CSRF,
+    }, opts.headers || {});
+    const r = await fetch(url, opts);
+    if (r.status === 403) {
+      // Guard rejected (expired/disabled/device). Bounce to login.
+      const j = await r.json().catch(() => ({}));
+      window.location = '/poi/login/';
+      throw new Error(j.error || 'Access ended');
+    }
+    return r.json();
+  }
+  function form(obj) {
+    const fd = new FormData();
+    Object.keys(obj).forEach(k => fd.append(k, obj[k]));
+    return fd;
+  }
+  const esc = s => (s || '').replace(/[&<>"]/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+  const ME = "{{ me.id }}";
+  let activeTab = 'chats';
+  let activeRoom = null;
+  let pollTimer = null;
+
+  const railBody = document.getElementById('railBody');
+  const mainContent = document.getElementById('mainContent');
+
+  // ── Tabs ────────────────────────────────────────────────────────────────
+  document.querySelectorAll('.poi-tab').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.poi-tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      activeTab = t.dataset.tab;
+      if (activeTab === 'chats') loadRooms();
+      else if (activeTab === 'files') loadFiles();
+      else loadAlerts();
+    });
+  });
+
+  // ── Chats ─────────────────────────────────────────────────────────────────
+  async function loadRooms() {
+    railBody.innerHTML = '<div class="poi-empty">Loading…</div>';
+    const [rooms, contacts] = await Promise.all([
+      api('/poi/api/rooms/'), api('/poi/api/contacts/')
+    ]);
+    let html = '';
+    (rooms.rooms || []).forEach(r => {
+      html += roomRow(r);
+    });
+    // Contacts you haven't started a chat with yet
+    const startedIds = new Set();  // (rooms don't expose contact id; keep simple)
+    if (contacts.contacts && contacts.contacts.length) {
+      html += '<div class="poi-banner">Start a conversation</div>';
+      contacts.contacts.forEach(c => {
+        html += '<div class="poi-list-item" data-contact="' + c.id + '">' +
+          avatar(c.avatar_url, c.name) +
+          '<div class="poi-li-main"><div class="poi-li-name">' + esc(c.name) +
+          '</div><div class="poi-li-sub">' + esc(c.role) + '</div></div></div>';
+      });
+    }
+    railBody.innerHTML = html || '<div class="poi-empty">No contacts available.</div>';
+
+    railBody.querySelectorAll('[data-room]').forEach(el =>
+      el.addEventListener('click', () => openRoom(el.dataset.room, el)));
+    railBody.querySelectorAll('[data-contact]').forEach(el =>
+      el.addEventListener('click', () => startChat(el.dataset.contact)));
+  }
+  function roomRow(r) {
+    return '<div class="poi-list-item" data-room="' + r.room_id + '">' +
+      avatar(r.avatar_url, r.name) +
+      '<div class="poi-li-main"><div class="poi-li-name">' + esc(r.name) +
+      '</div><div class="poi-li-sub">' + esc(r.last_preview) + '</div></div></div>';
+  }
+  function avatar(url, name) {
+    const initials = (name || '?').split(' ').map(s => s[0]).slice(0,2).join('').toUpperCase();
+    if (url) return '<div class="poi-avatar"><img src="' + url + '" alt=""></div>';
+    return '<div class="poi-avatar">' + esc(initials) + '</div>';
+  }
+  async function startChat(contactId) {
+    const r = await api('/poi/api/chat/start/', { method: 'POST', body: form({ contact_id: contactId }) });
+    if (r.ok) { loadRooms(); openRoom(r.room_id); }
+  }
+
+  const EMOJIS = ['👍','❤️','😂','🎉','😮','😢','🙏','🔥','✅','👏','💯','👀','😅','🤝','💡','📌'];
+  let replyTo = null;        // {id, name, content}
+  let pendingFile = null;    // File object chosen for upload
+
+  async function openRoom(roomId, el) {
+    activeRoom = roomId;
+    replyTo = null; pendingFile = null;
+    if (el) {
+      railBody.querySelectorAll('.poi-list-item').forEach(x => x.classList.remove('active'));
+      el.classList.add('active');
+    }
+    document.getElementById('poiMain').classList.remove('hide-mobile');
+    mainContent.innerHTML =
+      '<div class="poi-msgs" id="msgs"><div class="poi-empty">Loading…</div></div>' +
+      '<div class="poi-reply-banner" id="replyBanner">' +
+        '<span id="replyText"></span><button id="replyCancel" title="Cancel reply">×</button>' +
+      '</div>' +
+      '<div class="poi-pending-file" id="pendingFile">' +
+        '<i class="bi bi-paperclip"></i><span id="pendingFileName"></span>' +
+        '<button id="pendingFileCancel" title="Remove">×</button>' +
+      '</div>' +
+      '<div class="poi-composer" style="position:relative">' +
+        '<div class="poi-composer-icons">' +
+          '<button class="poi-icon-btn" id="attachBtn" title="Share a file">📎</button>' +
+          '<button class="poi-icon-btn" id="emojiBtn" title="Emoji">😊</button>' +
+        '</div>' +
+        '<input type="file" id="fileInput" style="display:none">' +
+        '<textarea id="composer" placeholder="Write a message…"></textarea>' +
+        '<button class="poi-btn primary" id="sendBtn">Send</button>' +
+        '<div class="poi-emoji-pop" id="composerEmoji"></div>' +
+      '</div>';
+
+    document.getElementById('sendBtn').addEventListener('click', sendMsg);
+    document.getElementById('composer').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); }
+    });
+    document.getElementById('replyCancel').addEventListener('click', clearReply);
+    document.getElementById('attachBtn').addEventListener('click', chooseAttach);
+    document.getElementById('fileInput').addEventListener('change', onFilePicked);
+    document.getElementById('pendingFileCancel').addEventListener('click', clearPendingFile);
+
+    // composer emoji picker → insert into text
+    const cep = document.getElementById('composerEmoji');
+    EMOJIS.forEach(em => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = em;
+      b.addEventListener('click', () => {
+        const ta = document.getElementById('composer');
+        ta.value += em; ta.focus(); cep.classList.remove('open');
+      });
+      cep.appendChild(b);
+    });
+    document.getElementById('emojiBtn').addEventListener('click', e => {
+      e.stopPropagation(); cep.classList.toggle('open');
+    });
+    document.addEventListener('click', e => {
+      if (!e.target.closest('#composerEmoji') && !e.target.closest('#emojiBtn'))
+        cep.classList.remove('open');
+    });
+
+    await refreshMsgs(true);
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(() => refreshMsgs(false), 4000);
+  }
+
+  let lastMsgId = null;
+  const seenMsgIds = new Set();
+  async function refreshMsgs(full) {
+    if (!activeRoom) return;
+    let url = '/poi/api/rooms/' + activeRoom + '/messages/';
+    if (!full && lastMsgId) url += '?after_id=' + lastMsgId;
+    const r = await api(url);
+    const box = document.getElementById('msgs');
+    if (!box) return;
+    if (full) { box.innerHTML = ''; seenMsgIds.clear(); }
+    (r.messages || []).forEach(m => {
+      if (seenMsgIds.has(m.id)) return;
+      box.appendChild(renderMsg(m));
+      seenMsgIds.add(m.id);
+      lastMsgId = m.id;
+    });
+    if (full && !(r.messages || []).length) {
+      box.innerHTML = '<div class="poi-empty">No messages yet. Say hello.</div>';
+    }
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function renderMsg(m) {
+    const out = String(m.sender_id) === String(ME);
+    const div = document.createElement('div');
+    div.className = 'poi-msg ' + (out ? 'out' : 'in');
+    div.id = 'msg-' + m.id;
+    div.dataset.content = m.content || '';
+
+    let html = '';
+
+    // reply quote — tolerate flat (reply_to_sender/_content) or nested (reply_to{}).
+    const rSender = m.reply_to_sender
+      || (m.reply_to && (m.reply_to.sender_name || m.reply_to.sender)) || '';
+    const rContent = m.reply_to_content
+      || (m.reply_to && (m.reply_to.content || m.reply_to.message)) || '';
+    if (rSender || rContent) {
+      html += '<div class="poi-reply-quote"><strong>' + esc(rSender) +
+        '</strong> ' + esc(String(rContent).slice(0, 60)) + '</div>';
+    }
+
+    // body
+    let body = '<span class="poi-body">' + esc(m.content || '') + '</span>';
+    if (m.message_type === 'file' || m.message_type === 'image') {
+      let label = '📎 ' + esc(m.file_name || 'Attachment');
+      if (m.file_url) label = '<a href="' + m.file_url + '" target="_blank" style="color:inherit;text-decoration:underline">' + label + '</a>';
+      body = label + (m.content ? '<br><span class="poi-body">' + esc(m.content) + '</span>' : '');
+    }
+    html += body;
+
+    // edited marker + meta
+    const edited = m.is_edited ? ' · edited' : '';
+    html += '<span class="meta">' + esc(m.sender_name || '') + ' · ' +
+      esc((m.created_at || '').slice(11, 16)) + edited + '</span>';
+
+    // reactions
+    html += '<div class="poi-reactions" id="react-' + m.id + '"></div>';
+
+    // hover actions
+    html += '<div class="poi-msg-actions">' +
+      '<button class="poi-msg-act" title="React" data-act="react">😊</button>' +
+      '<button class="poi-msg-act" title="Reply" data-act="reply">↩</button>' +
+      (out ? '<button class="poi-msg-act" title="Edit" data-act="edit">✏️</button>' : '') +
+    '</div>';
+
+    div.innerHTML = html;
+
+    // wire actions
+    div.querySelector('[data-act="reply"]').addEventListener('click', () =>
+      startReply(m.id, m.sender_name, m.content || (m.file_name ? '📎 ' + m.file_name : '')));
+    div.querySelector('[data-act="react"]').addEventListener('click', e =>
+      openReactPicker(e.currentTarget, m.id));
+    const editBtn = div.querySelector('[data-act="edit"]');
+    if (editBtn) editBtn.addEventListener('click', () => startEdit(m.id));
+
+    // render existing reactions INTO this detached node (server sends {emoji: count}).
+    // Querying the local div — not document — because the node isn't appended yet.
+    if (m.reactions) {
+      const localBox = div.querySelector('#react-' + cssId(m.id));
+      paintReactions(localBox, m.id, m.reactions);
+    }
+
+    return div;
+  }
+
+  // ── reactions ───────────────────────────────────────────────────────────────
+  // paintReactions works on a given element (so it works pre-append);
+  // renderReactions looks the element up in the document (for live updates).
+  function paintReactions(box, msgId, reactions) {
+    if (!box) return;
+    box.innerHTML = '';
+    Object.keys(reactions || {}).forEach(em => {
+      const count = typeof reactions[em] === 'number' ? reactions[em] : (reactions[em] || []).length;
+      if (!count) return;
+      const chip = document.createElement('span');
+      chip.className = 'poi-react-chip';
+      chip.textContent = em + ' ' + count;
+      chip.addEventListener('click', () => sendReaction(msgId, em));
+      box.appendChild(chip);
+    });
+  }
+  function renderReactions(msgId, reactions) {
+    const box = document.getElementById('react-' + cssId(msgId));
+    paintReactions(box, msgId, reactions);
+  }
+  // UUIDs are CSS-id safe, but guard against any stray chars just in case.
+  function cssId(id) { return String(id); }
+  function openReactPicker(anchor, msgId) {
+    closeReactPickers();
+    const pop = document.createElement('div');
+    pop.className = 'poi-emoji-pop open react-pop';
+    pop.style.bottom = 'auto';
+    EMOJIS.slice(0, 8).forEach(em => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = em;
+      b.addEventListener('click', () => { sendReaction(msgId, em); closeReactPickers(); });
+      pop.appendChild(b);
+    });
+    anchor.closest('.poi-msg').appendChild(pop);
+  }
+  function closeReactPickers() {
+    document.querySelectorAll('.react-pop').forEach(p => p.remove());
+  }
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.poi-msg-actions') && !e.target.closest('.react-pop'))
+      closeReactPickers();
+  });
+  async function sendReaction(msgId, emoji) {
+    const r = await api('/poi/api/rooms/' + activeRoom + '/message/' + msgId + '/react/',
+      { method: 'POST', body: form({ emoji }) });
+    if (r.ok) renderReactions(msgId, r.reactions || {});
+  }
+
+  // ── reply ─────────────────────────────────────────────────────────────────
+  function startReply(id, name, content) {
+    replyTo = { id, name, content };
+    const banner = document.getElementById('replyBanner');
+    document.getElementById('replyText').innerHTML =
+      'Replying to <strong>' + esc(name || '') + '</strong>: ' + esc((content || '').slice(0, 50));
+    banner.classList.add('open');
+    document.getElementById('composer').focus();
+  }
+  function clearReply() {
+    replyTo = null;
+    const b = document.getElementById('replyBanner');
+    if (b) b.classList.remove('open');
+  }
+
+  // ── edit ────────────────────────────────────────────────────────────────────
+  function startEdit(msgId) {
+    const msgEl = document.getElementById('msg-' + msgId);
+    if (!msgEl) return;
+    const current = msgEl.dataset.content || '';
+    const bodySpan = msgEl.querySelector('.poi-body');
+    if (!bodySpan) return;
+    const orig = bodySpan.innerHTML;
+    bodySpan.innerHTML =
+      '<textarea class="edit-ta" style="width:100%;min-height:48px;border-radius:8px;' +
+      'border:1px solid var(--eo-border);padding:6px;font-size:.85rem">' + esc(current) + '</textarea>' +
+      '<div style="margin-top:5px;display:flex;gap:6px">' +
+        '<button class="poi-btn primary edit-save" style="padding:4px 12px">Save</button>' +
+        '<button class="poi-btn edit-cancel" style="padding:4px 12px">Cancel</button>' +
+      '</div>';
+    const ta = bodySpan.querySelector('.edit-ta'); ta.focus();
+    bodySpan.querySelector('.edit-cancel').addEventListener('click', () => { bodySpan.innerHTML = orig; });
+    bodySpan.querySelector('.edit-save').addEventListener('click', async () => {
+      const newText = ta.value.trim();
+      if (!newText) { alert('Message cannot be empty.'); return; }
+      const r = await api('/poi/api/rooms/' + activeRoom + '/message/' + msgId + '/edit/',
+        { method: 'POST', body: form({ content: newText }) });
+      if (r.ok) {
+        msgEl.dataset.content = newText;
+        bodySpan.innerHTML = esc(newText);
+        const meta = msgEl.querySelector('.meta');
+        if (meta && !/edited$/.test(meta.textContent)) meta.textContent += ' · edited';
+      } else {
+        alert(r.error || 'Could not edit.');
+      }
+    });
+  }
+
+  // ── file sharing ──────────────────────────────────────────────────────────
+  function chooseAttach() {
+    // Offer: upload a new file, or pick one already shared with me.
+    const pick = confirm('OK = upload a file from this device.\nCancel = choose a file already shared with you.');
+    if (pick) {
+      document.getElementById('fileInput').click();
+    } else {
+      pickExistingFile();
+    }
+  }
+  function onFilePicked(e) {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    pendingFile = f;
+    document.getElementById('pendingFileName').textContent = f.name;
+    document.getElementById('pendingFile').classList.add('open');
+  }
+  function clearPendingFile() {
+    pendingFile = null;
+    document.getElementById('fileInput').value = '';
+    document.getElementById('pendingFile').classList.remove('open');
+  }
+  async function pickExistingFile() {
+    const r = await api('/poi/api/files/');
+    const files = r.files || [];
+    if (!files.length) { alert('No files available to share yet.'); return; }
+    const list = files.map((f, i) => (i + 1) + '. ' + f.name).join('\n');
+    const choice = prompt('Share which file?\n' + list + '\n\nEnter number:');
+    const idx = parseInt(choice, 10) - 1;
+    if (isNaN(idx) || !files[idx]) return;
+    const body = { file_id: files[idx].id, caption: '' };
+    if (replyTo) body.reply_to = replyTo.id;
+    const res = await api('/poi/api/rooms/' + activeRoom + '/attach-file/',
+      { method: 'POST', body: form(body) });
+    if (res.ok && res.payload) {
+      appendOwnMessage(res.payload);
+      clearReply();
+    } else {
+      alert(res.error || 'Could not share file.');
+    }
+  }
+
+  function appendOwnMessage(m) {
+    const box = document.getElementById('msgs');
+    const empty = box.querySelector('.poi-empty');
+    if (empty) box.innerHTML = '';
+    if (!seenMsgIds.has(m.id)) {
+      box.appendChild(renderMsg(m));
+      seenMsgIds.add(m.id);
+      lastMsgId = m.id;
+    }
+    box.scrollTop = box.scrollHeight;
+  }
+
+  async function sendMsg() {
+    const ta = document.getElementById('composer');
+    const text = (ta.value || '').trim();
+    if ((!text && !pendingFile) || !activeRoom) return;
+
+    const fd = new FormData();
+    fd.append('content', text);
+    if (replyTo) fd.append('reply_to', replyTo.id);
+    if (pendingFile) fd.append('file', pendingFile);
+
+    ta.value = '';
+    const r = await api('/poi/api/rooms/' + activeRoom + '/send/',
+      { method: 'POST', body: fd });
+    if (r.ok && r.message) appendOwnMessage(r.message);
+    clearReply();
+    clearPendingFile();
+  }
+
+  // ── Files ──────────────────────────────────────────────────────────────────
+  let selectedForMerge = new Set();
+  async function loadFiles() {
+    railBody.innerHTML = '<div class="poi-empty">Loading…</div>';
+    const r = await api('/poi/api/files/');
+    selectedForMerge = new Set();
+    if (!(r.files || []).length) {
+      railBody.innerHTML = '<div class="poi-empty">No files shared with you yet.</div>';
+      return;
+    }
+    let html = '';
+    r.files.forEach(f => { html += fileRow(f); });
+    html += '<div style="padding:12px 16px"><button class="poi-btn" id="mergeBtn" disabled>Combine selected PDFs</button></div>';
+    railBody.innerHTML = html;
+
+    railBody.querySelectorAll('[data-file]').forEach(el => {
+      el.querySelector('.poi-prev').addEventListener('click', () => previewFile(el.dataset.file, el.dataset.name));
+      el.querySelectorAll('[data-tool]').forEach(b =>
+        b.addEventListener('click', () => runTool(b.dataset.tool, el.dataset.file)));
+      const cb = el.querySelector('.merge-cb');
+      if (cb) cb.addEventListener('change', () => {
+        if (cb.checked) selectedForMerge.add(el.dataset.file); else selectedForMerge.delete(el.dataset.file);
+        document.getElementById('mergeBtn').disabled = selectedForMerge.size < 2;
+      });
+    });
+    document.getElementById('mergeBtn').addEventListener('click', mergeSelected);
+  }
+  function fileRow(f) {
+    const isPdf = f.is_pdf;
+    let tools = '<span class="poi-chip poi-prev">Preview</span>';
+    if (isPdf) {
+      tools += '<span class="poi-chip" data-tool="to-word">PDF → Word</span>';
+      tools += '<span class="poi-chip" data-tool="remove-pages">Remove pages</span>';
+      tools += '<span class="poi-chip" data-tool="sign">Send for signature</span>';
+    } else {
+      tools += '<span class="poi-chip" data-tool="to-pdf">Convert to PDF</span>';
+    }
+    const cb = isPdf ? '<label style="font-size:.72rem"><input type="checkbox" class="merge-cb"> combine</label>' : '';
+    return '<div class="poi-file-row" data-file="' + f.id + '" data-name="' + esc(f.name) + '">' +
+      '<div class="name">' + esc(f.name) + '</div>' +
+      '<div class="sub">' + esc(f.uploaded_by) + ' · ' + (f.is_pdf ? 'PDF' : esc(f.type || 'file')) + '</div>' +
+      '<div class="poi-file-tools">' + tools + ' ' + cb + '</div></div>';
+  }
+  async function previewFile(id, name) {
+    const r = await api('/poi/api/files/' + id + '/preview/');
+    document.getElementById('poiMain').classList.remove('hide-mobile');
+    if (r.ok && r.url) {
+      mainContent.innerHTML = '<div class="poi-main-head">' + esc(name) + '</div>' +
+        '<div class="poi-preview-wrap"><iframe src="' + r.url + '"></iframe></div>';
+    } else {
+      mainContent.innerHTML = '<div class="poi-empty">Preview unavailable.</div>';
+    }
+  }
+  async function runTool(tool, fileId) {
+    let url = '/poi/api/files/' + fileId + '/';
+    let body = {};
+    if (tool === 'to-pdf')        url += 'to-pdf/';
+    else if (tool === 'to-word')  url += 'to-word/';
+    else if (tool === 'remove-pages') {
+      const pages = prompt('Pages to remove (e.g. 1,3,5-7):');
+      if (!pages) return;
+      url += 'remove-pages/'; body = { pages };
+    } else if (tool === 'sign') {
+      const c = await api('/poi/api/contacts/');
+      const list = (c.contacts || []).map((x,i) => (i+1) + '. ' + x.name).join('\n');
+      const pick = prompt('Send to which contact for signature?\n' + list + '\n\nEnter number:');
+      const idx = parseInt(pick, 10) - 1;
+      if (isNaN(idx) || !c.contacts[idx]) return;
+      url += 'sign/'; body = { signer_id: c.contacts[idx].id };
+    }
+    const r = await api(url, { method: 'POST', body: form(body) });
+    if (r.ok) {
+      alert(tool === 'sign' ? 'Signature request sent.' : ('Done — "' + (r.file ? r.file.name : 'file') + '" saved to your files.'));
+      if (tool !== 'sign') loadFiles();
+    } else {
+      alert(r.error || 'That didn\'t work.');
+    }
+  }
+  async function mergeSelected() {
+    const ids = Array.from(selectedForMerge);
+    if (ids.length < 2) return;
+    const r = await api('/poi/api/tools/merge/', { method: 'POST', body: form({ file_ids: ids.join(',') }) });
+    if (r.ok) { alert('Combined PDF saved to your files.'); loadFiles(); }
+    else alert(r.error || 'Merge failed.');
+  }
+
+  // ── Alerts ──────────────────────────────────────────────────────────────────
+  async function loadAlerts() {
+    railBody.innerHTML = '<div class="poi-empty">Loading…</div>';
+    const r = await api('/poi/api/notifications/');
+    if (!(r.notifications || []).length) {
+      railBody.innerHTML = '<div class="poi-empty">No notifications.</div>';
+      return;
+    }
+    let html = '';
+    let unread = 0;
+    r.notifications.forEach(n => {
+      if (!n.is_read) unread++;
+      html += '<div class="poi-alert-row">' +
+        '<div style="font-size:.84rem;color:var(--eo-text)">' + esc(n.text) + '</div>' +
+        '<div class="sub" style="font-size:.72rem;color:var(--eo-text-muted);margin-top:3px">' +
+        esc((n.created_at || '').slice(0, 16).replace('T', ' ')) + '</div></div>';
+    });
+    railBody.innerHTML = html;
+    const badge = document.getElementById('alertBadge');
+    if (unread > 0) { badge.style.display = 'inline-block'; badge.textContent = unread; }
+    else badge.style.display = 'none';
+  }
+
+  // Poll alert badge periodically regardless of tab
+  async function refreshBadge() {
+    try {
+      const r = await api('/poi/api/notifications/');
+      const unread = (r.notifications || []).filter(n => !n.is_read).length;
+      const badge = document.getElementById('alertBadge');
+      if (unread > 0) { badge.style.display = 'inline-block'; badge.textContent = unread; }
+      else badge.style.display = 'none';
+    } catch (e) {}
+  }
+
+  // ── init ────────────────────────────────────────────────────────────────────
+  loadRooms();
+  refreshBadge();
+  setInterval(refreshBadge, 20000);
+})();
+</script>
+{% endblock %}

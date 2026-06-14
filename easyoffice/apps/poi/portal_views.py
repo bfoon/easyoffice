@@ -86,24 +86,100 @@ class POIContactsView(POIRequiredMixin, View):
 
 class POIRoomsView(POIRequiredMixin, View):
     def get(self, request):
+        # ── TEMP DIAGNOSTIC: /poi/api/rooms/?debug=1 ──────────────────────────
+        # Shows every room the POI is a raw member of and exactly why each was
+        # kept or dropped by scoping. Remove this block once channels show up.
+        if request.GET.get("debug") == "1":
+            from apps.messaging.models import ChatRoom
+            allowed_ids = set(
+                scoping.allowed_contacts_qs().values_list("id", flat=True)
+            )
+            raw = (ChatRoom.objects.filter(members=request.user, is_archived=False)
+                   .prefetch_related("members"))
+            diag = []
+            for r in raw:
+                others = [m for m in r.members.all() if m.id != request.user.id]
+                member_info = []
+                for m in others:
+                    member_info.append({
+                        "name": _full_name(m),
+                        "email": getattr(m, "email", ""),
+                        "in_allowed": m.id in allowed_ids,
+                        "is_staff": getattr(m, "is_staff", None),
+                        "is_superuser": getattr(m, "is_superuser", None),
+                        "is_active": getattr(m, "is_active", None),
+                        "is_poi": getattr(m, "poi_profile", None) is not None,
+                        "role": str(getattr(m, "role", "") or ""),
+                        "title": str(getattr(m, "title", "") or ""),
+                    })
+                qualifies = bool(others) and all(m["in_allowed"] for m in member_info)
+                diag.append({
+                    "room_id": str(r.id),
+                    "name": r.name or "",
+                    "room_type": r.room_type,
+                    "is_archived": r.is_archived,
+                    "other_member_count": len(others),
+                    "qualifies": qualifies,
+                    "would_be_group": len(others) > 1,
+                    "members": member_info,
+                })
+            return JsonResponse({
+                "ok": True,
+                "debug": True,
+                "allowed_contact_count": len(allowed_ids),
+                "rooms_kept_by_scoping": len(scoping.poi_rooms_qs(request.user)),
+                "raw_rooms": diag,
+            })
+        # ── end diagnostic ────────────────────────────────────────────────────
+
         rooms = scoping.poi_rooms_qs(request.user)
         out = []
         for r in rooms:
             others = [m for m in r.members.all() if m.id != request.user.id]
+            is_group = len(others) > 1
             other = others[0] if others else None
             last = r.messages.filter(is_deleted=False).order_by("-created_at").first()
             preview = ""
             if last:
                 preview = ("📎 File" if last.message_type in ("file", "image")
                            else (last.content or "")[:60])
+            if is_group:
+                name = r.name or ", ".join(_full_name(m) for m in others[:3])
+            else:
+                name = _full_name(other) if other else (r.name or "Chat")
             out.append({
                 "room_id": str(r.id),
-                "name": _full_name(other) if other else (r.name or "Chat"),
-                "avatar_url": _avatar_url(other) if other else "",
+                "name": name,
+                "is_group": is_group,
+                "member_count": len(others) + 1,
+                "avatar_url": "" if is_group else (_avatar_url(other) if other else ""),
                 "last_preview": preview,
                 "updated_at": timezone.localtime(r.updated_at).isoformat(),
             })
         return JsonResponse({"ok": True, "rooms": out})
+
+
+class POIRoomMembersView(POIRequiredMixin, View):
+    """Members of a room the POI can access — used for the @-mention
+    autocomplete and the 'who's in this chat' banner. Lists every other member
+    of the room: allowed contacts (admins/CEO) plus any staff an admin
+    explicitly added via a POIRoomExtension. The can_access_room check
+    guarantees no other POI is ever present."""
+
+    def get(self, request, room_id):
+        from apps.messaging.models import ChatRoom
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not scoping.can_access_room(request.user, room):
+            raise Http404()
+
+        members = [m for m in room.members.all() if m.id != request.user.id]
+        data = [{
+            "id": str(m.id),
+            "name": _full_name(m),
+            "avatar_url": _avatar_url(m),
+        } for m in members]
+        return JsonResponse({"ok": True, "members": data})
 
 
 class POIStartChatView(POIRequiredMixin, View):
@@ -125,6 +201,10 @@ class POIStartChatView(POIRequiredMixin, View):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class POIRoomMessagesView(POIRequiredMixin, View):
+    PAGE_SIZE = 30          # newest N on first load (within the 20–50 range)
+    OLDER_PAGE_SIZE = 30    # how many older messages a scroll-up fetches
+    MAX_PAGE = 50           # hard ceiling per request
+
     def get(self, request, room_id):
         from apps.messaging.models import ChatRoom, ChatRoomMember
         from apps.messaging.views import _serialize_chat_message
@@ -134,20 +214,57 @@ class POIRoomMessagesView(POIRequiredMixin, View):
             raise Http404()
 
         after_id = (request.GET.get("after_id") or "").strip()
-        qs = room.messages.filter(is_deleted=False).select_related(
+        before_id = (request.GET.get("before_id") or "").strip()
+
+        try:
+            limit = int(request.GET.get("limit") or self.PAGE_SIZE)
+        except (TypeError, ValueError):
+            limit = self.PAGE_SIZE
+        limit = max(1, min(limit, self.MAX_PAGE))
+
+        base = room.messages.filter(is_deleted=False).select_related(
             "sender", "reply_to", "reply_to__sender", "linked_file"
         )
+
+        has_more = False
+
         if after_id:
+            # ── Live poll: everything NEWER than the anchor (oldest→newest). ──
             anchor = room.messages.filter(id=after_id).first()
+            qs = base
             if anchor:
                 qs = qs.filter(created_at__gt=anchor.created_at)
-        qs = qs.order_by("created_at")[:200]
+            msgs = list(qs.order_by("created_at"))
 
-        ChatRoomMember.objects.filter(room=room, user=request.user).update(
-            last_read=timezone.now()
-        )
-        data = [_serialize_chat_message(m, viewer=request.user) for m in qs]
-        return JsonResponse({"ok": True, "messages": data})
+        elif before_id:
+            # ── Scroll-up: a page of messages OLDER than the anchor. ──
+            anchor = room.messages.filter(id=before_id).first()
+            if anchor:
+                older = (
+                    base.filter(created_at__lt=anchor.created_at)
+                    .order_by("-created_at")[: limit + 1]
+                )
+                older = list(older)
+                has_more = len(older) > limit       # was there an extra row?
+                older = older[:limit]
+                msgs = list(reversed(older))          # return oldest→newest
+            else:
+                msgs = []
+
+        else:
+            # ── Initial load: newest `limit`, returned oldest→newest. ──
+            newest = list(base.order_by("-created_at")[: limit + 1])
+            has_more = len(newest) > limit
+            newest = newest[:limit]
+            msgs = list(reversed(newest))
+
+            # Only the initial open marks the room read.
+            ChatRoomMember.objects.filter(room=room, user=request.user).update(
+                last_read=timezone.now()
+            )
+
+        data = [_serialize_chat_message(m, viewer=request.user) for m in msgs]
+        return JsonResponse({"ok": True, "messages": data, "has_more": has_more})
 
 
 class POIRoomSendView(POIRequiredMixin, View):

@@ -18,7 +18,7 @@ recognises the device on each request.
 <style>
   /* Portal fills its flex parent (.poi-ext-main) rather than guessing
      viewport math, so the composer/footer never overlap. */
-  .poi-ext-main { padding: 0 !important; display: flex; min-height: 0; }
+  .poi-ext-main { padding: 0 !important; display: flex; min-height: 0; flex: 1; }
 
   .poi-wrap {
     display: grid;
@@ -26,6 +26,10 @@ recognises the device on each request.
     flex: 1;
     min-height: 0;
     height: 100%;
+    /* Fallback bound: if an ancestor doesn't supply a constrained height,
+       cap to the viewport so the inner flex/scroll still resolves and the
+       composer stays pinned instead of being pushed off-screen. */
+    max-height: 100vh;
     margin: 14px 20px;
     border: 1px solid var(--eo-border);
     border-radius: 14px;
@@ -61,6 +65,11 @@ recognises the device on each request.
     overflow: hidden;
   }
   .poi-avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .poi-avatar-channel {
+    border-radius: 10px; background: var(--eo-bg);
+    color: var(--eo-accent); border: 1px solid var(--eo-border);
+    font-size: 1.05rem; font-weight: 700;
+  }
   .poi-li-main { min-width: 0; flex: 1; }
   .poi-li-name { font-weight: 600; font-size: .86rem; color: var(--eo-text);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -191,6 +200,30 @@ recognises the device on each request.
   .poi-preview-wrap { flex: 1; background: var(--eo-bg); }
   .poi-preview-wrap iframe { width: 100%; height: 100%; border: 0; }
 
+  /* "who's in this chat" banner — keeps the POI aware of who can read them */
+  .poi-member-banner {
+    display: none; align-items: center; gap: 4px; flex-shrink: 0;
+    padding: 7px 14px; font-size: .74rem; color: var(--eo-text-muted);
+    background: var(--eo-bg); border-bottom: 1px solid var(--eo-border);
+    line-height: 1.3;
+  }
+  .poi-member-banner span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* @-mention autocomplete popup */
+  .poi-mention-pop {
+    display: none; position: absolute; bottom: 100%; left: 12px; right: 12px;
+    max-height: 200px; overflow-y: auto; margin-bottom: 6px; z-index: 30;
+    background: var(--eo-card, #fff); border: 1px solid var(--eo-border);
+    border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.14);
+  }
+  .poi-mention-pop.open { display: block; }
+  .poi-mention-item {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    cursor: pointer; font-size: .84rem; color: var(--eo-text);
+  }
+  .poi-mention-item:hover, .poi-mention-item.active { background: var(--eo-bg); }
+  .poi-mention-item .poi-avatar { width: 26px; height: 26px; font-size: .7rem; }
+
   @media (max-width: 760px) {
     .poi-wrap { grid-template-columns: 1fr; margin: 0; border-radius: 0; border-left: 0; border-right: 0; }
     .poi-rail.hide-mobile { display: none; }
@@ -280,6 +313,33 @@ recognises the device on each request.
   const esc = s => (s || '').replace(/[&<>"]/g, c =>
     ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 
+  // ── Notification sound ──────────────────────────────────────────────────────
+  // Tiny WebAudio chime so no audio asset/file is needed. Two slightly
+  // different tones distinguish sending from receiving. Browsers block audio
+  // until the first user gesture, so we lazily create the context and ignore
+  // any failure (e.g. before the user has interacted with the page).
+  let _audioCtx = null;
+  function _beep(freq, durMs) {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      _audioCtx = _audioCtx || new AC();
+      if (_audioCtx.state === 'suspended') _audioCtx.resume();
+      const osc = _audioCtx.createOscillator();
+      const gain = _audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, _audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.18, _audioCtx.currentTime + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, _audioCtx.currentTime + durMs / 1000);
+      osc.connect(gain); gain.connect(_audioCtx.destination);
+      osc.start();
+      osc.stop(_audioCtx.currentTime + durMs / 1000);
+    } catch (e) { /* audio not available yet — silent */ }
+  }
+  const playSentSound = () => _beep(660, 120);      // outgoing: higher, short
+  const playReceiveSound = () => _beep(440, 160);   // incoming: lower, slightly longer
+
   const ME = "{{ me.id }}";
   let activeTab = 'chats';
   let activeRoom = null;
@@ -307,11 +367,23 @@ recognises the device on each request.
       api('/poi/api/rooms/'), api('/poi/api/contacts/')
     ]);
     let html = '';
-    (rooms.rooms || []).forEach(r => {
-      html += roomRow(r);
-    });
+    const allRooms = rooms.rooms || [];
+    const channels = allRooms.filter(r => r.is_group);
+    const dms = allRooms.filter(r => !r.is_group);
+
+    // ── Channels (shared admin/CEO rooms) ──
+    if (channels.length) {
+      html += '<div class="poi-banner">Channels</div>';
+      channels.forEach(r => { html += roomRow(r); });
+    }
+
+    // ── Direct Messages ──
+    if (dms.length) {
+      html += '<div class="poi-banner">Direct Messages</div>';
+      dms.forEach(r => { html += roomRow(r); });
+    }
+
     // Contacts you haven't started a chat with yet
-    const startedIds = new Set();  // (rooms don't expose contact id; keep simple)
     if (contacts.contacts && contacts.contacts.length) {
       html += '<div class="poi-banner">Start a conversation</div>';
       contacts.contacts.forEach(c => {
@@ -329,6 +401,14 @@ recognises the device on each request.
       el.addEventListener('click', () => startChat(el.dataset.contact)));
   }
   function roomRow(r) {
+    if (r.is_group) {
+      const sub = (r.member_count ? r.member_count + ' members' : 'Channel') +
+        (r.last_preview ? ' · ' + esc(r.last_preview) : '');
+      return '<div class="poi-list-item" data-room="' + r.room_id + '">' +
+        '<div class="poi-avatar poi-avatar-channel">#</div>' +
+        '<div class="poi-li-main"><div class="poi-li-name">' + esc(r.name) +
+        '</div><div class="poi-li-sub">' + sub + '</div></div></div>';
+    }
     return '<div class="poi-list-item" data-room="' + r.room_id + '">' +
       avatar(r.avatar_url, r.name) +
       '<div class="poi-li-main"><div class="poi-li-name">' + esc(r.name) +
@@ -344,9 +424,24 @@ recognises the device on each request.
     if (r.ok) { loadRooms(); openRoom(r.room_id); }
   }
 
+  // Shows everyone (besides you) who is in this conversation, so it's always
+  // clear who can read your messages — including any staff an admin added.
+  function renderMemberBanner(members) {
+    const el = document.getElementById('memberBanner');
+    if (!el) return;
+    if (!members || !members.length) { el.style.display = 'none'; return; }
+    const names = members.map(m => esc(m.name)).join(', ');
+    const label = members.length === 1 ? 'In this chat: ' :
+      ('In this chat (' + members.length + '): ');
+    el.innerHTML = '<i class="bi bi-people"></i>&nbsp;' +
+      '<span>' + label + names + '</span>';
+    el.style.display = 'flex';
+  }
+
   const EMOJIS = ['👍','❤️','😂','🎉','😮','😢','🙏','🔥','✅','👏','💯','👀','😅','🤝','💡','📌'];
   let replyTo = null;        // {id, name, content}
   let pendingFile = null;    // File object chosen for upload
+  let roomMembers = [];      // [{id, name, avatar_url}] for @-mentions
 
   async function openRoom(roomId, el) {
     activeRoom = roomId;
@@ -357,6 +452,7 @@ recognises the device on each request.
     }
     document.getElementById('poiMain').classList.remove('hide-mobile');
     mainContent.innerHTML =
+      '<div class="poi-member-banner" id="memberBanner"></div>' +
       '<div class="poi-msgs" id="msgs"><div class="poi-empty">Loading…</div></div>' +
       '<div class="poi-reply-banner" id="replyBanner">' +
         '<span id="replyText"></span><button id="replyCancel" title="Cancel reply">×</button>' +
@@ -374,10 +470,14 @@ recognises the device on each request.
         '<textarea id="composer" placeholder="Write a message…"></textarea>' +
         '<button class="poi-btn primary" id="sendBtn">Send</button>' +
         '<div class="poi-emoji-pop" id="composerEmoji"></div>' +
+        '<div class="poi-mention-pop" id="mentionPop"></div>' +
       '</div>';
 
     document.getElementById('sendBtn').addEventListener('click', sendMsg);
     document.getElementById('composer').addEventListener('keydown', e => {
+      // If the @-mention popup is open, let its handler consume Enter.
+      const pop = document.getElementById('mentionPop');
+      if (pop && pop.classList.contains('open') && mentionMatches.length) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); }
     });
     document.getElementById('replyCancel').addEventListener('click', clearReply);
@@ -404,13 +504,31 @@ recognises the device on each request.
         cep.classList.remove('open');
     });
 
+    // @-mention autocomplete — wire up keystroke detection on the composer.
+    const composer = document.getElementById('composer');
+    composer.addEventListener('input', onComposerInput);
+    composer.addEventListener('keydown', onMentionKeydown);
+    // Load the room's members for the @ picker AND the "who's here" banner so
+    // the POI always knows everyone who can see this conversation.
+    roomMembers = [];
+    api('/poi/api/rooms/' + roomId + '/members/').then(res => {
+      if (res && res.ok) {
+        roomMembers = res.members || [];
+        renderMemberBanner(roomMembers);
+      }
+    }).catch(() => {});
+
     await refreshMsgs(true);
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(() => refreshMsgs(false), 4000);
   }
 
-  let lastMsgId = null;
+  let lastMsgId = null;       // newest loaded — anchor for live poll (after_id)
+  let firstMsgId = null;      // oldest loaded — anchor for scroll-up (before_id)
+  let hasMoreOlder = false;   // server says older messages exist
+  let loadingOlder = false;   // guard against overlapping scroll-up fetches
   const seenMsgIds = new Set();
+
   async function refreshMsgs(full) {
     if (!activeRoom) return;
     let url = '/poi/api/rooms/' + activeRoom + '/messages/';
@@ -418,17 +536,80 @@ recognises the device on each request.
     const r = await api(url);
     const box = document.getElementById('msgs');
     if (!box) return;
-    if (full) { box.innerHTML = ''; seenMsgIds.clear(); }
+    if (full) {
+      box.innerHTML = '';
+      seenMsgIds.clear();
+      firstMsgId = null; lastMsgId = null;
+      hasMoreOlder = !!r.has_more;
+    }
+    let newIncoming = 0;
     (r.messages || []).forEach(m => {
       if (seenMsgIds.has(m.id)) return;
       box.appendChild(renderMsg(m));
       seenMsgIds.add(m.id);
       lastMsgId = m.id;
+      if (firstMsgId === null) firstMsgId = m.id;  // first row we ever appended
+      if (String(m.sender_id) !== String(ME)) newIncoming++;
     });
+    // Only chime for messages arriving via a live poll, not the initial load.
+    if (!full && newIncoming > 0) playReceiveSound();
     if (full && !(r.messages || []).length) {
       box.innerHTML = '<div class="poi-empty">No messages yet. Say hello.</div>';
     }
-    box.scrollTop = box.scrollHeight;
+    if (full) {
+      box.scrollTop = box.scrollHeight;
+      ensureOlderLoader(box);
+    } else if (newIncoming > 0) {
+      box.scrollTop = box.scrollHeight;
+    }
+  }
+
+  // Attach a one-time scroll listener that loads older pages when the user
+  // scrolls near the top of the message box.
+  function ensureOlderLoader(box) {
+    box.onscroll = () => {
+      if (box.scrollTop <= 40 && hasMoreOlder && !loadingOlder) loadOlder(box);
+    };
+  }
+
+  async function loadOlder(box) {
+    if (!activeRoom || !firstMsgId || loadingOlder || !hasMoreOlder) return;
+    loadingOlder = true;
+
+    // Remember position so the view doesn't jump when we prepend.
+    const prevHeight = box.scrollHeight;
+    const prevTop = box.scrollTop;
+
+    // Optional "loading older" sliver at the top.
+    const spinner = document.createElement('div');
+    spinner.className = 'poi-empty';
+    spinner.style.padding = '8px';
+    spinner.textContent = 'Loading earlier messages…';
+    box.insertBefore(spinner, box.firstChild);
+
+    try {
+      const r = await api('/poi/api/rooms/' + activeRoom +
+        '/messages/?before_id=' + firstMsgId);
+      spinner.remove();
+
+      const older = (r.messages || []).filter(m => !seenMsgIds.has(m.id));
+      // Messages arrive oldest→newest; prepend in reverse so order is kept
+      // and update firstMsgId to the new oldest.
+      for (let i = older.length - 1; i >= 0; i--) {
+        const node = renderMsg(older[i]);
+        box.insertBefore(node, box.firstChild);
+        seenMsgIds.add(older[i].id);
+      }
+      if (older.length) firstMsgId = older[0].id;
+      hasMoreOlder = !!r.has_more;
+
+      // Restore scroll so the first previously-visible message stays put.
+      box.scrollTop = prevTop + (box.scrollHeight - prevHeight);
+    } catch (e) {
+      spinner.remove();
+    } finally {
+      loadingOlder = false;
+    }
   }
 
   function renderMsg(m) {
@@ -640,8 +821,99 @@ recognises the device on each request.
       box.appendChild(renderMsg(m));
       seenMsgIds.add(m.id);
       lastMsgId = m.id;
+      if (firstMsgId === null) firstMsgId = m.id;
     }
     box.scrollTop = box.scrollHeight;
+  }
+
+  // ── @-mention autocomplete ──────────────────────────────────────────────────
+  let mentionActiveIdx = -1;     // highlighted item in the popup
+  let mentionMatches = [];       // current filtered member list
+  let mentionStart = -1;         // index of the '@' in the textarea value
+
+  function closeMentionPop() {
+    const pop = document.getElementById('mentionPop');
+    if (pop) pop.classList.remove('open');
+    mentionActiveIdx = -1; mentionMatches = []; mentionStart = -1;
+  }
+
+  function onComposerInput(e) {
+    const ta = e.target;
+    const val = ta.value;
+    const caret = ta.selectionStart;
+    // Find the nearest '@' before the caret that starts a word.
+    let at = -1;
+    for (let i = caret - 1; i >= 0; i--) {
+      const ch = val[i];
+      if (ch === '@') {
+        if (i === 0 || /\s/.test(val[i - 1])) at = i;
+        break;
+      }
+      if (/\s/.test(ch)) break;   // whitespace before an @ → not a mention
+    }
+    if (at < 0 || !roomMembers.length) { closeMentionPop(); return; }
+
+    const query = val.slice(at + 1, caret).toLowerCase();
+    mentionMatches = roomMembers.filter(m =>
+      m.name.toLowerCase().includes(query)).slice(0, 8);
+    if (!mentionMatches.length) { closeMentionPop(); return; }
+
+    mentionStart = at;
+    mentionActiveIdx = 0;
+    renderMentionPop();
+  }
+
+  function renderMentionPop() {
+    const pop = document.getElementById('mentionPop');
+    if (!pop) return;
+    pop.innerHTML = '';
+    mentionMatches.forEach((m, i) => {
+      const row = document.createElement('div');
+      row.className = 'poi-mention-item' + (i === mentionActiveIdx ? ' active' : '');
+      row.innerHTML = avatar(m.avatar_url, m.name) +
+        '<span>' + esc(m.name) + '</span>';
+      row.addEventListener('mousedown', ev => { ev.preventDefault(); pickMention(i); });
+      pop.appendChild(row);
+    });
+    pop.classList.add('open');
+  }
+
+  function pickMention(idx) {
+    const m = mentionMatches[idx];
+    if (!m) return;
+    const ta = document.getElementById('composer');
+    const val = ta.value;
+    const caret = ta.selectionStart;
+    const before = val.slice(0, mentionStart);
+    const after = val.slice(caret);
+    const insert = '@' + m.name + ' ';
+    ta.value = before + insert + after;
+    const newCaret = (before + insert).length;
+    ta.setSelectionRange(newCaret, newCaret);
+    ta.focus();
+    closeMentionPop();
+  }
+
+  // Intercept navigation keys ONLY while the popup is open; otherwise let the
+  // existing Enter-to-send handler run untouched.
+  function onMentionKeydown(e) {
+    const pop = document.getElementById('mentionPop');
+    if (!pop || !pop.classList.contains('open') || !mentionMatches.length) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      mentionActiveIdx = (mentionActiveIdx + 1) % mentionMatches.length;
+      renderMentionPop();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      mentionActiveIdx = (mentionActiveIdx - 1 + mentionMatches.length) % mentionMatches.length;
+      renderMentionPop();
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      e.stopPropagation();   // don't trigger send
+      pickMention(mentionActiveIdx);
+    } else if (e.key === 'Escape') {
+      closeMentionPop();
+    }
   }
 
   async function sendMsg() {
@@ -657,7 +929,7 @@ recognises the device on each request.
     ta.value = '';
     const r = await api('/poi/api/rooms/' + activeRoom + '/send/',
       { method: 'POST', body: fd });
-    if (r.ok && r.message) appendOwnMessage(r.message);
+    if (r.ok && r.message) { appendOwnMessage(r.message); playSentSound(); }
     clearReply();
     clearPendingFile();
   }

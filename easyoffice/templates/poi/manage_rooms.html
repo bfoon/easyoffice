@@ -1,0 +1,365 @@
+{% extends "base.html" %}
+{% comment %}
+apps/poi/templates/poi/manage_rooms.html
+─────────────────────────────────────────
+Staff-side admin page to manage which named staff are added to POI channels.
+
+This is the single, auditable exception to POI confinement: an admin/CEO may
+add a non-admin staffer to a channel that contains a POI. The page talks to:
+
+    GET  poi/manage/rooms/                      → list POI channels + members
+    GET  poi/manage/staff-search/?q=&room_id=   → search addable staff
+    POST poi/manage/rooms/<id>/add-staff/       → add a staffer (records opt-in)
+    POST poi/manage/rooms/<id>/remove-staff/<uid>/ → remove + revoke opt-in
+
+Access is gated server-side by AdminPOIManageMixin; a POI can never reach here.
+{% endcomment %}
+{% block title %}POI Channels{% endblock %}
+
+{% block content %}
+<style>
+  .poic-wrap { max-width: 1000px; margin: 18px auto; padding: 0 16px; }
+  .poic-head h1 { font-size: 1.3rem; color: var(--eo-text); margin: 0 0 4px; }
+  .poic-head p { color: var(--eo-text-muted); font-size: .86rem; margin: 0 0 18px; }
+
+  .poic-warn {
+    display: flex; gap: 10px; align-items: flex-start;
+    background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412;
+    border-radius: 10px; padding: 11px 14px; font-size: .82rem;
+    margin-bottom: 18px; line-height: 1.45;
+  }
+  .poic-warn b { color: #7c2d12; }
+
+  .poic-card {
+    border: 1px solid var(--eo-border); border-radius: 12px;
+    background: var(--eo-surface); margin-bottom: 16px;
+    position: relative;
+  }
+  /* Raise a card while its add-staff dropdown is open so the list isn't
+     covered by the card below it. */
+  .poic-card.menu-open { z-index: 40; }
+  .poic-card-head {
+    padding: 13px 16px; border-bottom: 1px solid var(--eo-border);
+    display: flex; align-items: center; gap: 10px;
+    border-radius: 12px 12px 0 0;
+  }
+  .poic-card-title { font-weight: 700; font-size: .95rem; color: var(--eo-text); }
+  .poic-rename-btn {
+    border: none; background: none; cursor: pointer; color: var(--eo-text-muted);
+    font-size: .9rem; padding: 2px 4px; line-height: 1; border-radius: 6px;
+  }
+  .poic-rename-btn:hover { color: var(--eo-accent); background: var(--eo-bg); }
+  .poic-rename-input {
+    font-size: .92rem; font-weight: 600; color: var(--eo-text);
+    border: 1px solid var(--eo-accent); border-radius: 7px;
+    padding: 4px 9px; min-width: 220px; background: var(--eo-bg);
+  }
+  .poic-card-sub { font-size: .76rem; color: var(--eo-text-muted); margin-left: auto; }
+
+  .poic-members { padding: 8px 16px 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .poic-chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    border: 1px solid var(--eo-border); border-radius: 20px;
+    padding: 5px 6px 5px 12px; font-size: .8rem; color: var(--eo-text);
+    background: var(--eo-bg);
+  }
+  .poic-chip .tag {
+    font-size: .64rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .03em; padding: 1px 6px; border-radius: 8px;
+  }
+  .poic-chip .tag.poi    { background: #ede9fe; color: #6d28d9; }
+  .poic-chip .tag.admin  { background: #dbeafe; color: #1d4ed8; }
+  .poic-chip .tag.extra  { background: #dcfce7; color: #15803d; }
+  .poic-chip .rm {
+    border: none; background: none; cursor: pointer; color: var(--eo-text-muted);
+    font-size: 1rem; line-height: 1; padding: 0 4px;
+  }
+  .poic-chip .rm:hover { color: #dc2626; }
+
+  .poic-add-row { padding: 0 16px 16px; position: relative; }
+  .poic-add-input {
+    width: 100%; max-width: 340px; padding: 8px 11px; font-size: .84rem;
+    border: 1px solid var(--eo-border); border-radius: 9px;
+    background: var(--eo-bg); color: var(--eo-text);
+  }
+  .poic-results {
+    position: absolute; z-index: 20; left: 16px; right: 16px; max-width: 340px;
+    background: var(--eo-surface); border: 1px solid var(--eo-border);
+    border-radius: 9px; margin-top: 4px; max-height: 220px; overflow-y: auto;
+    box-shadow: 0 6px 22px rgba(0,0,0,.12); display: none;
+  }
+  .poic-results.open { display: block; }
+  .poic-result {
+    padding: 8px 12px; cursor: pointer; font-size: .83rem; color: var(--eo-text);
+    border-bottom: 1px solid var(--eo-border);
+  }
+  .poic-result:last-child { border-bottom: none; }
+  .poic-result:hover { background: var(--eo-bg); }
+  .poic-result .sub { font-size: .72rem; color: var(--eo-text-muted); }
+
+  .poic-empty { padding: 40px 16px; text-align: center; color: var(--eo-text-muted); }
+  .poic-toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+    background: var(--eo-text); color: #fff; padding: 9px 16px; border-radius: 9px;
+    font-size: .82rem; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 60;
+  }
+  .poic-toast.show { opacity: .95; }
+</style>
+
+<div class="poic-wrap">
+  <div class="poic-head">
+    <h1>POI Channels</h1>
+    <p>Add or remove named staff from channels that include a person of interest.</p>
+  </div>
+
+  <div class="poic-warn">
+    <i class="bi bi-shield-exclamation" style="font-size:1.1rem"></i>
+    <div>
+      Adding a staff member to a POI channel lets that staffer <b>see and message
+      the POI</b>, and lets the <b>POI see that staffer's name and messages</b>.
+      Only add people who are meant to have that visibility. Removing a staffer
+      revokes their access to the channel immediately.
+    </div>
+  </div>
+
+  <div id="poicList"><div class="poic-empty">Loading channels…</div></div>
+</div>
+
+<div class="poic-toast" id="poicToast"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  function getCookie(name) {
+    const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return m ? m.pop() : '';
+  }
+  const CSRF = getCookie('csrftoken');
+  const esc = s => (s || '').replace(/[&<>"]/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+  async function api(url, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({
+      'X-Requested-With': 'XMLHttpRequest',
+      'X-CSRFToken': CSRF,
+    }, opts.headers || {});
+    const r = await fetch(url, opts);
+    return r.json();
+  }
+  function form(obj) {
+    const fd = new FormData();
+    Object.keys(obj).forEach(k => fd.append(k, obj[k]));
+    return fd;
+  }
+  function toast(msg) {
+    const t = document.getElementById('poicToast');
+    t.textContent = msg; t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  const listEl = document.getElementById('poicList');
+
+  async function loadChannels() {
+    listEl.innerHTML = '<div class="poic-empty">Loading channels…</div>';
+    let data;
+    try { data = await api('/poi/manage/rooms/'); }
+    catch (e) { listEl.innerHTML = '<div class="poic-empty">Could not load channels.</div>'; return; }
+
+    const rooms = (data && data.rooms) || [];
+    if (!rooms.length) {
+      listEl.innerHTML = '<div class="poic-empty">No channels contain a POI yet.</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    rooms.forEach(r => listEl.appendChild(renderRoom(r)));
+  }
+
+  function memberChip(roomId, m) {
+    const chip = document.createElement('div');
+    chip.className = 'poic-chip';
+    let tag = '';
+    if (m.is_poi) tag = '<span class="tag poi">POI</span>';
+    else if (m.is_allowed_contact) tag = '<span class="tag admin">Admin/CEO</span>';
+    else if (m.is_extra) tag = '<span class="tag extra">Added staff</span>';
+
+    chip.innerHTML = '<span>' + esc(m.name) + '</span>' + tag;
+
+    // Only 'extra' (explicitly added) staff can be removed here. Admins/CEO are
+    // permanent allowed-contacts; POIs are never removed from their own room.
+    if (m.is_extra && !m.is_poi) {
+      const rm = document.createElement('button');
+      rm.className = 'rm'; rm.title = 'Remove from channel'; rm.textContent = '×';
+      rm.addEventListener('click', () => removeStaff(roomId, m.id, m.name));
+      chip.appendChild(rm);
+    }
+    return chip;
+  }
+
+  function renderRoom(r) {
+    const card = document.createElement('div');
+    card.className = 'poic-card';
+    card.dataset.room = r.room_id;
+
+    const poiNames = r.members.filter(m => m.is_poi).map(m => m.name).join(', ');
+
+    const head = document.createElement('div');
+    head.className = 'poic-card-head';
+    head.innerHTML =
+      '<span class="poic-card-title" data-title>' + esc(r.name || 'Untitled channel') + '</span>' +
+      '<button class="poic-rename-btn" title="Rename channel">' +
+      '<i class="bi bi-pencil"></i></button>' +
+      '<span class="poic-card-sub">POI: ' + esc(poiNames || '—') + '</span>';
+    card.appendChild(head);
+
+    head.querySelector('.poic-rename-btn')
+      .addEventListener('click', () => startRename(r, head));
+
+    const members = document.createElement('div');
+    members.className = 'poic-members';
+    r.members.forEach(m => members.appendChild(memberChip(r.room_id, m)));
+    card.appendChild(members);
+
+    // Add-staff search row
+    const addRow = document.createElement('div');
+    addRow.className = 'poic-add-row';
+    addRow.innerHTML =
+      '<input class="poic-add-input" type="text" placeholder="Add staff by name or email…">' +
+      '<div class="poic-results"></div>';
+    card.appendChild(addRow);
+
+    const input = addRow.querySelector('.poic-add-input');
+    const results = addRow.querySelector('.poic-results');
+    let timer = null;
+
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      const q = input.value.trim();
+      if (q.length < 2) {
+        results.classList.remove('open'); results.innerHTML = '';
+        card.classList.remove('menu-open');
+        return;
+      }
+      timer = setTimeout(() => searchStaff(r.room_id, q, results, input, card), 220);
+    });
+    input.addEventListener('blur', () => setTimeout(() => {
+      results.classList.remove('open');
+      card.classList.remove('menu-open');
+    }, 150));
+    return card;
+  }
+
+  function startRename(r, head) {
+    const titleEl = head.querySelector('[data-title]');
+    const btn = head.querySelector('.poic-rename-btn');
+    if (!titleEl || head.querySelector('.poic-rename-input')) return;
+
+    const current = (r.name || '').trim();
+    const input = document.createElement('input');
+    input.className = 'poic-rename-input';
+    input.type = 'text';
+    input.value = current;
+    input.placeholder = 'Channel name';
+    input.maxLength = 200;
+
+    titleEl.style.display = 'none';
+    btn.style.display = 'none';
+    head.insertBefore(input, titleEl.nextSibling);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const finish = async (commit) => {
+      if (done) return; done = true;
+      const name = input.value.trim();
+      if (commit && name && name !== current) {
+        const ok = await doRename(r.room_id, name);
+        if (ok) r.name = name;
+      }
+      // Re-render this card's header text and restore controls.
+      titleEl.textContent = r.name || 'Untitled channel';
+      titleEl.style.display = '';
+      btn.style.display = '';
+      input.remove();
+    };
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+  }
+
+  async function doRename(roomId, name) {
+    let data;
+    try {
+      data = await api('/poi/manage/rooms/' + roomId + '/rename/',
+        { method: 'POST', body: form({ name: name }) });
+    } catch (e) { toast('Could not rename channel.'); return false; }
+    if (data && data.ok) { toast('Channel renamed.'); return true; }
+    toast((data && data.error) || 'Could not rename channel.');
+    return false;
+  }
+
+  async function searchStaff(roomId, q, resultsEl, input, card) {
+    let data;
+    try {
+      data = await api('/poi/manage/staff-search/?room_id=' + encodeURIComponent(roomId) +
+        '&q=' + encodeURIComponent(q));
+    } catch (e) { return; }
+
+    const rows = (data && data.results) || [];
+    if (card) card.classList.add('menu-open');
+    if (!rows.length) {
+      resultsEl.innerHTML = '<div class="poic-result"><span class="sub">No matches.</span></div>';
+      resultsEl.classList.add('open');
+      return;
+    }
+    resultsEl.innerHTML = '';
+    rows.forEach(u => {
+      const row = document.createElement('div');
+      row.className = 'poic-result';
+      row.innerHTML = '<div>' + esc(u.name) + '</div>' +
+        (u.email ? '<div class="sub">' + esc(u.email) + '</div>' : '');
+      row.addEventListener('mousedown', ev => {
+        ev.preventDefault();
+        addStaff(roomId, u.id, u.name, input, resultsEl);
+      });
+      resultsEl.appendChild(row);
+    });
+    resultsEl.classList.add('open');
+  }
+
+  async function addStaff(roomId, userId, name, input, resultsEl) {
+    let data;
+    try {
+      data = await api('/poi/manage/rooms/' + roomId + '/add-staff/',
+        { method: 'POST', body: form({ user_id: userId }) });
+    } catch (e) { toast('Could not add staff.'); return; }
+
+    if (data && data.ok) {
+      input.value = ''; resultsEl.classList.remove('open'); resultsEl.innerHTML = '';
+      toast(name + ' added to channel.');
+      loadChannels();
+    } else {
+      toast((data && data.error) || 'Could not add staff.');
+    }
+  }
+
+  async function removeStaff(roomId, userId, name) {
+    if (!confirm('Remove ' + name + ' from this channel? They will lose access immediately.')) return;
+    let data;
+    try {
+      data = await api('/poi/manage/rooms/' + roomId + '/remove-staff/' + userId + '/',
+        { method: 'POST', body: form({}) });
+    } catch (e) { toast('Could not remove staff.'); return; }
+
+    if (data && data.ok) { toast(name + ' removed.'); loadChannels(); }
+    else { toast((data && data.error) || 'Could not remove staff.'); }
+  }
+
+  loadChannels();
+})();
+</script>
+{% endblock %}

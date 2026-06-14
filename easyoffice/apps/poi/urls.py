@@ -8,7 +8,7 @@ Mount in your root urls.py:
 
 from django.urls import path
 
-from apps.poi import auth_views, admin_views, portal_views, tool_views
+from apps.poi import auth_views, admin_views, portal_views, tool_views, staff_room_views
 
 urlpatterns = [
     # ── Auth / registration ───────────────────────────────────────────────────
@@ -26,6 +26,7 @@ urlpatterns = [
     path("api/contacts/",                 portal_views.POIContactsView.as_view(),      name="poi_contacts"),
     path("api/rooms/",                    portal_views.POIRoomsView.as_view(),         name="poi_rooms"),
     path("api/rooms/<uuid:room_id>/messages/", portal_views.POIRoomMessagesView.as_view(), name="poi_room_messages"),
+    path("api/rooms/<uuid:room_id>/members/", portal_views.POIRoomMembersView.as_view(), name="poi_room_members"),
     path("api/rooms/<uuid:room_id>/send/",     portal_views.POIRoomSendView.as_view(),      name="poi_room_send"),
     path("api/rooms/<uuid:room_id>/message/<uuid:message_id>/react/", portal_views.POIRoomReactView.as_view(), name="poi_room_react"),
     path("api/rooms/<uuid:room_id>/message/<uuid:message_id>/edit/",  portal_views.POIRoomEditView.as_view(),  name="poi_room_edit"),
@@ -47,4 +48,24 @@ urlpatterns = [
     path("manage/create/",           admin_views.POICreateView.as_view(),   name="poi_manage_create"),
     path("manage/<uuid:pk>/disable/",  admin_views.POIDisableView.as_view(),  name="poi_manage_disable"),
     path("manage/<uuid:pk>/reinvite/", admin_views.POIReinviteView.as_view(), name="poi_manage_reinvite"),
+
+    # ── Staff-side: extend a POI channel with named staff (guarded) ───────────
+    path("manage/rooms/page/",
+         staff_room_views.POIChannelManageView.as_view(),
+         name="poi_channel_manage_page"),
+    path("manage/rooms/",
+         staff_room_views.POIChannelListView.as_view(),
+         name="poi_channel_list"),
+    path("manage/staff-search/",
+         staff_room_views.POIStaffSearchView.as_view(),
+         name="poi_staff_search"),
+    path("manage/rooms/<uuid:room_id>/add-staff/",
+         staff_room_views.POIChannelAddStaffView.as_view(),
+         name="poi_channel_add_staff"),
+    path("manage/rooms/<uuid:room_id>/remove-staff/<uuid:user_id>/",
+         staff_room_views.POIChannelRemoveStaffView.as_view(),
+         name="poi_channel_remove_staff"),
+    path("manage/rooms/<uuid:room_id>/rename/",
+         staff_room_views.POIChannelRenameView.as_view(),
+         name="poi_channel_rename"),
 ]

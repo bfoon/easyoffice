@@ -199,3 +199,59 @@ class POIInvite(models.Model):
     def mark_used(self):
         self.used_at = timezone.now()
         self.save(update_fields=["used_at"])
+
+
+class POIRoomExtension(models.Model):
+    """
+    Marks a chat room as *deliberately* extended to include staff beyond the
+    usual admin/CEO allowed-contacts, while still containing a POI.
+
+    Why this exists
+    ---------------
+    The POI portal's default invariant is: a POI is only ever in a room with
+    admins/CEO. That confinement is enforced in apps.poi.scoping. This model is
+    the single, auditable exception: an admin/CEO may add named staff to a
+    specific POI channel. Scoping consults this table so the exception is
+    per-room and opt-in — it never loosens the rule for any other room.
+
+    A row existing means: "for THIS room, the users in `allowed_extra` are
+    permitted to share it with the POI." Removing the row (or emptying the set)
+    instantly re-confines the room.
+
+    Another POI is NEVER a valid extra member — that stays hard-blocked in the
+    view that writes here, regardless of this table.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # The room being extended. Lazy string FK avoids importing messaging here.
+    room = models.OneToOneField(
+        "messaging.ChatRoom",
+        on_delete=models.CASCADE,
+        related_name="poi_extension",
+    )
+
+    # Staff explicitly granted access to this POI room (beyond admins/CEO).
+    allowed_extra = models.ManyToManyField(
+        "core.User",
+        related_name="poi_extended_rooms",
+        blank=True,
+    )
+
+    extended_by = models.ForeignKey(
+        "core.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="poi_room_extensions_made",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"POIRoomExtension<{self.room_id}>"
+
+    def extra_ids(self):
+        return set(self.allowed_extra.values_list("id", flat=True))

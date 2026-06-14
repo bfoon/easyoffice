@@ -52,25 +52,78 @@ def is_allowed_contact(user):
     return allowed_contacts_qs().filter(pk=user.pk).exists()
 
 
+def _is_poi(user):
+    """True if *user* is itself a POI. Such a user is NEVER permitted in another
+    POI's room, even via a room extension — this is an absolute boundary."""
+    return getattr(user, "poi_profile", None) is not None
+
+
+def _room_extra_ids(room):
+    """IDs of staff explicitly added to *room* via a POIRoomExtension opt-in.
+    Empty set if the room was never extended. POIs are filtered out defensively
+    so a stale extension row can never re-admit a POI."""
+    ext = None
+    try:
+        ext = room.poi_extension  # reverse OneToOne; raises if absent
+    except Exception:
+        ext = None
+    if ext is None:
+        # Fallback lookup (also covers the not-prefetched case).
+        try:
+            from apps.poi.models import POIRoomExtension
+            ext = POIRoomExtension.objects.filter(room=room).first()
+        except Exception:
+            ext = None
+    if ext is None:
+        return set()
+    extra = set()
+    for u in ext.allowed_extra.all():
+        if not _is_poi(u):
+            extra.add(u.id)
+    return extra
+
+
+def _member_permitted_in_room(member, room, allowed_ids, extra_ids):
+    """A non-POI member is permitted in a POI room if they're an allowed
+    contact (admin/CEO) OR were explicitly added to THIS room's extension.
+    A POI member (other than the viewing POI) is never permitted."""
+    if _is_poi(member):
+        return False
+    return member.id in allowed_ids or member.id in extra_ids
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Chat rooms
 # ─────────────────────────────────────────────────────────────────────────────
 
 def poi_rooms_qs(poi_user):
-    """DM rooms the POI is a member of where the OTHER member is an allowed
-    contact. Group/unit/project rooms are never shown to a POI."""
+    """Rooms a POI may see. Includes:
+
+    * 1-on-1 DM rooms whose other member is an allowed contact,
+    * shared rooms where EVERY other member is an allowed contact (admins/CEO),
+    * shared rooms that an admin/CEO has explicitly EXTENDED (via
+      POIRoomExtension) to include named staff — those named staff are then
+      permitted alongside the admins/CEO.
+
+    A room is still rejected the moment ANY other member is neither an allowed
+    contact nor an explicitly-added staffer for that room — and another POI is
+    never permitted regardless of extension.
+    """
     from apps.messaging.models import ChatRoom
 
     allowed_ids = set(allowed_contacts_qs().values_list("id", flat=True))
     rooms = (
-        ChatRoom.objects.filter(members=poi_user, room_type="direct", is_archived=False)
+        ChatRoom.objects.filter(members=poi_user, is_archived=False)
         .prefetch_related("members")
         .order_by("-updated_at")
     )
     keep = []
     for r in rooms:
         others = [m for m in r.members.all() if m.id != poi_user.id]
-        if len(others) == 1 and others[0].id in allowed_ids:
+        extra_ids = _room_extra_ids(r)
+        if others and all(
+            _member_permitted_in_room(m, r, allowed_ids, extra_ids) for m in others
+        ):
             keep.append(r)
     return keep
 
@@ -98,13 +151,17 @@ def get_or_create_dm(poi_user, contact_user):
 
 
 def can_access_room(poi_user, room):
-    """True only for DM rooms between this POI and an allowed contact."""
-    if room.room_type != "direct":
-        return False
+    """True for a room the POI belongs to where EVERY other member is permitted:
+    an allowed contact (admin/CEO), or a staffer explicitly added to THIS room
+    via a POIRoomExtension. Another POI is never permitted."""
     if not room.members.filter(id=poi_user.id).exists():
         return False
+    allowed_ids = set(allowed_contacts_qs().values_list("id", flat=True))
+    extra_ids = _room_extra_ids(room)
     others = [m for m in room.members.all() if m.id != poi_user.id]
-    return len(others) == 1 and is_allowed_contact(others[0])
+    return bool(others) and all(
+        _member_permitted_in_room(m, room, allowed_ids, extra_ids) for m in others
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

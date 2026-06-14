@@ -42,6 +42,10 @@ from apps.hr.offer_letter import (
     save_offer_letter_for_onboarding,
 )
 
+from apps.hr.models import ZKDevice, ZKUserMap, ZKPunchLog
+from apps.hr.zk_client import ZKClient, ZKConnectionError
+from apps.hr import zk_service
+
 User = get_user_model()
 
 
@@ -2052,3 +2056,166 @@ class AttendanceSheetView(LoginRequiredMixin, TemplateView):
             'is_supervisor_user': is_supervisor_user(request_user),
         })
         return ctx
+
+
+class ZKDeviceListView(LoginRequiredMixin, TemplateView):
+    template_name = 'hr/zk_devices.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not is_hr_user(request.user):
+            messages.error(request, 'Only HR can manage attendance devices.')
+            return redirect('hr_dashboard')
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['devices'] = ZKDevice.objects.all().select_related('location')
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        if not is_hr_user(request.user):
+            return redirect('hr_dashboard')
+        device_id = request.POST.get('device_id')
+        if device_id:
+            device = get_object_or_404(ZKDevice, pk=device_id)
+            device.name = request.POST.get('name', device.name).strip()
+            device.ip_address = request.POST.get('ip_address', device.ip_address).strip()
+            device.port = int(request.POST.get('port') or device.port)
+            device.comm_password = int(request.POST.get('comm_password') or 0)
+            device.timeout = int(request.POST.get('timeout') or device.timeout)
+            device.force_udp = request.POST.get('force_udp') == 'on'
+            device.clear_device_after_sync = request.POST.get('clear_device_after_sync') == 'on'
+            device.is_active = request.POST.get('is_active') == 'on'
+            device.save()
+            messages.success(request, f'Device "{device.name}" updated.')
+        else:
+            device = ZKDevice.objects.create(
+                name=request.POST.get('name', 'New Terminal').strip(),
+                ip_address=request.POST.get('ip_address', '').strip(),
+                port=int(request.POST.get('port') or 4370),
+                comm_password=int(request.POST.get('comm_password') or 0),
+                timeout=int(request.POST.get('timeout') or 10),
+                force_udp=request.POST.get('force_udp') == 'on',
+                clear_device_after_sync=request.POST.get('clear_device_after_sync') == 'on',
+                is_active=request.POST.get('is_active') == 'on',
+                created_by=request.user,
+            )
+            messages.success(request, f'Device "{device.name}" added.')
+        return redirect('zk_device_list')
+
+
+class ZKDeviceTestView(LoginRequiredMixin, View):
+    def post(self, request, pk, *args, **kwargs):
+        if not is_hr_user(request.user):
+            return redirect('hr_dashboard')
+        device = get_object_or_404(ZKDevice, pk=pk)
+        try:
+            with ZKClient(device) as client:
+                info = client.test_connection()
+            device.last_sync_status = 'Connection OK: ' + ', '.join(
+                f'{k}={v}' for k, v in info.items()
+            )
+            device.save(update_fields=['last_sync_status'])
+            messages.success(request, f'Connected to {device.name}. {device.last_sync_status}')
+        except ZKConnectionError as exc:
+            messages.error(request, f'Connection failed: {exc}')
+        return redirect('zk_device_list')
+
+
+class ZKDeviceSyncView(LoginRequiredMixin, View):
+    def post(self, request, pk, *args, **kwargs):
+        if not is_hr_user(request.user):
+            return redirect('hr_dashboard')
+        device = get_object_or_404(ZKDevice, pk=pk)
+        try:
+            summary = zk_service.sync_device(device, marked_by=request.user)
+            messages.success(
+                request,
+                f'{device.name}: imported {summary["imported"]} punches, '
+                f'created {summary["records_created"]} and updated '
+                f'{summary["records_updated"]} attendance records. '
+                f'Unmapped enroll IDs: {summary["unmapped"]}.'
+            )
+        except ZKConnectionError as exc:
+            messages.error(request, f'Sync failed: {exc}')
+        return redirect('zk_device_list')
+
+
+class ZKSyncAllView(LoginRequiredMixin, View):
+    def post(self, request, *args, **kwargs):
+        if not is_hr_user(request.user):
+            return redirect('hr_dashboard')
+        summary = zk_service.sync_all_active_devices(marked_by=request.user)
+        messages.success(
+            request,
+            f'Synced all devices. Created {summary["records_created"]}, '
+            f'updated {summary["records_updated"]} attendance records.'
+        )
+        return redirect('zk_device_list')
+
+
+class ZKUserMapView(LoginRequiredMixin, TemplateView):
+    """Map terminal enroll IDs to staff. Pulls suggestions from the device."""
+    template_name = 'hr/zk_user_map.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not is_hr_user(request.user):
+            messages.error(request, 'Only HR can manage device mappings.')
+            return redirect('hr_dashboard')
+        self.device = get_object_or_404(ZKDevice, pk=kwargs['pk'])
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['device'] = self.device
+        ctx['existing_maps'] = ZKUserMap.objects.filter(
+            device=self.device
+        ).select_related('staff')
+        ctx['staff_list'] = User.objects.filter(is_active=True).order_by('first_name', 'last_name')
+        if self.request.GET.get('load') == '1':
+            try:
+                ctx['suggestions'] = zk_service.import_users_as_maps(self.device)
+            except ZKConnectionError as exc:
+                messages.error(self.request, f'Could not read users from device: {exc}')
+                ctx['suggestions'] = []
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        action = request.POST.get('action')
+        if action == 'delete':
+            ZKUserMap.objects.filter(pk=request.POST.get('map_id'), device=self.device).delete()
+            messages.success(request, 'Mapping removed.')
+            return redirect('zk_user_map', pk=self.device.pk)
+
+        # Bulk save: for every device_user_id field with a chosen staff, upsert.
+        saved = 0
+        for key, value in request.POST.items():
+            if not key.startswith('map_staff_'):
+                continue
+            device_user_id = key.replace('map_staff_', '')
+            if not value:
+                continue
+            staff = User.objects.filter(pk=value, is_active=True).first()
+            if not staff:
+                continue
+            name = request.POST.get(f'map_name_{device_user_id}', '').strip()
+            ZKUserMap.objects.update_or_create(
+                device=self.device,
+                device_user_id=device_user_id,
+                defaults={'staff': staff, 'device_user_name': name},
+            )
+            saved += 1
+        messages.success(request, f'Saved {saved} mapping(s).')
+        # Re-link any previously unmapped punches now that maps exist.
+        _relink_unmapped_punches(self.device)
+        return redirect('zk_user_map', pk=self.device.pk)
+
+
+def _relink_unmapped_punches(device):
+    """After mapping is updated, attach staff to historical unmapped punches."""
+    maps = {m.device_user_id: m.staff_id for m in ZKUserMap.objects.filter(device=device)}
+    for device_user_id, staff_id in maps.items():
+        ZKPunchLog.objects.filter(
+            device=device, device_user_id=device_user_id, staff__isnull=True
+        ).update(staff_id=staff_id, processed=False)
+

@@ -1102,3 +1102,144 @@ class AttendanceRecord(models.Model):
 
         if setting.discipline_enabled and self.minutes_late >= setting.late_half_day_after_minutes:
             self.status = self.Status.HALF_DAY
+
+
+class ZKDevice(models.Model):
+    """
+    A physical ZKTeco time & attendance terminal on the network.
+
+    HR/IT registers each terminal here. `pyzk` connects over TCP/IP using the
+    device IP, port (default 4370) and the optional comm key (device password).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=120, help_text='Friendly label, e.g. "Main Gate Terminal"')
+    location = models.ForeignKey(
+        OfficeLocation,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='zk_devices',
+    )
+
+    ip_address = models.GenericIPAddressField()
+    port = models.PositiveIntegerField(default=4370)
+    comm_password = models.PositiveIntegerField(
+        default=0,
+        help_text='Device communication key (0 if none).',
+    )
+    timeout = models.PositiveIntegerField(default=10, help_text='Connection timeout in seconds.')
+    force_udp = models.BooleanField(default=False, help_text='Use UDP instead of TCP for older devices.')
+
+    is_active = models.BooleanField(default=True)
+
+    # Sync bookkeeping. We only pull punches newer than last_sync_at so the
+    # device buffer is processed incrementally and we never re-read everything.
+    last_sync_at = models.DateTimeField(null=True, blank=True)
+    last_sync_status = models.CharField(max_length=255, blank=True)
+    last_punch_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='Timestamp of the most recent punch successfully imported.',
+    )
+    clear_device_after_sync = models.BooleanField(
+        default=False,
+        help_text='If enabled, the device buffer is cleared after a successful sync. '
+                  'Only enable if this server is the single source pulling from the device.',
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_zk_devices',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        verbose_name = 'ZKTeco Device'
+        verbose_name_plural = 'ZKTeco Devices'
+
+    def __str__(self):
+        return f'{self.name} ({self.ip_address}:{self.port})'
+
+
+class ZKUserMap(models.Model):
+    """
+    Links a ZKTeco enroll/user ID (as stored on the terminal) to a Django user.
+
+    A staff member may be enrolled on more than one terminal, so the unique
+    constraint is on (device, device_user_id) rather than device_user_id alone.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    device = models.ForeignKey(ZKDevice, on_delete=models.CASCADE, related_name='user_maps')
+    device_user_id = models.CharField(
+        max_length=64,
+        help_text='The user ID / enroll number as configured on the terminal.',
+    )
+    staff = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='zk_user_maps',
+    )
+    device_user_name = models.CharField(max_length=120, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['device', 'device_user_id']
+        indexes = [models.Index(fields=['device', 'device_user_id'])]
+
+    def __str__(self):
+        return f'{self.device.name}: {self.device_user_id} -> {self.staff}'
+
+
+class ZKPunchLog(models.Model):
+    """
+    Raw punch event pulled from a device, kept as an immutable audit trail.
+
+    AttendanceRecord is *derived* from these rows. Keeping the raw log lets HR
+    re-derive attendance later (e.g. after fixing a user mapping) without
+    re-querying the terminal, and gives an auditable source of truth.
+    """
+
+    class Direction(models.TextChoices):
+        UNKNOWN = 'unknown', _('Unknown')
+        CHECK_IN = 'in', _('Check In')
+        CHECK_OUT = 'out', _('Check Out')
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    device = models.ForeignKey(ZKDevice, on_delete=models.CASCADE, related_name='punch_logs')
+    device_user_id = models.CharField(max_length=64)
+    staff = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='zk_punch_logs',
+        help_text='Resolved via ZKUserMap; null if the enroll ID is unmapped.',
+    )
+    punch_time = models.DateTimeField()
+    # Raw punch/status codes straight from the SDK (device-dependent).
+    punch_type = models.IntegerField(default=0, help_text='Raw punch code from device (0=in,1=out,...).')
+    status_code = models.IntegerField(default=0, help_text='Raw verify/status code from device.')
+    direction = models.CharField(max_length=10, choices=Direction.choices, default=Direction.UNKNOWN)
+    processed = models.BooleanField(default=False,
+                                    help_text='Whether this punch has been folded into an AttendanceRecord.')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-punch_time']
+        # Dedupe guard: the same physical punch must never be imported twice.
+        unique_together = ['device', 'device_user_id', 'punch_time']
+        indexes = [
+            models.Index(fields=['device', 'punch_time']),
+            models.Index(fields=['staff', 'punch_time']),
+            models.Index(fields=['processed']),
+        ]
+
+    def __str__(self):
+        who = self.staff or self.device_user_id
+        return f'{who} @ {self.punch_time:%Y-%m-%d %H:%M}'

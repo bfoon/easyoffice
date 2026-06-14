@@ -44,4 +44,12 @@ urlpatterns = [
     # Attendance
     path('attendance/', views.AttendanceView.as_view(), name='attendance'),
     path('attendance/sheet/', views.AttendanceSheetView.as_view(), name='attendance_sheet'),
+
+    # --- Biometric attendance devices (ZKTeco) ---
+    path('devices/', views.ZKDeviceListView.as_view(), name='zk_device_list'),
+    path('devices/sync-all/', views.ZKSyncAllView.as_view(), name='zk_sync_all'),
+    path('devices/<uuid:pk>/test/', views.ZKDeviceTestView.as_view(), name='zk_device_test'),
+    path('devices/<uuid:pk>/sync/', views.ZKDeviceSyncView.as_view(), name='zk_device_sync'),
+    path('devices/<uuid:pk>/users/', views.ZKUserMapView.as_view(), name='zk_user_map'),
+
 ]

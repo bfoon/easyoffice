@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Map Device Users{% endblock %}
+{% block breadcrumb %}<a href="{% url 'hr_dashboard' %}">HR Dashboard</a> / <a href="{% url 'zk_device_list' %}">Devices</a> / Map Users{% endblock %}
+
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Map Enroll IDs — {{ device.name }}</h1>
+    <p class="eo-page-subtitle">Link each terminal enroll ID to a staff member so punches resolve to the right person.</p>
+  </div>
+  <a href="?load=1" class="eo-btn eo-btn-primary"><i class="bi bi-download"></i> Load Users From Device</a>
+</div>
+
+<div class="eo-card mb-4">
+  <div class="eo-card-header"><h2 class="eo-card-title">Existing Mappings</h2></div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Enroll ID</th><th>Device Name</th><th>Staff</th><th></th></tr></thead>
+      <tbody>
+        {% for m in existing_maps %}
+        <tr>
+          <td>{{ m.device_user_id }}</td>
+          <td>{{ m.device_user_name|default:"—" }}</td>
+          <td>{{ m.staff.get_full_name|default:m.staff.username }}</td>
+          <td>
+            <form method="post">{% csrf_token %}
+              <input type="hidden" name="action" value="delete">
+              <input type="hidden" name="map_id" value="{{ m.id }}">
+              <button class="eo-btn eo-btn-danger eo-btn-sm"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" style="text-align:center;color:var(--eo-text-muted);padding:24px">No mappings yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if suggestions %}
+<form method="post">
+  {% csrf_token %}
+  <div class="eo-card">
+    <div class="eo-card-header">
+      <h2 class="eo-card-title">Unmapped Enroll IDs From Device</h2>
+      <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-save"></i> Save Mappings</button>
+    </div>
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead><tr><th>Enroll ID</th><th>Device Name</th><th>Assign To Staff</th></tr></thead>
+        <tbody>
+          {% for s in suggestions %}
+          <tr>
+            <td>{{ s.device_user_id }}<input type="hidden" name="map_name_{{ s.device_user_id }}" value="{{ s.device_user_name }}"></td>
+            <td>{{ s.device_user_name|default:"—" }}</td>
+            <td style="min-width:280px">
+              <select name="map_staff_{{ s.device_user_id }}" class="eo-form-select">
+                <option value="">— Skip —</option>
+                {% for staff in staff_list %}
+                <option value="{{ staff.id }}" {% if s.suggested_staff_id == staff.id %}selected{% endif %}>
+                  {{ staff.get_full_name|default:staff.username }}
+                </option>
+                {% endfor %}
+              </select>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

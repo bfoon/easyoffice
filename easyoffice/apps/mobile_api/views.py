@@ -422,6 +422,45 @@ class ReactionToggleView(APIView):
         })
 
 
+class RoomUploadView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, room_id):
+        from apps.messaging.models import ChatRoom, ChatMessage, ChatRoomMember
+        from apps.messaging.views import _serialize_chat_message
+        from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
+
+        room = ChatRoom.objects.filter(id=room_id, members=request.user).first()
+        if not room or room.is_readonly:
+            return Response({'error': 'Not allowed'}, status=403)
+
+        f = request.FILES.get('file')
+        if not f:
+            return Response({'error': 'No file'}, status=400)
+
+        is_image = (f.content_type or '').startswith('image/')
+        msg = ChatMessage.objects.create(
+            room=room,
+            sender=request.user,
+            message_type='image' if is_image else 'file',
+            file=f,
+            file_name=f.name,
+            file_size=f.size,
+            content=request.data.get('caption', ''),
+        )
+        room.save(update_fields=['updated_at'])
+
+        payload = _serialize_chat_message(msg, viewer=request.user)
+        try:
+            async_to_sync(get_channel_layer().group_send)(
+                f'chat_{room.id}', {'type': 'chat.message', 'payload': payload},
+            )
+        except Exception:
+            pass
+        return Response(payload, status=201)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # POLLS
 # ─────────────────────────────────────────────────────────────────────────────

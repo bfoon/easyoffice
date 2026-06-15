@@ -22,6 +22,7 @@ urlpatterns = [
     # MESSAGES
     path('messages/<uuid:message_id>/',         views.MessageDeleteView.as_view(),   name='message_delete'),
     path('messages/<uuid:message_id>/react/',   views.ReactionToggleView.as_view(),  name='message_react'),
+    path('rooms/<uuid:room_id>/upload/', views.RoomUploadView.as_view(), name='room_upload'),
 
     # POLLS
     path('polls/<uuid:poll_id>/vote/',          views.VotePollView.as_view(),    name='poll_vote'),

@@ -62,5 +62,5 @@ async def websocket_router(scope, receive, send):
 
 application = ProtocolTypeRouter({
     'http': django_asgi_app,
-    'websocket': websocket_router,
+    'websocket': AllowedHostsOriginValidator(websocket_router),
 })

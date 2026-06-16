@@ -228,6 +228,7 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     unread = serializers.SerializerMethodField()
     last_message = serializers.SerializerMethodField()
     member_count = serializers.SerializerMethodField()
+    members = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatRoom
@@ -236,8 +237,12 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             'avatar_url', 'initials', 'other_user',
             'is_archived', 'is_readonly',
             'unread', 'last_message', 'member_count',
+            'members',  # ← add
             'created_at', 'updated_at',
         ]
+
+    def get_members(self, obj):
+        return UserMiniSerializer(obj.members.all(), many=True, context=self.context).data
 
     # ───── computed ─────
 

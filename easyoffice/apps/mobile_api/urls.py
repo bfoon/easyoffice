@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from apps.mobile_api import views
+from apps.mobile_api import views_tasks
 
 app_name = 'mobile_api'
 
@@ -23,6 +24,14 @@ urlpatterns = [
     path('messages/<uuid:message_id>/',         views.MessageDeleteView.as_view(),   name='message_delete'),
     path('messages/<uuid:message_id>/react/',   views.ReactionToggleView.as_view(),  name='message_react'),
     path('rooms/<uuid:room_id>/upload/', views.RoomUploadView.as_view(), name='room_upload'),
+
+    # TASKS
+    path('tasks/',                          views_tasks.MyTasksView.as_view(),              name='my_tasks'),
+    path('tasks/recent-closed/',            views_tasks.MyRecentClosedTasksView.as_view(),  name='my_recent_closed'),
+    path('tasks/<uuid:task_id>/',           views_tasks.TaskDetailView.as_view(),           name='task_detail_api'),
+    path('tasks/<uuid:task_id>/on-site/',   views_tasks.TaskOnSiteView.as_view(),           name='task_on_site_api'),
+    path('tasks/<uuid:task_id>/clear-on-site/', views_tasks.TaskClearOnSiteView.as_view(),  name='task_clear_on_site_api'),
+    path('tasks/<uuid:task_id>/complete/',  views_tasks.TaskCompleteView.as_view(),         name='task_complete_api'),
 
     # POLLS
     path('polls/<uuid:poll_id>/vote/',          views.VotePollView.as_view(),    name='poll_vote'),

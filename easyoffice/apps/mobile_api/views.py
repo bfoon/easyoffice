@@ -307,6 +307,34 @@ class RoomMessagesView(APIView):
         except Exception:
             log.exception('mobile send: ancillary helpers failed')
 
+        # Push notifications to other room members (best-effort).
+        try:
+            from apps.mobile_api.push import send_push_to_user
+            sender_name = (
+                getattr(request.user, 'full_name', None)
+                or request.user.get_full_name()
+                or request.user.username
+            )
+            room_title = room.name or 'New message'
+            if msg.message_type == 'image':
+                preview = '🖼 Photo'
+            elif msg.message_type == 'file':
+                preview = '📎 File'
+            elif msg.message_type == 'poll':
+                preview = '📊 Poll'
+            else:
+                preview = (content or '')[:120]
+
+            for member in room.members.exclude(id=request.user.id):
+                send_push_to_user(
+                    member,
+                    title=f'{sender_name} · {room_title}',
+                    body=preview,
+                    data={'room_id': str(room.id), 'type': 'chat_message'},
+                )
+        except Exception:
+            log.exception('mobile send: push fan-out failed')
+
         room.updated_at = timezone.now()
         room.save(update_fields=['updated_at'])
         ChatRoomMember.objects.filter(room=room, user=request.user).update(
@@ -465,6 +493,26 @@ class RoomUploadView(APIView):
         )
         room.save(update_fields=['updated_at'])
 
+        # Push notifications to other room members (best-effort).
+        try:
+            from apps.mobile_api.push import send_push_to_user
+            sender_name = (
+                getattr(request.user, 'full_name', None)
+                or request.user.get_full_name()
+                or request.user.username
+            )
+            room_title = room.name or 'New message'
+            preview = '🖼 Photo' if is_image else '📎 File'
+            for member in room.members.exclude(id=request.user.id):
+                send_push_to_user(
+                    member,
+                    title=f'{sender_name} · {room_title}',
+                    body=preview,
+                    data={'room_id': str(room.id), 'type': 'chat_message'},
+                )
+        except Exception:
+            log.exception('mobile upload: push fan-out failed')
+
         payload = _serialize_chat_message(msg, viewer=request.user)
         try:
             async_to_sync(get_channel_layer().group_send)(
@@ -583,6 +631,25 @@ class CreatePollView(APIView):
 
         room.updated_at = timezone.now()
         room.save(update_fields=['updated_at'])
+
+        # Push notifications to other room members (best-effort).
+        try:
+            from apps.mobile_api.push import send_push_to_user
+            sender_name = (
+                getattr(request.user, 'full_name', None)
+                or request.user.get_full_name()
+                or request.user.username
+            )
+            room_title = room.name or 'New message'
+            for member in room.members.exclude(id=request.user.id):
+                send_push_to_user(
+                    member,
+                    title=f'{sender_name} · {room_title}',
+                    body=f'📊 Poll: {question[:100]}',
+                    data={'room_id': str(room.id), 'type': 'chat_message'},
+                )
+        except Exception:
+            log.exception('mobile poll: push fan-out failed')
 
         # broadcast
         try:

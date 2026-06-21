@@ -155,9 +155,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def chat_message(self, event):
         await self.send(text_data=json.dumps(event['payload']))
 
-    async def chat_typing(self, event):
-        await self.send(text_data=json.dumps(event['payload']))
-
     async def chat_reaction(self, event):
         await self.send(text_data=json.dumps(event['payload']))
 
@@ -177,7 +174,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Broadcast pin/unpin events to every open client in the room."""
         await self.send(text_data=json.dumps(event['payload']))
 
-    # ── Add this method to ChatConsumer ────────────────────────────────────────
     async def chat_typing(self, event):
         """
         Forward a 'typing' signal from the channel-layer group out to this
@@ -267,6 +263,25 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             from apps.messaging.views import _notify_offline_members
             _notify_offline_members(room, user, msg)
+        except Exception:
+            pass
+
+        # ── Push notifications to other room members (best-effort) ──────────
+        # This is the socket path the mobile app actually uses to send
+        # messages, so the push fan-out must live here too — not only in the
+        # REST views.
+        try:
+            from apps.mobile_api.push import send_push_to_user
+            sender_name = self._safe_full_name(user)
+            room_title = room.name or 'New message'
+            preview = (content or '')[:120]
+            for member in room.members.exclude(id=user.id):
+                send_push_to_user(
+                    member,
+                    title=f'{sender_name} · {room_title}',
+                    body=preview,
+                    data={'room_id': str(room.id), 'type': 'chat_message'},
+                )
         except Exception:
             pass
 

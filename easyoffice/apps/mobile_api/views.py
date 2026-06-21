@@ -30,6 +30,7 @@ from apps.core.models import User
 from apps.messaging.models import (
     ChatRoom, ChatRoomMember, ChatMessage,
     ChatPoll, ChatPollOption, ChatPollVote,
+    DeviceToken,
 )
 from apps.mobile_api.serializers import (
     UserMiniSerializer,
@@ -711,22 +712,29 @@ class DeviceTokenView(APIView):
     POST /api/mobile/v1/device-tokens/
     Body: { platform: 'ios'|'android', token: '...', app_version: '...' }
 
-    Stub: persists the token on the user model. Wire up FCM / APNs in a
-    later phase — the mobile app already sends what's needed.
+    Stores (or refreshes) this device's push token for the current user.
     """
 
     def post(self, request):
         ser = DeviceTokenSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        # Implement DeviceToken model in apps/mobile_api/models.py to persist.
-        # For now, log and accept so the mobile app's pipeline doesn't break.
-        log.info(
-            'device-token register: user=%s platform=%s token=%s...',
-            request.user.id,
-            ser.validated_data['platform'],
-            ser.validated_data['token'][:12],
+
+        token = ser.validated_data['token']
+        platform = ser.validated_data['platform']
+        app_version = ser.validated_data.get('app_version', '')
+
+        # A token uniquely identifies a device install. If it already exists,
+        # make sure it points at the current user (handles a shared phone /
+        # account switch) and refresh its metadata.
+        obj, created = DeviceToken.objects.update_or_create(
+            token=token,
+            defaults={
+                'user': request.user,
+                'platform': platform,
+                'app_version': app_version,
+            },
         )
-        return Response({'ok': True})
+        return Response({'ok': True, 'created': created})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

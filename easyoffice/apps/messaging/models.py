@@ -276,6 +276,20 @@ class HiddenMessage(models.Model):
         unique_together = ('user', 'message')
         indexes = [models.Index(fields=['user', 'message'])]
 
+class DeviceToken(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='device_tokens')
+    token = models.CharField(max_length=512, unique=True)
+    platform = models.CharField(max_length=16, default='android')
+    app_version = models.CharField(max_length=32, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['user'])]
+
+    def __str__(self):
+        return f'{self.user} · {self.platform} · {self.token[:12]}…'
 # ─────────────────────────────────────────────────────────────────────────────
 # Wire up transparent decryption on ORM load
 # MUST be at the bottom, AFTER ChatMessage is defined.

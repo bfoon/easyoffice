@@ -231,6 +231,18 @@ class RoomMessagesView(APIView):
         if before:
             qs = qs.filter(created_at__lt=before)
 
+        # Exclude messages this user has hidden ("delete for me").
+        try:
+            from apps.messaging.models import HiddenMessage
+            hidden_ids = set(
+                HiddenMessage.objects.filter(user=request.user)
+                .values_list('message_id', flat=True)
+            )
+            if hidden_ids:
+                qs = qs.exclude(id__in=hidden_ids)
+        except Exception:
+            log.exception('mobile messages: hidden-message filter failed')
+
         messages = list(qs.order_by('-created_at')[:limit])
         messages.reverse()  # oldest → newest for the client
 
@@ -326,7 +338,7 @@ class RoomMessagesView(APIView):
 
 
 class MessageDeleteView(APIView):
-    """DELETE /api/mobile/v1/messages/<message_id>/ — soft delete."""
+    """DELETE /api/mobile/v1/messages/<message_id>/ — soft delete (for everyone)."""
 
     def delete(self, request, message_id):
         msg = get_object_or_404(
@@ -460,6 +472,63 @@ class RoomUploadView(APIView):
         except Exception:
             pass
         return Response(payload, status=201)
+
+
+class MessageEditView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, message_id):
+        from apps.messaging.models import ChatMessage
+        from apps.messaging.views import _serialize_chat_message
+        from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
+        from django.utils import timezone
+
+        msg = ChatMessage.objects.filter(id=message_id).first()
+        if not msg:
+            return Response({'error': 'Not found'}, status=404)
+        # Only the sender can edit, and only text messages.
+        if msg.sender_id != request.user.id:
+            return Response({'error': 'Not your message'}, status=403)
+        if msg.is_deleted:
+            return Response({'error': 'Message deleted'}, status=400)
+        if msg.message_type not in ('text',):
+            return Response({'error': 'Only text messages can be edited'}, status=400)
+
+        new_content = (request.data.get('content') or '').strip()
+        if not new_content:
+            return Response({'error': 'Content required'}, status=400)
+
+        msg.content = new_content       # re-encrypted on save by the model
+        msg.is_edited = True
+        msg.edited_at = timezone.now()
+        msg.save(update_fields=['content', 'is_edited', 'edited_at'])
+
+        payload = _serialize_chat_message(msg, viewer=request.user)
+        try:
+            async_to_sync(get_channel_layer().group_send)(
+                f'chat_{msg.room_id}',
+                {'type': 'chat.message', 'payload': payload},
+            )
+        except Exception:
+            pass
+        return Response(payload, status=200)
+
+
+class MessageHideView(APIView):
+    """POST /api/mobile/v1/messages/<message_id>/hide/ — 'delete for me' only."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, message_id):
+        from apps.messaging.models import ChatMessage, HiddenMessage
+        msg = ChatMessage.objects.filter(
+            id=message_id, room__members=request.user
+        ).first()
+        if not msg:
+            return Response({'error': 'Not found'}, status=404)
+        HiddenMessage.objects.get_or_create(user=request.user, message=msg)
+        return Response({'status': 'ok'}, status=200)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POLLS

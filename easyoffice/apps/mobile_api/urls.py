@@ -24,6 +24,8 @@ urlpatterns = [
     path('messages/<uuid:message_id>/',         views.MessageDeleteView.as_view(),   name='message_delete'),
     path('messages/<uuid:message_id>/react/',   views.ReactionToggleView.as_view(),  name='message_react'),
     path('rooms/<uuid:room_id>/upload/', views.RoomUploadView.as_view(), name='room_upload'),
+    path('messages/<uuid:message_id>/edit/', views.MessageEditView.as_view(), name='message_edit'),
+    path('messages/<uuid:message_id>/hide/', views.MessageHideView.as_view(), name='message_hide'),
 
     # TASKS
     path('tasks/',                          views_tasks.MyTasksView.as_view(),              name='my_tasks'),

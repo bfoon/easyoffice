@@ -917,7 +917,7 @@ class ChatRoomView(LoginRequiredMixin, View):
             room.save(update_fields=['updated_at'])
             ChatRoomMember.objects.filter(room=room, user=request.user).update(last_read=timezone.now())
             _broadcast_chat_message(new_message)
-            # Notify offline/away members via email
+            # Notify offline/away members via email + push
             _notify_offline_members(room, request.user, new_message)
 
         # Fetch/AJAX callers get JSON back — no page reload
@@ -1482,6 +1482,12 @@ class ChatAttachSharedFileView(LoginRequiredMixin, View):
         except Exception:
             pass
 
+        # Notify offline members (email) + push to mobile devices.
+        try:
+            _notify_offline_members(room, request.user, msg)
+        except Exception:
+            pass
+
         return JsonResponse({'ok': True, 'payload': payload})
 
 
@@ -1541,6 +1547,10 @@ class ForwardChatMessageView(LoginRequiredMixin, View):
         target_room.save(update_fields=['updated_at'])
         ChatRoomMember.objects.filter(room=target_room, user=request.user).update(last_read=timezone.now())
         _broadcast_chat_message(forwarded)
+        try:
+            _notify_offline_members(target_room, request.user, forwarded)
+        except Exception:
+            pass
 
         return JsonResponse({
             'ok': True,
@@ -1717,6 +1727,12 @@ class CreatePollView(LoginRequiredMixin, View):
         payload['poll'] = _serialize_poll_for_user(poll, request.user)
 
         _broadcast_chat_message(msg, viewer=request.user)
+
+        # Notify offline members (email) + push to mobile devices.
+        try:
+            _notify_offline_members(room, request.user, msg)
+        except Exception:
+            pass
 
         return JsonResponse({'ok': True, 'payload': payload})
 
@@ -2116,15 +2132,24 @@ _IDLE_THRESHOLD   = 300  # idle    if last heartbeat within this many seconds
 
 def _notify_offline_members(room, sender, message):
     """
-    After a message is sent, email any room members who are not currently online.
-    Runs in a background thread so it never slows down the HTTP response.
+    After a message is sent, email any room members who are not currently online,
+    AND send a Firebase push notification to their mobile devices.
+
+    Both run in a background thread so they never slow down the HTTP response.
+
+    This is the SINGLE place push notifications are sent for the web/REST/
+    socket message paths — every send path already calls this helper, so the
+    consumer should NOT also send push (that would double-notify).
     """
     import threading
 
     def _do_notify():
         try:
-            # Get all room members except the sender
-            members = room.members.exclude(id=sender.id).select_related('staffprofile')
+            members = list(
+                room.members.exclude(id=sender.id).select_related('staffprofile')
+            )
+
+            # 1. Email offline members (existing behaviour)
             for recipient in members:
                 try:
                     _send_offline_message_notification(
@@ -2135,6 +2160,39 @@ def _notify_offline_members(room, sender, message):
                     )
                 except Exception:
                     _presence_log.exception('Notification failed for user %s', recipient.pk)
+
+            # 2. Push to mobile devices (Firebase). Sent to ALL other members,
+            #    not only offline ones — a phone can be backgrounded while the
+            #    user still looks "online" on web, and FCM delivery is cheap.
+            try:
+                from apps.mobile_api.push import send_push_to_user
+                sender_name = _safe_full_name(sender)
+                room_title = room.name or 'New message'
+
+                mtype = getattr(message, 'message_type', 'text')
+                if mtype == 'image':
+                    preview = '🖼 Photo'
+                elif mtype == 'file':
+                    preview = '📎 File'
+                elif mtype == 'poll':
+                    preview = '📊 Poll'
+                else:
+                    preview = (message.content or '')[:120]
+
+                for recipient in members:
+                    try:
+                        sent = send_push_to_user(
+                            recipient,
+                            title=f'{sender_name} · {room_title}',
+                            body=preview,
+                            data={'room_id': str(room.id), 'type': 'chat_message'},
+                        )
+                        _presence_log.info('web push: user=%s sent=%s', recipient.pk, sent)
+                    except Exception:
+                        _presence_log.exception('web push failed for user %s', recipient.pk)
+            except Exception:
+                _presence_log.exception('web push fan-out failed')
+
         except Exception:
             _presence_log.exception('_notify_offline_members failed')
 

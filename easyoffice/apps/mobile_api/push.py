@@ -4,8 +4,10 @@ apps/mobile_api/push.py
 Firebase Cloud Messaging sender for the EasyOffice mobile app.
 
 Reads the service-account key from the FIREBASE_CREDENTIALS env var,
-initializes the Firebase Admin SDK once, and exposes send_push_to_user()
-which pushes a notification to every device a user has registered.
+initializes the Firebase Admin SDK once, and exposes:
+
+    send_push_to_user(user, title, body, data)   → one user, all their devices
+    send_push_to_users(users, title, body, data)  → many users
 
 Dead tokens (UNREGISTERED / invalid) are pruned automatically.
 """
@@ -65,7 +67,7 @@ def send_push_to_user(user, title, body, data=None):
     Send a notification to all of `user`'s registered devices.
 
     `data` is an optional dict of string key/values delivered alongside the
-    notification (e.g. room_id) so the app can deep-link on tap.
+    notification (e.g. room_id, type) so the app can deep-link on tap.
 
     Returns the number of devices successfully sent to. Best-effort: any
     failure is logged, never raised.
@@ -126,3 +128,22 @@ def send_push_to_user(user, title, body, data=None):
             log.exception('push: dead-token cleanup failed')
 
     return sent
+
+
+def send_push_to_users(users, title, body, data=None):
+    """
+    Fan out a push to several users. Accepts any iterable of User objects
+    (or anything truthy that send_push_to_user accepts). Returns the total
+    number of devices reached across all users.
+
+    Best-effort: a failure for one user never stops the others.
+    """
+    total = 0
+    for u in users:
+        if u is None:
+            continue
+        try:
+            total += send_push_to_user(u, title, body, data=data)
+        except Exception:
+            log.exception('send_push_to_users: failed for one user')
+    return total

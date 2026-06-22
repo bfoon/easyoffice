@@ -3,6 +3,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from apps.mobile_api import views
 from apps.mobile_api import views_tasks
+from apps.mobile_api import views_files_sign as fs
 
 app_name = 'mobile_api'
 
@@ -47,4 +48,17 @@ urlpatterns = [
 
     # DEVICE TOKENS
     path('device-tokens/',                      views.DeviceTokenView.as_view(), name='device_tokens'),
+
+    # ── Files ────────────────────────────────────────────────────────────────
+    path('files/', fs.MobileFileListView.as_view(), name='mobile_file_list'),
+    path('files/<uuid:file_id>/', fs.MobileFileDetailView.as_view(), name='mobile_file_detail'),
+
+    # ── Signatures ───────────────────────────────────────────────────────────
+    path('sign/requests/', fs.MobileSignRequestsView.as_view(), name='mobile_sign_requests'),
+    path('sign/requests/<uuid:request_id>/', fs.MobileSignRequestDetailView.as_view(), name='mobile_sign_detail'),
+    path('sign/requests/<uuid:request_id>/fields/<uuid:field_id>/', fs.MobileSignFieldView.as_view(),
+         name='mobile_sign_field'),
+    path('sign/requests/<uuid:request_id>/submit/', fs.MobileSignSubmitView.as_view(), name='mobile_sign_submit'),
+    path('sign/requests/<uuid:request_id>/decline/', fs.MobileSignDeclineView.as_view(), name='mobile_sign_decline'),
+
 ]

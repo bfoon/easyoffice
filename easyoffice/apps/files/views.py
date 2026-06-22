@@ -1615,17 +1615,24 @@ def _apply_pdf_letterhead(
     width_pct=80.0,
     height_pct=70.0,
 ):
+    # Read the letterhead once into memory so we can spin up an independent
+    # page object for each output page. Reusing a single shared page object
+    # (the original bug) makes every output page point at the same content
+    # stream, so all source pages merge on top of one another — producing
+    # overlapping, repeated, messy pages in "all pages" mode.
+    with open(letterhead_pdf_path, 'rb') as fh:
+        letterhead_bytes = fh.read()
+
     src_reader = PdfReader(source_pdf_path)
-    letter_reader = PdfReader(letterhead_pdf_path)
     writer = PdfWriter()
 
-    if not letter_reader.pages:
+    # Geometry is read from a throwaway copy of the letterhead's first page.
+    geom_base = PdfReader(BytesIO(letterhead_bytes)).pages[0]
+    if geom_base is None:
         raise RuntimeError("Letterhead PDF is empty.")
 
-    letterhead_base = letter_reader.pages[0]
-
-    bg_w = float(letterhead_base.mediabox.width)
-    bg_h = float(letterhead_base.mediabox.height)
+    bg_w = float(geom_base.mediabox.width)
+    bg_h = float(geom_base.mediabox.height)
 
     x_pct = max(0.0, min(100.0, float(x_pct)))
     y_pct = max(0.0, min(100.0, float(y_pct)))
@@ -1640,7 +1647,9 @@ def _apply_pdf_letterhead(
         use_letterhead = (apply_mode == 'all') or (apply_mode == 'first' and index == 0)
 
         if use_letterhead:
-            writer.add_page(letterhead_base)
+            # Fresh, independent letterhead page for THIS output page only.
+            fresh_letterhead = PdfReader(BytesIO(letterhead_bytes)).pages[0]
+            writer.add_page(fresh_letterhead)
             out_page = writer.pages[-1]
 
             if getattr(out_page, "rotation", 0):
@@ -1679,7 +1688,6 @@ def _apply_pdf_letterhead(
     writer.write(output)
     output.seek(0)
     return output
-
 
 def _get_or_create_signature_preview_pdf(sig_req):
     """

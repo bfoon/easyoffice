@@ -82,6 +82,7 @@ MIDDLEWARE = [
     'apps.core.middleware.ActiveUserMiddleware',
     'apps.core.middleware.OfficeBrandingMiddleware',
     'apps.user_admin.middleware.PasswordChangeRequiredMiddleware',
+    'apps.poi.middleware.POIConfinementMiddleware',
 ]
 
 ROOT_URLCONF = 'easyoffice.urls'

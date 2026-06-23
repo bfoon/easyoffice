@@ -434,6 +434,28 @@ class LoginView(View):
             return render(request, self.template_name, {'form': form})
 
         user = form.get_user()
+
+        # ── Block POIs from the main app entirely ─────────────────────────────
+        # A Person-Of-Interest is a real User with a usable password, but must
+        # only ever use the POI portal — never the main EasyOffice app. We check
+        # here, right after authentication succeeds and BEFORE any session,
+        # OTP, or device logic runs, so a POI can never get a main-app session
+        # by any login path (trusted device, device switch, or OTP).
+        if getattr(user, 'poi_profile', None) is not None:
+            SecurityEvent.log(
+                user=user,
+                event_type=SecurityEvent.EventType.LOGIN_FAILED,
+                ip_address=_get_client_ip(request),
+                detail='POI attempted main-app login; redirected to portal.',
+            )
+            return render(request, self.template_name, {
+                'form': form,
+                'error': (
+                    'This account uses the portal. Please sign in using the '
+                    'portal link from your invitation.'
+                ),
+            })
+
         ip = _get_client_ip(request)
         geo = _geo_lookup(ip)
         device_id = _get_device_id(request)

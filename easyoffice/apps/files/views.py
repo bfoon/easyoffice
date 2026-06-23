@@ -2704,6 +2704,18 @@ class FilePreviewInfoView(LoginRequiredMixin, View):
         if not _file_permission_for(request.user, f):
             return JsonResponse({'ok': False, 'error': 'Permission denied.'}, status=403)
 
+        ext = (getattr(f, 'extension', '') or '').lower().strip('.')
+        is_office_editable = ext in {'docx', 'xlsx', 'pptx'}
+
+        # Resolve the collaborative editor URL defensively — if the route
+        # name ever changes we degrade to "not editable" instead of 500ing.
+        editor_url = None
+        if is_office_editable:
+            try:
+                editor_url = reverse('collabora_editor', kwargs={'pk': f.pk})
+            except Exception:
+                editor_url = None
+
         data = {
             'ok': True,
             'id': str(f.pk),
@@ -2711,7 +2723,39 @@ class FilePreviewInfoView(LoginRequiredMixin, View):
             'is_pdf': bool(getattr(f, 'is_pdf', False)),
             'can_edit': bool(_can_edit_file(request.user, f)),
             'preview_url': reverse('file_preview', kwargs={'pk': f.pk}),
+            'is_office_editable': is_office_editable and editor_url is not None,
+            'editor_url': editor_url,
+            'version': getattr(f, 'version', None),
         }
+
+        # ── Version + "who touched it" ────────────────────────────────────
+        def _who(u):
+            if not u:
+                return 'Someone'
+            name = (u.get_full_name() or '').strip() if hasattr(u, 'get_full_name') else ''
+            return name or getattr(u, 'username', None) or 'Someone'
+
+        touchers = []
+        try:
+            rows = f.history_rows.select_related('actor').order_by('-id')[:8]
+            for h in rows:
+                when = getattr(h, 'created_at', None) or getattr(h, 'timestamp', None)
+                touchers.append({
+                    'actor':  _who(getattr(h, 'actor', None)),
+                    'action': (h.get_action_display()
+                               if hasattr(h, 'get_action_display')
+                               else getattr(h, 'action', '')),
+                    'when':   when.isoformat() if when else None,
+                })
+        except Exception:
+            pass
+        data['touchers'] = touchers
+
+        if touchers:
+            top = touchers[0]
+            data['last_touch'] = f"{top['action']} by {top['actor']}".strip()
+        else:
+            data['last_touch'] = f"Uploaded by {_who(getattr(f, 'uploaded_by', None))}"
 
         if data['is_pdf']:
             try:

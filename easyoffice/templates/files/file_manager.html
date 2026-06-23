@@ -355,6 +355,14 @@ body.ann-tool-erase-active     .pdfjs-page-wrap { cursor: not-allowed; }
   box-shadow: 0 8px 24px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.10);
   user-select: none;
   min-width: 40px;
+  max-height: calc(100% - 24px);   /* never taller than the preview area */
+  overflow-y: auto;                /* scroll instead of clipping tools     */
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+.ann-toolbar::-webkit-scrollbar { width: 6px; }
+.ann-toolbar::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,.18); border-radius: 6px;
 }
 
 .ann-tool-btn {
@@ -3611,11 +3619,16 @@ button.fm-file-card:focus-visible {
           <i class="bi bi-eye me-2" style="color:var(--eo-accent)"></i>File Preview
         </div>
         <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px" id="previewModalFileName"></div>
+        <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:3px;display:none" id="previewMeta"></div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
         <button type="button" id="lpShareBtn" class="lp-share-btn" onclick="lpOnShareBtnClick()" hidden>
           <i class="bi bi-cast"></i> <span id="lpShareBtnLabel">Share Live</span>
         </button>
+        <a href="#" id="previewEditBtn" class="eo-btn eo-btn-primary eo-btn-sm"
+           target="_blank" rel="noopener" hidden>
+          <i class="bi bi-pencil-square"></i> Edit
+        </a>
         <a href="#" id="previewDownloadBtn" class="eo-btn eo-btn-secondary eo-btn-sm">
           <i class="bi bi-download"></i> Download
         </a>
@@ -5073,6 +5086,35 @@ button.fm-file-card:focus-visible {
       const railFile  = document.getElementById('pdfRailFileName');
       const railCount = document.getElementById('pdfRailPageCount');
       currentMeta = data;
+
+      // ── Office "Edit" button + version / who-touched line ──
+      const editBtn = document.getElementById('previewEditBtn');
+      if (editBtn) {
+        if (data.is_office_editable && data.can_edit && data.editor_url) {
+          editBtn.href   = data.editor_url;
+          editBtn.hidden = false;
+        } else {
+          editBtn.hidden = true;
+          editBtn.removeAttribute('href');
+        }
+      }
+      const metaEl = document.getElementById('previewMeta');
+      if (metaEl) {
+        const bits = [];
+        if (data.version)    bits.push('v' + data.version);
+        if (data.last_touch) bits.push(data.last_touch);
+        if (bits.length) {
+          metaEl.textContent = bits.join('  ·  ');
+          if (Array.isArray(data.touchers) && data.touchers.length) {
+            metaEl.title = data.touchers
+              .map(t => `${t.action} — ${t.actor}`)
+              .join('\n');
+          }
+          metaEl.style.display = 'block';
+        } else {
+          metaEl.style.display = 'none';
+        }
+      }
       if (railFile) railFile.textContent = fileName || data.name || 'Untitled';
       if (!data.is_pdf || !data.can_edit) {
         if (toggleBtn) toggleBtn.hidden = true;

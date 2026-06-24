@@ -4,6 +4,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from apps.mobile_api import views
 from apps.mobile_api import views_tasks
 from apps.mobile_api import views_files_sign as fs
+from apps.mobile_api import views_files_upload
 
 app_name = 'mobile_api'
 
@@ -52,6 +53,8 @@ urlpatterns = [
     # ── Files ────────────────────────────────────────────────────────────────
     path('files/', fs.MobileFileListView.as_view(), name='mobile_file_list'),
     path('files/<uuid:file_id>/', fs.MobileFileDetailView.as_view(), name='mobile_file_detail'),
+    path('files/upload/', views_files_upload.MobileFileUploadView.as_view(),
+         name='mobile_file_upload'),
 
     # ── Signatures ───────────────────────────────────────────────────────────
     path('sign/requests/', fs.MobileSignRequestsView.as_view(), name='mobile_sign_requests'),

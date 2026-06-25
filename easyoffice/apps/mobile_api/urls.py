@@ -5,6 +5,7 @@ from apps.mobile_api import views
 from apps.mobile_api import views_tasks
 from apps.mobile_api import views_files_sign as fs
 from apps.mobile_api import views_files_upload
+from apps.mobile_api import views_file_bridge
 
 app_name = 'mobile_api'
 
@@ -55,6 +56,12 @@ urlpatterns = [
     path('files/<uuid:file_id>/', fs.MobileFileDetailView.as_view(), name='mobile_file_detail'),
     path('files/upload/', views_files_upload.MobileFileUploadView.as_view(),
          name='mobile_file_upload'),
+    path('rooms/<uuid:room_id>/attach-file/',
+         views_file_bridge.MobileAttachFileView.as_view(),
+         name='mobile_attach_file'),
+    path('rooms/<uuid:room_id>/messages/<uuid:message_id>/save-to-files/',
+         views_file_bridge.MobileSaveToFilesView.as_view(),
+         name='mobile_save_to_files'),
 
     # ── Signatures ───────────────────────────────────────────────────────────
     path('sign/requests/', fs.MobileSignRequestsView.as_view(), name='mobile_sign_requests'),

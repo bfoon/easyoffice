@@ -14,6 +14,7 @@ urlpatterns = [
     path('products/new/',             views.ProductCreateView.as_view(),  name='product_create'),
     path('products/<uuid:pk>/',       views.ProductDetailView.as_view(),  name='product_detail'),
     path('products/<uuid:pk>/edit/',  views.ProductUpdateView.as_view(),  name='product_update'),
+    path('products/import/', views.OdooImportView.as_view(), name='product_import'),
 
     # Stock movements
     path('stock/receive/',  views.ReceiveStockView.as_view(),   name='stock_receive'),

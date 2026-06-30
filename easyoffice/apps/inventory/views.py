@@ -23,11 +23,13 @@ from django.views.generic import (
 )
 
 from . import services
+from .importers import import_odoo_products
+
 from .forms import (
     AssetAssignForm, AssetForm, AssetMaintenanceForm, AssetReturnForm,
     CategoryForm, IssueStockForm, LocationForm, ProductForm,
     ReceiveStockForm, StockRequestForm, StockTakeForm, SupplierForm,
-    TransferStockForm,
+    TransferStockForm, OdooImportForm,
 )
 from .models import (
     Asset, AssetAssignment, AssetEvent, AssetMaintenance, Category, Location,
@@ -1368,3 +1370,67 @@ class BestSellersCardView(_InventoryContextMixin, InventoryAccessMixin, View):
             'footer': request.GET.get('footer') or '',
             'now':    timezone.now(),
         })
+
+
+class OdooImportView(InventoryManagerMixin, View):
+    """
+    Upload an Odoo product.template export and import it.
+
+    GET  → show the upload form.
+    POST → run the import. Defaults to a dry-run so the user always sees a
+           preview first; they re-submit with "Preview only" unticked to
+           commit.
+    """
+    template_name = 'inventory/odoo_import.html'
+    inv_module = 'products'  # ModuleAccessMixin-aware; needs OPERATE on products
+    inv_level = 'operate'
+
+    def get(self, request, *args, **kwargs):
+        return render(request, self.template_name, {
+            'form': OdooImportForm(),
+            'result': None,
+            'can_manage': True,
+        })
+
+    def post(self, request, *args, **kwargs):
+        form = OdooImportForm(request.POST, request.FILES)
+        result = None
+
+        if form.is_valid():
+            cd = form.cleaned_data
+            try:
+                result = import_odoo_products(
+                    cd['file'],
+                    location=cd.get('location'),
+                    actor=request.user,
+                    seed_stock=cd.get('seed_stock', True),
+                    import_images=cd.get('import_images', False),
+                    update_existing=cd.get('update_existing', True),
+                    dry_run=cd.get('dry_run', True),
+                )
+            except Exception as exc:  # noqa: BLE001
+                messages.error(request, f'Import failed: {exc}')
+            else:
+                d = result.as_dict()
+                if d['dry_run']:
+                    messages.info(
+                        request,
+                        f"Preview: {d['created']} new, {d['updated']} updated, "
+                        f"{d['skipped']} skipped. Untick “Preview only” and "
+                        f"re-submit to commit."
+                    )
+                else:
+                    messages.success(
+                        request,
+                        f"Imported {d['created']} new and updated {d['updated']} "
+                        f"product(s); seeded stock for {d['stock_seeded']}."
+                    )
+        else:
+            messages.error(request, 'Please fix the errors below.')
+
+        return render(request, self.template_name, {
+            'form': form,
+            'result': result.as_dict() if result else None,
+            'can_manage': True,
+        })
+

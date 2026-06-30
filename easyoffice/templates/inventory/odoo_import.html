@@ -1,0 +1,146 @@
+{% extends "inventory/inventory_base.html" %}
+{% load humanize %}
+{% block title %}Import from Odoo — Inventory{% endblock %}
+{% block breadcrumb %}<a href="{% url 'inventory:dashboard' %}">Inventory</a> / <a href="{% url 'inventory:product_list' %}">Products</a> / Import{% endblock %}
+
+{% block inv_content %}
+
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Bulk import</div>
+      <h1 class="inv-page-title">Import products from Odoo</h1>
+      <p class="inv-page-subtitle">Upload a <strong>Product (product.template)</strong> Excel export</p>
+    </div>
+    <div class="inv-page-actions">
+      <a href="{% url 'inventory:product_list' %}" class="inv-btn">← Back to products</a>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-7">
+      <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+
+        <div class="inv-card">
+          {% if form.non_field_errors %}
+          <div style="padding:10px 14px;border-radius:8px;background:#fee2e2;color:#991b1b;font-size:.84rem;margin-bottom:14px">
+            {{ form.non_field_errors }}
+          </div>
+          {% endif %}
+
+          <div style="margin-bottom:16px">
+            <label class="inv-form-label">{{ form.file.label }}{% if form.file.field.required %} <span style="color:#dc2626">*</span>{% endif %}</label>
+            {{ form.file }}
+            {% if form.file.help_text %}<small style="color:#64748b;font-size:.7rem;display:block;margin-top:3px">{{ form.file.help_text }}</small>{% endif %}
+            {% if form.file.errors %}<div style="color:#dc2626;font-size:.74rem;margin-top:3px">{{ form.file.errors|join:", " }}</div>{% endif %}
+          </div>
+
+          <div style="margin-bottom:16px">
+            <label class="inv-form-label">{{ form.location.label }}</label>
+            {{ form.location }}
+            {% if form.location.help_text %}<small style="color:#64748b;font-size:.7rem;display:block;margin-top:3px">{{ form.location.help_text }}</small>{% endif %}
+            {% if form.location.errors %}<div style="color:#dc2626;font-size:.74rem;margin-top:3px">{{ form.location.errors|join:", " }}</div>{% endif %}
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:10px;padding:14px;background:#f8fafc;border-radius:10px;margin-bottom:16px">
+            {% for field in form %}
+              {% if field.name == 'seed_stock' or field.name == 'import_images' or field.name == 'update_existing' or field.name == 'dry_run' %}
+              <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">
+                {{ field }}
+                <span>
+                  <span style="font-size:.85rem;font-weight:600;color:#0f172a">{{ field.label }}</span>
+                  {% if field.help_text %}<small style="display:block;color:#64748b;font-size:.7rem">{{ field.help_text }}</small>{% endif %}
+                </span>
+              </label>
+              {% endif %}
+            {% endfor %}
+          </div>
+
+          <div style="display:flex;gap:8px">
+            <button class="inv-btn inv-btn-primary"><i class="bi bi-upload"></i> Run import</button>
+            <a href="{% url 'inventory:product_list' %}" class="inv-btn">Cancel</a>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <div class="col-lg-5">
+      <div class="inv-card" style="background:#f0f9ff;border:1px solid #bae6fd">
+        <h3 class="inv-card-title" style="margin-bottom:10px"><i class="bi bi-info-circle"></i> How it maps</h3>
+        <div style="font-size:.82rem;color:#0c4a6e;line-height:1.7">
+          <div><strong>Name</strong> → product name</div>
+          <div><strong>Internal Reference</strong> → SKU <small>(auto-generated when blank)</small></div>
+          <div><strong>Sales Price</strong> → sell price</div>
+          <div><strong>Product Category</strong> → category (parent → child)</div>
+          <div><strong>Unit</strong> → unit label</div>
+          <div><strong>Quantity On Hand</strong> → opening stock</div>
+        </div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #bae6fd;font-size:.78rem;color:#0c4a6e">
+          <i class="bi bi-shield-check"></i> Leave <strong>Preview only</strong> ticked to validate first — nothing is written until you re-submit with it unticked.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if result %}
+  <div class="inv-card" style="margin-top:18px">
+    <div class="inv-card-header" style="padding:0 0 14px 0">
+      <h3 class="inv-card-title">
+        {% if result.dry_run %}<span class="inv-chip inv-chip-amber">Preview</span>{% else %}<span class="inv-chip inv-chip-green">Committed</span>{% endif %}
+        Import result
+      </h3>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px">
+      {% with r=result %}
+      <div style="padding:12px;background:#f8fafc;border-radius:10px;text-align:center">
+        <div style="font-size:1.4rem;font-weight:800;color:#0f172a">{{ r.total_rows|intcomma }}</div>
+        <div style="font-size:.66rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Rows read</div>
+      </div>
+      <div style="padding:12px;background:#f0fdf4;border-radius:10px;text-align:center">
+        <div style="font-size:1.4rem;font-weight:800;color:#15803d">{{ r.created|intcomma }}</div>
+        <div style="font-size:.66rem;color:#166534;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Created</div>
+      </div>
+      <div style="padding:12px;background:#eff6ff;border-radius:10px;text-align:center">
+        <div style="font-size:1.4rem;font-weight:800;color:#1d4ed8">{{ r.updated|intcomma }}</div>
+        <div style="font-size:.66rem;color:#1e40af;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Updated</div>
+      </div>
+      <div style="padding:12px;background:#f8fafc;border-radius:10px;text-align:center">
+        <div style="font-size:1.4rem;font-weight:800;color:#64748b">{{ r.skipped|intcomma }}</div>
+        <div style="font-size:.66rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Skipped</div>
+      </div>
+      <div style="padding:12px;background:#f8fafc;border-radius:10px;text-align:center">
+        <div style="font-size:1.4rem;font-weight:800;color:#0f172a">{{ r.categories_made|intcomma }}</div>
+        <div style="font-size:.66rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Categories</div>
+      </div>
+      <div style="padding:12px;background:#f8fafc;border-radius:10px;text-align:center">
+        <div style="font-size:1.4rem;font-weight:800;color:#0f172a">{{ r.stock_seeded|intcomma }}</div>
+        <div style="font-size:.66rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Stock seeded</div>
+      </div>
+      {% endwith %}
+    </div>
+
+    {% if result.issues %}
+    <div style="margin-top:16px">
+      <div style="font-size:.78rem;font-weight:700;color:#b45309;margin-bottom:8px">
+        <i class="bi bi-exclamation-triangle"></i> {{ result.issues|length }} issue(s)
+      </div>
+      <div style="max-height:240px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px">
+        <table class="inv-table">
+          <thead><tr><th>Row</th><th>Product</th><th>Message</th></tr></thead>
+          <tbody>
+            {% for i in result.issues %}
+            <tr>
+              <td><small class="inv-table-mono">{{ i.row }}</small></td>
+              <td><small>{{ i.name }}</small></td>
+              <td><small style="color:#b45309">{{ i.message }}</small></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+{% endblock %}

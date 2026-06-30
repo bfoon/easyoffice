@@ -172,3 +172,48 @@ class StockRequestForm(forms.ModelForm):
         model  = StockRequest
         fields = ['department', 'location', 'purpose']
         widgets = {'purpose': forms.Textarea(attrs={'rows': 2, 'class': 'eo-textarea'})}
+
+
+class OdooImportForm(forms.Form):
+    """Upload an Odoo product.template Excel export."""
+
+    file = forms.FileField(
+        label='Odoo export (.xlsx)',
+        help_text='The file from Odoo: Products → Action → Export.',
+        widget=forms.ClearableFileInput(attrs={'class': 'inv-input', 'accept': '.xlsx,.xls'}),
+    )
+    location = forms.ModelChoiceField(
+        queryset=Location.objects.filter(is_active=True),
+        required=False,
+        label='Seed opening stock into',
+        help_text='Where "Quantity On Hand" should be recorded. Leave blank to skip stock.',
+        widget=forms.Select(attrs={'class': 'inv-select'}),
+    )
+    seed_stock = forms.BooleanField(
+        required=False, initial=True, label='Create opening-stock movements',
+    )
+    import_images = forms.BooleanField(
+        required=False, initial=False,
+        label='Import embedded images',
+        help_text='Odoo placeholder graphics are skipped automatically.',
+    )
+    update_existing = forms.BooleanField(
+        required=False, initial=True,
+        label='Update products that already exist (match on SKU / name)',
+    )
+    dry_run = forms.BooleanField(
+        required=False, initial=True,
+        label='Preview only (dry-run) — validate without saving',
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        f = cleaned.get('file')
+        if f and not str(f.name).lower().endswith(('.xlsx', '.xls')):
+            raise forms.ValidationError('Please upload an .xlsx or .xls file.')
+        if cleaned.get('seed_stock') and not cleaned.get('location') and not cleaned.get('dry_run'):
+            raise forms.ValidationError(
+                'Choose a location for opening stock, or untick '
+                '"Create opening-stock movements".'
+            )
+        return cleaned

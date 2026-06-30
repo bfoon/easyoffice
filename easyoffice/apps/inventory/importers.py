@@ -90,7 +90,9 @@ UNIT_MAP = {
     'days':   'day',
 }
 
-SKU_MAXLEN = 40   # matches Product.sku max_length
+SKU_MAXLEN  = 40    # matches Product.sku max_length
+NAME_MAXLEN = 200   # matches Product.name max_length
+CAT_MAXLEN  = 100   # matches Category.name max_length
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -229,6 +231,11 @@ def _get_or_create_category(path: str, result: ImportResult, dry_run: bool):
         parent_name = segments[0]
         child_name = ' / '.join(segments[1:])
 
+    # Category.name is capped at 100 chars.
+    if parent_name:
+        parent_name = parent_name[:CAT_MAXLEN]
+    child_name = child_name[:CAT_MAXLEN]
+
     parent = None
     if parent_name:
         if dry_run:
@@ -296,6 +303,49 @@ def _decode_image(b64: str):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# Workbook reader (openpyxl — no pandas dependency)
+# ════════════════════════════════════════════════════════════════════════════
+
+def _read_xlsx(path_or_filelike, sheet_name=0):
+    """
+    Read the first row as headers and return (headers, rows) where each row
+    is a dict keyed by the header string. Uses openpyxl in read-only mode so
+    large exports stream cheaply.
+
+    `sheet_name` may be an int index (0 = first sheet) or a sheet title.
+    """
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path_or_filelike, read_only=True, data_only=True)
+    try:
+        if isinstance(sheet_name, int):
+            ws = wb[wb.sheetnames[sheet_name]]
+        else:
+            ws = wb[sheet_name]
+
+        row_iter = ws.iter_rows(values_only=True)
+        try:
+            raw_headers = next(row_iter)
+        except StopIteration:
+            return [], []
+
+        headers = [('' if h is None else str(h)) for h in raw_headers]
+
+        rows = []
+        for values in row_iter:
+            # Skip fully-blank rows (trailing empties are common in exports)
+            if values is None or all(v is None or str(v).strip() == '' for v in values):
+                continue
+            row = {}
+            for i, h in enumerate(headers):
+                row[h] = values[i] if i < len(values) else None
+            rows.append(row)
+        return headers, rows
+    finally:
+        wb.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # Main entry point
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -331,33 +381,48 @@ def import_odoo_products(
     dry_run : bool
         Parse and validate but write nothing. Returns a full report.
     """
-    import pandas as pd  # local import keeps pandas optional at app load
+    from openpyxl import load_workbook  # local import keeps openpyxl optional at app load
 
     if seed_stock and location is None and not dry_run:
         raise ValueError('A location is required when seed_stock=True.')
 
-    df = pd.read_excel(path_or_filelike, sheet_name=sheet_name, dtype=str)
-    cols = _resolve_columns(list(df.columns))
+    headers, data_rows = _read_xlsx(path_or_filelike, sheet_name)
+    cols = _resolve_columns(headers)
 
     if COL_NAME not in cols:
         raise ValueError(
             "This doesn't look like an Odoo product export — no 'Name' column found. "
-            f"Columns seen: {list(df.columns)}"
+            f"Columns seen: {headers}"
         )
 
-    result = ImportResult(total_rows=len(df), dry_run=dry_run)
+    result = ImportResult(total_rows=len(data_rows), dry_run=dry_run)
     taken_skus: set[str] = set()
 
     # We run the whole thing in a transaction; on dry_run we roll back at the end.
-    sid = transaction.set_autocommit(False)
+    transaction.set_autocommit(False)
     try:
-        for idx, row in df.iterrows():
+        for idx, row in enumerate(data_rows):
             excel_row = idx + 2  # header is row 1
-            name = _clean(row.get(cols.get(COL_NAME)))
-            if not name:
+            full_name = _clean(row.get(cols.get(COL_NAME)))
+            if not full_name:
                 result.skipped += 1
                 result.add_issue(excel_row, '(blank)', 'No product name — skipped.')
                 continue
+
+            # Product.name is capped at 200 chars. Long Odoo names are really
+            # full spec sheets — keep the whole thing in `description` and use
+            # a trimmed-on-a-word-boundary version as the name.
+            name = full_name
+            overflow_description = ''
+            if len(full_name) > NAME_MAXLEN:
+                cut = full_name[:NAME_MAXLEN].rsplit(' ', 1)[0] or full_name[:NAME_MAXLEN]
+                name = (cut[:NAME_MAXLEN - 1].rstrip() + '…')
+                overflow_description = full_name
+                result.add_issue(
+                    excel_row, name,
+                    f'Name was {len(full_name)} chars — trimmed to fit; '
+                    f'full text saved to description.',
+                )
 
             # ── SKU resolution ────────────────────────────────────────────
             raw_ref = _clean(row.get(cols.get(COL_REF), '')) if COL_REF in cols else ''
@@ -405,6 +470,10 @@ def import_odoo_products(
                 category=category,
                 kind=kind,
             )
+            # Only set description when the name overflowed, so we don't
+            # blank out a description the user may have written by hand.
+            if overflow_description:
+                defaults['description'] = overflow_description
 
             if existing:
                 for f_, v_ in defaults.items():

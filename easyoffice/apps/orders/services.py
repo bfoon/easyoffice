@@ -63,6 +63,111 @@ User = get_user_model()
 
 
 # ════════════════════════════════════════════════════════════════════════
+# Customer resolution — link, match, or auto-create from contact details
+# ════════════════════════════════════════════════════════════════════════
+
+def _model_field_names(model) -> set:
+    return {f.name for f in model._meta.get_fields()}
+
+
+def _tolerant_create(model, wanted: dict):
+    """Create `model` using only the kwargs that are real fields on it."""
+    fields = _model_field_names(model)
+    return model.objects.create(**{k: v for k, v in wanted.items() if k in fields and v is not None})
+
+
+def _find_or_create_customer_from_contact(*, name: str, phone: str, email: str,
+                                          address: str, actor=None):
+    """
+    Resolve manually-typed contact details to a Customer record.
+
+    Matching (in order — email and phone are identifying, a bare name is not):
+        1. Existing customer with the same email (case-insensitive)
+        2. Existing customer with the same phone number
+        3. None → CREATE a new Customer (+ primary CustomerPhone) from the
+           typed details, so the contact is saved for future orders.
+
+    Returns (customer_or_None, created: bool). Fail-soft: any problem
+    returns (None, False) and the order proceeds with just the snapshot
+    fields, exactly like before.
+    """
+    name = (name or '').strip()
+    phone = (phone or '').strip()
+    email = (email or '').strip()
+    address = (address or '').strip()
+
+    if not (name or phone or email):
+        return None, False
+
+    try:
+        from apps.customer_service.models import Customer
+    except Exception:  # pragma: no cover — customer_service unavailable
+        return None, False
+
+    try:
+        # 1. Email match
+        if email:
+            existing = Customer.objects.filter(email__iexact=email).first()
+            if existing:
+                return existing, False
+
+        # 2. Phone match (against the CustomerPhone related rows)
+        if phone:
+            existing = Customer.objects.filter(
+                phones__phone_number=phone,
+            ).first()
+            if existing:
+                return existing, False
+
+        # 3. Create
+        if not name:
+            # Don't create nameless customer shells from a bare phone/email.
+            return None, False
+
+        customer = _tolerant_create(Customer, {
+            'full_name':  name[:180],
+            'email':      email or '',
+            'address':    address or '',
+            'created_by': actor if (actor and getattr(actor, 'is_authenticated', False)) else None,
+        })
+
+        if phone:
+            try:
+                from apps.customer_service.models import CustomerPhone
+                _tolerant_create(CustomerPhone, {
+                    'customer':     customer,
+                    'phone_number': phone[:30],
+                    'is_primary':   True,
+                    'phone_type':   'primary',
+                    'created_by':   actor if (actor and getattr(actor, 'is_authenticated', False)) else None,
+                })
+            except Exception:
+                logger.exception(
+                    'Auto-created customer %s but failed to save phone %s',
+                    customer.pk, phone,
+                )
+
+        logger.info('Auto-created customer %s ("%s") from order contact details.',
+                    customer.pk, name)
+        return customer, True
+
+    except Exception:
+        logger.exception('Customer find-or-create failed for contact "%s"', name)
+        return None, False
+
+
+def _backfill_contact_from_customer(payload: dict, customer) -> dict:
+    """Fill blank contact snapshot fields from the linked Customer."""
+    filled = _payload_from_customer(customer, overrides={
+        k: payload.get(k) for k in
+        ('contact_name', 'contact_phone', 'contact_email', 'delivery_address')
+    })
+    payload = dict(payload)
+    payload.update(filled)
+    return payload
+
+
+# ════════════════════════════════════════════════════════════════════════
 # Order creation
 # ════════════════════════════════════════════════════════════════════════
 
@@ -98,6 +203,43 @@ def create_order_from_payload(payload: dict, *, source: str = OrderSource.PHONE,
         existing = SalesOrder.objects.filter(idempotency_key=idem).first()
         if existing:
             return existing
+
+    # ── Resolve the customer ────────────────────────────────────────────────
+    # Three paths:
+    #   a. customer_id given → link it and backfill blank contact fields from
+    #      the record (so the detail page always shows full contact info).
+    #   b. no customer_id, but contact details typed → match an existing
+    #      customer by email/phone, or auto-create one so the contact is
+    #      saved for future orders. Emails then go to the customer's email
+    #      (notifications._customer_email prefers it over the snapshot).
+    #   c. nothing → order proceeds unlinked, exactly like before.
+    customer_was_created = False
+    customer_auto_linked = False
+    linked_customer = None
+    if payload.get('customer_id'):
+        try:
+            from apps.customer_service.models import Customer
+            linked_customer = Customer.objects.filter(pk=payload['customer_id']).first()
+        except Exception:
+            linked_customer = None
+        if linked_customer:
+            payload = _backfill_contact_from_customer(payload, linked_customer)
+    else:
+        linked_customer, customer_was_created = _find_or_create_customer_from_contact(
+            name=payload.get('contact_name', ''),
+            phone=payload.get('contact_phone', ''),
+            email=payload.get('contact_email', ''),
+            address=payload.get('delivery_address', ''),
+            actor=actor,
+        )
+        if linked_customer:
+            customer_auto_linked = True
+            payload = dict(payload)
+            payload['customer_id'] = linked_customer.pk
+            if not customer_was_created:
+                # Matched an existing customer — backfill anything the agent
+                # left blank from the record we already have.
+                payload = _backfill_contact_from_customer(payload, linked_customer)
 
     # ── Validate inventory-linked items BEFORE creating anything ───────────
     # We resolve each line's optional product_id once, accumulate per-product
@@ -186,6 +328,18 @@ def create_order_from_payload(payload: dict, *, source: str = OrderSource.PHONE,
         message=f'Order created from {order.get_source_display()}',
         payload={'item_count': len(items), 'total': str(order.total)},
     )
+
+    if linked_customer and customer_auto_linked:
+        OrderEvent.objects.create(
+            order=order, kind=OrderEvent.Kind.CUSTOMER_LINK, actor=actor,
+            message=(
+                f'New customer "{linked_customer}" created from contact details and linked.'
+                if customer_was_created else
+                f'Matched existing customer "{linked_customer}" from contact details and linked.'
+            ),
+            payload={'customer_id': str(linked_customer.pk),
+                     'auto_created': customer_was_created},
+        )
 
     if stock_shortfalls:
         summary = '; '.join(

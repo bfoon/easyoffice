@@ -175,6 +175,32 @@
   .pp-opt-price { font-size: .8rem; font-weight: 700; color: var(--eo-text); font-variant-numeric: tabular-nums; }
   .pp-opt-stock { font-size: .65rem; color: #047857; font-weight: 700; margin-top: 2px; }
   .pp-opt-stock.low { color: #c2410c; }
+  .pp-opt-stock.out { color: #dc2626; }
+
+  /* ── Customer typeahead (reuses pp-menu look) ─────────────────────────── */
+  .cust-wrap { position: relative; }
+  .cust-chip {
+    display: none; align-items: center; gap: 8px;
+    margin-top: 8px; padding: 7px 11px;
+    background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px;
+    font-size: .76rem; color: #065f46;
+  }
+  .cust-chip.show { display: flex; }
+  .cust-chip .cc-main { flex: 1; min-width: 0; }
+  .cust-chip .cc-name { font-weight: 700; }
+  .cust-chip .cc-sub { font-size: .68rem; color: #047857; margin-top: 1px; }
+  .cust-chip .cc-unlink {
+    background: transparent; border: 0; cursor: pointer;
+    color: #059669; font-size: .95rem; padding: 2px 4px; border-radius: 6px;
+  }
+  .cust-chip .cc-unlink:hover { background: #d1fae5; color: #065f46; }
+  .cust-new-hint {
+    display: none; align-items: center; gap: 7px;
+    margin-top: 8px; padding: 6px 10px;
+    background: #eff6ff; border: 1px dashed #bfdbfe; border-radius: 8px;
+    font-size: .72rem; color: #1e40af;
+  }
+  .cust-new-hint.show { display: flex; }
   .pp-empty {
     padding: 14px; text-align: center; color: var(--eo-text-muted); font-size: .82rem;
   }
@@ -298,21 +324,34 @@
           <span class="desc">— who is buying?</span>
         </div>
         <div class="nc-card-body">
-          <div class="field full" style="margin-bottom:14px">
-            <label for="{{ header_form.customer.id_for_label }}">Existing customer <span class="opt">(optional)</span></label>
-            <div class="input-wrap has-prefix">
-              <i class="bi bi-search prefix"></i>
-              {{ header_form.customer }}
-            </div>
-            <div class="helper"><i class="bi bi-info-circle"></i> Leave blank for a new customer — the contact details below will be saved as a snapshot.</div>
+          {# The old "Existing customer" select is kept (hidden) so the form
+             still posts `customer` — the Contact name typeahead below sets
+             its value when an existing customer is picked. #}
+          <div class="field full" style="display:none;" aria-hidden="true">
+            {{ header_form.customer }}
           </div>
 
           <div class="field-grid">
             <div class="field">
               <label for="{{ header_form.contact_name.id_for_label }}">Contact name</label>
-              <div class="input-wrap has-prefix">
+              <div class="input-wrap has-prefix cust-wrap" id="custWrap">
                 <i class="bi bi-person prefix"></i>
                 {{ header_form.contact_name }}
+                <div class="pp-menu" id="custMenu" role="listbox"></div>
+              </div>
+              <div class="cust-chip" id="custChip">
+                <i class="bi bi-person-check-fill"></i>
+                <div class="cc-main">
+                  <div class="cc-name" id="custChipName"></div>
+                  <div class="cc-sub">Existing customer linked — details auto-filled; emails go to their saved address.</div>
+                </div>
+                <button type="button" class="cc-unlink" id="custUnlink" title="Unlink — enter a different contact">
+                  <i class="bi bi-x-lg"></i>
+                </button>
+              </div>
+              <div class="cust-new-hint" id="custNewHint">
+                <i class="bi bi-person-plus"></i>
+                <span>New contact — it will be saved to Customers when the order is created.</span>
               </div>
             </div>
             <div class="field">
@@ -530,6 +569,7 @@
 
   // ── Inventory picker ──────────────────────────────────────────────────
   const SELLABLE_URL = "{% url 'orders:api_sellable_products' %}";
+  const CUSTOMER_URL = "{% url 'orders:api_customers' %}";
   let lastFetchToken = 0;        // race-safe: only the latest request wins
   const cache = new Map();       // q -> [results]
 
@@ -558,9 +598,12 @@
     let html = '';
 
     if (items.length) {
-      html += '<div class="pp-section">In stock</div>';
+      html += '<div class="pp-section">Inventory</div>';
       items.forEach((p, i) => {
-        const stockCls = parseFloat(p.available) <= 5 ? 'low' : '';
+        const status = p.stock_status || (parseFloat(p.available) <= 0 ? 'out' : '');
+        let stockCls = '', stockTxt = `${formatNum(p.available)} ${escapeHtml(p.unit || 'in stock')}`;
+        if (status === 'out') { stockCls = 'out'; stockTxt = 'Out of stock'; }
+        else if (status === 'low' || parseFloat(p.available) <= 5) { stockCls = 'low'; }
         html += `
           <div class="pp-opt" data-i="${i}" role="option">
             <div class="pp-opt-main">
@@ -569,12 +612,12 @@
             </div>
             <div class="pp-opt-num">
               <div class="pp-opt-price">${escapeHtml(p.currency)} ${formatMoney(p.sell_price)}</div>
-              <div class="pp-opt-stock ${stockCls}">${formatNum(p.available)} ${escapeHtml(p.unit || 'in stock')}</div>
+              <div class="pp-opt-stock ${stockCls}">${stockTxt}</div>
             </div>
           </div>`;
       });
     } else if (q) {
-      html += '<div class="pp-empty">No matching products in stock.</div>';
+      html += '<div class="pp-empty">No matching products in inventory.</div>';
     } else {
       html += '<div class="pp-empty">Start typing to search inventory…</div>';
     }
@@ -657,7 +700,6 @@
       if (parseFloat(upInput.value || '0') === 0) {
         upInput.value = p.sell_price;
       }
-      qtyInput.max = p.available;
       setBadge('product');
       hideMenu();
       enforceQtyCap();
@@ -687,6 +729,8 @@
     }
 
     function enforceQtyCap() {
+      // Ordering more than what's in stock is ALLOWED — deduction at invoice
+      // finalize is clamped to available stock server-side. We only warn.
       const max = parseFloat(desc.dataset.maxQty || '');
       if (isNaN(max)) {
         qtyWarn.classList.add('hidden');
@@ -694,8 +738,9 @@
       }
       const val = parseFloat(qtyInput.value || '0');
       if (val > max) {
-        qtyInput.value = max;
-        qtyWarn.textContent = `Capped at ${formatNum(max)} (in stock)`;
+        qtyWarn.textContent = max <= 0
+          ? 'Out of stock — order allowed, no stock will be deducted'
+          : `Only ${formatNum(max)} in stock — the rest won't deduct stock`;
         qtyWarn.classList.remove('hidden');
         recalc();
       } else {
@@ -792,6 +837,158 @@
   // Seed two rows so the form isn't empty
   addRow();
   addRow();
+
+  // ── Customer typeahead on the Contact name field ────────────────────────
+  //
+  // Typing a contact name searches existing customers (name / email / phone).
+  // Picking one links the order to that customer (hidden `customer` select)
+  // and auto-fills phone, email and delivery address. Typing a name that
+  // matches nobody just creates the order as before — and the server now
+  // saves the typed contact as a new Customer automatically.
+  (function customerTypeahead() {
+    const nameInput = document.getElementById('{{ header_form.contact_name.id_for_label }}');
+    const custSelect = document.getElementById('{{ header_form.customer.id_for_label }}');
+    const menu    = document.getElementById('custMenu');
+    const chip    = document.getElementById('custChip');
+    const chipName = document.getElementById('custChipName');
+    const unlink  = document.getElementById('custUnlink');
+    const newHint = document.getElementById('custNewHint');
+    const phoneInput = document.getElementById('{{ header_form.contact_phone.id_for_label }}');
+    const emailInput = document.getElementById('{{ header_form.contact_email.id_for_label }}');
+    const addrInput  = document.getElementById('{{ header_form.delivery_address.id_for_label }}');
+    if (!nameInput || !custSelect || !menu) return;
+
+    let results = [];
+    let activeIdx = -1;
+    let debounceT = null;
+    let fetchToken = 0;
+    const custCache = new Map();
+
+    function isLinked() { return !!custSelect.value; }
+
+    function updateHints() {
+      const hasName = (nameInput.value || '').trim().length >= 2;
+      chip.classList.toggle('show', isLinked());
+      newHint.classList.toggle('show', hasName && !isLinked());
+    }
+
+    async function fetchCustomers(q) {
+      if (custCache.has(q)) return custCache.get(q);
+      const myToken = ++fetchToken;
+      try {
+        const resp = await fetch(CUSTOMER_URL + '?q=' + encodeURIComponent(q), {
+          headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+          credentials: 'same-origin',
+        });
+        if (!resp.ok) return [];
+        const data = await resp.json();
+        const list = (data && data.results) || [];
+        if (myToken !== fetchToken) return null;
+        custCache.set(q, list);
+        return list;
+      } catch (_) { return []; }
+    }
+
+    function renderCustMenu(q) {
+      let html = '';
+      if (results.length) {
+        html += '<div class="pp-section">Existing customers</div>';
+        results.forEach((c, i) => {
+          const meta = [c.phone, c.email].filter(Boolean).join(' · ');
+          html += `
+            <div class="pp-opt" data-i="${i}" role="option">
+              <div class="pp-opt-main">
+                <div class="pp-opt-name">${escapeHtml(c.name)}</div>
+                <div class="pp-opt-meta">${escapeHtml(meta || 'no contact details on file')}</div>
+              </div>
+              <div class="pp-opt-num"><i class="bi bi-person-check" style="color:#059669;"></i></div>
+            </div>`;
+        });
+      } else {
+        html += `<div class="pp-empty">No existing customer matches "${escapeHtml(q)}" — a new customer will be saved with this order.</div>`;
+      }
+      menu.innerHTML = html;
+      menu.classList.add('open');
+      activeIdx = -1;
+    }
+
+    function hideCustMenu() { menu.classList.remove('open'); }
+
+    function pickCustomer(c) {
+      // Link the hidden select (the option exists — the form renders every
+      // customer) and auto-fill the contact snapshot fields.
+      custSelect.value = c.id;
+      nameInput.value = c.name;
+      if (phoneInput) phoneInput.value = c.phone || '';
+      if (emailInput) emailInput.value = c.email || '';
+      if (addrInput && !addrInput.value.trim()) addrInput.value = c.address || '';
+      chipName.textContent = c.name + (c.email ? ' · ' + c.email : '');
+      hideCustMenu();
+      updateHints();
+    }
+
+    function clearCustomerLink() {
+      if (isLinked()) custSelect.value = '';
+      updateHints();
+    }
+
+    async function refreshCust() {
+      const q = (nameInput.value || '').trim();
+      if (q.length < 2) { hideCustMenu(); updateHints(); return; }
+      const list = await fetchCustomers(q);
+      if (list === null) return;   // superseded
+      if (document.activeElement !== nameInput) return;
+      results = list;
+      renderCustMenu(q);
+      updateHints();
+    }
+
+    nameInput.addEventListener('input', () => {
+      clearCustomerLink();
+      clearTimeout(debounceT);
+      debounceT = setTimeout(refreshCust, 180);
+    });
+    nameInput.addEventListener('focus', () => {
+      if (!isLinked() && (nameInput.value || '').trim().length >= 2) refreshCust();
+    });
+    nameInput.addEventListener('keydown', (e) => {
+      const opts = menu.querySelectorAll('.pp-opt');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        activeIdx = Math.min(activeIdx + 1, opts.length - 1);
+        opts.forEach((el, i) => el.classList.toggle('active', i === activeIdx));
+        if (opts[activeIdx]) opts[activeIdx].scrollIntoView({block: 'nearest'});
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        activeIdx = Math.max(activeIdx - 1, 0);
+        opts.forEach((el, i) => el.classList.toggle('active', i === activeIdx));
+      } else if (e.key === 'Enter' && menu.classList.contains('open')) {
+        if (activeIdx >= 0 && results[activeIdx]) {
+          e.preventDefault();
+          pickCustomer(results[activeIdx]);
+        } else {
+          hideCustMenu();
+        }
+      } else if (e.key === 'Escape') {
+        hideCustMenu();
+      }
+    });
+    menu.addEventListener('mousedown', (e) => {
+      const optEl = e.target.closest('.pp-opt');
+      if (!optEl) return;
+      e.preventDefault();
+      const i = parseInt(optEl.dataset.i, 10);
+      if (results[i]) pickCustomer(results[i]);
+    });
+    nameInput.addEventListener('blur', () => { setTimeout(() => { hideCustMenu(); updateHints(); }, 120); });
+    unlink.addEventListener('click', () => {
+      custSelect.value = '';
+      updateHints();
+      nameInput.focus();
+    });
+
+    updateHints();
+  })();
 
   // Prevent submitting empty orders (basic client-side guard — server still validates)
   document.getElementById('orderForm').addEventListener('submit', (e) => {

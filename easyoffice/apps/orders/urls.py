@@ -22,4 +22,6 @@ urlpatterns = [
 
     # Internal JSON: live inventory typeahead for the line-item picker
     path('api/sellable-products/',            views.SellableProductsAPIView.as_view(),           name='api_sellable_products'),
+    # Internal JSON: existing-customer typeahead for the Contact name field
+    path('api/customers/',                    views.CustomerSearchAPIView.as_view(),             name='api_customers'),
 ]

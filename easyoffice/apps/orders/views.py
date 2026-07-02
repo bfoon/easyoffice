@@ -815,3 +815,48 @@ class SellableProductsAPIView(OrdersAccessMixin, View):
                 'category':     p.category.name if p.category_id else '',
             })
         return JsonResponse({'results': results})
+
+
+class CustomerSearchAPIView(OrdersAccessMixin, View):
+    """
+    GET /orders/api/customers/?q=<search>
+
+    Typeahead for the order create page's Contact name field. Matches
+    existing customers by name, email, or phone number (case-insensitive)
+    and returns everything needed to auto-fill the contact snapshot:
+    name, primary phone, email, and address.
+    """
+
+    def get(self, request):
+        q = (request.GET.get('q') or '').strip()
+        if len(q) < 2:
+            return JsonResponse({'results': []})
+
+        try:
+            from apps.customer_service.models import Customer
+        except Exception:
+            return JsonResponse({'results': [], 'reason': 'customer_service_unavailable'})
+
+        from .services import _customer_primary_phone
+
+        qs = (
+            Customer.objects
+            .filter(
+                Q(full_name__icontains=q) |
+                Q(email__icontains=q) |
+                Q(phones__phone_number__icontains=q)
+            )
+            .distinct()
+            .order_by('full_name')[:10]
+        )
+
+        results = []
+        for c in qs:
+            results.append({
+                'id':      str(c.pk),
+                'name':    getattr(c, 'full_name', '') or getattr(c, 'display_name', '') or '',
+                'email':   getattr(c, 'email', '') or '',
+                'phone':   _customer_primary_phone(c),
+                'address': getattr(c, 'address', '') or '',
+            })
+        return JsonResponse({'results': results})

@@ -5,9 +5,15 @@ Bridges from other apps into the inventory ledger.
 
 Hooks
 ═════
-  • SalesOrder transitions to FULFILLED → debit stock at the default
-    sellable location (orders.signals already flips the status; we
-    listen to the same post_save event and trigger after).
+  • SalesOrder transitions to FULFILLED → informational log ONLY.
+    ⚠ Stock deduction for orders no longer happens here. It moved to the
+    single deduction point in apps/invoices — when the order's Invoice
+    document is finalized (apps/invoices/signals.py →
+    apps/invoices/stock.deduct_stock_for_invoice). Both standalone
+    invoices and order-generated invoices pass through the same
+    finalize_invoice code path, so deducting there covers both flows
+    exactly once. Keeping a debit here as well would deduct the same
+    goods twice.
 
   • PurchaseRequest transitions to DELIVERED → credit stock. We don't
     know the line items unless they were saved on the PR; the helper
@@ -28,7 +34,8 @@ logger = logging.getLogger(__name__)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# Sales order: when fulfilled → debit stock
+# Sales order: when fulfilled → log only (deduction happens at invoice
+# finalize — see module docstring)
 # ════════════════════════════════════════════════════════════════════════════
 
 try:
@@ -64,14 +71,14 @@ if HAVE_ORDERS:
         if prev == OrderStatus.FULFILLED:
             return  # no-op — same status
 
-        from . import services
-        try:
-            services.on_sales_order_fulfilled(instance, actor=None)
-        except Exception:
-            logger.exception(
-                'Inventory hook failed for fulfilled order %s',
-                getattr(instance, 'order_no', instance.pk),
-            )
+        # Stock for this order was already deducted when its Invoice
+        # document was finalized (apps/invoices/stock.py). Nothing to
+        # debit here — just leave a breadcrumb for the audit trail.
+        logger.info(
+            'Order %s fulfilled. Stock was deducted at invoice finalize; '
+            'no additional deduction performed.',
+            getattr(instance, 'order_no', instance.pk),
+        )
 
 
 # ════════════════════════════════════════════════════════════════════════════

@@ -10,6 +10,14 @@ Currently:
     IncomingPaymentRequest (only if it isn't already paid — paid
     receivables represent real revenue and shouldn't be retroactively
     cancelled; that's a refund flow, not a void).
+  - When a document of type INVOICE transitions to FINALIZED, deduct
+    inventory stock for line items that match inventory products.
+    Deduction is clamped to available stock (out-of-stock items are
+    never blocked and never deducted), free-text lines are skipped, and
+    proformas / delivery notes never touch stock. This is the SINGLE
+    deduction point for both standalone invoices and order-generated
+    invoices (the order chain finalizes its Invoice document through the
+    same code path). See apps/invoices/stock.py.
 
 Wire-up: make sure apps/invoices/apps.py has a `ready()` that imports
 this module:
@@ -29,7 +37,7 @@ import logging
 from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
 
-from .models import InvoiceDocument
+from .models import InvoiceDocument, DocType
 
 log = logging.getLogger(__name__)
 
@@ -71,3 +79,41 @@ def _on_invoice_voided_cancel_receivable(sender, instance, created, **kwargs):
                 'Failed to sync receivable state for voided invoice %s',
                 instance.pk,
             )
+
+
+@receiver(post_save, sender=InvoiceDocument)
+def _on_invoice_finalized_deduct_stock(sender, instance, created, **kwargs):
+    """
+    Draft → FINALIZED transition on a document of type INVOICE → deduct
+    inventory stock for matching line items.
+
+    Only INVOICE documents deduct — a Proforma is a quotation and a
+    Delivery Note is issued for goods already invoiced, so hooking either
+    would double-count. Fires exactly once per invoice (finalize is a
+    one-way, single-shot transition). Fail-soft: any error here is logged
+    and never blocks or rolls back the finalize.
+    """
+    if created:
+        return
+    if instance.doc_type != DocType.INVOICE:
+        return
+
+    prev = getattr(instance, '_previous_status', None)
+    if (prev == InvoiceDocument.Status.FINALIZED
+            or instance.status != InvoiceDocument.Status.FINALIZED):
+        return
+
+    try:
+        from .stock import deduct_stock_for_invoice
+        actor = getattr(instance, 'finalized_by', None) or instance.created_by
+        report = deduct_stock_for_invoice(instance, actor=actor)
+        if report.get('shortfall'):
+            log.warning(
+                'Invoice %s finalized with stock shortfalls: %s',
+                instance.number or instance.pk, report['shortfall'],
+            )
+    except Exception:
+        log.exception(
+            'Stock deduction failed for finalized invoice %s',
+            instance.pk,
+        )

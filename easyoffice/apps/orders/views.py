@@ -752,8 +752,11 @@ class SellableProductsAPIView(OrdersAccessMixin, View):
     Returns up to 20 inventory.Product rows that:
         • are flagged sellable + active
         • are kind=STOCKED (services and bundles never appear)
-        • have available stock > 0   (on_hand minus reservations, summed
-          across every StockItem the product has)
+
+    Out-of-stock products ARE included — they can still be ordered; stock
+    deduction at fulfillment is clamped to what's on hand. Each row carries
+    `available` and `stock_status` ('ok' / 'low' / 'out') so the picker can
+    badge them.
 
     Used by the line-item picker on the order create page. Search matches
     SKU, name, or barcode (case-insensitive). Inventory app must be
@@ -783,7 +786,6 @@ class SellableProductsAPIView(OrdersAccessMixin, View):
                   reserved_total=Coalesce(Sum('stock_items__reserved_quantity'), zero),
               )
               .annotate(available=F('on_hand_total') - F('reserved_total'))
-              .filter(available__gt=0)
               .select_related('category')
               .order_by('name'))
 
@@ -794,14 +796,22 @@ class SellableProductsAPIView(OrdersAccessMixin, View):
 
         results = []
         for p in qs[:20]:
+            avail = p.available or D('0')
+            if avail <= 0:
+                stock_status = 'out'
+            elif avail < (p.reorder_point or D('0')):
+                stock_status = 'low'
+            else:
+                stock_status = 'ok'
             results.append({
-                'id':         str(p.pk),
-                'sku':        p.sku,
-                'name':       p.name,
-                'unit':       getattr(p, 'unit_label', '') or '',
-                'currency':   p.currency,
-                'sell_price': str(p.sell_price or '0'),
-                'available':  str(p.available),
-                'category':   p.category.name if p.category_id else '',
+                'id':           str(p.pk),
+                'sku':          p.sku,
+                'name':         p.name,
+                'unit':         getattr(p, 'unit_label', '') or '',
+                'currency':     p.currency,
+                'sell_price':   str(p.sell_price or '0'),
+                'available':    str(avail),
+                'stock_status': stock_status,
+                'category':     p.category.name if p.category_id else '',
             })
         return JsonResponse({'results': results})

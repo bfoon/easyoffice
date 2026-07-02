@@ -79,8 +79,10 @@ def create_order_from_payload(payload: dict, *, source: str = OrderSource.PHONE,
         external_ref, idempotency_key,
         items — list of dicts. Each item supports:
             product_id    optional UUID — when set, links to inventory.Product
-                          and the line will deduct stock on fulfillment.
-                          Server validates qty <= available stock.
+                          and the line will deduct stock on fulfillment
+                          (deduction is clamped to what's actually on hand —
+                          out-of-stock items are allowed and simply don't
+                          deduct; any shortfall is recorded on the order).
             description   required free text. Always stored even when product
                           is set (so the order survives renames / archives).
             quantity      required, defaults to 1
@@ -132,17 +134,24 @@ def create_order_from_payload(payload: dict, *, source: str = OrderSource.PHONE,
             demand_by_product[product.pk] = demand_by_product.get(product.pk, Decimal('0')) + qty
         resolved_lines.append((it, product))
 
-    # Now check aggregated demand against current stock.
+    # Note aggregated demand vs current stock — but DO NOT block. Out-of-stock
+    # items are allowed on an order; deduction at fulfillment is clamped to
+    # what's actually on hand, so nothing goes negative. We just record the
+    # shortfall so the team can see it on the order.
+    stock_shortfalls = []
     for prod_id, demanded in demand_by_product.items():
         product = next((p for _, p in resolved_lines if p and p.pk == prod_id), None)
         if product is None:
             continue
         available = product.total_available
         if demanded > available:
-            raise ValueError(
-                f'Not enough stock for "{product.name}": '
-                f'asked for {demanded:g}, only {available:g} available.'
-            )
+            stock_shortfalls.append({
+                'product_id': str(product.pk),
+                'sku': product.sku,
+                'name': product.name,
+                'demanded': str(demanded),
+                'available': str(available),
+            })
 
     order = SalesOrder.objects.create(
         source=source,
@@ -177,6 +186,21 @@ def create_order_from_payload(payload: dict, *, source: str = OrderSource.PHONE,
         message=f'Order created from {order.get_source_display()}',
         payload={'item_count': len(items), 'total': str(order.total)},
     )
+
+    if stock_shortfalls:
+        summary = '; '.join(
+            f"{s['name']} (asked {s['demanded']}, available {s['available']})"
+            for s in stock_shortfalls
+        )[:390]
+        OrderEvent.objects.create(
+            order=order, kind=OrderEvent.Kind.NOTE, actor=actor,
+            message=f'⚠ Insufficient stock at intake: {summary}',
+            payload={'stock_shortfalls': stock_shortfalls},
+        )
+        logger.warning(
+            'Order %s created with stock shortfalls: %s',
+            order.order_no, summary,
+        )
 
     transaction.on_commit(lambda: notifications.notify_order_created(order, actor=actor))
     if not order.customer_id:

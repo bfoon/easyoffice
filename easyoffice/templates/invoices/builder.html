@@ -109,6 +109,48 @@
                   background:#fff; color:#475569; cursor:pointer; font-size: 12.5px; }
   .add-item-btn:hover { border-color:#0ea5e9; color: #0ea5e9; }
 
+  /* ── Inventory autocomplete dropdown ─────────────────────────────────── */
+  #prod-ac {
+    position: absolute; z-index: 10050; display: none;
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(15,23,42,0.16);
+    min-width: 280px; max-width: 420px; max-height: 320px; overflow-y: auto;
+    font-size: 12.5px;
+  }
+  #prod-ac .ac-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #f1f5f9;
+  }
+  #prod-ac .ac-item:last-child { border-bottom: 0; }
+  #prod-ac .ac-item:hover, #prod-ac .ac-item.active { background: #f0f9ff; }
+  #prod-ac .ac-item .nm { flex: 1; min-width: 0; }
+  #prod-ac .ac-item .nm .n { font-weight: 600; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #prod-ac .ac-item .nm .sku { font-size: 10.5px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+  #prod-ac .ac-item .pr { font-weight: 600; color: #0f172a; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #prod-ac .ac-stock {
+    font-size: 9.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap;
+  }
+  #prod-ac .ac-stock.ok  { background: #dcfce7; color: #166534; }
+  #prod-ac .ac-stock.low { background: #fef3c7; color: #92400e; }
+  #prod-ac .ac-stock.out { background: #fee2e2; color: #991b1b; }
+  #prod-ac .ac-stock.na  { background: #f1f5f9; color: #64748b; }
+  #prod-ac .ac-empty {
+    padding: 10px 12px; color: #64748b; font-size: 12px;
+  }
+  #prod-ac .ac-save-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px; background: #fefce8; border-top: 1px solid #fde68a;
+    cursor: pointer;
+  }
+  #prod-ac .ac-save-row:hover, #prod-ac .ac-save-row.active { background: #fef3c7; }
+  #prod-ac .ac-save-row .txt { flex: 1; font-size: 12px; color: #78350f; font-weight: 600; }
+  #prod-ac .ac-save-row .sub { font-size: 10.5px; color: #a16207; font-weight: 400; margin-top: 1px; }
+  #prod-ac .ac-hint {
+    padding: 6px 12px; font-size: 10.5px; color: #94a3b8;
+    background: #f8fafc; border-top: 1px solid #f1f5f9;
+  }
+
   /* Totals panel */
   .tot-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px;}
   .tot-row .lbl { color:#64748b; }
@@ -478,6 +520,8 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
   const URL_LAYOUT    = '{% url "invoices:invoice_layout" invoice.pk %}';
   const URL_FINALIZE  = '{% url "invoices:invoice_finalize" invoice.pk %}';
   const URL_SAVE_TMPL = '{% url "invoices:template_create_from_invoice" invoice.pk %}';
+  const URL_PROD_SEARCH = '{% url "invoices:product_search_api" %}';
+  const URL_PROD_ADD    = '{% url "invoices:product_quick_add_api" %}';
   const DETAIL_URL    = '{% url "invoices:invoice_detail" invoice.pk %}';
   const LAYOUT_LOCKED = {% if invoice.is_layout_locked %}true{% else %}false{% endif %};
   const DOC_TYPE_LOCKED = {% if invoice.is_doc_type_locked %}true{% else %}false{% endif %};
@@ -802,12 +846,218 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
     });
   }
 
+  // ── Inventory autocomplete on the Description field ─────────────────────
+  //
+  // Type part of an item name / SKU / barcode → live suggestions from the
+  // inventory. Pick one to fill the description + unit price. If nothing
+  // matches, the text stays as-is on the invoice (free text is always fine);
+  // users with inventory permission also get a one-click "save to inventory".
+  //
+  const acBox = document.createElement('div');
+  acBox.id = 'prod-ac';
+  document.body.appendChild(acBox);
+
+  let acInput = null;        // the .desc input the dropdown is attached to
+  let acResults = [];        // last search results
+  let acCanAdd = false;      // server-confirmed permission flag
+  let acActiveIdx = -1;      // keyboard highlight (-1 = none)
+  let acSeq = 0;             // request sequence guard (drop stale responses)
+
+  function showToast(msg, bg) {
+    const toast = document.getElementById('tmpl-toast');
+    toast.textContent = msg;
+    toast.style.background = bg || '#16a34a';
+    toast.style.display = 'block';
+    setTimeout(() => { toast.style.display = 'none'; }, 3500);
+  }
+
+  function hideAC() {
+    acBox.style.display = 'none';
+    acBox.innerHTML = '';
+    acResults = [];
+    acActiveIdx = -1;
+    acInput = null;
+  }
+
+  function positionAC(input) {
+    const r = input.getBoundingClientRect();
+    acBox.style.left  = Math.max(8, Math.min(r.left + window.scrollX,
+                          window.scrollX + window.innerWidth - 430)) + 'px';
+    acBox.style.top   = (r.bottom + window.scrollY + 3) + 'px';
+    acBox.style.minWidth = Math.max(280, r.width) + 'px';
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, c =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function stockBadge(p) {
+    const map = { ok: 'In stock', low: 'Low', out: 'Out', na: '—' };
+    const cls = p.stock_status || 'na';
+    const label = (cls === 'ok' && p.stock != null)
+      ? `${p.stock} in stock` : (map[cls] || '—');
+    return `<span class="ac-stock ${cls}">${escHtml(label)}</span>`;
+  }
+
+  function renderAC(query) {
+    if (!acInput) return;
+    let html = '';
+    acResults.forEach((p, i) => {
+      html += `
+        <div class="ac-item${i === acActiveIdx ? ' active' : ''}" data-idx="${i}">
+          <div class="nm">
+            <div class="n">${escHtml(p.name)}</div>
+            <div class="sku">${escHtml(p.sku)}</div>
+          </div>
+          ${stockBadge(p)}
+          <div class="pr">${escHtml(p.currency)} ${parseFloat(p.unit_price || 0).toFixed(2)}</div>
+        </div>`;
+    });
+    if (!acResults.length) {
+      html += `<div class="ac-empty"><i class="bi bi-search"></i>
+                 "<strong>${escHtml(query)}</strong>" is not in the inventory —
+                 it will be added to this invoice as typed.</div>`;
+    }
+    if (acCanAdd && query.trim().length >= 2 &&
+        !acResults.some(p => p.name.toLowerCase() === query.trim().toLowerCase())) {
+      html += `
+        <div class="ac-save-row${acActiveIdx === acResults.length ? ' active' : ''}" data-save="1">
+          <i class="bi bi-box-arrow-in-down" style="color:#a16207; font-size:15px;"></i>
+          <div>
+            <div class="txt">Save "${escHtml(query.trim())}" to inventory</div>
+            <div class="sub">Creates a product with this name and the row's unit price. Skip to keep it invoice-only.</div>
+          </div>
+        </div>`;
+    }
+    html += `<div class="ac-hint">↑↓ navigate · Enter select · Esc close</div>`;
+    acBox.innerHTML = html;
+    positionAC(acInput);
+    acBox.style.display = 'block';
+
+    acBox.querySelectorAll('.ac-item').forEach(el => {
+      el.addEventListener('mousedown', (e) => {   // mousedown fires before input blur
+        e.preventDefault();
+        pickProduct(acResults[parseInt(el.dataset.idx, 10)]);
+      });
+    });
+    const saveRow = acBox.querySelector('.ac-save-row');
+    if (saveRow) {
+      saveRow.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        quickAddProduct(query.trim());
+      });
+    }
+  }
+
+  function pickProduct(p) {
+    if (!acInput || !p) return;
+    const row = acInput.closest('tr');
+    acInput.value = p.name;
+    acInput.dataset.productId = p.id;
+    const priceInp = row.querySelector('.price');
+    if (priceInp && (!parseFloat(priceInp.value) || parseFloat(priceInp.value) === 0)) {
+      priceInp.value = parseFloat(p.unit_price || 0).toFixed(2);
+    }
+    hideAC();
+    updateLineTotals();
+    debouncedSaveItems();
+  }
+
+  async function quickAddProduct(name) {
+    if (!name) return;
+    const input = acInput;
+    const row = input ? input.closest('tr') : null;
+    const price = row ? (row.querySelector('.price').value || '0') : '0';
+    const currency = document.querySelector('[name=currency]')?.value || 'GMD';
+    if (!confirm(`Save "${name}" to the inventory?\n\nSell price: ${currency} ${parseFloat(price || 0).toFixed(2)}\n\nCancel keeps it on this invoice only.`)) {
+      hideAC();
+      return;
+    }
+    hideAC();
+    try {
+      const res = await fetch(URL_PROD_ADD, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+        body: JSON.stringify({name, unit_price: price, currency}),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Could not save product');
+      if (input && data.product) input.dataset.productId = data.product.id;
+      showToast(data.message || 'Saved to inventory.');
+    } catch (err) {
+      console.error(err);
+      showToast('Error: ' + err.message, '#dc2626');
+    }
+  }
+
+  async function searchProducts(input) {
+    const q = input.value.trim();
+    delete input.dataset.productId;   // typing invalidates a previous pick
+    if (q.length < 2) { hideAC(); return; }
+    const seq = ++acSeq;
+    try {
+      const res = await fetch(URL_PROD_SEARCH + '?q=' + encodeURIComponent(q), {
+        headers: {'X-CSRFToken': CSRF},
+      });
+      const data = await res.json();
+      if (seq !== acSeq) return;                       // stale response
+      if (document.activeElement !== input) return;    // focus moved on
+      if (!data.ok || !data.inventory_available) { hideAC(); return; }
+      acInput = input;
+      acResults = data.results || [];
+      acCanAdd = !!data.can_add;
+      acActiveIdx = -1;
+      renderAC(q);
+    } catch (err) {
+      console.error(err);
+      hideAC();
+    }
+  }
+  const debouncedSearch = debounce(searchProducts, 250);
+
+  function attachAutocomplete(input) {
+    input.setAttribute('autocomplete', 'off');
+    input.addEventListener('input', () => debouncedSearch(input));
+    input.addEventListener('focus', () => { if (input.value.trim().length >= 2) debouncedSearch(input); });
+    input.addEventListener('blur',  () => setTimeout(() => { if (acInput === input) hideAC(); }, 180));
+    input.addEventListener('keydown', (e) => {
+      if (acBox.style.display !== 'block' || acInput !== input) return;
+      const hasSaveRow = !!acBox.querySelector('.ac-save-row');
+      const maxIdx = acResults.length - 1 + (hasSaveRow ? 1 : 0);
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        acActiveIdx = Math.min(acActiveIdx + 1, maxIdx);
+        renderAC(input.value.trim());
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        acActiveIdx = Math.max(acActiveIdx - 1, -1);
+        renderAC(input.value.trim());
+      } else if (e.key === 'Enter') {
+        if (acActiveIdx >= 0) {
+          e.preventDefault();
+          if (acActiveIdx < acResults.length) pickProduct(acResults[acActiveIdx]);
+          else quickAddProduct(input.value.trim());
+        } else {
+          hideAC();   // Enter with nothing highlighted = keep as free text
+        }
+      } else if (e.key === 'Escape') {
+        hideAC();
+      }
+    });
+  }
+
+  window.addEventListener('scroll', () => { if (acInput) positionAC(acInput); }, true);
+  window.addEventListener('resize', () => { if (acInput) positionAC(acInput); });
+
   // Item row wiring
   function wireRow(row) {
     row.querySelectorAll('input').forEach(inp => {
       inp.addEventListener('input', () => { updateLineTotals(); debouncedSaveItems(); });
     });
+    attachAutocomplete(row.querySelector('.desc'));
     row.querySelector('.rm-btn').addEventListener('click', () => {
+      hideAC();
       row.remove();
       updateLineTotals();
       saveItems();
@@ -818,7 +1068,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
   document.getElementById('add-item-btn').addEventListener('click', () => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><input type="text" class="desc" placeholder="Item description"></td>
+      <td><input type="text" class="desc" placeholder="Type to search inventory…"></td>
       <td><input type="number" class="num qty" step="0.01" value="1"></td>
       <td><input type="number" class="num price" step="0.01" value="0.00"></td>
       <td class="total">0.00</td>

@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from . import views_products
 
 app_name = 'invoices'
 
@@ -7,6 +8,10 @@ urlpatterns = [
     path('',                          views.InvoiceDashboardView.as_view(),  name='invoice_dashboard'),
     path('new/',                      views.NewInvoiceView.as_view(),        name='invoice_new'),
     path('letterheads/',              views.LetterheadListView.as_view(),    name='invoice_letterheads'),
+
+    # Inventory bridge (autocomplete + quick add from the builder)
+    path('api/products/search/',      views_products.ProductSearchAPIView.as_view(),   name='product_search_api'),
+    path('api/products/quick-add/',   views_products.ProductQuickAddAPIView.as_view(), name='product_quick_add_api'),
 
     # Templates
     path('templates/',                 views.TemplateListView.as_view(),              name='template_list'),

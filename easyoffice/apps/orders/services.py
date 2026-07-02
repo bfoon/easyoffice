@@ -563,6 +563,117 @@ def _build_doc_for_order(order: 'SalesOrder', doc_type: str, actor):
     return finalize_invoice(inv, actor)
 
 
+# ════════════════════════════════════════════════════════════════════════
+# CEO signature placement
+# ════════════════════════════════════════════════════════════════════════
+
+def compute_ceo_signature_spot(invoice_doc) -> dict:
+    """
+    Pick a spot for the CEO signature that doesn't sit on top of the
+    document's content blocks.
+
+    Reads the invoice's actual layout (user-dragged positions merged over
+    the generator defaults) and slots the signature on the RIGHT side,
+    below the totals block and above the notes block. If the notes block
+    is empty the signature may drop a little lower. Everything is
+    percentages of the page, y measured from the top — same convention as
+    the invoice layout_json.
+
+    Returns {'x_pct', 'y_pct', 'w_pct', 'h_pct'} (h includes the caption
+    lines drawn under the signature image).
+    """
+    SIG_W, SIG_H = 20.0, 6.0
+
+    # Generator defaults, overridden by whatever this document customised.
+    layout = {
+        'totals':       {'x_pct': 62.0, 'y_pct': 74.0},
+        'bank_details': {'x_pct':  7.0, 'y_pct': 74.0},
+        'notes':        {'x_pct':  7.0, 'y_pct': 88.0},
+    }
+    try:
+        from apps.invoices.pdf_generator import DEFAULT_LAYOUT
+        for key in layout:
+            if key in DEFAULT_LAYOUT:
+                layout[key].update(DEFAULT_LAYOUT[key])
+    except Exception:
+        pass
+    custom = getattr(invoice_doc, 'layout_json', None) or {}
+    for key, val in custom.items():
+        if key in layout and isinstance(val, dict):
+            layout[key].update({k: v for k, v in val.items() if k in ('x_pct', 'y_pct', 'w_pct')})
+
+    totals_y = float(layout['totals']['y_pct'])
+    bank_y   = float(layout['bank_details']['y_pct'])
+    notes_y  = float(layout['notes']['y_pct'])
+    x        = float(layout['totals']['x_pct'])
+
+    has_notes = bool((getattr(invoice_doc, 'notes', '') or '').strip())
+
+    # Below whichever bottom block (totals / bank) starts lower, leaving
+    # ~10% for the block's own content.
+    y = max(totals_y, bank_y) + 10.0
+    if has_notes:
+        # Must clear the notes block above its top edge.
+        y = min(y, notes_y - SIG_H - 0.5)
+    # Keep it on the page, above the letterhead footer strip.
+    y = max(66.0, min(y, 92.0 - SIG_H))
+
+    # Keep the box inside the right margin.
+    x = max(5.0, min(x, 95.0 - SIG_W))
+
+    return {'x_pct': round(x, 1), 'y_pct': round(y, 1),
+            'w_pct': SIG_W, 'h_pct': SIG_H}
+
+
+def _try_place_signature_field(sig_req, signer, invoice_doc):
+    """
+    Attach a placed SIGNATURE FIELD to the request so the NORMAL files-app
+    signing flow shows the CEO a click-to-sign box and embeds the signature
+    at a content-safe position. Without a placed field, the burn step
+    (which only renders fields with a filled value) embeds nothing — which
+    is exactly the "request completed but no signature on the PDF" bug.
+
+    Placed on the LAST page (totals / bank details / notes render there on
+    multi-page documents), at the spot computed from the document's layout.
+    Fail-soft: any problem is logged and the request is still created —
+    the one-click sign path stamps directly and doesn't need a field.
+    """
+    spot = compute_ceo_signature_spot(invoice_doc)
+
+    # Last page of the generated PDF (defaults to 1 if unreadable).
+    page_no = 1
+    try:
+        from pypdf import PdfReader
+        from io import BytesIO as _BytesIO
+        shared_file = invoice_doc.generated_pdf
+        if shared_file and getattr(shared_file, 'file', None):
+            with shared_file.file.open('rb') as fh:
+                page_no = max(1, len(PdfReader(_BytesIO(fh.read())).pages))
+    except Exception:
+        page_no = 1
+
+    try:
+        from apps.files.models import SignatureField
+        SignatureField.objects.create(
+            request=sig_req,
+            signer=signer,
+            field_type='signature',
+            page=page_no,
+            x_pct=spot['x_pct'],
+            y_pct=spot['y_pct'],
+            width_pct=spot['w_pct'],
+            height_pct=spot['h_pct'],
+            label='CEO Signature',
+            required=True,
+        )
+    except Exception:
+        logger.exception(
+            'Could not place a signature field on request %s — the normal '
+            'signing flow may not embed a visible signature. One-click '
+            'sign is unaffected.', sig_req.pk,
+        )
+
+
 def _create_ceo_signature_request(order: 'SalesOrder', invoice_doc, *,
                                   doc_label: str, actor) -> 'SignatureRequest':
     """
@@ -620,7 +731,7 @@ def _create_ceo_signature_request(order: 'SalesOrder', invoice_doc, *,
         or ceo_email
     )
 
-    SignatureRequestSigner.objects.get_or_create(
+    signer_row, _ = SignatureRequestSigner.objects.get_or_create(
         request=sig_req,
         user=ceo,
         defaults={
@@ -630,6 +741,10 @@ def _create_ceo_signature_request(order: 'SalesOrder', invoice_doc, *,
             'status': SignatureRequestSigner.Status.PENDING,
         },
     )
+
+    # Place a signature field at a content-safe spot so the normal signing
+    # flow embeds a visible signature (fail-soft — see helper).
+    _try_place_signature_field(sig_req, signer_row, invoice_doc)
 
     try:
         SignatureAuditEvent.objects.create(

@@ -564,8 +564,10 @@ class OrderQuickCEOSignView(OrdersAccessMixin, View):
         if not sig_image_bytes:
             sig_data_uri = (saved_sig.data or '').strip()
         if not sig_image_bytes and not sig_data_uri:
-            messages.error(request, 'Your saved signature appears to be empty.')
-            return redirect('orders:order_detail', pk=order.pk)
+            # No usable image in the saved signature (e.g. typed-only).
+            # Proceed anyway — the stamper falls back to drawing the CEO's
+            # name in script style so a signature is always visible.
+            sig_data_uri = None
 
         # ── Stamp the PDF ──────────────────────────────────────────────────
         try:
@@ -590,9 +592,11 @@ class OrderQuickCEOSignView(OrdersAccessMixin, View):
         Composite the saved signature onto the document, save the new PDF
         to the same SharedFile, and complete the SignatureRequest.
 
-        Fixed signature placement (matching the bottom-left area on the
-        company letterhead, just above the footer strip):
-            sig_x = 5%   sig_y = 82%   sig_w = 22%   sig_h = 10%
+        Placement is layout-aware: right side of the LAST page, below the
+        totals block and clear of the notes block, computed from the
+        document's actual layout_json (services.compute_ceo_signature_spot).
+        A signature is ALWAYS rendered — if the saved signature has no
+        usable image, the CEO's name is drawn in script style instead.
         """
         # Late imports — same libs the files-app QuickSignView uses
         from pypdf import PdfReader, PdfWriter
@@ -611,21 +615,54 @@ class OrderQuickCEOSignView(OrdersAccessMixin, View):
         reader = PdfReader(BytesIO(src_bytes))
         writer = PdfWriter()
 
-        # Decode the saved signature image into bytes
+        # ── Decode the saved signature into image bytes (robustly) ─────────
+        # Handles: data URIs, raw base64 blobs without the data: prefix,
+        # and uploaded image files. If none of those yields an image (e.g.
+        # a typed-text signature saved without a rendered image), we fall
+        # back to DRAWING the CEO's name in an italic script style — the
+        # document must never come back "signed" with nothing visible.
         if sig_image_bytes is None and sig_data_uri:
-            if sig_data_uri.startswith('data:image'):
-                _, b64 = sig_data_uri.split(',', 1)
-                sig_image_bytes = base64.b64decode(b64)
-            else:
-                # typed signature without rendered image — skip stamping
-                # but still let the signing complete (fallback)
+            b64 = sig_data_uri
+            if b64.startswith('data:image'):
+                b64 = b64.split(',', 1)[1]
+            try:
+                candidate = base64.b64decode(b64, validate=False)
+                # PNG / JPEG / GIF magic check
+                if candidate[:4] in (b'\x89PNG',) or candidate[:3] == b'\xff\xd8\xff' \
+                        or candidate[:4] == b'GIF8':
+                    sig_image_bytes = candidate
+            except Exception:
                 sig_image_bytes = None
 
-        # Fixed coords (% of page) — bottom-left where you drew the red box
-        SIG_X_PCT = 5.0
-        SIG_Y_PCT = 82.0    # measured from top
-        SIG_W_PCT = 22.0
-        SIG_H_PCT = 10.0
+        # ── Placement — layout-aware, content-safe ─────────────────────────
+        # Computed from the document's actual block layout (right side,
+        # below the totals block, clear of the notes block). Falls back to
+        # a safe fixed spot if the invoice record can't be resolved.
+        from .services import compute_ceo_signature_spot
+        invoice_doc = None
+        try:
+            meta = getattr(sig_req, 'metadata', None) or {}
+            inv_id = meta.get('orders.invoice_id')
+            if inv_id:
+                from apps.invoices.models import InvoiceDocument
+                invoice_doc = InvoiceDocument.objects.filter(pk=inv_id).first()
+            if invoice_doc is None:
+                for candidate_doc in (order.delivery_note, order.invoice, order.proforma):
+                    if candidate_doc is not None and candidate_doc.generated_pdf_id == document.pk:
+                        invoice_doc = candidate_doc
+                        break
+        except Exception:
+            invoice_doc = None
+
+        if invoice_doc is not None:
+            spot = compute_ceo_signature_spot(invoice_doc)
+        else:
+            spot = {'x_pct': 62.0, 'y_pct': 80.0, 'w_pct': 20.0, 'h_pct': 6.0}
+
+        SIG_X_PCT = spot['x_pct']
+        SIG_Y_PCT = spot['y_pct']      # measured from top
+        SIG_W_PCT = spot['w_pct']
+        SIG_H_PCT = spot['h_pct']      # includes the caption lines
 
         signed_at = _dt.now().strftime('%d %b %Y %H:%M UTC')
         full_name = (
@@ -633,6 +670,11 @@ class OrderQuickCEOSignView(OrdersAccessMixin, View):
             or request.user.get_full_name()
             or request.user.username
         )
+
+        # Totals / bank details / notes always render on the LAST page of a
+        # multi-page document — the signature belongs next to them, not on
+        # an items-only first page.
+        stamp_page_idx = len(reader.pages) - 1
 
         for page_idx in range(len(reader.pages)):
             page = reader.pages[page_idx]
@@ -642,30 +684,43 @@ class OrderQuickCEOSignView(OrdersAccessMixin, View):
             overlay = BytesIO()
             c = rl_canvas.Canvas(overlay, pagesize=(page_w, page_h))
 
-            # Stamp the signature only on the FIRST page (matches a wet-ink CEO sig
-            # placed once at the bottom of the document, not on every page).
-            if page_idx == 0 and sig_image_bytes:
+            if page_idx == stamp_page_idx:
                 fx = (SIG_X_PCT / 100.0) * page_w
                 fw = (SIG_W_PCT / 100.0) * page_w
-                fh_pts = (SIG_H_PCT / 100.0) * page_h
-                fy = page_h * (1.0 - (SIG_Y_PCT + SIG_H_PCT) / 100.0)
+                box_h = (SIG_H_PCT / 100.0) * page_h
+                box_top_y = page_h * (1.0 - SIG_Y_PCT / 100.0)
 
-                try:
-                    c.drawImage(
-                        ImageReader(BytesIO(sig_image_bytes)),
-                        fx, fy, width=fw, height=fh_pts,
-                        preserveAspectRatio=True, anchor='sw', mask='auto',
-                    )
-                except Exception:
-                    pass  # don't break the whole flow if image fails
+                caption_h = 16          # two caption lines in points
+                img_h = max(14, box_h - caption_h)
+                img_y = box_top_y - img_h
 
-                # Small caption under the signature
+                if sig_image_bytes:
+                    try:
+                        c.drawImage(
+                            ImageReader(BytesIO(sig_image_bytes)),
+                            fx, img_y, width=fw, height=img_h,
+                            preserveAspectRatio=True, anchor='sw', mask='auto',
+                        )
+                    except Exception:
+                        sig_image_bytes = None  # fall through to typed fallback
+
+                if not sig_image_bytes:
+                    # Typed fallback — the name in an italic script style,
+                    # with a signing line, so the signature is ALWAYS visible.
+                    c.setFont('Helvetica-Oblique', 16)
+                    c.setFillColorRGB(0.10, 0.15, 0.35)
+                    c.drawString(fx + 2, img_y + img_h * 0.35, full_name)
+                    c.setLineWidth(0.7)
+                    c.setStrokeColorRGB(0.35, 0.40, 0.50)
+                    c.line(fx, img_y + img_h * 0.22, fx + fw, img_y + img_h * 0.22)
+
+                # Caption under the signature
                 c.setFont('Helvetica', 7.5)
                 c.setFillColorRGB(0.20, 0.30, 0.45)
-                c.drawString(fx, max(2, fy - 8), f'CEO · {full_name}')
+                c.drawString(fx, max(2, img_y - 8), f'CEO · {full_name}')
                 c.setFont('Helvetica', 6.5)
                 c.setFillColorRGB(0.45, 0.50, 0.58)
-                c.drawString(fx, max(2, fy - 16), f'Electronically signed · {signed_at}')
+                c.drawString(fx, max(2, img_y - 16), f'Electronically signed · {signed_at}')
 
             c.save()
             overlay.seek(0)

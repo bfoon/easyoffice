@@ -657,7 +657,7 @@ class OrderQuickCEOSignView(OrdersAccessMixin, View):
         if invoice_doc is not None:
             spot = compute_ceo_signature_spot(invoice_doc)
         else:
-            spot = {'x_pct': 62.0, 'y_pct': 80.0, 'w_pct': 20.0, 'h_pct': 6.0}
+            spot = {'x_pct': 62.0, 'y_pct': 79.0, 'w_pct': 30.0, 'h_pct': 8.0}
 
         SIG_X_PCT = spot['x_pct']
         SIG_Y_PCT = spot['y_pct']      # measured from top
@@ -690,8 +690,8 @@ class OrderQuickCEOSignView(OrdersAccessMixin, View):
                 box_h = (SIG_H_PCT / 100.0) * page_h
                 box_top_y = page_h * (1.0 - SIG_Y_PCT / 100.0)
 
-                caption_h = 16          # two caption lines in points
-                img_h = max(14, box_h - caption_h)
+                caption_h = 9           # single caption line in points
+                img_h = max(24, box_h - caption_h)
                 img_y = box_top_y - img_h
 
                 if sig_image_bytes:
@@ -707,20 +707,20 @@ class OrderQuickCEOSignView(OrdersAccessMixin, View):
                 if not sig_image_bytes:
                     # Typed fallback — the name in an italic script style,
                     # with a signing line, so the signature is ALWAYS visible.
-                    c.setFont('Helvetica-Oblique', 16)
+                    c.setFont('Helvetica-Oblique', max(18, min(30, img_h * 0.42)))
                     c.setFillColorRGB(0.10, 0.15, 0.35)
                     c.drawString(fx + 2, img_y + img_h * 0.35, full_name)
-                    c.setLineWidth(0.7)
+                    c.setLineWidth(0.8)
                     c.setStrokeColorRGB(0.35, 0.40, 0.50)
                     c.line(fx, img_y + img_h * 0.22, fx + fw, img_y + img_h * 0.22)
 
-                # Caption under the signature
+                # Single caption line under the signature
                 c.setFont('Helvetica', 7.5)
                 c.setFillColorRGB(0.20, 0.30, 0.45)
-                c.drawString(fx, max(2, img_y - 8), f'CEO · {full_name}')
-                c.setFont('Helvetica', 6.5)
-                c.setFillColorRGB(0.45, 0.50, 0.58)
-                c.drawString(fx, max(2, img_y - 16), f'Electronically signed · {signed_at}')
+                c.drawString(
+                    fx, max(2, img_y - 8),
+                    f'CEO · {full_name} · Electronically signed {signed_at}',
+                )
 
             c.save()
             overlay.seek(0)
@@ -773,19 +773,49 @@ class OrderQuickCEOSignView(OrdersAccessMixin, View):
         except Exception:
             pass
 
-        # ── Complete the request — this fires the orders post_save signal ──
-        # We update_status() if available; otherwise set the field directly.
+        # ── Complete the request ──
+        # update_status() if available; otherwise set the field directly.
         if hasattr(sig_req, 'update_status'):
             sig_req.update_status()
-        else:
+            sig_req.refresh_from_db(fields=['status'])
+        # Safety net: if every signer has signed but the status still isn't
+        # completed (update_status missing or conservative), force it.
+        all_signed = not sig_req.signers.exclude(status='signed').exists()
+        if all_signed and str(getattr(sig_req, 'status', '')).lower() not in (
+                'completed', 'signed', 'done', 'finished'):
             sig_req.status = 'completed'
-            sig_req.completed_at = timezone.now()
-            sig_req.save(update_fields=['status', 'completed_at', 'updated_at'])
+            if hasattr(sig_req, 'completed_at'):
+                sig_req.completed_at = timezone.now()
+                sig_req.save(update_fields=['status', 'completed_at', 'updated_at'])
+            else:
+                sig_req.save(update_fields=['status', 'updated_at'])
 
         try:
             sig_req.rebuild_audit_hash()
         except Exception:
             pass
+
+        # ── Advance the order + email the buyer the signed PDF ──
+        # The post_save signal bridge normally handles this, but we also
+        # dispatch directly so one-click signing never depends on signal
+        # wiring. The services handlers are idempotent, so if the signal
+        # already advanced the order this is a harmless no-op.
+        transaction.on_commit(lambda: self._dispatch_after_commit(sig_req.pk))
+
+    @staticmethod
+    def _dispatch_after_commit(sig_req_pk):
+        try:
+            from apps.files.models import SignatureRequest
+            from .signals import advance_order_after_signature
+            sig_req = SignatureRequest.objects.filter(pk=sig_req_pk).first()
+            if sig_req is not None:
+                advance_order_after_signature(sig_req)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                'Direct order-advance dispatch failed for signature request %s',
+                sig_req_pk,
+            )
 
 
 def saved_sig_type_for(image_bytes, data_uri):

@@ -14,6 +14,11 @@ urlpatterns = [
         name='employee_onboarding_offer_letter',
     ),
     path(
+        'onboarding/<uuid:pk>/offer-letter/send/',
+        views.OfferLetterSendForSigningView.as_view(),
+        name='employee_onboarding_offer_letter_send',
+    ),
+    path(
         'onboarding/invite/',
         views.EmployeeOnboardingInviteCreateView.as_view(),
         name='employee_onboarding_invite_create',

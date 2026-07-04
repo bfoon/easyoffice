@@ -40,6 +40,7 @@ from apps.hr.offer_letter import (
     build_offer_letter_pdf,
     offer_letter_filename,
     save_offer_letter_for_onboarding,
+    send_offer_letter_for_signature,
 )
 
 from apps.hr.models import ZKDevice, ZKUserMap, ZKPunchLog
@@ -1621,6 +1622,89 @@ class OfferLetterDownloadView(LoginRequiredMixin, View):
         return response
 
 
+class OfferLetterSendForSigningView(LoginRequiredMixin, View):
+    """
+    POST-only: email the offer letter to the employee with a digital
+    signing link via the Files-app signature flow.
+
+    Generates (or regenerates) the offer letter PDF, saves it as an
+    EmployeeDocument + Files-app SharedFile, creates a token-based
+    SignatureRequest with the acceptance signature/date fields pre-placed
+    on the "Accepted by Employee" lines, and emails the employee the offer
+    PDF with a "Review & Sign" link (no login required).
+
+    When the employee signs, apps.files.tasks.finalise_signature_after_sign
+    calls apps.hr.offer_letter.handle_offer_signature_completed, which marks
+    this onboarding record as offer-letter-signed and replaces the offer
+    letter under "Documents, Work History & References" with the stamped,
+    signed PDF.
+    """
+
+    http_method_names = ['post']
+
+    def post(self, request, pk):
+        if not (is_hr_user(request.user) or is_ceo_user(request.user)):
+            return HttpResponseForbidden(
+                'Only HR or CEO can send the offer letter for signing.'
+            )
+
+        onboarding = get_object_or_404(EmployeeOnboarding, pk=pk)
+
+        if onboarding.offer_letter_signed:
+            messages.info(
+                request,
+                'The offer letter has already been signed — nothing to send.'
+            )
+            return redirect('employee_onboarding_detail', pk=onboarding.pk)
+
+        # Same gate as manual generation: only after CEO approval.
+        if onboarding.status not in [
+            EmployeeOnboarding.Status.APPROVED,
+            EmployeeOnboarding.Status.HIRED,
+            EmployeeOnboarding.Status.CONTRACT_PENDING,
+        ]:
+            messages.error(
+                request,
+                'The offer letter can only be sent after the CEO has approved the hire.'
+            )
+            return redirect('employee_onboarding_detail', pk=onboarding.pk)
+
+        try:
+            expires_days = int(request.POST.get('expires_days') or 14)
+        except (TypeError, ValueError):
+            expires_days = 14
+
+        try:
+            _doc, _shared, sig_req, signer = send_offer_letter_for_signature(
+                onboarding,
+                request.user,
+                base_url=request.build_absolute_uri('/'),
+                expires_days=expires_days,
+                extra_message=(request.POST.get('message') or '').strip(),
+            )
+        except ValueError as exc:
+            # User-friendly failures raised by the helper
+            # (no email on record, Files app unavailable, ...).
+            messages.error(request, str(exc))
+            return redirect('employee_onboarding_detail', pk=onboarding.pk)
+        except Exception as exc:
+            messages.error(
+                request,
+                f'Something went wrong while sending the offer for signing ({exc}). '
+                f'Please try again.'
+            )
+            return redirect('employee_onboarding_detail', pk=onboarding.pk)
+
+        messages.success(
+            request,
+            f'Offer letter emailed to {signer.email} with a signing link '
+            f'(valid {expires_days} days). This record will be marked as '
+            f'signed automatically once '
+            f'{onboarding.first_name or "the employee"} accepts and signs.'
+        )
+        return redirect('employee_onboarding_detail', pk=onboarding.pk)
+
+
 class EmploymentListView(LoginRequiredMixin, TemplateView):
     template_name = 'hr/employment_list.html'
 
@@ -2218,4 +2302,3 @@ def _relink_unmapped_punches(device):
         ZKPunchLog.objects.filter(
             device=device, device_user_id=device_user_id, staff__isnull=True
         ).update(staff_id=staff_id, processed=False)
-

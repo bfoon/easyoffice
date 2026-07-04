@@ -211,6 +211,21 @@ def finalise_signature_after_sign(sig_req_id, signer_id, base_url):
         except Exception:
             logger.exception('Could not iterate CC recipients for %s', sig_req.pk)
 
+        # ── Cross-app hook: HR offer-letter acceptance ──────────────────────
+        # Offer letters sent via apps.hr.offer_letter.send_offer_letter_for_signature
+        # tag the request with metadata['hr'] = {'kind': 'offer_letter', ...}.
+        # When the employee finishes signing, mark the onboarding record and
+        # attach the stamped PDF back onto it. Late import + broad except so
+        # a missing/misbehaving HR app can never break the signing flow.
+        try:
+            hr_meta = (sig_req.metadata or {}).get('hr') or {}
+            if hr_meta.get('kind') == 'offer_letter':
+                from apps.hr.offer_letter import handle_offer_signature_completed
+                handle_offer_signature_completed(sig_req)
+        except Exception:
+            logger.exception('HR offer-letter completion hook failed for %s',
+                             sig_req.pk)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Decline notification

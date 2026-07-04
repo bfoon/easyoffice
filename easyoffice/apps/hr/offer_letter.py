@@ -20,7 +20,17 @@ Strategy
 Public entry points
 ───────────────────
     build_offer_letter_pdf(onboarding) -> bytes
-    save_offer_letter_for_onboarding(onboarding, user) -> (EmployeeDocument, SharedFile|None)
+    build_offer_letter_pdf_with_sign_meta(onboarding) -> (bytes, sign_meta)
+    save_offer_letter_for_onboarding(onboarding, user, pdf_bytes=None)
+        -> (EmployeeDocument, SharedFile|None)
+    send_offer_letter_for_signature(onboarding, user, base_url, ...)
+        -> (EmployeeDocument, SharedFile, SignatureRequest, Signer)
+        Generates the letter, emails it to the employee with a
+        "Review & Sign" link, and pre-places the acceptance signature
+        fields using the Files app signature flow.
+    handle_offer_signature_completed(sig_req)
+        Called by apps.files.tasks when the employee has signed — marks
+        the onboarding record and attaches the signed PDF.
 
 The module is deliberately import-light: heavy imports (ReportLab, pypdf,
 SharedFile, LetterheadTemplate) are deferred to call sites so a missing
@@ -194,12 +204,18 @@ def _company_name() -> str:
 # Overlay builder — the actual offer letter content
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_offer_letter_overlay(onboarding, page_width: float, page_height: float) -> bytes:
+def _make_offer_letter_overlay(onboarding, page_width: float, page_height: float):
     """
     Render the offer letter body as a single PDF page sized to the letterhead.
 
     Layout: a slightly inset content frame, leaving generous top/bottom margins
     so the letterhead's existing header/footer artwork remains visible.
+
+    Returns (pdf_bytes, sign_meta) where sign_meta describes where the
+    "Accepted by Employee" signature/date lines landed, expressed in the
+    SignatureField percentage convention used by apps.files
+    (x/y are % of page size, y measured FROM THE TOP — see
+    views._embed_signatures_in_pdf: fy = h * (1 - (y_pct + height_pct)/100)).
     """
     try:
         from reportlab.lib import colors
@@ -401,11 +417,13 @@ def _make_offer_letter_overlay(onboarding, page_width: float, page_height: float
     y -= 8
 
     # If we've run out of room for the closing block, push it onto a second page.
+    page_num = 1
     if y < bottom + 90:
         c.showPage()
         c.setPageSize((page_width, page_height))
         y = top
         c.setFillColor(ink)
+        page_num = 2
 
     # ── Closing + signature block ──────────────────────────────────────────
     closing = (
@@ -446,8 +464,30 @@ def _make_offer_letter_overlay(onboarding, page_width: float, page_height: float
     c.drawString(ack_x, ack_y - 42, 'Signature: _____________________________')
     c.drawString(ack_x, ack_y - 56, 'Date: _____________________________')
 
+    # ── Signing-field geometry for the Files app signature flow ────────────
+    # Convert the acceptance lines into SignatureField percentage boxes.
+    # y_pct is measured from the TOP of the page (screen convention), while
+    # ReportLab's ack_y is from the bottom — hence the (page_h - top) flips.
+    def _pct_box(x, y_top_pdf, w, h):
+        return {
+            'x_pct':      round(max(0.0, x / page_width * 100.0), 2),
+            'y_pct':      round(max(0.0, (page_height - y_top_pdf) / page_height * 100.0), 2),
+            'width_pct':  round(min(100.0, w / page_width * 100.0), 2),
+            'height_pct': round(min(100.0, h / page_height * 100.0), 2),
+        }
+
+    sig_x = ack_x + 52                    # just after the "Signature:" label
+    sig_w = max(120.0, right - sig_x)     # to the right margin
+    sign_meta = {
+        'page': page_num,
+        # Drawn/typed signature box sits on top of the signature line.
+        'signature': _pct_box(sig_x, ack_y - 10, sig_w, 36),
+        # Date box sits on the "Date: ____" line below it.
+        'date':      _pct_box(ack_x + 32, ack_y - 48, 150, 14),
+    }
+
     c.save()
-    return buffer.getvalue()
+    return buffer.getvalue(), sign_meta
 
 
 def _draw_paragraph(c, text, x, y, max_width, font='Helvetica', size=10, leading=13, color=None):
@@ -478,6 +518,22 @@ def _draw_paragraph(c, text, x, y, max_width, font='Helvetica', size=10, leading
 # Public PDF builder
 # ─────────────────────────────────────────────────────────────────────────────
 
+def build_offer_letter_pdf_with_sign_meta(onboarding):
+    """
+    Build the final offer letter PDF and the signing-field geometry.
+
+    Returns (pdf_bytes, sign_meta). sign_meta locates the
+    "Accepted by Employee" signature/date lines so the Files-app signature
+    flow can drop SignatureField boxes exactly on them.
+    """
+    letterhead_bytes = get_offer_letterhead_pdf_bytes()
+    page_w, page_h = _first_pdf_page_size(letterhead_bytes)
+    overlay_bytes, sign_meta = _make_offer_letter_overlay(onboarding, page_w, page_h)
+    if letterhead_bytes:
+        return _merge_letterhead_and_overlay(letterhead_bytes, overlay_bytes), sign_meta
+    return overlay_bytes, sign_meta
+
+
 def build_offer_letter_pdf(onboarding) -> bytes:
     """
     Build the final offer letter PDF as raw bytes.
@@ -485,12 +541,8 @@ def build_offer_letter_pdf(onboarding) -> bytes:
     Mirrors build_payslip_pdf in views.py: render the overlay sized to the
     letterhead's page (or A4), then merge with pypdf.
     """
-    letterhead_bytes = get_offer_letterhead_pdf_bytes()
-    page_w, page_h = _first_pdf_page_size(letterhead_bytes)
-    overlay_bytes = _make_offer_letter_overlay(onboarding, page_w, page_h)
-    if letterhead_bytes:
-        return _merge_letterhead_and_overlay(letterhead_bytes, overlay_bytes)
-    return overlay_bytes
+    pdf_bytes, _meta = build_offer_letter_pdf_with_sign_meta(onboarding)
+    return pdf_bytes
 
 
 def offer_letter_filename(onboarding) -> str:
@@ -504,7 +556,7 @@ def offer_letter_filename(onboarding) -> str:
 # Persistence — attach to onboarding AND save to Files app
 # ─────────────────────────────────────────────────────────────────────────────
 
-def save_offer_letter_for_onboarding(onboarding, user):
+def save_offer_letter_for_onboarding(onboarding, user, pdf_bytes=None):
     """
     Generate the offer letter PDF and persist it.
 
@@ -515,19 +567,25 @@ def save_offer_letter_for_onboarding(onboarding, user):
     • shared_file — created in the Files app under a 'HR / Offer Letters'
       folder. Owned by the new staff_user when it exists, otherwise by
       ``user`` (the CEO/HR person triggering generation).
+
+    ``pdf_bytes`` lets callers that already rendered the PDF (the signing
+    flow below) reuse it instead of rendering twice.
     """
     from apps.hr.models import EmployeeDocument
 
-    pdf_bytes = build_offer_letter_pdf(onboarding)
+    if pdf_bytes is None:
+        pdf_bytes = build_offer_letter_pdf(onboarding)
     filename = offer_letter_filename(onboarding)
     title = f'Offer Letter — {onboarding.employee_code or onboarding.full_name}'
 
     # ── 1) EmployeeDocument (replace any prior offer letter for this onboarding) ──
+    # Note: a signed copy (title ending in "(Signed)") is preserved —
+    # regenerating the unsigned letter must never destroy a signed record.
     EmployeeDocument.objects.filter(
         onboarding=onboarding,
         document_type=EmployeeDocument.DocumentType.CONTRACT,
         title__startswith='Offer Letter',
-    ).delete()
+    ).exclude(title__endswith='(Signed)').delete()
 
     employee_doc = EmployeeDocument.objects.create(
         onboarding=onboarding,
@@ -619,3 +677,383 @@ def save_offer_letter_for_onboarding(onboarding, user):
         shared_file = None
 
     return employee_doc, shared_file
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Send-for-signing — Files app signature flow integration
+# ─────────────────────────────────────────────────────────────────────────────
+
+def send_offer_letter_for_signature(onboarding, user, base_url,
+                                    expires_days=14, extra_message=''):
+    """
+    Generate the offer letter, persist it, create a Files-app
+    SignatureRequest for the employee, and email them the offer with a
+    one-click "Review & Sign" link (token-based, no login required).
+
+    The employee's acceptance signature/date fields are pre-placed exactly
+    on the "Accepted by Employee" lines of the letter.
+
+    Returns (employee_doc, shared_file, sig_req, signer).
+    Raises ValueError with a user-friendly message on any hard failure.
+    """
+    from apps.files.models import (
+        SignatureRequest,
+        SignatureRequestSigner,
+        SignatureRequestDocument,
+        SignatureAuditEvent,
+        SignatureField,
+    )
+
+    # ── 0) Resolve the recipient ────────────────────────────────────────────
+    to_email = (onboarding.personal_email or getattr(onboarding, 'official_email', '') or '').strip()
+    if not to_email:
+        raise ValueError(
+            'This employee has no personal or official email on record — '
+            'add an email address before sending the offer for signing.'
+        )
+    to_name = onboarding.full_name or to_email
+
+    # ── 1) Build + persist the PDF (single render) ─────────────────────────
+    pdf_bytes, sign_meta = build_offer_letter_pdf_with_sign_meta(onboarding)
+    employee_doc, shared_file = save_offer_letter_for_onboarding(
+        onboarding, user, pdf_bytes=pdf_bytes
+    )
+    if shared_file is None:
+        raise ValueError(
+            'The offer letter was generated, but it could not be saved to '
+            'the Files app — the signature flow needs a Files-app document.'
+        )
+
+    # ── 2) Cancel any previous still-open offer-letter request ─────────────
+    # Re-sending the offer should not leave two live signing links around.
+    try:
+        stale = SignatureRequest.objects.filter(
+            metadata__hr__kind='offer_letter',
+            metadata__hr__onboarding_id=str(onboarding.pk),
+            status__in=['sent', 'partial'],
+        )
+        for old in stale:
+            old.status = SignatureRequest.Status.CANCELLED
+            old.save(update_fields=['status', 'updated_at'])
+            old.signers.filter(status__in=['pending', 'viewed']).update(status='cancelled')
+            SignatureAuditEvent.objects.create(
+                request=old, event='cancelled',
+                notes='Superseded by a newly issued offer letter.',
+            )
+    except Exception:
+        logger.exception('Could not cancel stale offer signature requests '
+                         'for onboarding %s', onboarding.pk)
+
+    # ── 3) Create the SignatureRequest ──────────────────────────────────────
+    title = f'Offer Letter — {onboarding.full_name or onboarding.employee_code}'
+    message = (
+        'Please review your letter of offer carefully. If you are satisfied '
+        'with the terms of this offer, sign in the "Accepted by Employee" '
+        'section to confirm your acceptance.'
+    )
+    if extra_message:
+        message = f'{message}\n\n{extra_message}'
+
+    sig_req = SignatureRequest.objects.create(
+        title=title,
+        message=message,
+        document=shared_file,
+        created_by=user,
+        status=SignatureRequest.Status.SENT,
+        metadata={'hr': {
+            'kind': 'offer_letter',
+            'onboarding_id': str(onboarding.pk),
+            'employee_code': onboarding.employee_code or '',
+        }},
+    )
+    if expires_days:
+        from datetime import timedelta
+        sig_req.expires_at = timezone.now() + timedelta(days=int(expires_days))
+        sig_req.save(update_fields=['expires_at'])
+
+    try:
+        SignatureRequestDocument.objects.create(
+            request=sig_req, document=shared_file, order=1, is_primary=True,
+        )
+    except Exception:
+        pass  # legacy single-FK path still works
+
+    # ── 4) Signer = the employee ────────────────────────────────────────────
+    signer_user = onboarding.staff_user
+    if signer_user is None:
+        try:
+            from apps.core.models import User as CoreUser
+            signer_user = CoreUser.objects.filter(email__iexact=to_email).first()
+        except Exception:
+            signer_user = None
+
+    signer = SignatureRequestSigner.objects.create(
+        request=sig_req,
+        user=signer_user,
+        email=to_email,
+        name=to_name,
+        order=1,
+        invited_at=timezone.now(),
+    )
+
+    # ── 5) Pre-place signature + date fields on the acceptance lines ────────
+    try:
+        page = int(sign_meta.get('page', 1))
+        s = sign_meta.get('signature') or {}
+        d = sign_meta.get('date') or {}
+        if s:
+            SignatureField.objects.create(
+                request=sig_req, signer=signer,
+                field_type=SignatureField.FieldType.SIGNATURE,
+                page=page, label='Accepted by Employee', required=True,
+                x_pct=s['x_pct'], y_pct=s['y_pct'],
+                width_pct=s['width_pct'], height_pct=s['height_pct'],
+            )
+        if d:
+            SignatureField.objects.create(
+                request=sig_req, signer=signer,
+                field_type=SignatureField.FieldType.DATE,
+                page=page, label='Acceptance Date', required=True,
+                x_pct=d['x_pct'], y_pct=d['y_pct'],
+                width_pct=d['width_pct'], height_pct=d['height_pct'],
+            )
+    except Exception:
+        # Without fields the sign page still works — the signer just signs
+        # without pre-placed boxes. Never block the send over placement.
+        logger.exception('Could not pre-place offer signature fields for %s', sig_req.pk)
+
+    # ── 6) Audit trail ───────────────────────────────────────────────────────
+    try:
+        SignatureAuditEvent.objects.create(
+            request=sig_req, event='created',
+            notes=f'Offer letter issued by {user.full_name} (HR onboarding '
+                  f'{onboarding.employee_code or onboarding.pk}).',
+        )
+        SignatureAuditEvent.objects.create(
+            request=sig_req, event='sent',
+            signer_email=to_email, signer_name=to_name,
+            notes='Offer letter emailed to employee with signing link.',
+        )
+        sig_req.rebuild_audit_hash()
+    except Exception:
+        logger.exception('Could not write audit events for %s', sig_req.pk)
+
+    # ── 7) Email the employee: offer PDF attached + Review & Sign link ─────
+    # Sent in a daemon thread (same pattern as apps.files) so the HTTP
+    # response returns immediately.
+    def _send():
+        _send_offer_signing_email(onboarding, sig_req, signer, base_url, pdf_bytes)
+
+    try:
+        from apps.files.views import _spawn
+        _spawn(_send)
+    except Exception:
+        try:
+            _send()
+        except Exception:
+            logger.exception('Could not send offer signing email for %s', sig_req.pk)
+
+    return employee_doc, shared_file, sig_req, signer
+
+
+def _send_offer_signing_email(onboarding, sig_req, signer, base_url, pdf_bytes):
+    """HTML offer email: copy of the letter attached + a Review & Sign CTA."""
+    from django.conf import settings
+    from django.core.mail import EmailMessage
+
+    org_name = getattr(settings, 'ORGANISATION_NAME',
+                       getattr(settings, 'OFFICE_NAME', 'EasyOffice'))
+    from_email = getattr(settings, 'DEFAULT_FROM_EMAIL',
+                         f'noreply@{org_name.lower().replace(" ", "")}.org')
+    sign_url = base_url.rstrip('/') + signer.signing_url
+    job_title = onboarding.job_title_display or onboarding.job_title or 'your new role'
+    expires = (sig_req.expires_at.strftime('%d %B %Y') if sig_req.expires_at else None)
+    first_name = onboarding.first_name or onboarding.full_name or 'Colleague'
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif;}}
+  .w{{max-width:620px;margin:28px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08);}}
+  .hdr{{background:linear-gradient(135deg,#0f3d73,#145aa0 58%,#0d9488);padding:36px 40px;text-align:center;}}
+  .hdr h1{{margin:0 0 4px;font-size:22px;color:#fff;font-weight:800;}}
+  .hdr p{{margin:0;font-size:13px;color:rgba(255,255,255,.8);}}
+  .badge{{font-size:40px;display:block;margin-bottom:12px;}}
+  .body{{padding:32px 40px;}}
+  .greeting{{font-size:15.5px;color:#1e293b;line-height:1.75;margin-bottom:18px;}}
+  .doc-box{{background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:12px;padding:16px 20px;margin:18px 0;display:flex;align-items:center;gap:14px;}}
+  .doc-name{{font-weight:700;font-size:15px;color:#1e293b;}}
+  .doc-from{{font-size:13px;color:#64748b;margin-top:3px;}}
+  .accept-box{{background:#ecfdf5;border:1px solid #a7f3d0;border-radius:12px;padding:14px 18px;font-size:14px;color:#065f46;line-height:1.7;margin:16px 0;}}
+  .cta{{text-align:center;margin:28px 0;}}
+  .btn{{display:inline-block;background:linear-gradient(135deg,#0f3d73,#0d9488);color:#fff!important;padding:14px 38px;border-radius:12px;text-decoration:none;font-weight:800;font-size:16px;box-shadow:0 4px 16px rgba(15,61,115,.3);}}
+  .url-note{{font-size:12px;color:#94a3b8;text-align:center;margin-top:8px;word-break:break-all;}}
+  .expire{{background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px 14px;font-size:13px;color:#9a3412;margin-top:14px;}}
+  .warn{{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;font-size:12.5px;color:#475569;margin-top:14px;line-height:1.6;}}
+  .footer{{background:#f8fafc;padding:20px 40px;text-align:center;border-top:1px solid #e2e8f0;}}
+  .footer p{{margin:0;font-size:12px;color:#94a3b8;line-height:1.8;}}
+</style></head>
+<body>
+<div class="w">
+  <div class="hdr">
+    <span class="badge">🎉</span>
+    <h1>Your Letter of Offer</h1>
+    <p>{org_name} — Human Resources</p>
+  </div>
+  <div class="body">
+    <p class="greeting">Dear <strong>{first_name}</strong>,<br><br>
+    Congratulations! We are pleased to offer you the position of
+    <strong>{job_title}</strong> at {org_name}. A copy of your official
+    letter of offer is attached to this email for your records.</p>
+
+    <div class="doc-box">
+      <div style="font-size:2rem">📄</div>
+      <div>
+        <div class="doc-name">{sig_req.title}</div>
+        <div class="doc-from">Attached as PDF · {org_name}</div>
+      </div>
+    </div>
+
+    <div class="accept-box">
+      ✅ <strong>If you are satisfied with the terms of this offer</strong>,
+      please click the button below to review the letter and digitally sign
+      in the <em>“Accepted by Employee”</em> section. Signing confirms your
+      acceptance of the offer — no printing or scanning is required.
+    </div>
+
+    <div class="cta">
+      <a href="{sign_url}" class="btn">🖊 Review &amp; Sign Offer Letter</a>
+      <div class="url-note">Or copy this link: {sign_url}</div>
+    </div>
+
+    {'<div class="expire">⏰ This offer link expires on <strong>' + expires + '</strong>. Please sign before then.</div>' if expires else ''}
+
+    <div class="warn">🔒 This signing link is unique to you and should not be
+    shared. No login is required. If you have any questions about the terms
+    of the offer, please contact HR before signing.</div>
+  </div>
+  <div class="footer">
+    <p><strong>{org_name}</strong><br>This is an automated message from the
+    HR onboarding system. Please do not reply to this email.</p>
+  </div>
+</div>
+</body></html>"""
+
+    msg = EmailMessage(
+        subject=f'Offer of Employment — Action Required | {org_name}',
+        body=html,
+        from_email=from_email,
+        to=[signer.email],
+    )
+    msg.content_subtype = 'html'
+    try:
+        msg.attach(offer_letter_filename(onboarding), pdf_bytes, 'application/pdf')
+    except Exception:
+        logger.exception('Could not attach offer PDF to signing email for %s', sig_req.pk)
+    msg.send(fail_silently=False)
+
+
+def handle_offer_signature_completed(sig_req):
+    """
+    Called from apps.files.tasks.finalise_signature_after_sign once every
+    signer on an offer-letter request has signed.
+
+    • Marks the onboarding record's offer letter as signed.
+    • Replaces the offer letter under "Documents, Work History & References"
+      with the stamped/signed PDF — the original unsigned EmployeeDocument
+      row is overwritten in place and retitled "… (Signed)".
+    """
+    from apps.hr.models import EmployeeOnboarding, EmployeeDocument
+
+    hr_meta = (sig_req.metadata or {}).get('hr') or {}
+    onboarding_id = hr_meta.get('onboarding_id')
+    if hr_meta.get('kind') != 'offer_letter' or not onboarding_id:
+        return
+
+    try:
+        onboarding = EmployeeOnboarding.objects.get(pk=onboarding_id)
+    except EmployeeOnboarding.DoesNotExist:
+        logger.warning('Offer signature completed but onboarding %s is gone',
+                       onboarding_id)
+        return
+
+    signer = sig_req.signers.order_by('order').first()
+
+    # ── Mark signed on the onboarding record ────────────────────────────────
+    try:
+        if not onboarding.offer_letter_signed:
+            onboarding.offer_letter_signed = True
+            onboarding.offer_letter_signed_at = (
+                signer.signed_at if signer and signer.signed_at else timezone.now()
+            )
+            # Recorded as confirmed by the staff account when the employee
+            # already has one, otherwise by whoever issued the request.
+            onboarding.offer_letter_signed_by = (
+                onboarding.staff_user or sig_req.created_by
+            )
+            onboarding.save(update_fields=[
+                'offer_letter_signed',
+                'offer_letter_signed_at',
+                'offer_letter_signed_by',
+            ])
+    except Exception:
+        logger.exception('Could not mark offer letter signed for onboarding %s',
+                         onboarding_id)
+
+    # ── Replace the offer letter in "Documents, Work History & References" ──
+    # sig_req.document now points at the stamped/signed copy (the embedder
+    # swaps it after completion). Instead of adding a second row, we overwrite
+    # the ORIGINAL "Offer Letter — …" EmployeeDocument in place so the
+    # detail-page table shows one entry: the signed version.
+    try:
+        signed_doc = sig_req.document
+        if signed_doc and getattr(signed_doc, 'file', None):
+            signed_bytes = _read_pdf_bytes_from_field(signed_doc.file)
+            if signed_bytes:
+                signed_title = (
+                    f'Offer Letter — '
+                    f'{onboarding.employee_code or onboarding.full_name} (Signed)'
+                )
+
+                offer_docs = EmployeeDocument.objects.filter(
+                    onboarding=onboarding,
+                    document_type=EmployeeDocument.DocumentType.CONTRACT,
+                    title__startswith='Offer Letter',
+                ).order_by('-uploaded_at')
+
+                target = offer_docs.first()
+
+                # Drop duplicates and any legacy 'Signed Offer Letter' rows so
+                # exactly one offer-letter document remains after this runs.
+                offer_docs.exclude(pk=getattr(target, 'pk', None)).delete()
+                EmployeeDocument.objects.filter(
+                    onboarding=onboarding,
+                    document_type=EmployeeDocument.DocumentType.CONTRACT,
+                    title__startswith='Signed Offer Letter',
+                ).delete()
+
+                if target is None:
+                    # Original was removed somehow — recreate the row.
+                    target = EmployeeDocument.objects.create(
+                        onboarding=onboarding,
+                        document_type=EmployeeDocument.DocumentType.CONTRACT,
+                        title=signed_title,
+                        uploaded_by=sig_req.created_by,
+                    )
+                else:
+                    target.title = signed_title
+                    target.save(update_fields=['title'])
+                    # Remove the unsigned PDF blob before writing the new one.
+                    try:
+                        target.file.delete(save=False)
+                    except Exception:
+                        pass
+
+                target.file.save(
+                    f'signed_{offer_letter_filename(onboarding)}',
+                    ContentFile(signed_bytes),
+                    save=True,
+                )
+    except Exception:
+        logger.exception('Could not replace offer letter with signed PDF for '
+                         'onboarding %s', onboarding_id)

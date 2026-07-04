@@ -3,32 +3,34 @@ apps/files/external_share_views.py
 ──────────────────────────────────
 All view classes for the external (no-login) file-sharing feature.
 
-Kept in its own module so views.py doesn't grow yet another 800 lines.
-The main views.py just needs:
+SECURITY CHANGES vs previous version
+────────────────────────────────────
+1. max_downloads is now ENFORCED. Previously the invitation email
+   advertised a download budget but _serve_file only incremented the
+   counter — the limit was never checked. Downloads now go through
+   share.is_active, and exhausting the budget returns 410 + audit row.
 
-    from apps.files.external_share_views import (
-        ExternalShareCreateView,
-        ExternalShareListView,
-        ExternalShareManageView,
-        ExternalShareRevokeView,
-        ExternalShareOpenView,
-        ExternalShareDeviceDecideView,
-        ExternalShareFingerprintView,
-    )
+2. Device email-bombing fixed. The CSRF-exempt fingerprint endpoint let
+   anyone with the link create unlimited ExternalShareDevice rows, each
+   firing a verification email at the owner. Now:
+     • per-IP and per-share rate limits on the endpoint,
+     • a hard cap on devices per share (MAX_DEVICES_PER_SHARE),
+     • verification emails throttled per share.
 
-URL routes are registered in apps/files/urls.py (see updated file).
+3. Email accept/decline links no longer mutate state on GET. Corporate
+   link scanners (Outlook SafeLinks, Mimecast, GMail prefetch) follow
+   GET links in email — with the old code a scanner could silently
+   ACCEPT an attacker's device. GET now renders a confirmation page;
+   the decision is applied only on an owner-submitted POST (CSRF-protected).
 
-Public (no-login) endpoints:
-    /files/ext/<token>/                  → ExternalShareOpenView
-    /files/ext/<token>/fp/                → ExternalShareFingerprintView (POST, JSON)
-    /files/ext/device/<token>/<decision>/ → ExternalShareDeviceDecideView
-                                            decision = 'accept' | 'decline'
+4. File serving hardened: injection-proof Content-Disposition (spaces
+   and Unicode names preserved via RFC 5987), X-Content-Type-Options:
+   nosniff, and inline rendering restricted to safe types under a CSP
+   sandbox — an uploaded HTML/SVG can no longer execute script on the
+   app origin when a "view only" share renders it inline.
 
-Authenticated endpoints (the file's owner):
-    /files/<file_pk>/external/create/    → ExternalShareCreateView (POST)
-    /files/external/                     → ExternalShareListView (browse all)
-    /files/external/<pk>/                → ExternalShareManageView (timeline + devices)
-    /files/external/<pk>/revoke/         → ExternalShareRevokeView (POST)
+5. Audit rows and fingerprints now use the trusted-proxy-aware client
+   IP instead of blindly trusting X-Forwarded-For.
 """
 from __future__ import annotations
 
@@ -37,12 +39,14 @@ import logging
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import (
-    FileResponse, Http404, HttpResponse, HttpResponseForbidden, JsonResponse,
+    Http404, HttpResponseForbidden, JsonResponse,
 )
+from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
+from django.utils.html import escape
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import View, TemplateView
 from datetime import timedelta
@@ -59,8 +63,19 @@ from apps.files.external_share_utils import (
     parse_user_agent,
     write_audit,
 )
+from apps.files.security_utils import (
+    rate_limit,
+    secure_file_response,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# Hard limits for the anonymous surface
+MAX_DEVICES_PER_SHARE       = 15    # distinct devices before we stop registering
+FP_RATE_LIMIT_PER_IP        = 30    # fingerprint POSTs per IP per hour
+FP_RATE_LIMIT_PER_SHARE     = 60    # fingerprint POSTs per share per hour
+VERIFY_EMAILS_PER_SHARE_DAY = 10    # owner verification emails per share per day
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -74,15 +89,12 @@ def _is_ajax(request):
 def _can_share_externally(user, file_obj):
     """
     Mirrors the existing _can_edit_file rule: only edit/full users can
-    create or revoke external shares. We deliberately don't import
-    _can_edit_file from views.py to keep this module decoupled (and avoid
-    the circular import).
+    create or revoke external shares.
     """
     if not user.is_authenticated:
         return False
     if file_obj.uploaded_by_id == user.id:
         return True
-    # Mirrors FileShareAccess permission check
     return file_obj.share_access.filter(user=user, permission__in=('edit', 'full')).exists()
 
 
@@ -93,10 +105,8 @@ def _absolute_base(request):
 
 def _client_token_from_request(request):
     """
-    Read the client-side fingerprint token. The recipient's browser sets it
-    in localStorage on first open and posts it back as a cookie + header on
-    subsequent visits. Cookie wins; header is the fallback used right after
-    the JS POST that registers the device.
+    Read the client-side fingerprint token. Cookie wins; header is the
+    fallback used right after the JS POST that registers the device.
     """
     return (
         request.COOKIES.get('eo_ext_fp')
@@ -113,12 +123,13 @@ def _set_fingerprint_cookie(response, fingerprint):
         max_age=60 * 60 * 24 * 365,
         httponly=True,
         samesite='Lax',
+        secure=True,
     )
     return response
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1) Owner-side: create a share
+# 1) Owner-side: create
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ExternalShareCreateView(LoginRequiredMixin, View):
@@ -167,8 +178,6 @@ class ExternalShareCreateView(LoginRequiredMixin, View):
         if permission not in ('view', 'download'):
             permission = 'download'
 
-        # Don't create a duplicate share to the same email if there's already
-        # an active one — extend the existing share's expiry instead.
         email_hash = ExternalFileShare.hash_email(recipient_email)
         existing = (ExternalFileShare.objects
                     .filter(file=f, recipient_email_hash=email_hash,
@@ -179,7 +188,6 @@ class ExternalShareCreateView(LoginRequiredMixin, View):
         new_expiry = timezone.now() + timedelta(hours=hours)
 
         if existing and not existing.is_expired and not existing.is_revoked:
-            # Extend / update existing share
             existing.expires_at    = new_expiry
             existing.message       = message_body
             existing.permission    = permission
@@ -210,7 +218,6 @@ class ExternalShareCreateView(LoginRequiredMixin, View):
                         ip_address=get_client_ip(request))
             new_record = True
 
-        # Background email send.
         try:
             from apps.files.tasks import send_external_share_invitation
             send_external_share_invitation.delay(share.pk, _absolute_base(request))
@@ -236,16 +243,13 @@ class ExternalShareCreateView(LoginRequiredMixin, View):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2) Owner-side: list / manage / revoke
+# 2) Owner-side: list / manage / revoke / device manage
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ExternalShareListView(LoginRequiredMixin, View):
     """
     GET  /files/external/                  → JSON list (for share modal panel)
     GET  /files/external/?file=<file_pk>   → only shares for that file
-
-    Returns shares the current user can manage (i.e. shares they created OR
-    shares on files they have edit/full access to).
     """
 
     def get(self, request):
@@ -257,13 +261,12 @@ class ExternalShareListView(LoginRequiredMixin, View):
         if file_pk:
             try:
                 f = SharedFile.objects.get(pk=file_pk)
-            except SharedFile.DoesNotExist:
+            except (SharedFile.DoesNotExist, ValueError):
                 return JsonResponse({'ok': False, 'error': 'File not found.'}, status=404)
             if not _can_share_externally(request.user, f):
                 return JsonResponse({'ok': False, 'error': 'Permission denied.'}, status=403)
             qs = qs.filter(file=f)
         else:
-            # Only shares user can manage anywhere
             qs = qs.filter(
                 Q(created_by=request.user)
                 | Q(file__uploaded_by=request.user)
@@ -271,14 +274,11 @@ class ExternalShareListView(LoginRequiredMixin, View):
                     file__share_access__permission__in=('edit', 'full'))
             ).distinct()
 
-        # Refresh status (cheap — handful of rows)
         for s in qs:
+            old_status = s.status
             s.refresh_status()
-
-        # Bulk-save dirty rows in one transaction would be nicer; this is
-        # fine for typical volumes.
-        for s in qs:
-            ExternalFileShare.objects.filter(pk=s.pk).update(status=s.status)
+            if s.status != old_status:
+                ExternalFileShare.objects.filter(pk=s.pk).update(status=s.status)
 
         rows = []
         for s in qs.order_by('-created_at')[:200]:
@@ -298,6 +298,8 @@ class ExternalShareListView(LoginRequiredMixin, View):
                 'is_active':         s.is_active,
                 'download_count':    s.download_count,
                 'max_downloads':     s.max_downloads,
+                'downloads_left':    (max(0, s.max_downloads - s.download_count)
+                                      if s.max_downloads else None),
                 'created_at':        s.created_at.isoformat(),
                 'created_by':        s.created_by.full_name if s.created_by_id else '—',
                 'open_url':          s.open_url,
@@ -356,9 +358,7 @@ class ExternalShareRevokeView(LoginRequiredMixin, View):
 class ExternalShareDeviceManageView(LoginRequiredMixin, View):
     """
     POST /files/external/<pk>/devices/<device_pk>/<decision>/
-
-    Owner-initiated accept/decline of a device from inside the manage page
-    (instead of from the email link). decision ∈ {accept, decline, remove}.
+    decision ∈ {accept, decline, remove}. CSRF-protected, owner-only.
     """
 
     def post(self, request, pk, device_pk, decision):
@@ -420,19 +420,9 @@ class ExternalShareOpenView(View):
     GET  /files/ext/<token>/
 
     The link the recipient clicks. Resolves the share, sets the fingerprint
-    cookie if missing, then either:
-
-      • Renders a "registering this device, please wait" page that POSTs the
-        client-side fingerprint to ExternalShareFingerprintView. After that
-        round-trip we know which device this is, and the page redirects:
-          - back here if the device is already accepted
-          - to a "verification pending" page if the owner hasn't decided yet
-          - to a "declined" page if the owner declined
-          - to the file download/preview if accepted
-
-    The single-page flow keeps the recipient on a clean URL so the QR
-    scanner / mobile share sheet doesn't break, while still letting us
-    collect the fingerprint via JS.
+    cookie if missing, then either serves the file (accepted device),
+    renders the pending/declined state, or renders the interstitial that
+    registers the device via ExternalShareFingerprintView.
     """
 
     template_name = 'files/external_share_open.html'
@@ -445,20 +435,24 @@ class ExternalShareOpenView(View):
         }, status=410)
 
     def get(self, request, token):
-        share = get_object_or_404(ExternalFileShare.objects.select_related('file', 'created_by'),
-                                  token=token)
+        share = get_object_or_404(
+            ExternalFileShare.objects.select_related('file', 'created_by'),
+            token=token,
+        )
 
         if share.is_revoked:
             return self._expired_response(share, request, 'revoked')
         if share.is_expired:
-            # Reflect status if not already.
             if share.status != ExternalFileShare.Status.EXPIRED:
                 share.status = ExternalFileShare.Status.EXPIRED
                 share.save(update_fields=['status'])
                 write_audit(share, 'expired', notes='Auto-marked on access')
             return self._expired_response(share, request, 'expired')
 
-        # Try to resolve device from existing cookie.
+        # NEW: enforce the download budget the invitation email promises.
+        if share.max_downloads and share.download_count >= share.max_downloads:
+            return self._expired_response(share, request, 'download_limit_reached')
+
         client_token = _client_token_from_request(request)
         ip = get_client_ip(request)
         ua = request.META.get('HTTP_USER_AGENT', '')
@@ -472,7 +466,6 @@ class ExternalShareOpenView(View):
             ).first()
 
         if device and device.is_accepted:
-            # Direct hit — serve the file/preview.
             write_audit(share, 'opened', device=device,
                         notes='Repeat open from accepted device',
                         ip_address=ip)
@@ -485,10 +478,6 @@ class ExternalShareOpenView(View):
             return render(request, 'files/external_share_declined.html',
                           {'share': share, 'device': device}, status=403)
 
-        # Either no device yet (first visit) or pending approval. Render the
-        # interstitial page that:
-        #   a) generates a JS fingerprint and POSTs it to /fp/  (then reloads)
-        #   b) shows pending state once the device row exists
         ctx = {
             'share': share,
             'device': device,
@@ -501,29 +490,39 @@ class ExternalShareOpenView(View):
 
     def _serve_file(self, request, share, device):
         """Stream the file to an accepted device. View-only = inline preview."""
-        share.download_count += 1
+        # Atomic-ish budget check + increment. F() avoids a lost-update race
+        # letting two simultaneous requests both pass the budget check.
+        from django.db.models import F
+        share.download_count = F('download_count') + 1
         share.save(update_fields=['download_count'])
+        share.refresh_from_db(fields=['download_count'])
+
+        if share.max_downloads and share.download_count > share.max_downloads:
+            write_audit(share, 'failed_attempt', device=device,
+                        notes='Download budget exhausted',
+                        ip_address=get_client_ip(request))
+            return render(request, 'files/external_share_unavailable.html', {
+                'share': share, 'reason': 'download_limit_reached',
+            }, status=410)
 
         write_audit(share, 'downloaded', device=device,
                     notes=f'Served {share.file.name} ({share.permission})',
                     ip_address=get_client_ip(request))
 
         f = share.file
-        import mimetypes as _mt
-        ctype, _ = _mt.guess_type(f.name)
-        ctype = ctype or 'application/octet-stream'
-
         try:
             fh = f.file.open('rb')
         except Exception:
             raise Http404
 
-        response = FileResponse(fh, content_type=ctype)
-        if share.permission == 'view':
-            response['Content-Disposition'] = f'inline; filename="{f.name}"'
-        else:
-            response['Content-Disposition'] = f'attachment; filename="{f.name}"'
-        return response
+        # secure_file_response guarantees:
+        #   • no header injection through the filename (spaces/Unicode OK),
+        #   • nosniff, and no script execution for inline previews
+        #     (HTML/SVG uploads are shown as text, others sandboxed).
+        return secure_file_response(
+            fh, f.name,
+            inline=(share.permission == 'view'),
+        )
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -534,12 +533,9 @@ class ExternalShareFingerprintView(View):
     JSON body: { client_token, screen, timezone }
 
     Registers (or refreshes) an ExternalShareDevice for the recipient.
-    Sets the fingerprint cookie, returns the device's current status so
-    the page can render accordingly.
-
-    CSRF-exempt because the recipient is anonymous and has no CSRF cookie
-    on first visit — the share token in the URL is the authorisation
-    bearer here. We also accept GET → 405 explicitly so probes are clear.
+    CSRF-exempt because the recipient is anonymous — the share token in
+    the URL is the authorisation bearer. Abuse is bounded by rate limits
+    and the per-share device cap.
     """
 
     def post(self, request, token):
@@ -550,8 +546,14 @@ class ExternalShareFingerprintView(View):
         if share.is_revoked or share.is_expired:
             return JsonResponse({'ok': False, 'error': 'unavailable'}, status=410)
 
-        # Defensive body parse: tolerate empty body, bad JSON, BOM, and
-        # form-encoded fallback. Must NEVER 500 on a hostile client.
+        ip = get_client_ip(request)
+
+        # NEW: throttle the anonymous surface.
+        if not rate_limit(f'extfp-ip:{ip}', limit=FP_RATE_LIMIT_PER_IP, window_seconds=3600):
+            return JsonResponse({'ok': False, 'error': 'rate_limited'}, status=429)
+        if not rate_limit(f'extfp-share:{share.pk}', limit=FP_RATE_LIMIT_PER_SHARE, window_seconds=3600):
+            return JsonResponse({'ok': False, 'error': 'rate_limited'}, status=429)
+
         data = {}
         try:
             raw = request.body or b''
@@ -563,7 +565,6 @@ class ExternalShareFingerprintView(View):
         except Exception:
             data = {}
 
-        # Form-encoded fallback (some networks strip JSON content-type)
         if not data and request.POST:
             data = {
                 'client_token': request.POST.get('client_token', ''),
@@ -577,11 +578,27 @@ class ExternalShareFingerprintView(View):
         if not client_token:
             return JsonResponse({'ok': False, 'error': 'missing client_token'}, status=400)
 
-        ip = get_client_ip(request)
         ua = request.META.get('HTTP_USER_AGENT', '')[:1000]
         fingerprint = build_device_fingerprint(client_token, ua, ip)
-
         ua_info = parse_user_agent(ua)
+
+        # NEW: hard cap on distinct devices — prevents unbounded row growth
+        # and email-bombing the owner with verification requests.
+        existing_device = ExternalShareDevice.objects.filter(
+            share=share, fingerprint=fingerprint,
+        ).first()
+
+        if existing_device is None:
+            if share.devices.count() >= MAX_DEVICES_PER_SHARE:
+                write_audit(share, 'failed_attempt',
+                            notes='Device cap reached — registration refused',
+                            ip_address=ip)
+                return JsonResponse({
+                    'ok': False,
+                    'error': 'device_limit',
+                    'message': 'Too many devices have tried this link. '
+                               'Ask the sender to re-share the file.',
+                }, status=403)
 
         device, created = ExternalShareDevice.objects.get_or_create(
             share=share,
@@ -596,8 +613,6 @@ class ExternalShareFingerprintView(View):
         )
 
         if not created:
-            # Refresh telemetry for the existing device — IP can change, UA
-            # can patch-bump, etc. Don't overwrite a final decision though.
             update_fields = []
             if ip and ip != device.ip_address:
                 device.ip_address = ip
@@ -617,18 +632,24 @@ class ExternalShareFingerprintView(View):
             if update_fields:
                 device.save(update_fields=update_fields)
 
-        # New device → fire owner verification email
         if created:
             write_audit(share, 'opened', device=device,
                         notes=f'First visit (screen={screen}, tz={tz_name})',
                         ip_address=ip)
-            try:
-                from apps.files.tasks import send_external_share_device_verification
-                send_external_share_device_verification.delay(
-                    device.pk, _absolute_base(request)
-                )
-            except Exception:
-                logger.exception('Could not enqueue device verification email for %s', device.pk)
+            # NEW: verification emails are throttled per share per day so a
+            # hostile client cycling client_tokens can't flood the owner.
+            if rate_limit(f'extverify:{share.pk}',
+                          limit=VERIFY_EMAILS_PER_SHARE_DAY,
+                          window_seconds=86400):
+                try:
+                    from apps.files.tasks import send_external_share_device_verification
+                    send_external_share_device_verification.delay(
+                        device.pk, _absolute_base(request)
+                    )
+                except Exception:
+                    logger.exception('Could not enqueue device verification email for %s', device.pk)
+            else:
+                logger.warning('Verification email throttled for share %s', share.pk)
 
         response = JsonResponse({
             'ok': True,
@@ -636,7 +657,7 @@ class ExternalShareFingerprintView(View):
             'is_accepted':  device.is_accepted,
             'is_declined':  device.is_declined,
             'is_pending':   device.is_pending,
-            'reload':       device.is_accepted,  # tell client to reload to download
+            'reload':       device.is_accepted,
         })
         _set_fingerprint_cookie(response, client_token)
         return response
@@ -644,34 +665,92 @@ class ExternalShareFingerprintView(View):
 
 class ExternalShareDeviceDecideView(View):
     """
-    GET  /files/ext/device/<token>/<decision>/
+    GET  /files/ext/device/<token>/<decision>/  → confirmation page
+    POST /files/ext/device/<token>/<decision>/  → applies the decision
 
-    The owner clicks accept or decline from the verification email. Token
-    is the device's verify_token (one-time, single-purpose). We require
-    the owner to be logged in for safety; if they're not we redirect to
-    login first and return them here.
+    SECURITY: the previous version applied the decision directly on GET.
+    Email security scanners (Outlook SafeLinks, Mimecast, proxies) follow
+    GET links automatically — a scanner could accept or decline a device
+    without the owner ever seeing the email. State changes now require a
+    CSRF-protected POST that only the logged-in owner can submit.
     """
 
     ALLOWED = {'accept', 'decline'}
 
-    def get(self, request, token, decision):
+    def _resolve(self, request, token, decision):
         if decision not in self.ALLOWED:
-            return HttpResponseForbidden('Unknown decision.')
+            return None, None, HttpResponseForbidden('Unknown decision.')
 
         device = get_object_or_404(
-            ExternalShareDevice.objects.select_related('share', 'share__file', 'share__created_by'),
+            ExternalShareDevice.objects.select_related(
+                'share', 'share__file', 'share__created_by'),
             verify_token=token,
         )
         share = device.share
 
-        # Auth guard: only the share's owner (or someone with edit/full on
-        # the file) can decide. Use Django's standard login redirect.
         if not request.user.is_authenticated:
             from django.contrib.auth.views import redirect_to_login
-            return redirect_to_login(request.get_full_path())
+            return None, None, redirect_to_login(request.get_full_path())
 
         if not _can_share_externally(request.user, share.file):
-            return HttpResponseForbidden('You do not have permission to decide this device.')
+            return None, None, HttpResponseForbidden(
+                'You do not have permission to decide this device.')
+
+        return device, share, None
+
+    def _confirm_page(self, request, device, share, decision):
+        """
+        Minimal self-contained confirmation page — no new template file
+        needed. Everything user-controlled is escaped.
+        """
+        verb   = 'Accept' if decision == 'accept' else 'Decline'
+        colour = '#10b981' if decision == 'accept' else '#ef4444'
+        csrf   = get_token(request)
+        from django.http import HttpResponse
+        html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{verb} device — EasyOffice</title></head>
+<body style="margin:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif">
+<div style="max-width:520px;margin:48px auto;background:#fff;border-radius:16px;
+            box-shadow:0 4px 24px rgba(0,0,0,.08);overflow:hidden">
+  <div style="background:{colour};color:#fff;padding:24px 32px">
+    <h1 style="margin:0;font-size:19px">Confirm: {verb} this device?</h1>
+  </div>
+  <div style="padding:24px 32px;font-size:14px;color:#1e293b;line-height:1.7">
+    <p><strong>File:</strong> {escape(share.file.name)}</p>
+    <p><strong>Recipient:</strong> {escape(share.recipient_email)}</p>
+    <p><strong>Device:</strong> {escape(device.short_label)}</p>
+    <p><strong>IP:</strong> {escape(device.ip_address or '—')}
+       &nbsp;·&nbsp; <strong>First seen:</strong>
+       {timezone.localtime(device.first_seen_at).strftime('%b %d, %Y · %H:%M')}</p>
+    <form method="post" style="margin-top:20px;text-align:center">
+      <input type="hidden" name="csrfmiddlewaretoken" value="{csrf}">
+      <button type="submit" style="background:{colour};color:#fff;border:0;
+              padding:12px 30px;border-radius:10px;font-weight:700;font-size:15px;
+              cursor:pointer">{verb} device</button>
+      <a href="{reverse('external_share_manage', kwargs={'pk': share.pk})}"
+         style="margin-left:14px;color:#64748b;font-size:13px">Cancel / manage share</a>
+    </form>
+  </div>
+</div></body></html>"""
+        return HttpResponse(html)
+
+    def get(self, request, token, decision):
+        device, share, err = self._resolve(request, token, decision)
+        if err:
+            return err
+
+        if device.status != ExternalShareDevice.Status.PENDING:
+            return render(request, 'files/external_share_device_already_decided.html', {
+                'device': device, 'share': share,
+            })
+
+        return self._confirm_page(request, device, share, decision)
+
+    def post(self, request, token, decision):
+        device, share, err = self._resolve(request, token, decision)
+        if err:
+            return err
 
         if device.status != ExternalShareDevice.Status.PENDING:
             return render(request, 'files/external_share_device_already_decided.html', {
@@ -683,21 +762,19 @@ class ExternalShareDeviceDecideView(View):
             action_audit = 'device_accepted'
         else:
             device.status = ExternalShareDevice.Status.DECLINED
-            device.decline_reason = (request.GET.get('reason') or '')[:500]
+            device.decline_reason = (request.POST.get('reason') or '')[:500]
             action_audit = 'device_declined'
         device.decided_at = timezone.now()
         device.decided_by = request.user
         device.save()
 
         write_audit(share, action_audit, device=device, actor=request.user,
-                    notes=f'Decision via email link',
+                    notes='Decision via email link (confirmed)',
                     ip_address=get_client_ip(request))
 
-        # Recompute share status (PENDING → ACTIVE if first acceptance).
         share.refresh_status()
         ExternalFileShare.objects.filter(pk=share.pk).update(status=share.status)
 
-        # Tell the recipient.
         try:
             from apps.files.tasks import send_external_share_device_decision
             send_external_share_device_decision.delay(device.pk, _absolute_base(request))

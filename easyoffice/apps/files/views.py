@@ -24,6 +24,10 @@ from django.views.decorators.clickjacking import xframe_options_sameorigin
 from apps.letterhead.models import LetterheadTemplate
 from django.urls import reverse
 from django.core.files.storage import default_storage
+from apps.files.security_utils import (
+    set_content_disposition, secure_file_response, clean_display_name,
+    client_ip as _trusted_client_ip,
+)
 from apps.files.models import (
     SharedFile,
     FileFolder,
@@ -56,10 +60,10 @@ def _is_ajax(request):
 
 
 def _get_client_ip(request):
-    x_forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded:
-        return x_forwarded.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR')
+    # X-Forwarded-For is attacker-controlled unless we only trust our own
+    # proxy hops. Delegates to security_utils.client_ip, which honours
+    # settings.TRUSTED_PROXY_COUNT. Keeps signature audit IPs trustworthy.
+    return _trusted_client_ip(request)
 
 def _folder_chain(folder):
     chain = []
@@ -1373,8 +1377,9 @@ def _embed_signatures_in_pdf(sig_req):
     writer.write(out_buf)
     signed_bytes = out_buf.getvalue()
 
-    orig_name   = document.name
-    signed_name = (orig_name[:-4] + '-signed.pdf') if orig_name.lower().endswith('.pdf') else (orig_name + '-signed.pdf')
+    orig_name   = clean_display_name(document.name)
+    stem        = orig_name[:-4] if orig_name.lower().endswith('.pdf') else orig_name
+    signed_name = f'{stem} — signed.pdf'
 
     signed_file = SharedFile.objects.create(
         name        = signed_name,
@@ -1885,6 +1890,80 @@ def _short_ref(text, length=14):
     return text[:length] + '…' if len(text) > length else text
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Signature field value helpers (initials / date / payload validation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from datetime import datetime as _dt
+
+# Payload budgets per field type. A drawn signature PNG at reasonable
+# resolution is well under 200 KB base64; anything bigger is abuse.
+FIELD_VALUE_LIMITS = {
+    'signature': 400_000,   # data:image base64 or "font:Name|Text"
+    'initials':  400_000,
+    'date':      64,
+    'text':      500,
+}
+
+_DATE_INPUT_FORMATS = (
+    '%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y',
+    '%d/%m/%y', '%m/%d/%y',
+    '%d %b %Y', '%d %B %Y', '%b %d, %Y', '%B %d, %Y',
+    '%d %b %y',
+)
+DATE_DISPLAY_FORMAT = '%d %b %Y'   # e.g. 04 Jul 2026 — what gets stamped
+
+
+def normalize_signature_date(value, *, default_today=True):
+    """
+    Parse a signer-typed date in common formats and return the canonical
+    display string, or None if it can't be parsed. Empty input returns
+    today's date when default_today is True (DocuSign-style auto date).
+    """
+    value = (value or '').strip()
+    if not value:
+        return timezone.localdate().strftime(DATE_DISPLAY_FORMAT) if default_today else None
+
+    cleaned = re.sub(r'\s+', ' ', value)
+    for fmt in _DATE_INPUT_FORMATS:
+        try:
+            return _dt.strptime(cleaned, fmt).strftime(DATE_DISPLAY_FORMAT)
+        except ValueError:
+            continue
+    return None
+
+
+def normalize_initials(value, signer_name=''):
+    """
+    Make initials behave the way people expect:
+
+      • "FB" / "FBJ" / "F.B."  → used as typed (dots stripped, uppercased)
+      • "Foon Jallow"          → "FJ"
+      • "Foon B. Jallow"       → "FBJ"   (middle name no longer dropped)
+      • empty                  → derived from signer_name, else 'EO'
+
+    Fixes the bug where typed initials were mangled: the old code did
+    ''.join([p[0] for p in text.split()[:2]]) which turned "FB" into "F".
+    """
+    raw = re.sub(r'\s+', ' ', str(value or '').strip())
+    compact = raw.replace('.', '').replace(' ', '')
+
+    # Already looks like initials — keep exactly what the signer typed.
+    if compact and len(compact) <= 4 and compact.isalpha():
+        if len(raw.split()) == 1 or all(len(p.strip('.')) == 1 for p in raw.split()):
+            return compact.upper()
+
+    # A full name — take the first letter of up to three parts.
+    parts = [p for p in raw.replace('.', ' ').split() if p]
+    if parts:
+        return ''.join(p[0] for p in parts[:3]).upper()
+
+    fallback = [p for p in (signer_name or '').replace('.', ' ').split() if p]
+    if fallback:
+        return ''.join(p[0] for p in fallback[:3]).upper()
+    return 'EO'
+
+
 def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, document):
     """
     EasyOffice DocuSign-style signature/initial badge.
@@ -1904,7 +1983,6 @@ def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, doc
 
     field_type = field.field_type
     signer_name = field.signer.name if field.signer else 'Signer'
-    signer_initials = ''.join([p[0] for p in signer_name.split()[:2]]).upper() or 'EO'
 
     ref = (
         getattr(document, 'file_hash', '')
@@ -2004,7 +2082,9 @@ def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, doc
         display_text = re.sub(r'\s+', ' ', str(display_text or '').strip())
 
         if is_initial:
-            display_text = ''.join([p[0] for p in display_text.split()[:2]]).upper() or signer_initials
+            # FIX: typed initials ("FB", "F.B.") pass through untouched;
+            # a typed full name still collapses. Previously "FB" → "F".
+            display_text = normalize_initials(display_text, signer_name)
 
         img_buf = None
         try:
@@ -2055,12 +2135,20 @@ def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, doc
 def _draw_easyoffice_text_box(c, field, value, fx, fy, fw, fh):
     """
     EasyOffice compact badge for date/text fields.
+
+    FIX: long values were clipped by a clipPath, silently cutting content
+    out of the legally-binding PDF. Now the font shrinks to fit; if the
+    value still doesn't fit on one line it wraps to two, and only then is
+    it ellipsised. Date values render bold for signature-block prominence.
     """
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
     EO_BLUE = (0.055, 0.341, 0.760)
     EO_BG = (0.965, 0.980, 1.000)
     EO_TEXT = (0.080, 0.110, 0.180)
 
-    label = 'EO Date' if field.field_type == 'date' else 'EO Text'
+    is_date = field.field_type == 'date'
+    label = 'EO Date' if is_date else 'EO Text'
 
     c.setFillColorRGB(*EO_BG)
     c.setStrokeColorRGB(*EO_BLUE)
@@ -2069,22 +2157,68 @@ def _draw_easyoffice_text_box(c, field, value, fx, fy, fw, fh):
 
     label_h = max(8, min(13, fh * 0.25))
     c.setFillColorRGB(1, 1, 1)
-    c.rect(fx + 6, fy + fh - label_h * 0.55, max(38, len(label) * 4.5), label_h + 2, stroke=0, fill=1)
+    c.rect(fx + 6, fy + fh - label_h * 0.55, max(38, len(label) * 4.5), label_h + 2,
+           stroke=0, fill=1)
 
     c.setFont('Helvetica-Bold', max(5.5, min(7.5, label_h * 0.72)))
     c.setFillColorRGB(*EO_BLUE)
     c.drawString(fx + 8, fy + fh - label_h * 0.30, label)
 
-    font_size = max(7.5, min(fh * 0.34, 11))
-    c.setFont('Helvetica', font_size)
+    display = re.sub(r'\s+', ' ', str(value or '').strip())
+    if not display:
+        return
+
+    avail_w = fw - 16
+    avail_h = fh - label_h - 8
+
+    font_name = 'Helvetica-Bold' if is_date else 'Helvetica'
     c.setFillColorRGB(*EO_TEXT)
 
-    c.saveState()
-    p = c.beginPath()
-    p.rect(fx + 7, fy + 5, fw - 14, fh - 13)
-    c.clipPath(p, stroke=0, fill=0)
-    c.drawString(fx + 8, fy + (fh - font_size) * 0.42, str(value))
-    c.restoreState()
+    # 1) Try a single line, shrinking from the ideal size down to 6pt.
+    max_size = max(7.5, min(fh * 0.34, 12))
+    size = max_size
+    while size > 6 and stringWidth(display, font_name, size) > avail_w:
+        size -= 0.5
+
+    if stringWidth(display, font_name, size) <= avail_w:
+        c.setFont(font_name, size)
+        c.drawString(fx + 8, fy + (fh - size) * 0.42, display)
+        return
+
+    # 2) Two-line wrap at word boundaries, then ellipsise the remainder.
+    size = max(6.0, max_size * 0.72)
+    line_h = size + 2
+    if line_h * 2 > avail_h:
+        size = max(5.5, (avail_h / 2) - 2)
+        line_h = size + 2
+
+    words, lines, current = display.split(' '), [], ''
+    for w in words:
+        candidate = f'{current} {w}'.strip()
+        if stringWidth(candidate, font_name, size) <= avail_w:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = w
+            if len(lines) == 2:
+                break
+    if current and len(lines) < 2:
+        lines.append(current)
+
+    if len(lines) == 2:
+        used = ' '.join(lines)
+        if len(used) < len(display):
+            last = lines[1]
+            while last and stringWidth(last + '…', font_name, size) > avail_w:
+                last = last[:-1]
+            lines[1] = (last + '…') if last else '…'
+
+    c.setFont(font_name, size)
+    top_y = fy + fh - label_h - line_h - 1
+    for i, line in enumerate(lines[:2]):
+        c.drawString(fx + 8, top_y - (i * line_h), line)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # File Manager
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2445,16 +2579,15 @@ class FilePreviewView(LoginRequiredMixin, View):
                 f.file.open('rb'),
                 content_type='text/plain; charset=utf-8'
             )
-            response['Content-Disposition'] = f'inline; filename="{f.name}"'
+            set_content_disposition(response, f.name, inline=True)
             response['X-Frame-Options'] = 'SAMEORIGIN'
             return response
 
-        content_type, _ = mimetypes.guess_type(f.name)
-        content_type = content_type or 'application/octet-stream'
-        response = FileResponse(f.file.open('rb'), content_type=content_type)
-        response['Content-Disposition'] = f'inline; filename="{f.name}"'
-        response['X-Frame-Options'] = 'SAMEORIGIN'
-        return response
+        # SECURITY: never render unknown uploads inline with a guessed
+        # content type — an uploaded .htm/.svg/.xhtml would execute script
+        # on our origin. secure_file_response sandboxes safe types and
+        # downgrades active content to text/download, with nosniff.
+        return secure_file_response(f.file.open('rb'), f.name, inline=True)
 
     def _zip_preview(self, f):
         try:
@@ -2630,7 +2763,7 @@ class FilePreviewView(LoginRequiredMixin, View):
         """
 
         response = HttpResponse(html_content, content_type='text/html; charset=utf-8')
-        response['Content-Disposition'] = f'inline; filename="{f.name}.zip-preview.html"'
+        set_content_disposition(response, f'{f.name}.zip-preview.html', inline=True)
         response['X-Frame-Options'] = 'SAMEORIGIN'
         return response
 
@@ -2673,7 +2806,7 @@ class FilePreviewView(LoginRequiredMixin, View):
             open(str(cache_path), 'rb'),
             content_type='application/pdf',
         )
-        response['Content-Disposition'] = f'inline; filename="{f.name}.preview.pdf"'
+        set_content_disposition(response, f'{f.name}.preview.pdf', inline=True)
         response['X-Frame-Options'] = 'SAMEORIGIN'
         return response
 
@@ -3094,8 +3227,8 @@ class FileShareView(LoginRequiredMixin, View):
 
 class FolderCreateView(LoginRequiredMixin, View):
     def post(self, request):
-        name = request.POST.get('name', '').strip()
-        if not name:
+        name = clean_display_name(request.POST.get('name', '').strip())
+        if not name or name == 'Untitled':
             if _is_ajax(request):
                 return JsonResponse({'ok': False, 'error': 'Folder name required.'}, status=400)
             messages.error(request, 'Folder name required.')
@@ -4434,15 +4567,38 @@ class SignDocumentView(View):
 
             if not sig_data:
                 messages.error(request, 'Signature is required.')
-                return redirect('sign_document_complete', token=token)
+                return redirect('sign_document', token=token)
 
-            # Require all signer fields to be completed before final sign
+            # Cap the final signature payload (same budget as field values).
+            if len(sig_data) > FIELD_VALUE_LIMITS['signature']:
+                messages.error(request, 'The signature image is too large. Please try again.')
+                return redirect('sign_document', token=token)
+
             if hasattr(signer, 'fields'):
-                my_total_fields = signer.fields.count()
-                my_filled_fields = signer.fields.exclude(value='').count()
-                if my_total_fields and my_filled_fields != my_total_fields:
-                    messages.error(request, 'Please complete all required fields before signing.')
-                    return redirect('sign_document_complete', token=token)
+                # DocuSign-style: auto-stamp any untouched date fields with
+                # the signing date so the document is always fully dated.
+                for date_field in signer.fields.filter(field_type='date', value=''):
+                    date_field.value = normalize_signature_date('', default_today=True)
+                    if hasattr(date_field, 'filled_at'):
+                        date_field.filled_at = timezone.now()
+                        date_field.save(update_fields=['value', 'filled_at'])
+                    else:
+                        date_field.save(update_fields=['value'])
+
+                # FIX: only *required* fields gate signing. Optional
+                # (required=False) fields previously blocked the flow, and
+                # the error redirect dead-ended on the completion page.
+                missing = list(
+                    signer.fields.filter(required=True, value='')
+                                 .values_list('field_type', flat=True)
+                )
+                if missing:
+                    pretty = ', '.join(sorted(set(m.title() for m in missing)))
+                    messages.error(
+                        request,
+                        f'Please complete all required fields before signing ({pretty}).'
+                    )
+                    return redirect('sign_document', token=token)
 
             signer.status = 'signed'
             signer.signed_at = timezone.now()
@@ -4820,6 +4976,16 @@ class FillSignatureFieldView(View):
     """
     Saves one signer field value from the signing page:
     signature, initials, date, or text.
+
+    Hardened vs previous version:
+      • declined/already-signed signers can no longer modify fields;
+      • per-type value length caps (a signer could previously POST
+        megabytes into the TextField);
+      • signature/initials payloads must be a data:image URI, a
+        "font:Name|Text" typed value, or short plain text;
+      • date values are parsed and stored canonically ("04 Jul 2026");
+      • typed initials survive intact instead of collapsing to one letter;
+      • optional (required=False) fields may be cleared.
     """
     def post(self, request, token, field_id):
         import json as _json
@@ -4832,6 +4998,13 @@ class FillSignatureFieldView(View):
             return JsonResponse({
                 'status': 'error',
                 'message': 'This signing request is no longer available.'
+            }, status=403)
+
+        # A signer who already signed or declined is done.
+        if signer.status in ('signed', 'declined'):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'This signing session has already been completed.'
             }, status=403)
 
         # Ordered signing guard
@@ -4863,14 +5036,60 @@ class FillSignatureFieldView(View):
 
         value = str(payload.get('value') or '').strip()
 
-        if not value:
+        # ── Per-type validation ──────────────────────────────────────────
+        limit = FIELD_VALUE_LIMITS.get(field.field_type, 500)
+        if len(value) > limit:
             return JsonResponse({
                 'status': 'error',
-                'message': 'Please complete this field.'
+                'message': 'This value is too large for the field.'
             }, status=400)
 
-        field.value = value
+        if not value:
+            if field.required:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Please complete this field.'
+                }, status=400)
+            # Optional field cleared.
+            field.value = ''
+            if hasattr(field, 'filled_at'):
+                field.filled_at = None
+                field.save(update_fields=['value', 'filled_at'])
+            else:
+                field.save(update_fields=['value'])
+            return self._progress_response(sig_req, signer, field)
 
+        if field.field_type == 'date':
+            normalised = normalize_signature_date(value, default_today=False)
+            if not normalised:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Please enter a valid date (e.g. 04 Jul 2026 or 2026-07-04).'
+                }, status=400)
+            value = normalised
+
+        elif field.field_type == 'initials':
+            if not value.startswith('data:image'):
+                value = normalize_initials(value, signer.name)
+                if not value:
+                    return JsonResponse({
+                        'status': 'error',
+                        'message': 'Please enter your initials.'
+                    }, status=400)
+
+        elif field.field_type == 'signature':
+            valid = (
+                value.startswith('data:image')
+                or value.startswith('font:')
+                or len(value) <= 120       # short typed name
+            )
+            if not valid:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Unsupported signature format.'
+                }, status=400)
+
+        field.value = value
         if hasattr(field, 'filled_at'):
             field.filled_at = timezone.now()
             field.save(update_fields=['value', 'filled_at'])
@@ -4878,39 +5097,41 @@ class FillSignatureFieldView(View):
             field.save(update_fields=['value'])
 
         changed = []
-
         if signer.status == 'pending':
             signer.status = 'viewed'
             changed.append('status')
-
         if not signer.viewed_at:
             signer.viewed_at = timezone.now()
             changed.append('viewed_at')
-
         if hasattr(signer, 'ip_address') and not signer.ip_address:
             signer.ip_address = _get_client_ip(request)
             changed.append('ip_address')
-
         if changed:
             signer.save(update_fields=changed)
 
-        total_fields = SignatureField.objects.filter(
-            request=sig_req,
-            signer=signer,
-        ).count()
+        return self._progress_response(sig_req, signer, field)
 
-        filled_fields = SignatureField.objects.filter(
-            request=sig_req,
-            signer=signer,
-        ).exclude(value='').count()
+    @staticmethod
+    def _progress_response(sig_req, signer, field):
+        from apps.files.models import SignatureField
+
+        qs = SignatureField.objects.filter(request=sig_req, signer=signer)
+        total_required  = qs.filter(required=True).count()
+        filled_required = qs.filter(required=True).exclude(value='').count()
+        total_fields    = qs.count()
+        filled_fields   = qs.exclude(value='').count()
 
         return JsonResponse({
             'status': 'ok',
             'field_id': str(field.id),
             'field_type': field.field_type,
+            'value': field.value if field.field_type in ('date', 'text', 'initials') else '',
             'filled_fields': filled_fields,
             'total_fields': total_fields,
-            'all_fields_done': total_fields == filled_fields,
+            'filled_required': filled_required,
+            'total_required': total_required,
+            # DocuSign behaviour: only *required* fields gate the Finish button.
+            'all_fields_done': filled_required == total_required,
             'message': 'Field saved successfully.'
         })
 
@@ -5122,7 +5343,7 @@ class SignDocumentPreviewView(View):
             fh,
             content_type='application/pdf'
         )
-        response['Content-Disposition'] = f'inline; filename="{file_name}"'
+        set_content_disposition(response, file_name, inline=True)
         response['Accept-Ranges'] = 'bytes'
         response['X-Frame-Options'] = 'SAMEORIGIN'
         response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -5161,7 +5382,7 @@ class SignDocumentDownloadView(View):
             fh,
             content_type='application/pdf'
         )
-        response['Content-Disposition'] = f'attachment; filename="{file_name}"'
+        set_content_disposition(response, file_name)
         return response
 
 
@@ -5968,7 +6189,7 @@ class QuickSignPreviewView(LoginRequiredMixin, View):
             pdf.file,
             content_type='application/pdf'
         )
-        response['Content-Disposition'] = f'inline; filename="{file_name}"'
+        set_content_disposition(response, file_name, inline=True)
         response['Accept-Ranges'] = 'bytes'
         response['X-Frame-Options'] = 'SAMEORIGIN'
         response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -6683,11 +6904,7 @@ class FilePublicDownloadView(View):
         f = pt.file
         pt.download_count += 1
         pt.save(update_fields=['download_count'])
-        import mimetypes as _mimetypes
-        content_type, _ = _mimetypes.guess_type(f.name)
-        response = FileResponse(f.file.open('rb'), content_type=content_type or 'application/octet-stream')
-        response['Content-Disposition'] = f'attachment; filename="{f.name}"'
-        return response
+        return secure_file_response(f.file.open('rb'), f.name, inline=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -6716,8 +6933,8 @@ class FileRenameView(LoginRequiredMixin, View):
             messages.error(request, 'You do not have permission to rename this file.')
             return redirect('file_manager')
 
-        new_name = (request.POST.get('name') or '').strip()
-        if not new_name:
+        new_name = clean_display_name((request.POST.get('name') or '').strip())
+        if not new_name or new_name == 'Untitled':
             if _is_ajax(request):
                 return JsonResponse({'ok': False, 'error': 'File name cannot be empty.'}, status=400)
             messages.error(request, 'File name cannot be empty.')
@@ -6777,8 +6994,8 @@ class FolderRenameView(LoginRequiredMixin, View):
             messages.error(request, 'You do not have permission to rename this folder.')
             return redirect('file_manager')
 
-        new_name = (request.POST.get('name') or '').strip()
-        if not new_name:
+        new_name = clean_display_name((request.POST.get('name') or '').strip())
+        if not new_name or new_name == 'Untitled':
             if _is_ajax(request):
                 return JsonResponse({'ok': False, 'error': 'Folder name cannot be empty.'}, status=400)
             messages.error(request, 'Folder name cannot be empty.')
@@ -8428,7 +8645,7 @@ class ZipCompressView(LoginRequiredMixin, TemplateView):
             pass
 
         response = HttpResponse(zip_bytes, content_type='application/zip')
-        response['Content-Disposition'] = f'attachment; filename="{archive_name}.zip"'
+        set_content_disposition(response, f'{archive_name}.zip')
         response['X-EO-Archive-Files']  = str(len(ordered))
         response['X-EO-Archive-Size']   = str(zip_size)
         return response
@@ -8489,7 +8706,7 @@ class ZipCompressView(LoginRequiredMixin, TemplateView):
 
         outer_bytes = outer.getvalue()
         response = HttpResponse(outer_bytes, content_type='application/zip')
-        response['Content-Disposition'] = f'attachment; filename="{archive_name}-split.zip"'
+        set_content_disposition(response, f'{archive_name}-split.zip')
         response['X-EO-Archive-Files']  = str(len(files))
         response['X-EO-Archive-Parts']  = str(part_count)
         response['X-EO-Archive-Size']   = str(total)

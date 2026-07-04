@@ -1,33 +1,30 @@
 """
 apps/files/external_share_utils.py
 ──────────────────────────────────
-Helper utilities for the external (no-login) file-sharing feature:
+Helper utilities for the external (no-login) file-sharing feature.
 
-  • Device fingerprinting   — build a stable identifier for the recipient's
-                              browser/device combo.
-  • UA parsing              — best-effort extraction of OS / browser / device
-                              type without pulling in an extra dep. If
-                              `user_agents` is installed it's used; otherwise
-                              we fall back to a tiny regex parser.
-  • Email helpers           — render & send the three transactional emails
-                              (invitation to recipient, device-verification to
-                              owner, device-decision to recipient).
-  • Audit helpers           — single entry point for writing audit rows so
-                              callers don't repeat themselves.
-
-All functions are best-effort and never raise on transport failures —
-sending an email or parsing a UA must not break the user's flow.
+SECURITY CHANGES vs previous version
+  • Every user-controlled value interpolated into email HTML is now
+    escaped (file names, recipient/sender names, browser/OS strings, …).
+    Previously a file named  <img src=x onerror=…>.pdf  injected live
+    HTML into both the invitation and the owner-verification emails.
+  • get_client_ip now delegates to security_utils.client_ip, which only
+    honours X-Forwarded-For when TRUSTED_PROXY_COUNT is configured.
+    Spoofed XFF headers previously poisoned audit rows and device
+    fingerprints.
 """
 from __future__ import annotations
 
 import hashlib
 import logging
-import re
 
 from django.conf import settings
 from django.core.mail import EmailMessage
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import escape
+
+from apps.files.security_utils import client_ip as _trusted_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -37,23 +34,21 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_client_ip(request):
-    """Same logic the rest of the app uses — kept here to avoid circular imports."""
-    fwd = request.META.get('HTTP_X_FORWARDED_FOR')
-    if fwd:
-        return fwd.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR') or ''
+    """Trusted-proxy-aware client IP. See security_utils.client_ip."""
+    return _trusted_client_ip(request)
 
 
 def _ip_subnet(ip):
     """
     Group IPv4 addresses by /24 so a phone bouncing between cell towers
-    doesn't keep registering as a new device. IPv6 just returns the
-    address as-is for now.
+    doesn't keep registering as a new device. IPv6 uses the /64 prefix.
     """
     if not ip:
         return ''
     if ':' in ip:
-        return ip
+        # /64 keeps the same household together on IPv6.
+        parts = ip.split(':')
+        return ':'.join(parts[:4]) + '::/64'
     parts = ip.split('.')
     if len(parts) == 4:
         return '.'.join(parts[:3]) + '.0/24'
@@ -63,16 +58,13 @@ def _ip_subnet(ip):
 def build_device_fingerprint(client_token, user_agent, ip):
     """
     Produce a stable SHA-256 hex digest from:
-      • a client-side fingerprint token (set in localStorage on first visit)
+      • a client-side fingerprint token (set on first visit)
       • the User-Agent string
-      • the /24 of the IP
+      • the subnet of the IP
 
     The client_token dominates: as long as the recipient stays on the same
     browser profile, the fingerprint never changes even if their IP moves
-    (home → office) or their UA gets a minor patch bump.
-
-    If the client_token is absent (cookies/JS disabled) we still produce
-    a usable fingerprint from UA + IP /24.
+    or their UA gets a minor patch bump.
     """
     parts = [
         (client_token or '').strip(),
@@ -94,16 +86,12 @@ except Exception:  # pragma: no cover
 
 
 def _parse_ua_fallback(ua):
-    """
-    Tiny fallback parser. Not nearly as accurate as the user_agents lib but
-    good enough to populate the security-review fields on the device row.
-    """
+    """Tiny fallback parser used when the user_agents lib is unavailable."""
     if not ua:
         return {'browser': '', 'os': '', 'device_type': 'unknown'}
 
     ua_lower = ua.lower()
 
-    # Browser
     if 'edg/' in ua_lower:
         browser = 'Edge'
     elif 'opr/' in ua_lower or 'opera' in ua_lower:
@@ -117,7 +105,6 @@ def _parse_ua_fallback(ua):
     else:
         browser = 'Unknown'
 
-    # OS
     if 'windows nt 10' in ua_lower:
         os_name = 'Windows 10/11'
     elif 'windows' in ua_lower:
@@ -133,8 +120,7 @@ def _parse_ua_fallback(ua):
     else:
         os_name = 'Unknown'
 
-    # Device type
-    if 'mobile' in ua_lower or 'iphone' in ua_lower or ('android' in ua_lower and 'mobile' in ua_lower):
+    if 'mobile' in ua_lower or 'iphone' in ua_lower:
         device_type = 'mobile'
     elif 'tablet' in ua_lower or 'ipad' in ua_lower:
         device_type = 'tablet'
@@ -145,10 +131,7 @@ def _parse_ua_fallback(ua):
 
 
 def parse_user_agent(ua):
-    """
-    Returns a dict: {'browser': str, 'os': str, 'device_type': str}.
-    Uses the user_agents lib if available, falls back otherwise.
-    """
+    """Returns {'browser': str, 'os': str, 'device_type': str}."""
     if not ua:
         return {'browser': '', 'os': '', 'device_type': 'unknown'}
 
@@ -207,9 +190,7 @@ def _abs_url(base_url, path):
 def send_invitation_email(share, base_url):
     """
     Email the external recipient with the "Open File" link.
-
-    Bullet-proofs against missing email transport — failures logged, never
-    raised.
+    All interpolated values are HTML-escaped.
     """
     try:
         recipient_email = share.recipient_email  # decrypts
@@ -218,14 +199,17 @@ def send_invitation_email(share, base_url):
             logger.warning('Skipping invitation email: no recipient on share %s', share.pk)
             return False
 
-        open_url = _abs_url(base_url, share.open_url)
-        org      = _org_name()
-        sender_name = share.created_by.full_name if share.created_by_id else org
-        sender_email = share.created_by.email if share.created_by_id else ''
+        open_url    = _abs_url(base_url, share.open_url)
+        org         = escape(_org_name())
+        sender_name = escape(share.created_by.full_name if share.created_by_id else _org_name())
+        sender_email = escape(share.created_by.email if share.created_by_id else '')
+        file_name   = escape(share.file.name)
+        recipient_name_html  = escape(recipient_name)
+        recipient_email_html = escape(recipient_email)
 
         message_block = ''
         if share.message:
-            safe_msg = share.message.replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br>')
+            safe_msg = escape(share.message).replace('\n', '<br>')
             message_block = (
                 f'<div style="background:#f8fafc;border-left:4px solid #3b82f6;'
                 f'padding:14px 18px;border-radius:8px;font-size:14px;color:#334155;'
@@ -260,16 +244,16 @@ body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-se
     <p>{org}</p>
   </div>
   <div class="body">
-    <p>Hi <strong>{recipient_name}</strong>,</p>
+    <p>Hi <strong>{recipient_name_html}</strong>,</p>
     <p><strong>{sender_name}</strong> has shared a document with you:</p>
-    <p style="font-size:18px;font-weight:700;color:#1e3a8a;margin:8px 0">"{share.file.name}"</p>
+    <p style="font-size:18px;font-weight:700;color:#1e3a8a;margin:8px 0">"{file_name}"</p>
     {message_block}
     <div style="text-align:center;margin:24px 0">
       <a href="{open_url}" class="btn">Open File →</a>
     </div>
     <div class="meta">
       <div>🕒 <strong>Link expires:</strong> {expiry_human}</div>
-      <div>🔐 <strong>Permission:</strong> {share.get_permission_display()}</div>
+      <div>🔐 <strong>Permission:</strong> {escape(share.get_permission_display())}</div>
       <div>📥 <strong>Downloads allowed:</strong> {share.max_downloads or 'Unlimited'}</div>
     </div>
     <div class="warn">
@@ -280,13 +264,14 @@ body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-se
   </div>
   <div class="footer">
     {org} · External File Share<br>
-    Sent to {recipient_email} on behalf of {sender_email or sender_name}
+    Sent to {recipient_email_html} on behalf of {sender_email or sender_name}
   </div>
 </div>
 </body></html>"""
 
         msg = EmailMessage(
-            subject=f'{sender_name} shared "{share.file.name}" with you',
+            subject=f'{share.created_by.full_name if share.created_by_id else _org_name()} '
+                    f'shared "{share.file.name}" with you',
             body=html,
             from_email=_from_email(),
             to=[recipient_email],
@@ -302,7 +287,7 @@ body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-se
 def send_device_verification_email(device, base_url):
     """
     Email the share's owner asking them to ACCEPT or DECLINE this newly-seen
-    device. Contains both decision links + captured device info for review.
+    device. All interpolated values are HTML-escaped.
     """
     try:
         share = device.share
@@ -311,7 +296,7 @@ def send_device_verification_email(device, base_url):
             logger.warning('No owner email for device verification on share %s', share.pk)
             return False
 
-        recipient_email = share.recipient_email
+        recipient_email = escape(share.recipient_email)
         accept_url  = _abs_url(base_url, reverse('external_share_device_decide',
                                                   kwargs={'token': device.verify_token,
                                                           'decision': 'accept'}))
@@ -321,7 +306,9 @@ def send_device_verification_email(device, base_url):
         manage_url  = _abs_url(base_url, reverse('external_share_manage',
                                                   kwargs={'pk': share.pk}))
 
-        org = _org_name()
+        org        = escape(_org_name())
+        owner_name = escape(owner.full_name)
+        file_name  = escape(share.file.name)
 
         device_table = f"""
 <table style="width:100%;border-collapse:collapse;font-size:13px;color:#334155;
@@ -329,15 +316,15 @@ def send_device_verification_email(device, base_url):
   <tr><td style="padding:8px 14px;font-weight:600;width:130px">Recipient</td>
       <td style="padding:8px 14px">{recipient_email}</td></tr>
   <tr><td style="padding:8px 14px;font-weight:600;background:#fff">IP address</td>
-      <td style="padding:8px 14px;background:#fff">{device.ip_address or '—'}</td></tr>
+      <td style="padding:8px 14px;background:#fff">{escape(device.ip_address or '—')}</td></tr>
   <tr><td style="padding:8px 14px;font-weight:600">Browser</td>
-      <td style="padding:8px 14px">{device.browser_name or 'Unknown'}</td></tr>
+      <td style="padding:8px 14px">{escape(device.browser_name or 'Unknown')}</td></tr>
   <tr><td style="padding:8px 14px;font-weight:600;background:#fff">Operating system</td>
-      <td style="padding:8px 14px;background:#fff">{device.os_name or 'Unknown'}</td></tr>
+      <td style="padding:8px 14px;background:#fff">{escape(device.os_name or 'Unknown')}</td></tr>
   <tr><td style="padding:8px 14px;font-weight:600">Device type</td>
-      <td style="padding:8px 14px">{(device.device_type or 'unknown').title()}</td></tr>
+      <td style="padding:8px 14px">{escape((device.device_type or 'unknown').title())}</td></tr>
   <tr><td style="padding:8px 14px;font-weight:600;background:#fff">Location (approx)</td>
-      <td style="padding:8px 14px;background:#fff">{device.city or '—'} {device.country_code or ''}</td></tr>
+      <td style="padding:8px 14px;background:#fff">{escape(device.city or '—')} {escape(device.country_code or '')}</td></tr>
   <tr><td style="padding:8px 14px;font-weight:600">First seen</td>
       <td style="padding:8px 14px">{timezone.localtime(device.first_seen_at).strftime('%b %d, %Y · %H:%M')}</td></tr>
 </table>"""
@@ -355,7 +342,6 @@ body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-se
      text-decoration:none;font-weight:700;font-size:14px;margin:0 6px;}}
 .btn-ok{{background:#10b981;color:#fff;}}
 .btn-no{{background:#ef4444;color:#fff;}}
-.btn-mn{{background:#3b82f6;color:#fff;}}
 .footer{{background:#f8fafc;padding:16px 36px;border-top:1px solid #e2e8f0;
         text-align:center;font-size:12px;color:#94a3b8;}}
 </style></head><body>
@@ -365,16 +351,17 @@ body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-se
     <p>{org} · External File Share</p>
   </div>
   <div class="body">
-    <p>Hi <strong>{owner.full_name}</strong>,</p>
-    <p>Someone is trying to open the file <em>"{share.file.name}"</em> for the
+    <p>Hi <strong>{owner_name}</strong>,</p>
+    <p>Someone is trying to open the file <em>"{file_name}"</em> for the
     first time from a device we haven't seen before. Please verify whether
     this is the recipient you expected.</p>
     {device_table}
     <div style="text-align:center;margin:22px 0">
-      <a href="{accept_url}"  class="btn btn-ok">✓ Accept device</a>
-      <a href="{decline_url}" class="btn btn-no">✗ Decline device</a>
+      <a href="{accept_url}"  class="btn btn-ok">✓ Review &amp; accept device</a>
+      <a href="{decline_url}" class="btn btn-no">✗ Review &amp; decline device</a>
     </div>
     <p style="font-size:13px;color:#64748b;text-align:center">
+      You'll be asked to confirm before the decision is applied.<br>
       Or <a href="{manage_url}" style="color:#3b82f6">manage all devices for this share</a>.
     </p>
   </div>
@@ -400,8 +387,8 @@ body{{margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-se
 
 def send_device_decision_to_recipient(device, base_url):
     """
-    Tell the recipient that their device was approved (or declined) so they
-    can come back and finish opening the file.
+    Tell the recipient that their device was approved (or declined).
+    All interpolated values are HTML-escaped.
     """
     try:
         share = device.share
@@ -409,23 +396,27 @@ def send_device_decision_to_recipient(device, base_url):
         if not recipient_email:
             return False
 
-        accepted = device.is_accepted
-        org = _org_name()
-        open_url = _abs_url(base_url, share.open_url)
+        accepted   = device.is_accepted
+        org        = escape(_org_name())
+        owner_name = escape(share.created_by.full_name)
+        file_name  = escape(share.file.name)
+        open_url   = _abs_url(base_url, share.open_url)
 
         if accepted:
             subject = f'Your access to "{share.file.name}" is approved'
             colour  = '#10b981'
             heading = '✅ Device approved'
-            body_p  = (f'Your device has been approved by <strong>{share.created_by.full_name}</strong>. '
-                       f'You can now open <em>"{share.file.name}"</em>.')
-            cta     = f'<a href="{open_url}" style="display:inline-block;background:#10b981;color:#fff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:700">Open File →</a>'
+            body_p  = (f'Your device has been approved by <strong>{owner_name}</strong>. '
+                       f'You can now open <em>"{file_name}"</em>.')
+            cta     = (f'<a href="{open_url}" style="display:inline-block;background:#10b981;'
+                       f'color:#fff;padding:12px 28px;border-radius:10px;text-decoration:none;'
+                       f'font-weight:700">Open File →</a>')
         else:
             subject = f'Your access to "{share.file.name}" was declined'
             colour  = '#ef4444'
             heading = '❌ Device declined'
-            body_p  = (f'Unfortunately, <strong>{share.created_by.full_name}</strong> declined this '
-                       f'device for the file <em>"{share.file.name}"</em>. If you believe this is in '
+            body_p  = (f'Unfortunately, <strong>{owner_name}</strong> declined this '
+                       f'device for the file <em>"{file_name}"</em>. If you believe this is in '
                        f'error, please contact them directly.')
             cta     = ''
 
@@ -463,10 +454,7 @@ def send_device_decision_to_recipient(device, base_url):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def write_audit(share, action, *, device=None, actor=None, notes='', ip_address=None):
-    """Single entry point for writing an ExternalShareAuditEvent row.
-
-    Never raises — best-effort logging, just like _log_audit elsewhere.
-    """
+    """Single entry point for writing an ExternalShareAuditEvent row."""
     try:
         from apps.files.models import ExternalShareAuditEvent
         ExternalShareAuditEvent.objects.create(

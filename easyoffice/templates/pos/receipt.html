@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Receipt {{ sale.sale_no|default:'' }}</title>
+<link rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<style>
+body{margin:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif}
+.rcpt-wrap{max-width:340px;margin:24px auto 10px;background:#fff;
+  border:1px solid #e2e8f0;border-radius:12px;padding:22px 20px;
+  font-family:'Courier New',monospace;color:#0f172a;
+  box-shadow:0 2px 12px rgba(15,23,42,.08)}
+.rcpt-c{text-align:center}
+.rcpt-org{font-size:16px;font-weight:900;letter-spacing:.02em}
+.rcpt-sub{font-size:11px;color:#475569}
+.rcpt-rule{border-top:1px dashed #94a3b8;margin:10px 0}
+.rcpt-row{display:flex;justify-content:space-between;font-size:12.5px;padding:1.5px 0}
+.rcpt-row.b{font-weight:900}
+.rcpt-row.total{font-size:16px;font-weight:900;padding:6px 0}
+.rcpt-item-nm{font-size:12.5px;font-weight:700}
+.rcpt-item-ln{display:flex;justify-content:space-between;font-size:12px;
+  color:#334155;padding-left:8px}
+.rcpt-foot{text-align:center;font-size:11px;color:#64748b;margin-top:10px;
+  font-style:italic}
+.rcpt-void{border:3px solid #dc2626;color:#dc2626;text-align:center;font-weight:900;
+  letter-spacing:.3em;padding:6px;margin:10px 0;transform:rotate(-3deg)}
+.rcpt-actions{max-width:340px;margin:0 auto 30px;display:flex;gap:8px;
+  justify-content:center;flex-wrap:wrap}
+.rcpt-btn{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;
+  border-radius:9px;border:1px solid #cbd5e1;background:#fff;color:#0b5563;
+  font-family:'Segoe UI',Arial,sans-serif;font-size:13.5px;font-weight:700;
+  cursor:pointer;text-decoration:none}
+.rcpt-btn.primary{background:linear-gradient(135deg,#0b5563,#13a0a0);
+  color:#fff;border:0}
+@media print{
+  body{background:#fff}
+  .rcpt-wrap{margin:0;border:0;box-shadow:none;width:80mm;max-width:80mm;
+    border-radius:0;padding:4mm}
+  .rcpt-actions{display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="rcpt-wrap">
+  <div class="rcpt-c">
+    <div class="rcpt-org">{{ org.name }}</div>
+    {% if org.address %}<div class="rcpt-sub">{{ org.address }}</div>{% endif %}
+    {% if org.phone %}<div class="rcpt-sub">Tel: {{ org.phone }}</div>{% endif %}
+  </div>
+  <div class="rcpt-rule"></div>
+
+  {% if sale.status == 'voided' %}<div class="rcpt-void">VOIDED</div>{% endif %}
+
+  <div class="rcpt-c" style="font-weight:900;font-size:13px;margin-bottom:6px">
+    SALES RECEIPT
+  </div>
+  <div class="rcpt-row b"><span>Receipt No:</span>
+    <span>{{ sale.sale_no|default:'—' }}</span></div>
+  <div class="rcpt-row"><span>Date:</span>
+    <span>{{ sale.completed_at|default:sale.created_at|date:'d M Y  H:i' }}</span></div>
+  <div class="rcpt-row"><span>Cashier:</span>
+    <span>{{ sale.cashier.get_full_name|default:sale.cashier.username }}</span></div>
+  {% if sale.customer_name %}
+  <div class="rcpt-row"><span>Customer:</span><span>{{ sale.customer_name }}</span></div>
+  {% endif %}
+  {% if sale.customer_phone %}
+  <div class="rcpt-row"><span>Phone:</span><span>{{ sale.customer_phone }}</span></div>
+  {% endif %}
+  <div class="rcpt-rule"></div>
+
+  {% for item in sale.items.all %}
+    <div class="rcpt-item-nm">{{ item.name }}</div>
+    <div class="rcpt-item-ln">
+      <span>{{ item.quantity }} × {{ item.unit_price }}</span>
+      <span>{{ sale.currency }} {{ item.line_total }}</span>
+    </div>
+  {% endfor %}
+  <div class="rcpt-rule"></div>
+
+  <div class="rcpt-row"><span>Subtotal:</span>
+    <span>{{ sale.currency }} {{ sale.subtotal }}</span></div>
+  {% if sale.discount and sale.discount != 0 %}
+  <div class="rcpt-row"><span>Discount:</span>
+    <span>−{{ sale.currency }} {{ sale.discount }}</span></div>
+  {% endif %}
+  {% if sale.tax and sale.tax != 0 %}
+  <div class="rcpt-row"><span>Tax:</span>
+    <span>{{ sale.currency }} {{ sale.tax }}</span></div>
+  {% endif %}
+  <div class="rcpt-row total"><span>TOTAL:</span>
+    <span>{{ sale.currency }} {{ sale.total }}</span></div>
+
+  <div class="rcpt-row"><span>Paid by:</span>
+    <span>{{ sale.get_payment_method_display }}</span></div>
+  {% if sale.payment_ref %}
+  <div class="rcpt-row"><span>Ref:</span><span>{{ sale.payment_ref }}</span></div>
+  {% endif %}
+  {% if sale.amount_tendered is not None %}
+  <div class="rcpt-row"><span>Tendered:</span>
+    <span>{{ sale.currency }} {{ sale.amount_tendered }}</span></div>
+  {% endif %}
+  {% if sale.change_due is not None %}
+  <div class="rcpt-row b"><span>Change:</span>
+    <span>{{ sale.currency }} {{ sale.change_due }}</span></div>
+  {% endif %}
+
+  <div class="rcpt-rule"></div>
+  <div class="rcpt-c">
+    {# Server-free QR: rendered locally in JS below — no third-party call. #}
+    <canvas id="rcpt-qr" width="110" height="110" aria-label="Digital receipt QR"></canvas>
+    <div class="rcpt-sub">Scan for your digital receipt</div>
+  </div>
+  <div class="rcpt-foot">Thank you for your business!</div>
+</div>
+
+{% if not is_public %}
+<div class="rcpt-actions">
+  <button class="rcpt-btn primary" onclick="window.print()">
+    <i class="bi bi-printer"></i> Print</button>
+  <a class="rcpt-btn" href="{% url 'pos_receipt_pdf' sale.pk %}" target="_blank">
+    <i class="bi bi-filetype-pdf"></i> PDF</a>
+  <a class="rcpt-btn" href="{% url 'pos_terminal' %}">
+    <i class="bi bi-upc-scan"></i> Back to till</a>
+</div>
+{% endif %}
+
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+{{ public_url|json_script:"rcpt-public-url" }}
+<script>
+(function () {
+  var url = JSON.parse(document.getElementById('rcpt-public-url').textContent);
+  var canvas = document.getElementById('rcpt-qr');
+  if (window.QRCode && canvas && url) {
+    QRCode.toCanvas(canvas, url, {width: 110, margin: 1}, function (err) {
+      if (err) canvas.style.display = 'none';
+    });
+  } else if (canvas) { canvas.style.display = 'none'; }
+})();
+{% if auto_print %}
+window.addEventListener('load', function () {
+  setTimeout(function () { window.print(); }, 400);
+});
+{% endif %}
+</script>
+</body>
+</html>

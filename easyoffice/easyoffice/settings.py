@@ -63,6 +63,7 @@ LOCAL_APPS = [
     'apps.customer_portal',
     'apps.logistics',
     'apps.poi',
+    'apps.pos',
     'apps.admin_security.apps.AdminSecurityConfig',
 ]
 
@@ -210,6 +211,9 @@ CUSTOMER_PORTAL_ASSIGNMENT_MODEL = 'customer_service.ServiceTicketAssignment'
 CUSTOMER_PORTAL_CUSTOMER_MODEL = 'customer_service.Customer'
 
 # Used by email templates
+ORGANISATION_NAME    = 'Easy Solutions'
+ORGANISATION_ADDRESS = 'Kairaba Avenue, Serrekunda, The Gambia'
+ORGANISATION_PHONE   = '+220 …'
 SITE_URL = 'https://easyoffice.gm'
 SUPPORT_EMAIL = 'support@easysolutions.gm'
 
@@ -414,3 +418,11 @@ POI_NOTIFICATION_MODEL    = "core.Notification"
 POI_NOTIF_RECIPIENT_FIELD = "user"
 POI_NOTIF_READ_FIELD      = "is_read"
 POI_NOTIF_CREATED_FIELD   = "created_at"
+
+POS_INVENTORY_MODEL = 'orders.InventoryItem'   # app_label.ModelName
+POS_FIELD_NAME      = 'name'         # product display name
+POS_FIELD_SKU       = 'sku'          # SKU/product code   ('' if you have none)
+POS_FIELD_BARCODE   = 'barcode'      # barcode/QR value   ('' if you have none)
+POS_FIELD_PRICE     = 'unit_price'   # selling price
+POS_FIELD_STOCK     = 'quantity'     # on-hand stock      ('' = no stock tracking)
+POS_ALLOW_OVERSELL  = False          # True lets stock go negative

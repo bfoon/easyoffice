@@ -1,0 +1,623 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Point of Sale{% endblock %}
+
+{% block content %}
+<style>
+/* ── POS terminal — eo-* companion styles ─────────────────────────────── */
+.pos-wrap{display:grid;grid-template-columns:1fr 400px;gap:16px;align-items:start}
+@media(max-width:980px){.pos-wrap{grid-template-columns:1fr}}
+
+.pos-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;
+  box-shadow:0 1px 3px rgba(15,23,42,.06)}
+.pos-card-h{padding:12px 18px;border-bottom:1px solid #eef2f7;display:flex;
+  align-items:center;justify-content:space-between;gap:10px}
+.pos-card-h h2{margin:0;font-size:15px;font-weight:800;color:#0b5563}
+.pos-card-b{padding:14px 18px}
+
+/* Scan bar */
+.pos-scan{display:flex;gap:10px}
+.pos-scan input{flex:1;font-size:18px;padding:12px 16px;border:2px solid #13a0a0;
+  border-radius:10px;outline:none;font-weight:600}
+.pos-scan input:focus{border-color:#0b5563;box-shadow:0 0 0 3px rgba(19,160,160,.18)}
+.pos-scan .eo-btn{white-space:nowrap}
+
+/* Search results dropdown */
+.pos-results{position:relative}
+.pos-results-list{position:absolute;top:4px;left:0;right:0;z-index:30;background:#fff;
+  border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(15,23,42,.14);
+  max-height:320px;overflow:auto;display:none}
+.pos-result{padding:10px 14px;display:flex;justify-content:space-between;gap:10px;
+  cursor:pointer;border-bottom:1px solid #f1f5f9;align-items:center}
+.pos-result:hover,.pos-result.active{background:#f0fbfb}
+.pos-result .nm{font-weight:700;color:#0f172a;font-size:14px}
+.pos-result .meta{font-size:12px;color:#64748b}
+.pos-result .pr{font-weight:800;color:#0b5563;white-space:nowrap}
+.pos-result .stock-low{color:#b45309}
+.pos-result .stock-out{color:#dc2626}
+
+/* Cart table */
+.pos-cart{width:100%;border-collapse:collapse}
+.pos-cart th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+  color:#64748b;text-align:left;padding:8px 6px;border-bottom:2px solid #e2e8f0}
+.pos-cart td{padding:10px 6px;border-bottom:1px solid #f1f5f9;font-size:14px;
+  vertical-align:middle}
+.pos-cart .nm{font-weight:700;color:#0f172a}
+.pos-cart .sub{font-size:11.5px;color:#94a3b8}
+.pos-cart .qty{display:flex;align-items:center;gap:6px}
+.pos-cart .qty button{width:28px;height:28px;border-radius:8px;border:1px solid #cbd5e1;
+  background:#f8fafc;font-weight:800;cursor:pointer;font-size:15px;line-height:1}
+.pos-cart .qty button:hover{background:#e2f7f7;border-color:#13a0a0}
+.pos-cart .qty input{width:52px;text-align:center;padding:4px;border:1px solid #cbd5e1;
+  border-radius:8px;font-weight:700}
+.pos-cart .rm{border:0;background:none;color:#dc2626;cursor:pointer;font-size:16px}
+.pos-empty{padding:44px 10px;text-align:center;color:#94a3b8}
+.pos-empty i{font-size:40px;display:block;margin-bottom:8px;color:#cbd5e1}
+
+/* Totals panel */
+.pos-tot{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;
+  color:#334155}
+.pos-tot.grand{font-size:24px;font-weight:900;color:#0b5563;border-top:2px solid #e2e8f0;
+  padding-top:12px;margin-top:6px}
+.pos-pay-btn{width:100%;margin-top:14px;padding:16px;font-size:18px;font-weight:800;
+  border:0;border-radius:12px;background:linear-gradient(135deg,#0b5563,#13a0a0);
+  color:#fff;cursor:pointer}
+.pos-pay-btn:disabled{opacity:.45;cursor:not-allowed}
+.pos-pay-btn:not(:disabled):hover{filter:brightness(1.06)}
+
+/* Payment modal */
+.pos-modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:60;
+  display:none;align-items:center;justify-content:center;padding:16px}
+.pos-modal-bg.open{display:flex}
+.pos-modal{background:#fff;border-radius:16px;width:100%;max-width:520px;
+  max-height:92vh;overflow:auto;box-shadow:0 24px 64px rgba(0,0,0,.28)}
+.pos-modal-h{padding:16px 22px;border-bottom:1px solid #eef2f7;display:flex;
+  justify-content:space-between;align-items:center}
+.pos-modal-h h3{margin:0;font-size:17px;font-weight:800;color:#0b5563}
+.pos-modal-b{padding:18px 22px}
+.pos-field{margin-bottom:12px}
+.pos-field label{display:block;font-size:12px;font-weight:700;color:#475569;
+  margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em}
+.pos-field input,.pos-field select{width:100%;padding:10px 12px;border:1px solid #cbd5e1;
+  border-radius:10px;font-size:15px}
+.pos-methods{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+.pos-method{padding:10px 6px;border:2px solid #e2e8f0;border-radius:10px;text-align:center;
+  cursor:pointer;font-weight:700;font-size:13px;color:#475569;background:#fff}
+.pos-method.sel{border-color:#13a0a0;background:#f0fbfb;color:#0b5563}
+.pos-change{font-size:22px;font-weight:900;color:#059669;text-align:center;
+  padding:10px;background:#ecfdf5;border-radius:10px;margin-top:6px;display:none}
+.pos-hint{font-size:12px;color:#94a3b8;margin-top:2px}
+.pos-optional{background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;
+  padding:12px 14px;margin:14px 0}
+.pos-optional .t{font-size:12.5px;font-weight:800;color:#64748b;margin-bottom:8px}
+
+/* Done screen */
+.pos-done{text-align:center;padding:24px 10px}
+.pos-done .big{font-size:52px;color:#059669}
+.pos-done h3{margin:8px 0 4px;font-size:20px;color:#0f172a}
+.pos-done .chg{font-size:30px;font-weight:900;color:#0b5563;margin:10px 0}
+
+/* Toast */
+.pos-toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);
+  background:#0f172a;color:#fff;padding:11px 20px;border-radius:10px;font-size:14px;
+  z-index:80;display:none;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.pos-toast.warn{background:#b45309}
+.pos-toast.err{background:#dc2626}
+
+/* Camera scanner */
+#pos-camera-box{display:none;margin-top:10px;border-radius:12px;overflow:hidden;
+  border:2px solid #13a0a0}
+</style>
+
+<div class="eo-page-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+  <div>
+    <h1 style="margin:0"><i class="bi bi-upc-scan"></i> Point of Sale</h1>
+    <p style="margin:2px 0 0;color:#64748b;font-size:13.5px">
+      Scan a barcode / QR, or search by name — walk-in checkout.
+    </p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a href="{% url 'pos_sales_today' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-journal-text"></i> Today's Sales
+    </a>
+  </div>
+</div>
+
+<div class="pos-wrap">
+
+  <!-- ── LEFT: scan + cart ─────────────────────────────────────────── -->
+  <div class="pos-card">
+    <div class="pos-card-h">
+      <h2><i class="bi bi-cart3"></i> Basket</h2>
+      <button class="eo-btn eo-btn-secondary eo-btn-sm" id="pos-clear-btn"
+              title="Empty the basket">
+        <i class="bi bi-x-circle"></i> Clear
+      </button>
+    </div>
+    <div class="pos-card-b">
+
+      <div class="pos-scan">
+        <input type="text" id="pos-scan-input" autocomplete="off"
+               placeholder="Scan barcode / QR — or type a product name…"
+               autofocus>
+        <button class="eo-btn eo-btn-primary" id="pos-camera-btn"
+                title="Scan with camera">
+          <i class="bi bi-camera"></i>
+        </button>
+      </div>
+      <div class="pos-results">
+        <div class="pos-results-list" id="pos-results"></div>
+      </div>
+      <div id="pos-camera-box"><div id="pos-camera-reader"></div></div>
+
+      <div style="margin-top:16px;overflow-x:auto">
+        <table class="pos-cart">
+          <thead>
+            <tr>
+              <th style="width:44%">Item</th>
+              <th>Price</th>
+              <th style="width:140px">Qty</th>
+              <th style="text-align:right">Total</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="pos-cart-body"></tbody>
+        </table>
+        <div class="pos-empty" id="pos-empty">
+          <i class="bi bi-upc-scan"></i>
+          Basket is empty — scan the first item to begin.
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── RIGHT: totals + pay ───────────────────────────────────────── -->
+  <div class="pos-card" style="position:sticky;top:14px">
+    <div class="pos-card-h"><h2><i class="bi bi-cash-coin"></i> Total</h2></div>
+    <div class="pos-card-b">
+      <div class="pos-tot"><span>Items</span><span id="pos-t-items">0</span></div>
+      <div class="pos-tot"><span>Subtotal</span>
+        <span>{{ currency }} <span id="pos-t-sub">0.00</span></span></div>
+      <div class="pos-tot">
+        <span>Discount
+          <button class="eo-btn eo-btn-secondary eo-btn-sm" id="pos-discount-btn"
+                  style="padding:1px 8px;font-size:11px;margin-left:4px">edit</button>
+        </span>
+        <span>−{{ currency }} <span id="pos-t-disc">0.00</span></span>
+      </div>
+      <div class="pos-tot grand"><span>TOTAL</span>
+        <span>{{ currency }} <span id="pos-t-total">0.00</span></span></div>
+
+      <button class="pos-pay-btn" id="pos-pay-btn" disabled>
+        <i class="bi bi-credit-card"></i>&nbsp; Take Payment&nbsp;
+        <span style="font-size:13px;opacity:.8">(F9)</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Payment modal ─────────────────────────────────────────────────── -->
+<div class="pos-modal-bg" id="pos-pay-modal">
+  <div class="pos-modal">
+    <div class="pos-modal-h">
+      <h3 id="pos-pay-title">Take Payment</h3>
+      <button class="rm" style="border:0;background:none;font-size:22px;cursor:pointer"
+              onclick="POS.closePay()">×</button>
+    </div>
+    <div class="pos-modal-b" id="pos-pay-body">
+
+      <div style="text-align:center;font-size:26px;font-weight:900;color:#0b5563;
+                  margin-bottom:14px">
+        {{ currency }} <span id="pos-pay-total">0.00</span>
+      </div>
+
+      <div class="pos-methods" id="pos-methods">
+        {% for value, label in payment_methods %}
+        <div class="pos-method{% if value == 'cash' %} sel{% endif %}"
+             data-method="{{ value }}">{{ label }}</div>
+        {% endfor %}
+      </div>
+
+      <div class="pos-field" id="pos-cash-row">
+        <label>Cash received</label>
+        <input type="number" step="0.01" min="0" id="pos-tendered"
+               placeholder="Amount handed over">
+        <div class="pos-change" id="pos-change-box">
+          Change: {{ currency }} <span id="pos-change">0.00</span>
+        </div>
+      </div>
+
+      <div class="pos-field" id="pos-ref-row" style="display:none">
+        <label>Transaction reference <span style="font-weight:400;text-transform:none">
+          (card auth / mobile-money txn)</span></label>
+        <input type="text" id="pos-payref" placeholder="Optional reference">
+      </div>
+
+      <div class="pos-optional">
+        <div class="t"><i class="bi bi-person"></i> RECEIPT DETAILS — all optional</div>
+        <div class="pos-field">
+          <label>Customer name</label>
+          <input type="text" id="pos-cust-name" placeholder="For a named receipt">
+        </div>
+        <div class="pos-field">
+          <label>Phone number</label>
+          <input type="tel" id="pos-cust-phone" placeholder="+220 …">
+        </div>
+        <div class="pos-field">
+          <label>Email — for a digital receipt</label>
+          <input type="email" id="pos-cust-email"
+                 placeholder="PDF receipt will be emailed automatically">
+          <div class="pos-hint">Leave empty to skip the digital receipt.</div>
+        </div>
+      </div>
+
+      <button class="pos-pay-btn" id="pos-confirm-btn">
+        <i class="bi bi-check2-circle"></i>&nbsp; Complete Sale
+      </button>
+    </div>
+
+    <!-- Done state (swapped in after completion) -->
+    <div class="pos-modal-b pos-done" id="pos-done-body" style="display:none">
+      <div class="big"><i class="bi bi-check-circle-fill"></i></div>
+      <h3>Sale completed</h3>
+      <div style="color:#64748b">Receipt <strong id="pos-done-no"></strong></div>
+      <div class="chg" id="pos-done-change" style="display:none"></div>
+      <div id="pos-done-email" style="display:none;color:#059669;font-size:13.5px;
+           margin-bottom:6px">
+        <i class="bi bi-envelope-check"></i> Digital receipt emailed
+      </div>
+      <div style="display:flex;gap:10px;justify-content:center;margin-top:14px;
+                  flex-wrap:wrap">
+        <a class="eo-btn eo-btn-primary" id="pos-done-print" target="_blank" href="#">
+          <i class="bi bi-printer"></i> Print receipt
+        </a>
+        <a class="eo-btn eo-btn-secondary" id="pos-done-pdf" target="_blank" href="#">
+          <i class="bi bi-filetype-pdf"></i> PDF
+        </a>
+        <button class="eo-btn eo-btn-secondary" onclick="POS.newSale()">
+          <i class="bi bi-plus-circle"></i> New sale
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="pos-toast" id="pos-toast"></div>
+
+<!-- html5-qrcode for camera scanning (USB scanners need nothing — they type) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+
+{{ basket_json|json_script:"pos-basket-data" }}
+<script>
+'use strict';
+const POS = (() => {
+  const CURRENCY = '{{ currency }}';
+  const URLS = {
+    lookup:   "{% url 'pos_lookup' %}",
+    search:   "{% url 'pos_search' %}",
+    add:      "{% url 'pos_basket_add' %}",
+    qty:      "{% url 'pos_basket_qty' %}",
+    discount: "{% url 'pos_basket_discount' %}",
+    clear:    "{% url 'pos_basket_clear' %}",
+    complete: "{% url 'pos_complete' %}",
+  };
+  const CSRF = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || '';
+
+  let basket = JSON.parse(document.getElementById('pos-basket-data').textContent);
+  let searchTimer = null, activeIdx = -1, camera = null;
+
+  const $ = id => document.getElementById(id);
+  const money = v => (parseFloat(v) || 0).toFixed(2);
+
+  // ── HTTP helpers ────────────────────────────────────────────────────
+  async function post(url, body) {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF,
+                'X-Requested-With': 'XMLHttpRequest'},
+      body: JSON.stringify(body || {}),
+    });
+    return r.json().catch(() => ({ok: false, error: 'Bad response'}));
+  }
+
+  function toast(msg, kind) {
+    const t = $('pos-toast');
+    t.textContent = msg;
+    t.className = 'pos-toast' + (kind ? ' ' + kind : '');
+    t.style.display = 'block';
+    clearTimeout(t._h);
+    t._h = setTimeout(() => t.style.display = 'none', 2600);
+  }
+
+  // ── Escape helper (names come from the DB — never innerHTML raw) ────
+  const esc = s => String(s ?? '').replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  // ── Render basket ───────────────────────────────────────────────────
+  function render() {
+    const body = $('pos-cart-body');
+    body.innerHTML = '';
+    (basket.items || []).forEach(it => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>
+          <div class="nm">${esc(it.name)}</div>
+          <div class="sub">${esc(it.sku || it.barcode || '')}
+            ${it.stock !== null && it.stock !== undefined
+              ? ' · stock: ' + it.stock : ''}</div>
+        </td>
+        <td>${money(it.unit_price)}</td>
+        <td>
+          <div class="qty">
+            <button data-act="dec">−</button>
+            <input type="number" min="0" value="${it.quantity}" data-act="set">
+            <button data-act="inc">+</button>
+          </div>
+        </td>
+        <td style="text-align:right;font-weight:800">${money(it.line_total)}</td>
+        <td><button class="rm" data-act="rm" title="Remove">
+          <i class="bi bi-trash"></i></button></td>`;
+      tr.querySelector('[data-act=dec]').onclick =
+        () => setQty(it.item_id, it.quantity - 1);
+      tr.querySelector('[data-act=inc]').onclick =
+        () => setQty(it.item_id, it.quantity + 1);
+      tr.querySelector('[data-act=set]').onchange =
+        e => setQty(it.item_id, parseInt(e.target.value || '0', 10));
+      tr.querySelector('[data-act=rm]').onclick =
+        () => setQty(it.item_id, 0);
+      body.appendChild(tr);
+    });
+    $('pos-empty').style.display = (basket.items || []).length ? 'none' : 'block';
+    $('pos-t-items').textContent = basket.item_count || 0;
+    $('pos-t-sub').textContent   = money(basket.subtotal);
+    $('pos-t-disc').textContent  = money(basket.discount);
+    $('pos-t-total').textContent = money(basket.total);
+    $('pos-pay-btn').disabled    = !(basket.items || []).length;
+  }
+
+  function apply(resp) {
+    if (resp.basket) { basket = resp.basket; render(); }
+    if (resp.warning) toast(resp.warning, 'warn');
+  }
+
+  // ── Scan / add ──────────────────────────────────────────────────────
+  async function addByCode(code) {
+    const resp = await post(URLS.add, {code});
+    if (!resp.ok) {
+      if (resp.error === 'not_found') {
+        toast(`No product for "${code}" — try searching by name.`, 'err');
+        beep(false);
+      } else toast(resp.error || 'Could not add item.', 'err');
+      return;
+    }
+    apply(resp); beep(true);
+  }
+
+  async function addByInventoryId(id) {
+    const resp = await post(URLS.add, {inventory_id: id});
+    resp.ok ? (apply(resp), beep(true))
+            : toast(resp.error || 'Could not add item.', 'err');
+  }
+
+  async function setQty(itemId, qty) {
+    const resp = await post(URLS.qty, {item_id: itemId, qty: Math.max(0, qty)});
+    resp.ok ? apply(resp) : toast(resp.error || 'Update failed.', 'err');
+  }
+
+  // A short confirmation tone, like a supermarket till.
+  function beep(good) {
+    try {
+      const ctx = beep._ctx || (beep._ctx =
+        new (window.AudioContext || window.webkitAudioContext)());
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = good ? 1046 : 220;
+      g.gain.value = 0.08;
+      o.connect(g); g.connect(ctx.destination);
+      o.start(); o.stop(ctx.currentTime + (good ? 0.09 : 0.25));
+    } catch (e) { /* audio blocked — fine */ }
+  }
+
+  // ── Scan input behaviour ────────────────────────────────────────────
+  // USB barcode scanners type the code then send Enter — so Enter on
+  // this input is the scan path (exact lookup). Typing letters shows
+  // the type-ahead search instead.
+  const scanInput = $('pos-scan-input');
+  const resultsBox = $('pos-results');
+
+  scanInput.addEventListener('keydown', e => {
+    const items = resultsBox.querySelectorAll('.pos-result');
+    if (e.key === 'ArrowDown' && items.length) {
+      e.preventDefault(); activeIdx = Math.min(activeIdx + 1, items.length - 1);
+      highlight(items); return;
+    }
+    if (e.key === 'ArrowUp' && items.length) {
+      e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0);
+      highlight(items); return;
+    }
+    if (e.key === 'Escape') { hideResults(); return; }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeIdx >= 0 && items[activeIdx]) { items[activeIdx].click(); return; }
+      const v = scanInput.value.trim();
+      if (!v) return;
+      hideResults();
+      scanInput.value = '';
+      addByCode(v);
+    }
+  });
+
+  scanInput.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    const q = scanInput.value.trim();
+    if (q.length < 2) { hideResults(); return; }
+    searchTimer = setTimeout(async () => {
+      const r = await fetch(`${URLS.search}?q=${encodeURIComponent(q)}`,
+        {headers: {'X-Requested-With': 'XMLHttpRequest'}});
+      const data = await r.json().catch(() => ({results: []}));
+      showResults(data.results || []);
+    }, 220);
+  });
+
+  function showResults(list) {
+    activeIdx = -1;
+    resultsBox.innerHTML = '';
+    if (!list.length) { hideResults(); return; }
+    list.forEach(p => {
+      const div = document.createElement('div');
+      div.className = 'pos-result';
+      const stockCls = p.stock === 0 ? 'stock-out'
+                      : (p.stock !== null && p.stock <= 3 ? 'stock-low' : '');
+      div.innerHTML = `
+        <div>
+          <div class="nm">${esc(p.name)}</div>
+          <div class="meta">${esc(p.sku || p.barcode || '')}
+            ${p.stock !== null && p.stock !== undefined
+              ? `· <span class="${stockCls}">stock ${p.stock}</span>` : ''}</div>
+        </div>
+        <div class="pr">${CURRENCY} ${money(p.price)}</div>`;
+      div.onclick = () => { hideResults(); scanInput.value = '';
+                            scanInput.focus(); addByInventoryId(p.inventory_id); };
+      resultsBox.appendChild(div);
+    });
+    resultsBox.style.display = 'block';
+  }
+  function highlight(items) {
+    items.forEach((el, i) => el.classList.toggle('active', i === activeIdx));
+    if (items[activeIdx]) items[activeIdx].scrollIntoView({block: 'nearest'});
+  }
+  function hideResults() { resultsBox.style.display = 'none'; activeIdx = -1; }
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.pos-results') && e.target !== scanInput) hideResults();
+  });
+
+  // Keep the till ready: clicking anywhere neutral refocuses the scan box.
+  document.addEventListener('click', e => {
+    if (!e.target.closest('input,button,select,a,.pos-modal,.pos-result,textarea'))
+      scanInput.focus();
+  });
+
+  // ── Camera QR/barcode scanning ──────────────────────────────────────
+  $('pos-camera-btn').onclick = async () => {
+    const box = $('pos-camera-box');
+    if (camera) { await stopCamera(); return; }
+    box.style.display = 'block';
+    camera = new Html5Qrcode('pos-camera-reader');
+    try {
+      await camera.start({facingMode: 'environment'},
+        {fps: 10, qrbox: {width: 220, height: 220}},
+        async text => { await stopCamera(); addByCode(text); },
+        () => {});
+    } catch (err) {
+      toast('Camera unavailable — use a USB scanner or type the code.', 'err');
+      await stopCamera();
+    }
+  };
+  async function stopCamera() {
+    if (camera) { try { await camera.stop(); camera.clear(); } catch (e) {} }
+    camera = null; $('pos-camera-box').style.display = 'none';
+    scanInput.focus();
+  }
+
+  // ── Clear / discount ────────────────────────────────────────────────
+  $('pos-clear-btn').onclick = async () => {
+    if (!(basket.items || []).length) return;
+    if (!confirm('Empty the basket?')) return;
+    apply(await post(URLS.clear));
+  };
+  $('pos-discount-btn').onclick = async () => {
+    const v = prompt('Discount amount (' + CURRENCY + '):', basket.discount || '0');
+    if (v === null) return;
+    const resp = await post(URLS.discount, {amount: v});
+    resp.ok ? apply(resp) : toast(resp.error || 'Discount failed.', 'err');
+  };
+
+  // ── Payment modal ───────────────────────────────────────────────────
+  let method = 'cash';
+  const modal = $('pos-pay-modal');
+
+  function openPay() {
+    if (!(basket.items || []).length) return;
+    $('pos-pay-total').textContent = money(basket.total);
+    $('pos-tendered').value = '';
+    $('pos-change-box').style.display = 'none';
+    $('pos-pay-body').style.display = 'block';
+    $('pos-done-body').style.display = 'none';
+    modal.classList.add('open');
+    setTimeout(() => $('pos-tendered').focus(), 60);
+  }
+  function closePay() { modal.classList.remove('open'); scanInput.focus(); }
+
+  document.querySelectorAll('.pos-method').forEach(el => {
+    el.onclick = () => {
+      document.querySelectorAll('.pos-method').forEach(m =>
+        m.classList.remove('sel'));
+      el.classList.add('sel');
+      method = el.dataset.method;
+      $('pos-cash-row').style.display = method === 'cash' ? 'block' : 'none';
+      $('pos-ref-row').style.display  = method === 'cash' ? 'none' : 'block';
+    };
+  });
+
+  $('pos-tendered').addEventListener('input', () => {
+    const t = parseFloat($('pos-tendered').value) || 0;
+    const total = parseFloat(basket.total) || 0;
+    const box = $('pos-change-box');
+    if (t >= total && total > 0) {
+      $('pos-change').textContent = money(t - total);
+      box.style.display = 'block';
+    } else box.style.display = 'none';
+  });
+
+  $('pos-confirm-btn').onclick = async () => {
+    const btn = $('pos-confirm-btn');
+    btn.disabled = true;
+    const resp = await post(URLS.complete, {
+      payment_method: method,
+      amount_tendered: $('pos-tendered').value || null,
+      payment_ref: $('pos-payref').value,
+      customer_name:  $('pos-cust-name').value,
+      customer_phone: $('pos-cust-phone').value,
+      customer_email: $('pos-cust-email').value,
+    });
+    btn.disabled = false;
+    if (!resp.ok) { toast(resp.error || 'Could not complete sale.', 'err'); return; }
+
+    // Done screen
+    $('pos-pay-body').style.display = 'none';
+    $('pos-done-body').style.display = 'block';
+    $('pos-done-no').textContent = resp.sale_no;
+    $('pos-done-print').href = resp.receipt_url;
+    $('pos-done-pdf').href = resp.receipt_pdf_url;
+    if (resp.change_due && parseFloat(resp.change_due) > 0) {
+      $('pos-done-change').textContent =
+        'Change: ' + CURRENCY + ' ' + money(resp.change_due);
+      $('pos-done-change').style.display = 'block';
+    } else $('pos-done-change').style.display = 'none';
+    $('pos-done-email').style.display = resp.emailed ? 'block' : 'none';
+    beep(true);
+  };
+
+  function newSale() {
+    basket = {items: [], subtotal: '0.00', discount: '0.00',
+              total: '0.00', item_count: 0};
+    render();
+    ['pos-cust-name', 'pos-cust-phone', 'pos-cust-email',
+     'pos-payref'].forEach(id => $(id).value = '');
+    closePay();
+    location.reload();  // fresh draft basket from the server
+  }
+
+  // ── Keyboard shortcuts ──────────────────────────────────────────────
+  document.addEventListener('keydown', e => {
+    if (e.key === 'F9') { e.preventDefault(); openPay(); }
+    if (e.key === 'Escape' && modal.classList.contains('open')) closePay();
+  });
+  $('pos-pay-btn').onclick = openPay;
+
+  render();
+  scanInput.focus();
+  return {closePay, newSale};
+})();
+</script>
+{% endblock %}

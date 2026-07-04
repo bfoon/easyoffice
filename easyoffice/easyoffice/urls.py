@@ -71,7 +71,8 @@ urlpatterns = [
     path('customer-service/', include('apps.customer_service.urls')),
     path('users/', include('apps.user_admin.urls', namespace='user_admin')),
     path('inventory/',     include('apps.inventory.urls')),
-       path('api/inventory/', include('apps.inventory.api.urls')),
+    path('api/inventory/', include('apps.inventory.api.urls')),
+    path('pos/', include('apps.pos.urls')),
 
 ]
 

@@ -1,6 +1,7 @@
 from django.urls import path
 from apps.finance import views
 from apps.finance import views_financial_system as fs
+from apps.finance import views_invoice_followup
 
 urlpatterns = [
     # ── Existing finance URLs ────────────────────────────────────────────────
@@ -36,6 +37,11 @@ urlpatterns = [
     path('invoices/<uuid:pk>/mark-paid/', views.IncomingPaymentRequestMarkPaidView.as_view(), name='incoming_payment_request_mark_paid'),
     path('invoices/<uuid:pk>/add-docs/', views.IncomingPaymentRequestAddDocView.as_view(), name='incoming_payment_request_add_docs'),
     path('invoices/<uuid:pk>/cancel/', views.IncomingPaymentRequestCancelView.as_view(), name='incoming_payment_request_cancel'),
+    path(
+        'invoices/<uuid:pk>/follow-up/',
+        views_invoice_followup.IncomingPaymentRequestAddFollowUpView.as_view(),
+        name='incoming_payment_request_add_followup'
+    ),
 
     path('contracts/', views.ContractDashboardView.as_view(), name='contract_dashboard'),
     path('contracts/all/', views.ContractListView.as_view(), name='contract_list'),

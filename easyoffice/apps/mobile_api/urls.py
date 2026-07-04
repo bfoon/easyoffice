@@ -6,6 +6,7 @@ from apps.mobile_api import views_tasks
 from apps.mobile_api import views_files_sign as fs
 from apps.mobile_api import views_files_upload
 from apps.mobile_api import views_file_bridge
+from apps.mobile_api import views_pos
 
 app_name = 'mobile_api'
 
@@ -71,4 +72,16 @@ urlpatterns = [
     path('sign/requests/<uuid:request_id>/submit/', fs.MobileSignSubmitView.as_view(), name='mobile_sign_submit'),
     path('sign/requests/<uuid:request_id>/decline/', fs.MobileSignDeclineView.as_view(), name='mobile_sign_decline'),
 
+    # ── Point of Sale (handheld till) ────────────────────────────────────────
+    path('pos/lookup/',            views_pos.MobilePOSLookupView.as_view(),         name='mobile_pos_lookup'),
+    path('pos/search/',            views_pos.MobilePOSSearchView.as_view(),         name='mobile_pos_search'),
+    path('pos/basket/',            views_pos.MobilePOSBasketView.as_view(),         name='mobile_pos_basket'),
+    path('pos/basket/add/',        views_pos.MobilePOSBasketAddView.as_view(),      name='mobile_pos_basket_add'),
+    path('pos/basket/qty/',        views_pos.MobilePOSBasketQtyView.as_view(),      name='mobile_pos_basket_qty'),
+    path('pos/basket/discount/',   views_pos.MobilePOSBasketDiscountView.as_view(), name='mobile_pos_basket_discount'),
+    path('pos/basket/clear/',      views_pos.MobilePOSBasketClearView.as_view(),    name='mobile_pos_basket_clear'),
+    path('pos/complete/',          views_pos.MobilePOSCompleteView.as_view(),       name='mobile_pos_complete'),
+    path('pos/receipt/<uuid:sale_id>/email/',
+         views_pos.MobilePOSReceiptEmailView.as_view(),                             name='mobile_pos_receipt_email'),
+    path('pos/sales/today/',       views_pos.MobilePOSSalesTodayView.as_view(),     name='mobile_pos_sales_today'),
 ]

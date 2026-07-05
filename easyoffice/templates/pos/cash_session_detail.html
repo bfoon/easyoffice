@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}Cash Session {{ session.session_no }}{% endblock %}
+
+{% block content %}
+<style>
+.cs-wrap{max-width:760px;margin:0 auto}
+.cs-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;
+  box-shadow:0 1px 3px rgba(15,23,42,.06);margin-bottom:16px}
+.cs-card-h{padding:14px 20px;border-bottom:1px solid #eef2f7;display:flex;
+  justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+.cs-card-h h2{margin:0;font-size:16px;font-weight:800;color:#0b5563}
+.cs-card-b{padding:18px 20px}
+.cs-row{display:flex;justify-content:space-between;padding:7px 0;font-size:14.5px;
+  color:#334155}
+.cs-row.sub{padding-left:16px;color:#64748b;font-size:13.5px}
+.cs-row.total{border-top:2px solid #e2e8f0;margin-top:6px;padding-top:12px;
+  font-size:17px;font-weight:800;color:#0f172a}
+.cs-var{border-radius:12px;padding:18px 20px;text-align:center;margin-top:6px}
+.cs-var .amt{font-size:32px;font-weight:900;line-height:1.1}
+.cs-var .lbl{font-size:13px;text-transform:uppercase;letter-spacing:.06em;
+  font-weight:700;margin-top:4px}
+.cs-var.balanced{background:#ecfdf5;color:#059669}
+.cs-var.over{background:#eff6ff;color:#2563eb}
+.cs-var.short{background:#fef2f2;color:#dc2626}
+.cs-var.pending{background:#f8fafc;color:#64748b}
+.cs-badge{display:inline-block;padding:3px 11px;border-radius:99px;font-size:12px;
+  font-weight:800}
+.cs-badge.open{background:#ecfdf5;color:#059669}
+.cs-badge.closed{background:#f1f5f9;color:#475569}
+.cs-meta{font-size:13px;color:#64748b;margin-top:2px}
+.cs-form label{display:block;font-size:12px;font-weight:700;color:#475569;
+  text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+.cs-form input,.cs-form textarea{width:100%;padding:11px 13px;border:1px solid #cbd5e1;
+  border-radius:10px;font-size:15px;margin-bottom:12px}
+.cs-mv{display:flex;justify-content:space-between;font-size:13.5px;padding:6px 0;
+  border-bottom:1px solid #f1f5f9}
+.cs-mv .in{color:#059669;font-weight:700}
+.cs-mv .out{color:#dc2626;font-weight:700}
+@media print{.eo-btn,.cs-noprint{display:none!important}}
+</style>
+
+<div class="cs-wrap">
+
+  <div class="eo-page-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+    <div>
+      <h1 style="margin:0">
+        <i class="bi bi-cash-stack"></i> {{ session.session_no }}
+        <span class="cs-badge {{ session.status }}">{{ session.get_status_display }}</span>
+      </h1>
+      <div class="cs-meta">
+        {{ data.cashier }}
+        {% if session.register_name %} · {{ session.register_name }}{% endif %}
+        · opened {{ session.opened_at|date:'d M Y H:i' }}
+        {% if session.closed_at %} · closed {{ session.closed_at|date:'H:i' }}{% endif %}
+      </div>
+    </div>
+    <div class="cs-noprint" style="display:flex;gap:8px">
+      <button class="eo-btn eo-btn-secondary" onclick="window.print()">
+        <i class="bi bi-printer"></i> Print</button>
+      <a class="eo-btn eo-btn-secondary" href="{% url 'pos_cash_session_list' %}">
+        <i class="bi bi-list-ul"></i> All shifts</a>
+    </div>
+  </div>
+
+  <!-- Reconciliation -->
+  <div class="cs-card">
+    <div class="cs-card-h"><h2><i class="bi bi-calculator"></i> Drawer Reconciliation</h2></div>
+    <div class="cs-card-b">
+      <div class="cs-row">
+        <span>Opening float</span>
+        <span>{{ data.currency }} {{ data.opening_float }}</span>
+      </div>
+      <div class="cs-row">
+        <span>+ Cash sales <span style="color:#94a3b8">({{ data.sales_count }} sale(s) total)</span></span>
+        <span>{{ data.currency }} {{ data.cash_sales }}</span>
+      </div>
+      {% if data.cash_pay_ins != '0.00' %}
+      <div class="cs-row"><span>+ Cash pay-ins</span>
+        <span>{{ data.currency }} {{ data.cash_pay_ins }}</span></div>
+      {% endif %}
+      {% if data.cash_pay_outs != '0.00' %}
+      <div class="cs-row"><span>− Cash pay-outs</span>
+        <span>−{{ data.currency }} {{ data.cash_pay_outs }}</span></div>
+      {% endif %}
+      {% if data.cash_refunds != '0.00' %}
+      <div class="cs-row"><span>− Cash refunds (voided cash sales)</span>
+        <span>−{{ data.currency }} {{ data.cash_refunds }}</span></div>
+      {% endif %}
+
+      <div class="cs-row total">
+        <span>Expected in drawer</span>
+        <span>{{ data.currency }} {{ data.expected_cash }}</span>
+      </div>
+
+      {% if data.counted_cash is not None %}
+      <div class="cs-row">
+        <span>Counted (actual)</span>
+        <span>{{ data.currency }} {{ data.counted_cash }}</span>
+      </div>
+      <div class="cs-var {{ data.variance_state }}">
+        <div class="amt">
+          {% if data.variance_state == 'over' %}+{% endif %}{{ data.currency }} {{ data.variance }}
+        </div>
+        <div class="lbl">
+          {% if data.variance_state == 'balanced' %}Balanced — drawer tallies
+          {% elif data.variance_state == 'over' %}Over
+          {% else %}Short{% endif %}
+        </div>
+      </div>
+      {% else %}
+      <div class="cs-var pending">
+        <div class="lbl">Awaiting closing count</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Non-cash breakdown -->
+  {% if data.noncash_by_method %}
+  <div class="cs-card">
+    <div class="cs-card-h"><h2><i class="bi bi-credit-card-2-front"></i> Non-Cash Takings</h2></div>
+    <div class="cs-card-b">
+      {% for method, amount in data.noncash_by_method.items %}
+      <div class="cs-row"><span>{{ method|title }}</span>
+        <span>{{ data.currency }} {{ amount }}</span></div>
+      {% endfor %}
+      <div class="cs-row total"><span>Total takings (all methods)</span>
+        <span>{{ data.currency }} {{ data.total_sales }}</span></div>
+      <div class="cs-meta" style="margin-top:8px">
+        Non-cash takings don't affect the drawer variance — only physical cash does.
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Cash movements -->
+  {% if data.movements %}
+  <div class="cs-card">
+    <div class="cs-card-h"><h2><i class="bi bi-arrow-left-right"></i> Cash Movements</h2></div>
+    <div class="cs-card-b">
+      {% for m in data.movements %}
+      <div class="cs-mv">
+        <span>
+          <span class="{% if m.kind == 'pay_in' %}in{% else %}out{% endif %}">
+            {% if m.kind == 'pay_in' %}▲ Pay-in{% else %}▼ Pay-out{% endif %}
+          </span>
+          {% if m.reason %}<span style="color:#64748b"> — {{ m.reason }}</span>{% endif %}
+        </span>
+        <span class="{% if m.kind == 'pay_in' %}in{% else %}out{% endif %}">
+          {% if m.kind == 'pay_in' %}+{% else %}−{% endif %}{{ data.currency }} {{ m.amount }}
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Close form (open sessions only) -->
+  {% if can_close %}
+  <div class="cs-card cs-noprint">
+    <div class="cs-card-h"><h2><i class="bi bi-lock"></i> Close Drawer</h2></div>
+    <div class="cs-card-b">
+      <form method="post" action="{% url 'pos_cash_supervisor_close' session.pk %}"
+            class="cs-form">
+        {% csrf_token %}
+        <label>Counted cash in drawer ({{ data.currency }})</label>
+        <input type="number" step="0.01" min="0" name="counted_cash"
+               placeholder="Physically count the drawer and enter the total" required
+               autofocus>
+        <label>Note (optional)</label>
+        <textarea name="note" rows="2"
+                  placeholder="Anything worth recording about this shift…"></textarea>
+        <button type="submit" class="eo-btn eo-btn-primary"
+                style="width:100%;padding:14px;font-size:16px;font-weight:800;
+                       background:linear-gradient(135deg,#0b5563,#13a0a0);border:0">
+          <i class="bi bi-check2-circle"></i> Close &amp; Reconcile
+        </button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if session.close_note %}
+  <div class="cs-card"><div class="cs-card-b">
+    <strong>Close note:</strong> {{ session.close_note }}
+    {% if data.closed_by %}<div class="cs-meta">Closed by {{ data.closed_by }}</div>{% endif %}
+  </div></div>
+  {% endif %}
+
+</div>
+{% endblock %}

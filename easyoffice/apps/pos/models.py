@@ -77,6 +77,13 @@ class POSSale(TimeStampedModel):
         help_text='Linked automatically when phone/email matches an existing contact.',
     )
 
+    # Cash-drawer shift this sale belongs to (set at completion when a
+    # session is open). Lets the session tally its cash takings.
+    session = models.ForeignKey(
+        'pos.POSCashSession', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='sales',
+    )
+
     # ── Money ────────────────────────────────────────────────────────────
     currency = models.CharField(max_length=8, default='GMD')
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
@@ -188,3 +195,9 @@ class POSDailyCounter(models.Model):
         row.last_number += 1
         row.save(update_fields=['last_number'])
         return f'PS-{today:%Y%m%d}-{row.last_number:04d}'
+
+
+# Cash-drawer session models (kept in a separate file for clarity).
+from .models_cash import (  # noqa: E402,F401
+    POSCashSession, POSCashMovement, POSCashSessionCounter,
+)

@@ -7,6 +7,7 @@ Wire into the project urls.py with:
 """
 from django.urls import path
 from . import views
+from . import views_cash
 
 urlpatterns = [
     path('',                        views.POSTerminalView.as_view(),   name='pos_terminal'),
@@ -35,4 +36,13 @@ urlpatterns = [
     # Day book
     path('sales/',                  views.SalesTodayView.as_view(),     name='pos_sales_today'),
     path('sales/<uuid:pk>/void/',   views.VoidSaleView.as_view(),       name='pos_void_sale'),
+
+    # ── Cash drawer sessions (opening / closing balance) ─────────────────
+    path('cash/',                   views_cash.CashSessionListView.as_view(),   name='pos_cash_session_list'),
+    path('cash/status/',            views_cash.CashSessionStatusView.as_view(), name='pos_cash_status'),
+    path('cash/open/',              views_cash.CashSessionOpenView.as_view(),   name='pos_cash_open'),
+    path('cash/close/',             views_cash.CashSessionCloseView.as_view(),  name='pos_cash_close'),
+    path('cash/movement/',          views_cash.CashMovementView.as_view(),      name='pos_cash_movement'),
+    path('cash/<uuid:pk>/',         views_cash.CashSessionDetailView.as_view(), name='pos_cash_session_detail'),
+    path('cash/<uuid:pk>/close/',   views_cash.CashSessionSupervisorCloseView.as_view(), name='pos_cash_supervisor_close'),
 ]

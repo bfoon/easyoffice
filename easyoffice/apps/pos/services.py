@@ -215,6 +215,16 @@ def complete_sale(sale: POSSale, *, payment_method: str, amount_tendered=None,
     sale.customer_email = (customer_email or '').strip()[:254]
     sale.customer = match_existing_customer(sale.customer_phone, sale.customer_email)
 
+    # Link to the cashier's open cash session (if any) so the drawer
+    # reconciliation tallies this sale. Lazy import avoids a cycle.
+    try:
+        from .services_cash import active_session
+        session = active_session(sale.cashier)
+        if session is not None:
+            sale.session = session
+    except Exception:
+        logger.exception('POS: could not link sale to cash session')
+
     sale.save()
 
     if sale.customer_email:

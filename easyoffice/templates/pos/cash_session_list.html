@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}POS Cash Sessions{% endblock %}
+
+{% block content %}
+<style>
+.cl-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e2e8f0;
+  border-radius:12px;overflow:hidden}
+.cl-table th{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;
+  color:#64748b;text-align:left;padding:10px 12px;background:#f8fafc;
+  border-bottom:2px solid #e2e8f0}
+.cl-table td{padding:10px 12px;border-bottom:1px solid #f1f5f9;font-size:13.5px}
+.cl-badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;
+  font-weight:800}
+.cl-badge.open{background:#ecfdf5;color:#059669}
+.cl-badge.closed{background:#f1f5f9;color:#475569}
+.cl-var{font-weight:800}
+.cl-var.balanced{color:#059669}
+.cl-var.over{color:#2563eb}
+.cl-var.short{color:#dc2626}
+.cl-var.pending{color:#94a3b8}
+</style>
+
+<div class="eo-page-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+  <div>
+    <h1 style="margin:0"><i class="bi bi-cash-stack"></i> Cash Sessions</h1>
+    <p style="margin:2px 0 0;color:#64748b;font-size:13.5px">
+      Opening &amp; closing balances per till shift.
+    </p>
+  </div>
+  <div style="display:flex;gap:8px">
+    {% if can_see_all %}
+      {% if show_all %}
+        <a href="{% url 'pos_cash_session_list' %}" class="eo-btn eo-btn-secondary">
+          <i class="bi bi-person"></i> My shifts</a>
+      {% else %}
+        <a href="?all=1" class="eo-btn eo-btn-secondary">
+          <i class="bi bi-people"></i> All cashiers</a>
+      {% endif %}
+    {% endif %}
+    <a href="{% url 'pos_terminal' %}" class="eo-btn eo-btn-primary">
+      <i class="bi bi-upc-scan"></i> Open Till</a>
+  </div>
+</div>
+
+{% if my_open %}
+<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:12px;
+            padding:14px 18px;margin-bottom:16px;display:flex;justify-content:space-between;
+            align-items:center;flex-wrap:wrap;gap:10px">
+  <div>
+    <strong style="color:#059669"><i class="bi bi-unlock"></i> You have an open drawer</strong>
+    — {{ my_open.session_no }}, opened {{ my_open.opened_at|date:'H:i' }}.
+    Expected: {{ my_open.currency }} {{ my_open.expected_cash_live }}
+  </div>
+  <a href="{% url 'pos_cash_session_detail' my_open.pk %}" class="eo-btn eo-btn-primary eo-btn-sm">
+    Reconcile &amp; close</a>
+</div>
+{% endif %}
+
+<table class="cl-table">
+  <thead>
+    <tr>
+      <th>Session</th><th>Cashier</th><th>Opened</th><th>Closed</th>
+      <th>Opening</th><th>Expected</th><th>Counted</th><th>Variance</th>
+      <th>Status</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in sessions %}
+    <tr>
+      <td style="font-weight:700">{{ s.session_no }}</td>
+      <td>{{ s.cashier.get_full_name|default:s.cashier.username }}</td>
+      <td>{{ s.opened_at|date:'d M H:i' }}</td>
+      <td>{{ s.closed_at|date:'d M H:i'|default:'—' }}</td>
+      <td>{{ s.currency }} {{ s.opening_float }}</td>
+      <td>{{ s.currency }}
+        {% if s.expected_cash is not None %}{{ s.expected_cash }}{% else %}{{ s.expected_cash_live }}{% endif %}
+      </td>
+      <td>{% if s.counted_cash is not None %}{{ s.currency }} {{ s.counted_cash }}{% else %}—{% endif %}</td>
+      <td>
+        {% if s.variance is not None %}
+          <span class="cl-var {% if s.variance == 0 %}balanced{% elif s.variance > 0 %}over{% else %}short{% endif %}">
+            {% if s.variance > 0 %}+{% endif %}{{ s.currency }} {{ s.variance }}
+          </span>
+        {% else %}
+          <span class="cl-var pending">—</span>
+        {% endif %}
+      </td>
+      <td><span class="cl-badge {{ s.status }}">{{ s.get_status_display }}</span></td>
+      <td><a class="eo-btn eo-btn-secondary eo-btn-sm"
+             href="{% url 'pos_cash_session_detail' s.pk %}">
+        <i class="bi bi-eye"></i></a></td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="10" style="text-align:center;color:#94a3b8;padding:30px">
+      No cash sessions yet. Open the till to start a shift.
+    </td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

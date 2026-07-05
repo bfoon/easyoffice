@@ -279,6 +279,19 @@ class CompleteSaleView(POSAccessMixin, View):
     def post(self, request):
         data = _json_body(request)
         sale = services.get_or_create_open_basket(request.user)
+
+        # Optional: require an open cash session before a CASH sale, so the
+        # drawer balance always tallies. Enable with POS_REQUIRE_CASH_SESSION.
+        from django.conf import settings
+        method = (data.get('payment_method') or 'cash').lower()
+        if getattr(settings, 'POS_REQUIRE_CASH_SESSION', False) and method == 'cash':
+            from . import services_cash
+            if services_cash.active_session(request.user) is None:
+                return JsonResponse(
+                    {'ok': False, 'error': 'no_session',
+                     'message': 'Open the cash drawer before taking cash payments.'},
+                    status=409)
+
         try:
             sale = services.complete_sale(
                 sale,

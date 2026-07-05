@@ -122,7 +122,12 @@ class FinancialControlCenterView(LoginRequiredMixin, FinancialSystemAccessMixin,
         top_expenses = analytics.expense_by_type(period)[:6]
         budget_snapshot = analytics.budget_vs_actual()
 
+        # POS takings for the period (own card + already folded into revenue).
+        from apps.finance import pos_revenue as _pos
+        pos_summary = _pos.pos_summary(period)
+
         ctx.update({
+            'pos_summary':      pos_summary,
             'kpi':              kpi,
             'period':           period,
             'basis':            basis,
@@ -192,6 +197,8 @@ class DashboardDataAPI(LoginRequiredMixin, FinancialSystemAccessMixin, View):
         by_type = analytics.expense_by_type(period)
         by_dept = analytics.expense_by_department(period)
         by_customer = analytics.revenue_by_customer(period, basis, limit=8)
+        from apps.finance import pos_revenue as _pos
+        pos_summary = _pos.pos_summary(period)
 
         return JsonResponse({
             'period': {
@@ -230,6 +237,16 @@ class DashboardDataAPI(LoginRequiredMixin, FinancialSystemAccessMixin, View):
                 {'department': r['department'], 'amount': _decimal(r['amount'])}
                 for r in by_dept
             ],
+            'pos': {
+                'available': pos_summary['available'],
+                'total': str(pos_summary['total']),
+                'count': pos_summary['count'],
+                'by_method': [
+                    {'method': m['method'], 'amount': str(m['amount']),
+                     'count': m['count']}
+                    for m in pos_summary['by_method']
+                ],
+            },
             'revenue_by_customer': [
                 {'customer': r['customer'], 'amount': _decimal(r['amount'])}
                 for r in by_customer

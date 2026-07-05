@@ -50,6 +50,7 @@ from apps.finance.models import (
     IncomingPaymentRequest,
     Contract,
 )
+from . import pos_revenue as _pos
 
 ZERO = Decimal('0')
 PRIMARY_CURRENCY = 'GMD'
@@ -211,6 +212,9 @@ def _revenue_cash(period: Period) -> Decimal:
     total += legacy.aggregate(
         t=Sum(F('amount') + F('tax_amount') - F('discount_amount'))
     )['t'] or ZERO
+
+    # POS walk-in takings (completed sales) — earned and collected at once.
+    total += _pos.pos_revenue(period, basis='cash')
     return total
 
 
@@ -246,6 +250,9 @@ def _revenue_accrual(period: Period) -> Decimal:
     total += legacy.aggregate(
         t=Sum(F('amount') + F('tax_amount') - F('discount_amount'))
     )['t'] or ZERO
+
+    # POS walk-in takings — a completed sale is invoiced the same instant.
+    total += _pos.pos_revenue(period, basis='accrual')
     return total
 
 
@@ -393,6 +400,10 @@ def revenue_vs_expense_series(period: Period, basis: str = 'cash') -> dict:
     rev_map = {(r['bucket'].year, r['bucket'].month): r['total'] for r in rev_qs}
     exp_map = {(r['bucket'].year, r['bucket'].month): r['total'] for r in exp_qs}
 
+    # Fold POS takings into the monthly revenue buckets.
+    for key, amount in _pos.pos_revenue_by_month(period).items():
+        rev_map[key] = (rev_map.get(key) or ZERO) + amount
+
     labels, rev_series, exp_series, net_series = [], [], [], []
     for y, m in months:
         labels.append(date(y, m, 1).strftime('%b %Y'))
@@ -467,6 +478,10 @@ def cash_flow_daily(period: Period) -> dict:
     for r in legacy_in:
         day = r['bucket'].date() if hasattr(r['bucket'], 'date') else r['bucket']
         in_map[day] = (in_map.get(day) or ZERO) + (r['total'] or ZERO)
+
+    # POS takings are cash in on the day of sale.
+    for day, amount in _pos.pos_revenue_by_day(period).items():
+        in_map[day] = (in_map.get(day) or ZERO) + amount
 
     cash_out = (
         Payment.objects
@@ -568,12 +583,19 @@ def revenue_by_customer(period: Period, basis: str = 'cash', limit: int = 10) ->
     rows = (
         qs.values('customer_name')
         .annotate(total=Sum(F('amount') + F('tax_amount') - F('discount_amount')))
-        .order_by('-total')[:limit]
+        .order_by('-total')
     )
-    return [
-        {'customer': r['customer_name'] or '—', 'amount': r['total'] or ZERO}
-        for r in rows
-    ]
+    # Merge invoice customers with POS customers, then take the top N.
+    merged: dict[str, Decimal] = {}
+    for r in rows:
+        name = r['customer_name'] or '—'
+        merged[name] = (merged.get(name) or ZERO) + (r['total'] or ZERO)
+    for row in _pos.pos_revenue_by_customer(period):
+        name = row['name'] or '—'
+        merged[name] = (merged.get(name) or ZERO) + (row['amount'] or ZERO)
+
+    ranked = sorted(merged.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+    return [{'customer': name, 'amount': amount} for name, amount in ranked]
 
 
 # ─── Budget vs Actual ────────────────────────────────────────────────────────

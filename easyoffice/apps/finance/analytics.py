@@ -213,7 +213,6 @@ def _revenue_cash(period: Period) -> Decimal:
         t=Sum(F('amount') + F('tax_amount') - F('discount_amount'))
     )['t'] or ZERO
 
-    # POS walk-in takings (completed sales) — earned and collected at once.
     total += _pos.pos_revenue(period, basis='cash')
     return total
 
@@ -251,7 +250,6 @@ def _revenue_accrual(period: Period) -> Decimal:
         t=Sum(F('amount') + F('tax_amount') - F('discount_amount'))
     )['t'] or ZERO
 
-    # POS walk-in takings — a completed sale is invoiced the same instant.
     total += _pos.pos_revenue(period, basis='accrual')
     return total
 
@@ -400,7 +398,6 @@ def revenue_vs_expense_series(period: Period, basis: str = 'cash') -> dict:
     rev_map = {(r['bucket'].year, r['bucket'].month): r['total'] for r in rev_qs}
     exp_map = {(r['bucket'].year, r['bucket'].month): r['total'] for r in exp_qs}
 
-    # Fold POS takings into the monthly revenue buckets.
     for key, amount in _pos.pos_revenue_by_month(period).items():
         rev_map[key] = (rev_map.get(key) or ZERO) + amount
 
@@ -479,7 +476,6 @@ def cash_flow_daily(period: Period) -> dict:
         day = r['bucket'].date() if hasattr(r['bucket'], 'date') else r['bucket']
         in_map[day] = (in_map.get(day) or ZERO) + (r['total'] or ZERO)
 
-    # POS takings are cash in on the day of sale.
     for day, amount in _pos.pos_revenue_by_day(period).items():
         in_map[day] = (in_map.get(day) or ZERO) + amount
 
@@ -585,7 +581,6 @@ def revenue_by_customer(period: Period, basis: str = 'cash', limit: int = 10) ->
         .annotate(total=Sum(F('amount') + F('tax_amount') - F('discount_amount')))
         .order_by('-total')
     )
-    # Merge invoice customers with POS customers, then take the top N.
     merged: dict[str, Decimal] = {}
     for r in rows:
         name = r['customer_name'] or '—'
@@ -593,7 +588,6 @@ def revenue_by_customer(period: Period, basis: str = 'cash', limit: int = 10) ->
     for row in _pos.pos_revenue_by_customer(period):
         name = row['name'] or '—'
         merged[name] = (merged.get(name) or ZERO) + (row['amount'] or ZERO)
-
     ranked = sorted(merged.items(), key=lambda kv: kv[1], reverse=True)[:limit]
     return [{'customer': name, 'amount': amount} for name, amount in ranked]
 
@@ -857,11 +851,21 @@ def income_statement(period: Period, basis: str = 'cash') -> dict:
     total_expenses = sum((r['amount'] for r in expense_lines), ZERO)
     net = rev - total_expenses
 
+    # Split revenue into a Customer Invoices line and a POS Sales line, so
+    # the statement shows POS on its own row while the total still ties out.
+    pos_rev = _pos.pos_revenue(period, basis)
+    invoice_rev = rev - pos_rev
+    revenue_lines = []
+    if invoice_rev or not pos_rev:
+        revenue_lines.append({'label': 'Customer Invoices', 'amount': invoice_rev})
+    if pos_rev:
+        revenue_lines.append({'label': 'POS Sales (walk-in)', 'amount': pos_rev})
+
     return {
         'period':       period,
         'basis':        basis,
         'revenue':      rev,
-        'revenue_lines': [{'label': 'Customer Invoices', 'amount': rev}],
+        'revenue_lines': revenue_lines,
         'expense_lines': expense_lines,
         'total_expenses': total_expenses,
         'net_income':   net,
@@ -876,11 +880,13 @@ def cash_flow_statement(period: Period) -> dict:
     Simplified statement of cash flows — operating activities only, since
     EasyOffice doesn't track investing/financing yet.
     """
-    cash_in = IncomingPaymentRequest.objects.filter(
+    invoice_in = IncomingPaymentRequest.objects.filter(
         status=IncomingPaymentRequest.Status.PAID,
         paid_at__date__gte=period.start,
         paid_at__date__lte=period.end,
     ).aggregate(t=Sum(F('amount') + F('tax_amount') - F('discount_amount')))['t'] or ZERO
+    pos_in = _pos.pos_revenue(period, basis='cash')
+    cash_in = invoice_in + pos_in
 
     # Outflows by direction
     out_qs = _payments_qs(period)
@@ -898,6 +904,15 @@ def cash_flow_statement(period: Period) -> dict:
         status=IncomingPaymentRequest.Status.PAID,
         paid_at__date__lt=period.start,
     ).aggregate(t=Sum(F('amount') + F('tax_amount') - F('discount_amount')))['t'] or ZERO
+    # POS takings collected before the period open the cash position too.
+    try:
+        from apps.pos.models import POSSale
+        opening_in += (POSSale.objects.filter(
+            status=POSSale.Status.COMPLETED,
+            completed_at__date__lt=period.start,
+        ).aggregate(t=Sum('total'))['t'] or ZERO)
+    except Exception:
+        pass
     opening_out = Payment.objects.filter(
         payment_date__lt=period.start,
         direction__in=OUTFLOW_DIRECTIONS,
@@ -909,7 +924,9 @@ def cash_flow_statement(period: Period) -> dict:
         'period':       period,
         'opening_cash': opening_cash,
         'cash_in':      cash_in,
-        'inflows':      [{'label': 'Customer collections', 'amount': cash_in}],
+        'inflows':      ([{'label': 'Customer collections', 'amount': invoice_in}]
+                         + ([{'label': 'POS Sales (walk-in)', 'amount': pos_in}]
+                            if pos_in else [])),
         'outflows':     outflows,
         'total_outflows': total_out,
         'net_cash_change': net,

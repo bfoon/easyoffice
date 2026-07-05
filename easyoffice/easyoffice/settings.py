@@ -426,3 +426,4 @@ POS_FIELD_BARCODE   = 'barcode'      # barcode/QR value   ('' if you have none)
 POS_FIELD_PRICE     = 'unit_price'   # selling price
 POS_FIELD_STOCK     = 'quantity'     # on-hand stock      ('' = no stock tracking)
 POS_ALLOW_OVERSELL  = False          # True lets stock go negative
+POS_REQUIRE_CASH_SESSION = True

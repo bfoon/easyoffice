@@ -104,6 +104,12 @@
 .pos-toast.warn{background:#b45309}
 .pos-toast.err{background:#dc2626}
 
+/* Cash-drawer status pill */
+.pos-drawer-pill{padding:5px 12px;border-radius:99px;font-size:12.5px;font-weight:800;
+  display:inline-flex;align-items:center;gap:5px;text-decoration:none;cursor:pointer}
+.pos-drawer-pill.open{background:#ecfdf5;color:#059669;border:1px solid #a7f3d0}
+.pos-drawer-pill.closed{background:#fef2f2;color:#dc2626;border:1px solid #fecaca}
+
 /* Camera scanner */
 #pos-camera-box{display:none;margin-top:10px;border-radius:12px;overflow:hidden;
   border:2px solid #13a0a0}
@@ -116,7 +122,11 @@
       Scan a barcode / QR, or search by name — walk-in checkout.
     </p>
   </div>
-  <div style="display:flex;gap:8px">
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <span id="pos-drawer-pill" class="pos-drawer-pill" style="display:none"></span>
+    <a href="{% url 'pos_cash_session_list' %}" class="eo-btn eo-btn-secondary">
+      <i class="bi bi-cash-stack"></i> Cash Drawer
+    </a>
     <a href="{% url 'pos_sales_today' %}" class="eo-btn eo-btn-secondary">
       <i class="bi bi-journal-text"></i> Today's Sales
     </a>
@@ -301,6 +311,9 @@ const POS = (() => {
     discount: "{% url 'pos_basket_discount' %}",
     clear:    "{% url 'pos_basket_clear' %}",
     complete: "{% url 'pos_complete' %}",
+    cashStatus: "{% url 'pos_cash_status' %}",
+    cashOpen:   "{% url 'pos_cash_open' %}",
+    cashList:   "{% url 'pos_cash_session_list' %}",
   };
   const CSRF = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || '';
 
@@ -614,6 +627,52 @@ const POS = (() => {
     if (e.key === 'Escape' && modal.classList.contains('open')) closePay();
   });
   $('pos-pay-btn').onclick = openPay;
+
+  // ── Cash drawer status ──────────────────────────────────────────────
+  async function refreshDrawer() {
+    let session = null;
+    try {
+      const r = await fetch(URLS.cashStatus,
+        {headers: {'X-Requested-With': 'XMLHttpRequest'}});
+      const d = await r.json();
+      session = d.session;
+    } catch (e) { return; }
+
+    const pill = $('pos-drawer-pill');
+    if (session) {
+      pill.className = 'pos-drawer-pill open';
+      pill.style.display = 'inline-flex';
+      pill.innerHTML = '<i class="bi bi-unlock"></i> Drawer open · ' +
+        session.currency + ' ' + money(session.expected_cash);
+      pill.onclick = () => location.href = URLS.cashList;
+      pill.title = 'Open since ' + session.session_no + ' — click to reconcile';
+    } else {
+      pill.className = 'pos-drawer-pill closed';
+      pill.style.display = 'inline-flex';
+      pill.innerHTML = '<i class="bi bi-lock"></i> Drawer closed';
+      pill.onclick = openDrawerPrompt;
+      pill.title = 'Click to open the cash drawer';
+    }
+  }
+
+  async function openDrawerPrompt() {
+    const val = prompt('Opening float — cash in the drawer now (' + CURRENCY + '):', '0');
+    if (val === null) return;
+    try {
+      const r = await fetch(URLS.cashOpen, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF,
+                  'X-Requested-With': 'XMLHttpRequest'},
+        body: JSON.stringify({opening_float: val}),
+      });
+      const d = await r.json();
+      if (d.ok) { toast('Drawer opened.'); refreshDrawer(); }
+      else toast(d.error || 'Could not open drawer.', 'err');
+    } catch (e) { toast('Could not open drawer.', 'err'); }
+  }
+
+  refreshDrawer();
+  setInterval(refreshDrawer, 20000);  // keep the pill fresh
 
   render();
   scanInput.focus();

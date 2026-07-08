@@ -844,12 +844,27 @@ class ChatRoomView(LoginRequiredMixin, View):
             members=request.user,
         )
 
-        chat_messages = (
+        # ⚡ PERFORMANCE: render only the newest INITIAL_ROOM_MESSAGES.
+        # The old code queried and template-rendered EVERY message in the
+        # room — thousands of bubbles in one HTML response for busy rooms.
+        # Older history now loads on demand through ChatHistoryView as the
+        # user scrolls up (see loadOlderIntoView() in chat_room.html).
+        base_msgs = (
             room.messages.filter(is_deleted=False)
             .select_related('sender', 'reply_to', 'reply_to__sender', 'linked_file')
             .prefetch_related('poll__options', 'poll__options__votes')
-            .order_by('created_at')
         )
+        chat_messages = list(
+            base_msgs.order_by('-created_at')[:INITIAL_ROOM_MESSAGES]
+        )
+        chat_messages.reverse()  # display oldest→newest
+
+        has_older_messages = False
+        if chat_messages:
+            has_older_messages = room.messages.filter(
+                is_deleted=False,
+                created_at__lt=chat_messages[0].created_at,
+            ).exists()
 
         members = (
             room.members.filter(is_active=True)
@@ -899,6 +914,7 @@ class ChatRoomView(LoginRequiredMixin, View):
             'can_link_project': can_link_project,
             'managed_projects': _managed_projects_for_user(request.user),
             'my_pinned_ids':    my_pinned_ids,
+            'has_older_messages': has_older_messages,
         }
         return render(request, self.template_name, ctx)
 
@@ -1158,6 +1174,78 @@ class ChatTypingPingView(LoginRequiredMixin, View):
 # ---------------------------------------------------------------------------
 # Message poll (new messages — WS fallback)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# ⚡ Chat history pagination
+# ---------------------------------------------------------------------------
+# Initial page size rendered server-side by ChatRoomView, and the batch
+# size returned per ChatHistoryView request. 60 initial keeps first paint
+# fast even in huge rooms; the client reveals 40 instantly and keeps the
+# rest as a buffer before the first network fetch.
+INITIAL_ROOM_MESSAGES = 60
+CHAT_HISTORY_PAGE_SIZE = 50
+CHAT_HISTORY_MAX_PAGE = 100
+
+
+class ChatHistoryView(LoginRequiredMixin, View):
+    """
+    GET /messages/<room_id>/history/?before_id=<uuid>&limit=<n>
+
+    Returns up to `limit` messages OLDER than `before_id`, serialized with
+    the same _serialize_chat_message() shape the WebSocket uses, sorted
+    oldest→newest within the batch (ready to prepend).
+
+    Used by the room page's scroll-up infinite loading AND by
+    jumpToMessage() when a pinned/search/file link targets a message that
+    isn't loaded yet — the client keeps fetching until the id appears.
+
+    Response:
+        { "ok": true, "messages": [...], "has_more": true }
+    """
+
+    def get(self, request, room_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        before_id = (request.GET.get('before_id') or '').strip()
+        try:
+            limit = int(request.GET.get('limit') or CHAT_HISTORY_PAGE_SIZE)
+        except (TypeError, ValueError):
+            limit = CHAT_HISTORY_PAGE_SIZE
+        limit = max(1, min(limit, CHAT_HISTORY_MAX_PAGE))
+
+        qs = (
+            room.messages.filter(is_deleted=False)
+            .select_related('sender', 'reply_to', 'reply_to__sender', 'linked_file')
+            .prefetch_related('poll__options', 'poll__options__votes')
+        )
+
+        if before_id:
+            try:
+                anchor_msg = room.messages.get(id=before_id)
+            except (ChatMessage.DoesNotExist, ValueError, Exception):
+                return JsonResponse(
+                    {'ok': False, 'error': 'Invalid before_id.'}, status=400
+                )
+            qs = qs.filter(created_at__lt=anchor_msg.created_at)
+
+        batch = list(qs.order_by('-created_at')[:limit])
+        batch.reverse()  # oldest→newest, ready to prepend in order
+
+        has_more = False
+        if batch:
+            has_more = room.messages.filter(
+                is_deleted=False,
+                created_at__lt=batch[0].created_at,
+            ).exists()
+
+        return JsonResponse({
+            'ok': True,
+            'messages': [
+                _serialize_chat_message(m, viewer=request.user) for m in batch
+            ],
+            'has_more': has_more,
+        })
+
 
 class ChatMessagesPollView(LoginRequiredMixin, View):
     def get(self, request, room_id):

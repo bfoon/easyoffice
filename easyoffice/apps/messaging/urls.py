@@ -19,6 +19,15 @@ urlpatterns = [
     path('<uuid:room_id>/reactions-poll/',  views.ChatReactionsPollView.as_view(), name='chat_reactions_poll'),
     path('<uuid:room_id>/edits-poll/',      views.ChatEditsPollView.as_view(),     name='chat_edits_poll'),
 
+    # ─────────────────────────────────────────────
+    # ⚡ HISTORY PAGINATION (infinite scroll-up)
+    # Older messages load in batches; also used by jumpToMessage()
+    # to reach pinned/linked messages that aren't loaded yet.
+    # ─────────────────────────────────────────────
+    path('<uuid:room_id>/history/',
+         views.ChatHistoryView.as_view(),
+         name='chat_history'),
+
     # 🔥 NEW → POLL STATE AUTO REFRESH
     path('<uuid:room_id>/polls/state/',     views.PollStateView.as_view(), name='chat_poll_state'),
 

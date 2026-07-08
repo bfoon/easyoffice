@@ -1912,11 +1912,11 @@
       </button>
     </div>
 
-    <div class="chat-messages" id="chatMessages">
+    <div class="chat-messages" id="chatMessages" data-has-older="{% if has_older_messages %}1{% else %}0{% endif %}">
       {% for msg in chat_messages %}
 
-<!--       {# 📅 DATE DIVIDER — rendered once per calendar day. data-date is the-->
-<!--          machine key; JS relabels it to "Today" / "Yesterday" on load. #}-->
+       {# 📅 DATE DIVIDER — rendered once per calendar day. data-date is the
+          machine key; JS relabels it to "Today" / "Yesterday" on load. #}
        {% ifchanged msg.created_at|date:"Y-m-d" %}
          <div class="chat-date-divider" data-date="{{ msg.created_at|date:'Y-m-d' }}">
            <span>{{ msg.created_at|date:'l, j F Y' }}</span>
@@ -3554,6 +3554,9 @@
     var container = byId('chatMessages');
     if(!container) return;
 
+    // ⚡ Does the server hold pages older than what it rendered?
+    serverHasOlder = container.getAttribute('data-has-older') === '1';
+
     // 1) Register all server-rendered msg IDs with the dedupe set so
     //    the poller doesn't re-append them.
     var allMsgs = container.querySelectorAll('[id^="msg-"]');
@@ -3589,13 +3592,22 @@
       }
     }
 
+    // ⚡ Even when nothing was deferred client-side, the SERVER may hold
+    // older pages — show the button so history stays reachable.
+    if(serverHasOlder && !byId('chatLoadEarlier')){
+      _insertLoadEarlierButton(LOAD_MORE_BATCH);
+      _updateLoadEarlierUI();
+    }
+
     // 3) Enrich only the VISIBLE batch. Old deferred messages get
     //    enriched lazily when they're revealed.
     enrichServerRenderedBubbles();
 
-    // 4) 📅 Date dividers: relabel today/yesterday, then hide dividers
-    //    whose entire day is still inside the deferred (hidden) history.
-    relabelDateDividers();
+    // 4) 📅 Date dividers: rebuild from message timestamps (normalises the
+    //    server-rendered dividers to the viewer's clock and keeps working
+    //    as paginated history prepends), then hide dividers whose entire
+    //    day is still inside the deferred (hidden) buffer.
+    rebuildDateDividers();
     updateDateDividers();
   }
 
@@ -3673,6 +3685,155 @@
     container.appendChild(div);
   }
 
+  // Remove every divider and regenerate from each message's data-ts.
+  // Needed because paginated history is PREPENDED client-side: the divider
+  // that used to sit above the first message of a day may now belong
+  // higher up (more of that day just loaded), and prepended batches span
+  // their own days. Rebuilding from scratch is O(n) and always correct.
+  function rebuildDateDividers(){
+    var container = byId('chatMessages');
+    if (!container) return;
+    container.querySelectorAll('.chat-date-divider').forEach(function(d){ d.remove(); });
+    var lastKey = null;
+    container.querySelectorAll('.chat-msg, [id^="msg-"]').forEach(function(m){
+      if (!m.id || m.id.indexOf('msg-') !== 0) return;
+      var ts = parseInt(m.dataset ? (m.dataset.ts || '0') : '0', 10);
+      if (!ts) return;                       // unknown time — skip
+      var d = new Date(ts * 1000);
+      var mo = String(d.getMonth() + 1); if (mo.length < 2) mo = '0' + mo;
+      var dy = String(d.getDate());      if (dy.length < 2) dy = '0' + dy;
+      var key = d.getFullYear() + '-' + mo + '-' + dy;
+      if (key !== lastKey){
+        lastKey = key;
+        var longLabel = d.toLocaleDateString(undefined,
+          { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+        var div = document.createElement('div');
+        div.className = 'chat-date-divider';
+        div.setAttribute('data-date', key);
+        div.setAttribute('data-label', longLabel);
+        var span = document.createElement('span');
+        span.textContent = _dividerLabelFor(key, longLabel);
+        div.appendChild(span);
+        container.insertBefore(div, m);
+      }
+    });
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     ⚡ SERVER-SIDE HISTORY PAGINATION
+     The room page now renders only the newest ~60 messages. Older
+     history loads in batches from /messages/<room>/history/ when:
+       • the user scrolls near the top,
+       • the "Load earlier messages" button is clicked after the
+         client-side deferred buffer is exhausted, or
+       • jumpToMessage() targets a message that isn't loaded yet
+         (pinned items, shared files/links, search results).
+     ═══════════════════════════════════════════════════════════════ */
+  var serverHasOlder = false;    // set from data-has-older in bootstrap
+  var historyLoading = false;
+
+  function fetchOlderMessages(limit){
+    var container = byId('chatMessages');
+    if (!container || historyLoading){
+      return Promise.resolve({ added: 0, hasMore: serverHasOlder });
+    }
+    var first = container.querySelector('.chat-msg');   // includes .deferred
+    var beforeId = first ? first.id.replace('msg-', '') : '';
+    historyLoading = true;
+
+    return fetch('/messages/' + ROOM_ID + '/history/?before_id=' +
+                 encodeURIComponent(beforeId) + '&limit=' + (limit || 50), {
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' }
+    })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(data){
+      historyLoading = false;
+      if (!data || !data.ok){
+        return { added: 0, hasMore: serverHasOlder };
+      }
+      serverHasOlder = !!data.has_more;
+      var items = data.messages || [];
+      if (!items.length){
+        serverHasOlder = false;
+        _updateLoadEarlierUI();
+        return { added: 0, hasMore: false };
+      }
+
+      // Anchor the viewport: prepending grows scrollHeight above the fold.
+      var prevHeight = container.scrollHeight;
+      var prevTop    = container.scrollTop;
+
+      var frag = document.createDocumentFragment();
+      var added = 0;
+      items.forEach(function(m){
+        var id = String(m.message_id || m.id || '');
+        if (!id || renderedIds.has(id) || byId('msg-' + id)) return;
+        renderedIds.add(id);
+        var node = buildMessageNode(m);
+        if (node){ frag.appendChild(node); added++; }
+      });
+
+      // Insert above the oldest loaded content but below the button.
+      var anchor = container.querySelector('.chat-date-divider, .chat-msg');
+      container.insertBefore(frag, anchor || container.firstChild);
+
+      rebuildDateDividers();
+      updateDateDividers();
+
+      container.scrollTop = prevTop + (container.scrollHeight - prevHeight);
+      _updateLoadEarlierUI();
+      return { added: added, hasMore: serverHasOlder };
+    })
+    .catch(function(){
+      historyLoading = false;
+      return { added: 0, hasMore: serverHasOlder };
+    });
+  }
+
+  // One entry point for "give me older messages": drain the client-side
+  // deferred buffer first (instant, no network), then hit the server.
+  function loadOlderIntoView(){
+    var container = byId('chatMessages');
+    if (!container) return Promise.resolve({ added: 0, hasMore: serverHasOlder });
+    if (container.querySelectorAll('.chat-msg.deferred').length){
+      revealOlderMessages();
+      return Promise.resolve({ added: 1, hasMore: true });
+    }
+    if (serverHasOlder) return fetchOlderMessages(50);
+    return Promise.resolve({ added: 0, hasMore: false });
+  }
+  window.loadOlderIntoView = loadOlderIntoView;
+
+  // Keep the "Load earlier messages" button in sync with BOTH sources of
+  // older content (client deferred buffer + server pages).
+  function _updateLoadEarlierUI(){
+    var container = byId('chatMessages');
+    if (!container) return;
+    var wrap = byId('chatLoadEarlier');
+    var deferredCount = container.querySelectorAll('.chat-msg.deferred').length;
+
+    if (!deferredCount && !serverHasOlder){
+      if (wrap) wrap.remove();
+      return;
+    }
+    if (!wrap){
+      _insertLoadEarlierButton(deferredCount || 1);
+      wrap = byId('chatLoadEarlier');
+      if (!wrap) return;
+    }
+    wrap.classList.remove('loading');
+    var span = wrap.querySelector('span');
+    if (span){
+      if (deferredCount){
+        var count = Math.min(deferredCount, LOAD_MORE_BATCH);
+        span.textContent = 'Load ' + count + ' earlier message' + (count === 1 ? '' : 's');
+      } else {
+        span.textContent = 'Load earlier messages';
+      }
+    }
+  }
+
   function _insertLoadEarlierButton(remaining){
     var container = byId('chatMessages');
     if(!container) return;
@@ -3691,7 +3852,7 @@
     container.insertBefore(wrap, container.firstChild);
 
     wrap.querySelector('button').addEventListener('click', function(){
-      revealOlderMessages();
+      loadOlderIntoView();   // deferred buffer first, then server pages
     });
   }
 
@@ -3745,18 +3906,9 @@
     var newHeight = container.scrollHeight;
     container.scrollTop = prevTop + (newHeight - prevHeight);
 
-    // Update / remove the load-earlier button based on what's left
-    var stillHidden = container.querySelectorAll('.chat-msg.deferred').length;
-    if(stillHidden > 0){
-      wrap.classList.remove('loading');
-      var span = wrap.querySelector('span');
-      var count = Math.min(stillHidden, LOAD_MORE_BATCH);
-      if(span){
-        span.textContent = 'Load ' + count + ' earlier message' + (count === 1 ? '' : 's');
-      }
-    } else {
-      wrap.remove();
-    }
+    // Update / remove the load-earlier button based on what's left in the
+    // deferred buffer AND whether the server still has older pages.
+    _updateLoadEarlierUI();
   }
   window.revealOlderMessages = revealOlderMessages;
 
@@ -3770,7 +3922,7 @@
       throttle = setTimeout(function(){
         throttle = null;
         if(container.scrollTop < 80 && byId('chatLoadEarlier')){
-          revealOlderMessages();
+          loadOlderIntoView();   // deferred buffer first, then server pages
         }
       }, 200);
     }, { passive: true });
@@ -5904,11 +6056,48 @@ function stopPollStatePolling(){
     .catch(function(){});
   };
 
+  // How many history pages jumpToMessage may pull while hunting for a
+  // target that isn't loaded yet. 60 pages × 100 msgs = 6,000 messages of
+  // depth — beyond that we give up rather than hammer the server.
+  var JUMP_FETCH_MAX_PAGES = 60;
+
+  function _fetchUntilMessageFound(msgId, attempt){
+    attempt = attempt || 0;
+    if (attempt >= JUMP_FETCH_MAX_PAGES){
+      console.warn('[chat] message', msgId, 'not found within',
+                   JUMP_FETCH_MAX_PAGES, 'history pages.');
+      _updateLoadEarlierUI();
+      return;
+    }
+    fetchOlderMessages(100).then(function(res){
+      if (byId('msg-' + msgId)){
+        window.jumpToMessage(msgId);           // found — now scroll to it
+        return;
+      }
+      if (res.hasMore && res.added > 0){
+        _fetchUntilMessageFound(msgId, attempt + 1);
+      } else {
+        console.warn('[chat] message', msgId, 'not found in room history.');
+        _updateLoadEarlierUI();
+      }
+    });
+  }
+
   window.jumpToMessage = function(msgId){
     if (!msgId) return;
     var target = document.getElementById('msg-' + msgId);
     if (!target){
-      console.warn('[chat] message', msgId, 'not in the current view.');
+      /* ⚡ PAGINATION: the target hasn't been loaded from the server yet
+         (old pinned message, shared file/link, or search result). Keep
+         fetching older pages until its id appears, then re-enter this
+         function to scroll + highlight. */
+      if (serverHasOlder){
+        var wrap = byId('chatLoadEarlier');
+        if (wrap) wrap.classList.add('loading');   // subtle busy hint
+        _fetchUntilMessageFound(msgId, 0);
+      } else {
+        console.warn('[chat] message', msgId, 'not in the current view.');
+      }
       return;
     }
 
@@ -6278,6 +6467,24 @@ function stopPollStatePolling(){
     var msgs = byId('chatMessages');
     if(!msgs) return;
 
+    var mid = String(data.message_id || data.id || ('tmp-' + Date.now()));
+    if(renderedIds.has(mid) || byId('msg-' + mid)) return;
+    renderedIds.add(mid);
+
+    // 📅 First live message of a new day (or of a stale room) gets a
+    // "Today" divider above it.
+    ensureTodayDivider(msgs);
+
+    var wrap = buildMessageNode(data);
+    if(!wrap) return;
+    msgs.appendChild(wrap);
+    scrollBottom();
+  }
+
+  /* ⚡ Shared message-DOM builder — used by appendMessage() for live
+     WebSocket/poll messages AND by fetchOlderMessages() when prepending
+     paginated history. Returns the node; caller decides where it goes. */
+  function buildMessageNode(data){
     var sid = String(data.sender_id || data.user_id || '');
     var sname = data.sender_name || data.sender || 'Unknown';
     var sinit = data.sender_initials || initials(sname);
@@ -6287,28 +6494,26 @@ function stopPollStatePolling(){
     var mtype = data.message_type || (data.poll ? 'poll' : 'text');
     var isOwn = sid === String(USER_ID);
 
-    if(renderedIds.has(mid) || byId('msg-' + mid)) return;
-    renderedIds.add(mid);
-
-    // 📅 First live message of a new day (or of a stale room) gets a
-    // "Today" divider above it.
-    ensureTodayDivider(msgs);
+    // Unix seconds for date-divider grouping: prefer the real created_at
+    // (history batches), fall back to "now" (live messages).
+    var tsUnix = data.created_at
+      ? Math.floor(new Date(data.created_at).getTime() / 1000)
+      : Math.floor(Date.now() / 1000);
 
     if(mtype === 'system'){
       var sys = document.createElement('div');
       sys.id = 'msg-' + mid;
+      sys.dataset.ts = String(tsUnix);
       sys.style.cssText = 'font-size:.8rem;color:var(--eo-text-muted);font-style:italic;padding:6px 0;text-align:center;';
       sys.textContent = text;
-      msgs.appendChild(sys);
-      scrollBottom();
-      return;
+      return sys;
     }
 
     var wrap = document.createElement('div');
     wrap.className = 'chat-msg' + (isOwn ? ' own' : '');
     wrap.id = 'msg-' + mid;
     wrap.dataset.sender = sid;
-    wrap.dataset.ts = String(Math.floor(Date.now() / 1000));
+    wrap.dataset.ts = String(tsUnix);
 
     var av = document.createElement('div');
     av.className = 'chat-avatar';
@@ -6444,6 +6649,16 @@ function stopPollStatePolling(){
         actions.appendChild(saveBtn);
       }
 
+      var pinBtn = document.createElement('button');
+      pinBtn.className = 'msg-action-btn pin-btn-toggle';
+      pinBtn.title = 'Bookmark this message (only you see your bookmarks)';
+      pinBtn.setAttribute('data-msg-id', mid);
+      pinBtn.innerHTML = '<i class="bi bi-pin-angle"></i>';
+      pinBtn.addEventListener('click', function(){
+        togglePinMessage(mid, pinBtn);
+      });
+      actions.appendChild(pinBtn);
+
       var reactBtn = document.createElement('button');
       reactBtn.className = 'msg-action-btn';
       reactBtn.title = 'React';
@@ -6479,8 +6694,7 @@ function stopPollStatePolling(){
       wrap.appendChild(actions);
     }
 
-    msgs.appendChild(wrap);
-    scrollBottom();
+    return wrap;
   }
 
   function showTyping(name){

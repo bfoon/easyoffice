@@ -50,12 +50,21 @@ class HRSetting(models.Model):
     discipline_enabled = models.BooleanField(default=True)
     late_half_day_after_minutes = models.PositiveIntegerField(default=120)
     missing_attendance_is_absent = models.BooleanField(
-        default=False,
-        help_text='If enabled, a missing attendance record on a work day counts as unpaid/absent during payroll generation.'
+        default=True,
+        help_text='DEPRECATED: payroll now always treats a work day without an attendance record '
+                  '(and without approved paid leave) as unpaid until HR enters the attendance.'
     )
 
     pay_cycle = models.CharField(max_length=20, choices=PayCycle.choices, default=PayCycle.MONTHLY)
-    payroll_day = models.PositiveSmallIntegerField(default=28)
+    payroll_day = models.PositiveSmallIntegerField(
+        default=25,
+        help_text='Day of the month when payroll should be generated. HR must finish entering '
+                  'attendance for the month before this day. Configurable by the CEO or Office Administrator.'
+    )
+    attendance_reminder_lead_days = models.PositiveSmallIntegerField(
+        default=5,
+        help_text='How many days before the payroll day to start reminding HR to complete attendance entry.'
+    )
     auto_generate_payroll = models.BooleanField(default=False)
 
     updated_by = models.ForeignKey(
@@ -89,6 +98,14 @@ class HRSetting(models.Model):
             for day in range(1, total_days + 1)
             if self.is_working_day(date(year, month, day))
         ]
+
+    def payroll_deadline_for(self, year, month):
+        """Date payroll should be generated for the given period (attendance entry deadline)."""
+        day = min(self.payroll_day or 25, monthrange(year, month)[1])
+        return date(year, month, day)
+
+    def reminder_window_start_for(self, year, month):
+        return self.payroll_deadline_for(year, month) - timedelta(days=self.attendance_reminder_lead_days or 0)
 
 
 class HireCategory(models.Model):
@@ -978,6 +995,11 @@ class PayrollRecord(models.Model):
     absent_days = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     half_days = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     unpaid_leave_days = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    unrecorded_days = models.DecimalField(
+        max_digits=6, decimal_places=2, default=0,
+        help_text='Work days with no attendance record entered by HR. These days are not paid '
+                  'until HR enters the attendance and payroll is refreshed.'
+    )
     leave_payout = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
@@ -987,6 +1009,7 @@ class PayrollRecord(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='approved_payrolls'
     )
+    approved_at = models.DateTimeField(null=True, blank=True)
     generated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='generated_payroll_records'
@@ -1006,10 +1029,15 @@ class PayrollRecord(models.Model):
         name = self.staff.get_full_name() or self.staff.username
         return f'{name} — {self.period_month}/{self.period_year}'
 
+    @property
+    def attendance_complete(self):
+        return (self.unrecorded_days or Decimal('0')) == Decimal('0')
+
     def approve(self, user):
         self.status = self.Status.APPROVED
         self.approved_by = user
-        self.save(update_fields=['status', 'approved_by'])
+        self.approved_at = timezone.now()
+        self.save(update_fields=['status', 'approved_by', 'approved_at'])
 
     def mark_paid(self, user, reference=''):
         if self.status == self.Status.DRAFT:
@@ -1018,7 +1046,7 @@ class PayrollRecord(models.Model):
         self.payment_date = timezone.now().date()
         if reference:
             self.payment_reference = reference
-        self.save(update_fields=['status', 'payment_date', 'payment_reference', 'approved_by'])
+        self.save(update_fields=['status', 'payment_date', 'payment_reference', 'approved_by', 'approved_at'])
 
     def mark_payslip_sent(self, email):
         self.payslip_sent_to = email or ''

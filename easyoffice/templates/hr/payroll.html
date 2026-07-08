@@ -45,6 +45,13 @@
   .hrp-inline-form{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin:0}
   .hrp-empty{text-align:center;padding:48px 20px;color:var(--hrp-muted)}
   .hrp-empty i{font-size:2.3rem;color:#9aa8bd;display:block;margin-bottom:10px}
+  .hrp-alert{display:flex;gap:12px;align-items:flex-start;border-radius:18px;padding:14px 16px;margin-bottom:16px;font-size:.9rem;line-height:1.45}
+  .hrp-alert i{font-size:1.2rem;margin-top:1px}
+  .hrp-alert-warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e}
+  .hrp-alert-ok{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46}
+  .hrp-alert-info{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af}
+  .hrp-alert strong{font-weight:850}
+  .hrp-badge-unrec{display:inline-block;margin-top:4px;padding:2px 8px;border-radius:999px;background:#fef3c7;color:#92400e;font-size:.68rem;font-weight:800}
   @media(max-width:992px){.hrp-grid{grid-template-columns:1fr}.hrp-grid>*{grid-column:1/-1!important}.hrp-hero{padding:22px}.hrp-table tbody td{min-width:130px}.hrp-actions{min-width:240px}}
   @media print{.eo-page-header,.hrp-hero,.hrp-card:first-of-type,.hrp-actions,.eo-btn,form{display:none!important}.hrp-card{box-shadow:none;border:0;padding:0}.hrp-table-wrap{border:0}.hrp-table thead th{background:#f3f4f6!important;color:#111!important}}
 </style>
@@ -64,6 +71,55 @@
       </div>
     </div>
   </section>
+
+  {% if not attendance_completeness.is_complete %}
+  <div class="hrp-alert hrp-alert-warn">
+    <i class="bi bi-exclamation-triangle-fill"></i>
+    <div>
+      <strong>Attendance is incomplete for {{ month }}/{{ year }}.</strong>
+      {{ attendance_completeness.missing }} attendance record{{ attendance_completeness.missing|pluralize }} for
+      {{ attendance_completeness.staff_missing_count }} staff member{{ attendance_completeness.staff_missing_count|pluralize }}
+      {% if attendance_completeness.missing == 1 %}is{% else %}are{% endif %} still missing.
+      Work days without attendance are <strong>not paid</strong> — payroll will show reduced or zero
+      amounts until HR enters all attendance and refreshes the payroll.
+      <br>
+      <strong>Reminder:</strong> enter all attendance before day {{ payroll_day }} of the month
+      (deadline {{ attendance_deadline|date:"d M Y" }}{% if deadline_days_left > 0 %}, {{ deadline_days_left }} day{{ deadline_days_left|pluralize }} left{% elif deadline_days_left == 0 %}, due today{% else %}, deadline has passed{% endif %}).
+      <a href="{% url 'attendance' %}">Go to attendance entry</a>.
+    </div>
+  </div>
+  {% else %}
+  <div class="hrp-alert hrp-alert-ok">
+    <i class="bi bi-check-circle-fill"></i>
+    <div><strong>Attendance entry is complete for {{ month }}/{{ year }}.</strong>
+      Payroll should be generated on day {{ payroll_day }} of the month ({{ attendance_deadline|date:"d M Y" }}).</div>
+  </div>
+  {% endif %}
+
+  {% if draft_count and can_approve_payroll %}
+  <div class="hrp-alert hrp-alert-info">
+    <i class="bi bi-clipboard-check"></i>
+    <div style="flex:1">
+      <strong>{{ draft_count }} payroll record{{ draft_count|pluralize }} awaiting your approval.</strong>
+      Review the figures below; approving the batch emails each staff member their payslip.
+      <form method="post" action="{% url 'payroll_batch_approve' %}" class="hrp-inline-form" style="margin-top:10px">
+        {% csrf_token %}
+        <input type="hidden" name="year" value="{{ year }}">
+        <input type="hidden" name="month" value="{{ month }}">
+        {% if unrecorded_total %}
+        <label class="hrp-check"><input type="checkbox" name="force"> Approve anyway (some staff still have unrecorded days)</label>
+        {% endif %}
+        <button class="eo-btn eo-btn-primary" type="submit"><i class="bi bi-patch-check"></i> Approve Batch &amp; Send Payslips</button>
+      </form>
+    </div>
+  </div>
+  {% elif draft_count %}
+  <div class="hrp-alert hrp-alert-info">
+    <i class="bi bi-hourglass-split"></i>
+    <div><strong>{{ draft_count }} payroll record{{ draft_count|pluralize }} awaiting CEO approval.</strong>
+      Payslips are emailed automatically once the CEO approves the batch.</div>
+  </div>
+  {% endif %}
 
   <div class="hrp-grid">
     <div class="hrp-card hrp-stat" style="grid-column:span 4">
@@ -117,8 +173,8 @@
         {% csrf_token %}
         <input type="hidden" name="year" value="{{ year }}">
         <input type="hidden" name="month" value="{{ month }}">
-        <label class="hrp-check"><input type="checkbox" name="send_payslips"> Email payslips after run</label>
         <button class="eo-btn eo-btn-primary" type="submit"><i class="bi bi-calculator"></i> Generate / Refresh Payroll</button>
+        <span class="hrp-check"><i class="bi bi-info-circle"></i> Payslips are sent after CEO batch approval</span>
       </form>
 
       <form method="post" action="{% url 'payroll_payslips_email' %}" class="hrp-inline-form">
@@ -128,6 +184,26 @@
         <button class="eo-btn eo-btn-secondary" type="submit"><i class="bi bi-envelope-paper"></i> Email Existing Payslips</button>
       </form>
     </div>
+
+    {% if can_configure_payroll %}
+    <div class="hrp-action-strip" style="margin-top:12px">
+      <form method="post" action="{% url 'payroll_settings' %}" class="hrp-inline-form">
+        {% csrf_token %}
+        <input type="hidden" name="year" value="{{ year }}">
+        <input type="hidden" name="month" value="{{ month }}">
+        <div>
+          <label class="eo-form-label">Payroll day (attendance deadline)</label>
+          <input type="number" min="1" max="28" name="payroll_day" class="eo-form-control" style="width:120px" value="{{ payroll_day }}">
+        </div>
+        <div>
+          <label class="eo-form-label">Remind HR (days before)</label>
+          <input type="number" min="0" max="27" name="attendance_reminder_lead_days" class="eo-form-control" style="width:120px" value="{{ hr_setting.attendance_reminder_lead_days }}">
+        </div>
+        <button class="eo-btn eo-btn-secondary" type="submit"><i class="bi bi-gear"></i> Save Payroll Settings</button>
+        <span class="hrp-check">Default is day 25 — only CEO / Office Administrator can change this.</span>
+      </form>
+    </div>
+    {% endif %}
   </div>
 
   <div class="hrp-card">
@@ -171,6 +247,9 @@
             <td>
               <div class="hrp-money">{{ rec.payable_days }} / {{ rec.total_work_days }} days</div>
               <div class="hrp-mini">Absent {{ rec.absent_days }} · Half {{ rec.half_days }} · Unpaid {{ rec.unpaid_leave_days }}</div>
+              {% if rec.unrecorded_days > 0 %}
+              <span class="hrp-badge-unrec"><i class="bi bi-exclamation-circle"></i> {{ rec.unrecorded_days }} day{{ rec.unrecorded_days|pluralize }} without attendance — not paid</span>
+              {% endif %}
             </td>
             <td><div class="hrp-money">{{ rec.gross_salary|floatformat:2|intcomma }}</div></td>
             <td><div class="hrp-money">{{ rec.net_salary|floatformat:2|intcomma }}</div></td>
@@ -188,11 +267,11 @@
                 <a href="{% url 'payroll_payslip_print' rec.pk %}" target="_blank" class="eo-btn eo-btn-secondary eo-btn-sm"><i class="bi bi-printer"></i> Print</a>
                 <form method="post" action="{% url 'payroll_action' rec.pk %}" class="hrp-inline-form">
                   {% csrf_token %}
-                  {% if rec.status == 'draft' %}
+                  {% if rec.status == 'draft' and can_approve_payroll %}
                   <button name="action" value="approve" class="eo-btn eo-btn-secondary eo-btn-sm" type="submit"><i class="bi bi-check2"></i> Approve</button>
                   {% endif %}
                   <button name="action" value="email_payslip" class="eo-btn eo-btn-secondary eo-btn-sm" type="submit"><i class="bi bi-envelope"></i> Email</button>
-                  {% if rec.status != 'paid' %}
+                  {% if rec.status != 'paid' and rec.status != 'draft' or rec.status == 'draft' and can_approve_payroll %}
                   <input name="payment_reference" class="eo-form-control" style="width:132px" placeholder="Reference">
                   <label class="hrp-check"><input type="checkbox" name="send_payslip"> send</label>
                   <button name="action" value="mark_paid" class="eo-btn eo-btn-primary eo-btn-sm" type="submit">Mark Paid</button>

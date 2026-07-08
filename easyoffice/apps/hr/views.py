@@ -78,6 +78,23 @@ def is_ceo_user(user):
     return user.is_superuser or user.groups.filter(name__in=['CEO', 'Chief Executive Officer']).exists()
 
 
+def is_admin_officer_user(user):
+    """Office administrator role — allowed to run payroll and configure the payroll day."""
+    return user.is_superuser or user.groups.filter(
+        name__in=['Office Administrator', 'Office Admin', 'Administrator']
+    ).exists()
+
+
+def can_run_payroll(user):
+    """HR, Office Administrator or CEO can generate/refresh payroll."""
+    return is_hr_user(user) or is_ceo_user(user) or is_admin_officer_user(user)
+
+
+def can_configure_payroll(user):
+    """Only the Office Administrator or CEO can change the payroll day / attendance deadline."""
+    return is_ceo_user(user) or is_admin_officer_user(user)
+
+
 def is_it_user(user):
     return user.is_superuser or user.groups.filter(name__in=['IT', 'ICT', 'Superuser of IT']).exists()
 
@@ -840,6 +857,18 @@ def send_payslip_email(record):
 
 
 def calculate_payroll_for_employment(employment, year, month, generated_by=None):
+    """
+    Attendance-driven payroll calculation.
+
+    Rules:
+    - Pay is proportional: monthly_salary * (payable_days / total_work_days), rounded ONCE at
+      the end. A staff member with full attendance therefore receives EXACTLY the salary on
+      their offer/employment record (no per-day rounding drift).
+    - A work day with NO attendance record entered by HR is NOT paid (unless the day is
+      covered by an approved paid leave request). If HR has entered no attendance at all for
+      the month, the staff member's pay is zero until attendance is entered and payroll is
+      refreshed. These days are tracked as `unrecorded_days` so HR can see what is missing.
+    """
     setting = HRSetting.get_solo()
     work_days = setting.working_days_in_month(year, month)
     total_work_days = Decimal(str(len(work_days) or 1))
@@ -847,8 +876,10 @@ def calculate_payroll_for_employment(employment, year, month, generated_by=None)
     period_start = date(year, month, 1)
     period_end = date(year, month, monthrange(year, month)[1])
 
-    daily_salary = money(Decimal(str(employment.monthly_salary or 0)) / total_work_days)
-    daily_allowance = money(employment.allowance_total() / total_work_days)
+    monthly_salary = Decimal(str(employment.monthly_salary or 0))
+    monthly_allowance = employment.allowance_total()
+    # Daily rate kept ONLY for leave payout valuation; never used to rebuild the monthly pay.
+    daily_salary = money(monthly_salary / total_work_days)
 
     attendance_map = {
         rec.date: rec
@@ -872,6 +903,7 @@ def calculate_payroll_for_employment(employment, year, month, generated_by=None)
     absent_days = Decimal('0.00')
     half_days = Decimal('0.00')
     unpaid_leave_days = Decimal('0.00')
+    unrecorded_days = Decimal('0.00')
 
     for work_day in work_days:
         if employment.start_date and work_day < employment.start_date:
@@ -912,16 +944,21 @@ def calculate_payroll_for_employment(employment, year, month, generated_by=None)
                 factor = Decimal('1.00') if leave_is_paid(leave) else Decimal('0.00')
                 if factor == Decimal('0.00'):
                     unpaid_leave_days += Decimal('1.00')
-            elif setting.missing_attendance_is_absent:
-                factor = Decimal('0.00')
-                absent_days += Decimal('1.00')
             else:
-                factor = Decimal('1.00')
+                # No attendance entered by HR for this work day: NOT payable until HR
+                # enters the attendance and payroll is regenerated/refreshed.
+                factor = Decimal('0.00')
+                unrecorded_days += Decimal('1.00')
 
         payable_days += factor
 
-    base_pay = money(daily_salary * payable_days)
-    allowance_pay = money(daily_allowance * payable_days)
+    # Proportional pay, rounded once: full attendance => exactly the offered monthly salary.
+    if payable_days >= total_work_days:
+        base_pay = money(monthly_salary)
+        allowance_pay = money(monthly_allowance)
+    else:
+        base_pay = money(monthly_salary * payable_days / total_work_days)
+        allowance_pay = money(monthly_allowance * payable_days / total_work_days)
     leave_payout = Decimal('0.00')
 
     if employment.resignation_date and period_start <= employment.resignation_date <= period_end:
@@ -932,7 +969,15 @@ def calculate_payroll_for_employment(employment, year, month, generated_by=None)
         'absent_days': str(absent_days),
         'half_days': str(half_days),
         'unpaid_leave_days': str(unpaid_leave_days),
+        'unrecorded_days': str(unrecorded_days),
     }
+
+    notes = 'Auto-generated from HR employment, attendance, leave and discipline records.'
+    if unrecorded_days > 0:
+        notes += (
+            f' ATTENTION: {unrecorded_days} work day(s) have no attendance entered by HR and are '
+            'NOT paid. Enter the missing attendance and click Generate / Refresh Payroll.'
+        )
 
     record, _ = PayrollRecord.objects.update_or_create(
         staff=employment.user,
@@ -941,7 +986,7 @@ def calculate_payroll_for_employment(employment, year, month, generated_by=None)
         defaults={
             'employment': employment,
             'basic_salary': base_pay,
-            'allowances': {'monthly_total': str(employment.allowance_total()), 'paid_total': str(allowance_pay)},
+            'allowances': {'monthly_total': str(monthly_allowance), 'paid_total': str(allowance_pay)},
             'deductions': deductions,
             'gross_salary': gross,
             'net_salary': gross,
@@ -951,13 +996,122 @@ def calculate_payroll_for_employment(employment, year, month, generated_by=None)
             'absent_days': absent_days,
             'half_days': half_days,
             'unpaid_leave_days': unpaid_leave_days,
+            'unrecorded_days': unrecorded_days,
             'leave_payout': leave_payout,
             'generated_by': generated_by,
             'generated_at': timezone.now(),
-            'notes': 'Auto-generated from HR employment, attendance, leave and discipline records.',
+            'status': PayrollRecord.Status.DRAFT,
+            'approved_by': None,
+            'approved_at': None,
+            'notes': notes,
         }
     )
     return record
+
+
+def attendance_completeness_for_period(year, month, setting=None):
+    """
+    Check how complete HR attendance entry is for a period.
+
+    Returns a dict with the number of expected staff/work-day records, how many are missing,
+    and how many staff are affected — used for the HR reminder banner and notifications.
+    Only counts work days that fall inside each staff member's employment window.
+    """
+    setting = setting or HRSetting.get_solo()
+    work_days = setting.working_days_in_month(year, month)
+    period_start = date(year, month, 1)
+    period_end = date(year, month, monthrange(year, month)[1])
+
+    employments = EmployeeEmployment.objects.select_related('user').filter(
+        status__in=[
+            EmployeeEmployment.Status.ACTIVE,
+            EmployeeEmployment.Status.ON_LEAVE,
+            EmployeeEmployment.Status.RESIGNED,
+        ],
+        user__is_active=True,
+    )
+
+    recorded = set(
+        AttendanceRecord.objects.filter(
+            date__range=[period_start, period_end]
+        ).values_list('staff_id', 'date')
+    )
+    leave_covered = set()
+    for lr in LeaveRequest.objects.filter(
+        status='approved', start_date__lte=period_end, end_date__gte=period_start
+    ):
+        for work_day in work_days:
+            if lr.start_date <= work_day <= lr.end_date:
+                leave_covered.add((lr.staff_id, work_day))
+
+    expected = 0
+    missing = 0
+    staff_missing = set()
+    for employment in employments:
+        for work_day in work_days:
+            if employment.start_date and work_day < employment.start_date:
+                continue
+            if employment.end_date and work_day > employment.end_date:
+                continue
+            if employment.resignation_date and work_day > employment.resignation_date:
+                continue
+            expected += 1
+            key = (employment.user_id, work_day)
+            if key not in recorded and key not in leave_covered:
+                missing += 1
+                staff_missing.add(employment.user_id)
+
+    return {
+        'expected': expected,
+        'missing': missing,
+        'staff_missing_count': len(staff_missing),
+        'is_complete': missing == 0,
+        'work_days_count': len(work_days),
+    }
+
+
+def notify_ceo_payroll_pending_approval(request, year, month, count, generated_by):
+    """Tell CEO users that a payroll batch is waiting for their approval."""
+    link = f'/hr/payroll/?year={year}&month={month}'
+    title = 'Payroll batch awaiting your approval'
+    message = (
+        f'{generated_by.get_full_name() or generated_by.username} generated payroll for '
+        f'{month:02d}/{year} ({count} record(s)). Please review the figures and approve the '
+        'batch to release payslips to staff.'
+    )
+    for user in _users_for_groups(CEO_STAGE_GROUPS):
+        _push_realtime_notification(user, title, message, link, icon='bi-cash-stack', color='#0f4c81')
+        _store_stage_notification(user, generated_by, title, message, link)
+        try:
+            _send_stage_email(user, title, message, request.build_absolute_uri(link))
+        except Exception:
+            pass
+
+
+def notify_hr_attendance_deadline(request_or_none, year, month, completeness, setting=None):
+    """Remind HR users to finish attendance entry before the payroll day."""
+    setting = setting or HRSetting.get_solo()
+    deadline = setting.payroll_deadline_for(year, month)
+    link = '/hr/attendance/'
+    title = f'Attendance entry deadline: {deadline:%d %b %Y}'
+    message = (
+        f'Payroll for {month:02d}/{year} is generated on day {setting.payroll_day} of the month. '
+        f'{completeness["missing"]} attendance record(s) for {completeness["staff_missing_count"]} '
+        'staff member(s) are still missing. Days without attendance are NOT paid, so please '
+        'complete attendance entry before the deadline.'
+    )
+    sender = getattr(request_or_none, 'user', None)
+    for user in _users_for_groups(['HR']):
+        _push_realtime_notification(user, title, message, link, icon='bi-calendar-check', color='#b45309')
+        _store_stage_notification(user, sender, title, message, link)
+        if request_or_none is not None:
+            action_url = request_or_none.build_absolute_uri(link)
+        else:
+            action_url = link
+        try:
+            _send_stage_email(user, title, message, action_url)
+        except Exception:
+            pass
 
 
 class HRDashboardView(LoginRequiredMixin, TemplateView):
@@ -1861,7 +2015,7 @@ class PayrollView(LoginRequiredMixin, TemplateView):
     template_name = 'hr/payroll.html'
 
     def dispatch(self, request, *args, **kwargs):
-        if not can_manage_hr(request.user):
+        if not can_run_payroll(request.user):
             return HttpResponseForbidden('You do not have permission to view payroll.')
         return super().dispatch(request, *args, **kwargs)
 
@@ -1875,13 +2029,36 @@ class PayrollView(LoginRequiredMixin, TemplateView):
         ctx['month'] = month
         ctx['total_gross'] = records.aggregate(total=Sum('gross_salary'))['total'] or 0
         ctx['total_net'] = records.aggregate(total=Sum('net_salary'))['total'] or 0
-        ctx['can_approve_payroll'] = can_manage_hr(self.request.user)
+
+        setting = HRSetting.get_solo()
+        completeness = attendance_completeness_for_period(year, month, setting=setting)
+        deadline = setting.payroll_deadline_for(year, month)
+        today = timezone.now().date()
+
+        ctx['hr_setting'] = setting
+        ctx['payroll_day'] = setting.payroll_day
+        ctx['attendance_deadline'] = deadline
+        ctx['deadline_days_left'] = (deadline - today).days
+        ctx['attendance_completeness'] = completeness
+        ctx['draft_count'] = records.filter(status=PayrollRecord.Status.DRAFT).count()
+        ctx['unrecorded_total'] = records.aggregate(total=Sum('unrecorded_days'))['total'] or 0
+
+        ctx['can_run_payroll'] = can_run_payroll(self.request.user)
+        ctx['can_approve_payroll'] = is_ceo_user(self.request.user)
+        ctx['can_configure_payroll'] = can_configure_payroll(self.request.user)
         return ctx
 
 
 class PayrollGenerateView(LoginRequiredMixin, View):
+    """
+    Generate/refresh payroll for a period. Allowed for HR, Office Administrator and CEO.
+    Payslips are NOT sent here anymore: the CEO must approve the batch first
+    (PayrollBatchApproveView), which releases the payslips. HR can still email
+    payslips manually per record or in bulk.
+    """
+
     def post(self, request):
-        if not can_manage_hr(request.user):
+        if not can_run_payroll(request.user):
             return HttpResponseForbidden('You do not have permission to generate payroll.')
         year = int(request.POST.get('year') or timezone.now().year)
         month = int(request.POST.get('month') or timezone.now().month)
@@ -1889,37 +2066,136 @@ class PayrollGenerateView(LoginRequiredMixin, View):
             status__in=[EmployeeEmployment.Status.ACTIVE, EmployeeEmployment.Status.ON_LEAVE, EmployeeEmployment.Status.RESIGNED]
         )
         count = 0
-        created_records = []
         with transaction.atomic():
             for employment in employments:
-                record = calculate_payroll_for_employment(employment, year, month, generated_by=request.user)
-                created_records.append(record)
+                calculate_payroll_for_employment(employment, year, month, generated_by=request.user)
                 count += 1
 
-        sent_count = 0
-        if request.POST.get('send_payslips') == 'on':
-            for record in created_records:
-                try:
-                    send_payslip_email(record)
-                    sent_count += 1
-                except Exception as exc:
-                    record.mark_payslip_error(exc)
-            messages.success(request, f'Payroll generated for {count} staff record(s). Payslips emailed to {sent_count} staff member(s).')
+        completeness = attendance_completeness_for_period(year, month)
+        if not completeness['is_complete']:
+            messages.warning(
+                request,
+                f'Payroll generated for {count} staff record(s), but {completeness["missing"]} '
+                f'attendance record(s) for {completeness["staff_missing_count"]} staff member(s) are '
+                'missing. Those days are NOT paid. Enter the missing attendance and click '
+                'Generate / Refresh Payroll again.'
+            )
         else:
-            messages.success(request, f'Payroll generated for {count} staff record(s).')
+            messages.success(
+                request,
+                f'Payroll generated for {count} staff record(s). The batch is now awaiting CEO '
+                'approval before payslips are released.'
+            )
+
+        try:
+            notify_ceo_payroll_pending_approval(request, year, month, count, request.user)
+        except Exception:
+            pass
+        return redirect(f'/hr/payroll/?year={year}&month={month}')
+
+
+class PayrollBatchApproveView(LoginRequiredMixin, View):
+    """
+    CEO-only: approve the whole payroll batch for a period after reviewing the figures.
+    On approval every record is marked approved and its payslip is emailed to the staff member.
+    """
+
+    def post(self, request):
+        if not is_ceo_user(request.user):
+            return HttpResponseForbidden('Only the CEO can approve a payroll batch.')
+        year = int(request.POST.get('year') or timezone.now().year)
+        month = int(request.POST.get('month') or timezone.now().month)
+
+        records = list(
+            PayrollRecord.objects.filter(
+                period_year=year, period_month=month, status=PayrollRecord.Status.DRAFT
+            ).select_related('staff', 'staff__staffprofile', 'employment')
+        )
+        if not records:
+            messages.info(request, 'There are no draft payroll records to approve for this period.')
+            return redirect(f'/hr/payroll/?year={year}&month={month}')
+
+        unrecorded = [r for r in records if (r.unrecorded_days or 0) > 0]
+        if unrecorded and request.POST.get('force') != 'on':
+            messages.warning(
+                request,
+                f'{len(unrecorded)} record(s) still have work days without attendance entered '
+                '(those days are unpaid). Ask HR to complete attendance and refresh payroll, '
+                'or tick "Approve anyway" to proceed.'
+            )
+            return redirect(f'/hr/payroll/?year={year}&month={month}')
+
+        approved = 0
+        sent = 0
+        failed = 0
+        for record in records:
+            record.approve(request.user)
+            approved += 1
+            try:
+                send_payslip_email(record)
+                sent += 1
+            except Exception as exc:
+                record.mark_payslip_error(exc)
+                failed += 1
+
+        msg = f'Payroll batch approved: {approved} record(s). Payslips emailed to {sent} staff member(s).'
+        if failed:
+            msg += f' {failed} payslip email(s) failed — see the register for details.'
+            messages.warning(request, msg)
+        else:
+            messages.success(request, msg)
+        return redirect(f'/hr/payroll/?year={year}&month={month}')
+
+
+class PayrollSettingsView(LoginRequiredMixin, View):
+    """Office Administrator / CEO configure the payroll day (attendance entry deadline)."""
+
+    def post(self, request):
+        if not can_configure_payroll(request.user):
+            return HttpResponseForbidden('Only the CEO or Office Administrator can change payroll settings.')
+        setting = HRSetting.get_solo()
+        try:
+            payroll_day = int(request.POST.get('payroll_day') or setting.payroll_day)
+        except (TypeError, ValueError):
+            payroll_day = setting.payroll_day
+        try:
+            lead_days = int(request.POST.get('attendance_reminder_lead_days') or setting.attendance_reminder_lead_days)
+        except (TypeError, ValueError):
+            lead_days = setting.attendance_reminder_lead_days
+
+        if not 1 <= payroll_day <= 28:
+            messages.error(request, 'Payroll day must be between 1 and 28.')
+        else:
+            setting.payroll_day = payroll_day
+            setting.attendance_reminder_lead_days = max(0, min(lead_days, 27))
+            setting.updated_by = request.user
+            setting.save(update_fields=['payroll_day', 'attendance_reminder_lead_days', 'updated_by', 'updated_at'])
+            messages.success(
+                request,
+                f'Payroll settings updated: payroll is generated on day {payroll_day} of each month; '
+                f'HR reminders start {setting.attendance_reminder_lead_days} day(s) before.'
+            )
+        year = request.POST.get('year') or timezone.now().year
+        month = request.POST.get('month') or timezone.now().month
         return redirect(f'/hr/payroll/?year={year}&month={month}')
 
 
 class PayrollActionView(LoginRequiredMixin, View):
     def post(self, request, pk):
-        if not can_manage_hr(request.user):
+        if not can_run_payroll(request.user):
             return HttpResponseForbidden('You do not have permission to update payroll.')
         record = get_object_or_404(PayrollRecord, pk=pk)
         action = request.POST.get('action')
         if action == 'approve':
+            if not is_ceo_user(request.user):
+                messages.error(request, 'Only the CEO can approve payroll records.')
+                return redirect(f'/hr/payroll/?year={record.period_year}&month={record.period_month}')
             record.approve(request.user)
             messages.success(request, 'Payroll record approved.')
         elif action == 'mark_paid':
+            if record.status == PayrollRecord.Status.DRAFT and not is_ceo_user(request.user):
+                messages.error(request, 'This record has not been approved by the CEO yet. It must be approved before payment.')
+                return redirect(f'/hr/payroll/?year={record.period_year}&month={record.period_month}')
             record.mark_paid(request.user, reference=request.POST.get('payment_reference', '').strip())
             if request.POST.get('send_payslip') == 'on':
                 try:
@@ -1946,7 +2222,7 @@ class PayrollActionView(LoginRequiredMixin, View):
 
 class PayrollPayslipPrintView(LoginRequiredMixin, View):
     def get(self, request, pk):
-        if not can_manage_hr(request.user):
+        if not can_run_payroll(request.user):
             return HttpResponseForbidden('You do not have permission to print payslips.')
         record = get_object_or_404(
             PayrollRecord.objects.select_related('staff', 'staff__staffprofile', 'employment', 'employment__department_ref', 'employment__position'),
@@ -1960,7 +2236,7 @@ class PayrollPayslipPrintView(LoginRequiredMixin, View):
 
 class PayrollBulkPayslipEmailView(LoginRequiredMixin, View):
     def post(self, request):
-        if not can_manage_hr(request.user):
+        if not can_run_payroll(request.user):
             return HttpResponseForbidden('You do not have permission to email payslips.')
         year = int(request.POST.get('year') or timezone.now().year)
         month = int(request.POST.get('month') or timezone.now().month)
@@ -2031,6 +2307,18 @@ class AttendanceView(LoginRequiredMixin, TemplateView):
             'late_count': summary.filter(status__in=['late', 'half_day']).count(),
             'leave_count': approved_leaves.count() + summary.filter(status__in=['paid_leave', 'leave']).count(),
             'absent_count': summary.filter(status='absent').count(),
+        })
+
+        # Payroll deadline reminder for HR: attendance must be complete before the payroll day.
+        setting = HRSetting.get_solo()
+        today = timezone.now().date()
+        deadline = setting.payroll_deadline_for(today.year, today.month)
+        completeness = attendance_completeness_for_period(today.year, today.month, setting=setting)
+        ctx.update({
+            'payroll_day': setting.payroll_day,
+            'attendance_deadline': deadline,
+            'deadline_days_left': (deadline - today).days,
+            'attendance_completeness': completeness,
         })
         return ctx
 

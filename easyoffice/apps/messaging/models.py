@@ -106,15 +106,35 @@ class ChatMessage(EncryptedContentMixin, models.Model):
 
     @property
     def effective_file_url(self):
+        # 🔒 SECURITY: direct chat uploads used to return self.file.url —
+        # a raw MEDIA path with NO access control. Anyone holding the
+        # link (or after being removed from the room) could download it
+        # forever if MEDIA is served by nginx/whitenoise. We now hand out
+        # the authenticated download route instead, which re-checks room
+        # membership on every request (see ChatMessageFileView).
         if self.file:
             try:
-                return self.file.url
+                if self.file.name:  # a stored file actually exists
+                    return f'/messages/{self.room_id}/message/{self.id}/file/'
             except Exception:
                 pass
         if self.linked_file_id:
+            # SharedFile links are governed by the files app's own ACLs.
+            # ⚠️ If files-app media is also publicly served, apply the same
+            # authenticated-serving pattern there.
             try:
                 if self.linked_file and self.linked_file.file:
                     return self.linked_file.file.url
+            except Exception:
+                pass
+        return ''
+
+    @property
+    def raw_file_url(self):
+        """Direct storage URL (internal use only — never expose to clients)."""
+        if self.file:
+            try:
+                return self.file.url
             except Exception:
                 pass
         return ''

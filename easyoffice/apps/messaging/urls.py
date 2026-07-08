@@ -75,6 +75,15 @@ urlpatterns = [
     path('api/edit/<uuid:message_id>/',   views.EditMessageView.as_view(),   name='edit_chat_message'),
 
     # ─────────────────────────────────────────────
+    # 🔒 AUTHENTICATED ATTACHMENT DOWNLOAD
+    # Direct chat uploads are ONLY served through this membership-checked
+    # view now — never via raw /media/ URLs. See ChatMessageFileView.
+    # ─────────────────────────────────────────────
+    path('<uuid:room_id>/message/<uuid:message_id>/file/',
+         views.ChatMessageFileView.as_view(),
+         name='chat_message_file'),
+
+    # ─────────────────────────────────────────────
     # FILES (CHAT + PROJECT)
     # ─────────────────────────────────────────────
     path('<uuid:room_id>/files/',        views.ChatFilePickerAPIView.as_view(),    name='chat_file_picker'),

@@ -87,6 +87,16 @@ class TypingPingView(LoginRequiredMixin, View):
             members=request.user,
         )
 
+        # 🔒 Same posting-permission rule as the message-send paths:
+        # users who can't post (read-only room / read-only role) shouldn't
+        # be able to broadcast typing indicators either.
+        try:
+            from apps.messaging.views import _can_post_in_room
+            if not _can_post_in_room(request.user, room):
+                return JsonResponse({'ok': True})  # silently ignore
+        except Exception:
+            pass
+
         try:
             from asgiref.sync import async_to_sync
             from channels.layers import get_channel_layer

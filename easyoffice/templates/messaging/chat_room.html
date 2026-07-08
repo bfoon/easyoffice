@@ -749,6 +749,41 @@
 .chat-msg.deferred{ display:none !important; }
 
 /* ═══════════════════════════════════════════════════════════════
+   📅 DATE DIVIDERS — "Today", "Yesterday", "Monday, 6 July 2026"
+   Server renders one divider per calendar day (Django ifchanged tag);
+   JS relabels today/yesterday and appends a "Today" divider when
+   the first live message of a new day arrives.
+   ═══════════════════════════════════════════════════════════════ */
+.chat-date-divider{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  margin:16px 0 10px;
+  user-select:none;
+}
+.chat-date-divider::before,
+.chat-date-divider::after{
+  content:'';
+  flex:1;
+  height:1px;
+  background:var(--eo-border, #e5e7eb);
+}
+.chat-date-divider span{
+  font-size:.68rem;
+  font-weight:700;
+  letter-spacing:.05em;
+  text-transform:uppercase;
+  color:var(--eo-text-muted, #9ca3af);
+  background:var(--eo-bg, #f3f4f6);
+  border:1px solid var(--eo-border, #e5e7eb);
+  border-radius:999px;
+  padding:3px 12px;
+  white-space:nowrap;
+}
+/* A divider whose whole day is still hidden in deferred history */
+.chat-date-divider.deferred{ display:none !important; }
+
+/* ═══════════════════════════════════════════════════════════════
    📌 PIN + JUMP-TO-MESSAGE
    ═══════════════════════════════════════════════════════════════ */
 .pin-btn-toggle.is-pinned{ color:var(--eo-accent) !important; }
@@ -1879,6 +1914,15 @@
 
     <div class="chat-messages" id="chatMessages">
       {% for msg in chat_messages %}
+
+       {# 📅 DATE DIVIDER — rendered once per calendar day. data-date is the
+          machine key; JS relabels it to "Today" / "Yesterday" on load. #}
+       {% ifchanged msg.created_at|date:"Y-m-d" %}
+         <div class="chat-date-divider" data-date="{{ msg.created_at|date:'Y-m-d' }}">
+           <span>{{ msg.created_at|date:'l, j F Y' }}</span>
+         </div>
+       {% endifchanged %}
+
        {% if forloop.first %}
         <div class="chat-msg {% if msg.sender == request.user %}own{% endif %}" id="msg-{{ msg.id }}" data-sender="{{ msg.sender.id }}" data-ts="{{ msg.created_at|date:'U' }}" data-pinned="{% if msg.id|stringformat:"s" in my_pinned_ids %}1{% else %}0{% endif %}">
           <div class="chat-avatar">
@@ -3548,6 +3592,85 @@
     // 3) Enrich only the VISIBLE batch. Old deferred messages get
     //    enriched lazily when they're revealed.
     enrichServerRenderedBubbles();
+
+    // 4) 📅 Date dividers: relabel today/yesterday, then hide dividers
+    //    whose entire day is still inside the deferred (hidden) history.
+    relabelDateDividers();
+    updateDateDividers();
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     📅 DATE DIVIDER HELPERS
+     ═══════════════════════════════════════════════════════════════ */
+  function _localDateKey(offsetDays){
+    var d = new Date();
+    if (offsetDays) d.setDate(d.getDate() + offsetDays);
+    var m  = String(d.getMonth() + 1); if (m.length < 2)  m = '0' + m;
+    var dy = String(d.getDate());      if (dy.length < 2) dy = '0' + dy;
+    return d.getFullYear() + '-' + m + '-' + dy;
+  }
+
+  // NOTE: the server groups days using Django's TIME_ZONE while this
+  // relabelling uses the viewer's clock. In a single-timezone office
+  // deployment they agree; if you go multi-timezone, render dividers
+  // per-user instead.
+  function _dividerLabelFor(dateKey, fallbackText){
+    if (dateKey === _localDateKey(0))  return 'Today';
+    if (dateKey === _localDateKey(-1)) return 'Yesterday';
+    return fallbackText;
+  }
+
+  function relabelDateDividers(){
+    document.querySelectorAll('#chatMessages .chat-date-divider').forEach(function(div){
+      var span = div.querySelector('span');
+      if (!span) return;
+      // Remember the original long-form label so we can fall back to it.
+      var orig = div.getAttribute('data-label');
+      if (!orig){ orig = span.textContent; div.setAttribute('data-label', orig); }
+      span.textContent = _dividerLabelFor(div.getAttribute('data-date') || '', orig);
+    });
+  }
+
+  // Hide any divider that has NO visible message before the next divider
+  // (i.e. its whole day is still deferred). Called after bootstrap, after
+  // each reveal batch, and after a jump reveals hidden history.
+  function updateDateDividers(){
+    var container = byId('chatMessages');
+    if (!container) return;
+    container.querySelectorAll('.chat-date-divider').forEach(function(div){
+      var node = div.nextElementSibling;
+      var hasVisible = false;
+      while (node && !node.classList.contains('chat-date-divider')){
+        var isMsg = node.classList.contains('chat-msg') ||
+                    (node.id && node.id.indexOf('msg-') === 0);
+        if (isMsg && !node.classList.contains('deferred')){ hasVisible = true; break; }
+        node = node.nextElementSibling;
+      }
+      div.classList.toggle('deferred', !hasVisible);
+    });
+  }
+  window.updateDateDividers = updateDateDividers;
+
+  // Called before appending a LIVE message: make sure a "Today" divider
+  // exists at the bottom (handles the first message after midnight while
+  // the tab stays open, and rooms whose last activity was days ago).
+  function ensureTodayDivider(container){
+    if (!container) return;
+    var todayKey = _localDateKey(0);
+    var dividers = container.querySelectorAll('.chat-date-divider');
+    var last = dividers.length ? dividers[dividers.length - 1] : null;
+    if (last && last.getAttribute('data-date') === todayKey){
+      last.classList.remove('deferred');
+      return;
+    }
+    var div = document.createElement('div');
+    div.className = 'chat-date-divider';
+    div.setAttribute('data-date', todayKey);
+    div.setAttribute('data-label', 'Today');
+    var span = document.createElement('span');
+    span.textContent = 'Today';
+    div.appendChild(span);
+    container.appendChild(div);
   }
 
   function _insertLoadEarlierButton(remaining){
@@ -3613,6 +3736,9 @@
 
     // Enrich the newly-visible bubbles
     enrichServerRenderedBubbles();
+
+    // 📅 Newly-revealed days may need their dividers shown again.
+    updateDateDividers();
 
     // Restore scroll position so it feels stable for the user.
     // (scrollHeight just grew; shift scrollTop by the delta.)
@@ -4892,6 +5018,12 @@ function stopPollStatePolling(){
       if (h.indexOf('#msg-') !== 0) return;
       var id = h.slice(5);
       if (!id) return;
+      // 🩹 Delegate to jumpToMessage — it now also reveals deferred
+      // (hidden) history, so search-result links to OLD messages work.
+      if (typeof window.jumpToMessage === 'function'){
+        window.jumpToMessage(id);
+        return;
+      }
       var el = document.getElementById('msg-' + id);
       if (!el) return;
       el.scrollIntoView({ behavior:'smooth', block:'center' });
@@ -5776,11 +5908,37 @@ function stopPollStatePolling(){
     if (!msgId) return;
     var target = document.getElementById('msg-' + msgId);
     if (!target){
-      // Not in the DOM — could be beyond the initial render window.
-      // Best we can do without a paging endpoint is flash a notice.
       console.warn('[chat] message', msgId, 'not in the current view.');
       return;
     }
+
+    /* 🩹 FIX: old pinned messages sit in the hidden (.deferred) history —
+       the element exists but is display:none, and scrollIntoView() on a
+       hidden element silently does NOTHING. That's why clicking an old
+       pin didn't take you to the message. Reveal history batches (reusing
+       revealOlderMessages so headers/enrichment/button state stay
+       correct) until the target is visible, THEN scroll. */
+    var guard = 0;
+    while (target.classList.contains('deferred') && guard < 500){
+      if (typeof revealOlderMessages === 'function' && byId('chatLoadEarlier')){
+        revealOlderMessages();               // reveals the next batch up
+      } else {
+        // Fallback: force-reveal from the target onward in one go.
+        var all = Array.prototype.slice.call(
+          document.querySelectorAll('#chatMessages .chat-msg.deferred'));
+        var idx = all.indexOf(target);
+        if (idx < 0) break;
+        // Walk back so the first revealed message carries a sender header
+        // (template omits headers on .grouped bubbles).
+        while (idx > 0 && all[idx].classList.contains('grouped')) idx--;
+        for (var i = idx; i < all.length; i++) all[i].classList.remove('deferred');
+        if (typeof enrichServerRenderedBubbles === 'function') enrichServerRenderedBubbles();
+        break;
+      }
+      guard++;
+    }
+    if (typeof updateDateDividers === 'function') updateDateDividers();
+
     target.scrollIntoView({ behavior:'smooth', block:'center' });
     target.classList.remove('jump-highlight');
     // Force reflow so the animation restarts if clicked twice
@@ -6132,6 +6290,10 @@ function stopPollStatePolling(){
     if(renderedIds.has(mid) || byId('msg-' + mid)) return;
     renderedIds.add(mid);
 
+    // 📅 First live message of a new day (or of a stale room) gets a
+    // "Today" divider above it.
+    ensureTodayDivider(msgs);
+
     if(mtype === 'system'){
       var sys = document.createElement('div');
       sys.id = 'msg-' + mid;
@@ -6146,6 +6308,7 @@ function stopPollStatePolling(){
     wrap.className = 'chat-msg' + (isOwn ? ' own' : '');
     wrap.id = 'msg-' + mid;
     wrap.dataset.sender = sid;
+    wrap.dataset.ts = String(Math.floor(Date.now() / 1000));
 
     var av = document.createElement('div');
     av.className = 'chat-avatar';

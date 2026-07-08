@@ -15,6 +15,15 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-this-key')
 DEBUG = config('DEBUG', default=True, cast=bool)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
 
+# 🔒 Required for POSTs (login, chat sends, CSRF checks) when the site is
+# served over HTTPS on its real domain. Without this, Django 4+ rejects
+# cross-origin-looking POSTs from https://easyoffice.gm with a CSRF error.
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='https://easyoffice.gm',
+    cast=Csv(),
+)
+
 DJANGO_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -191,6 +200,27 @@ MEDIA_ROOT = config('MEDIA_ROOT', default=str(BASE_DIR / 'media'))
 
 MAX_UPLOAD_SIZE = config('MAX_UPLOAD_SIZE', default=50, cast=int) * 1024 * 1024
 
+# 🔒 Enforce the same ceiling at the request-parsing layer so oversized
+# bodies are rejected before views ever run (memory-exhaustion guard).
+DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_SIZE
+FILE_UPLOAD_MAX_MEMORY_SIZE = min(MAX_UPLOAD_SIZE, 10 * 1024 * 1024)
+
+# 🔒🔒 MEDIA SERVING — CRITICAL DEPLOYMENT NOTE 🔒🔒
+# Chat attachments (media/chat_uploads/) and in-call presentation files
+# (media/presentations/) contain private conversation content. The app now
+# serves chat attachments ONLY through the authenticated
+# ChatMessageFileView (membership re-checked on every request) — but that
+# is only half the fix. Whatever serves /media/ directly (nginx, or
+# `static()` in urls.py during DEBUG) must STOP exposing those folders:
+#
+#   nginx:
+#     location /media/chat_uploads/  { internal; alias <MEDIA_ROOT>/chat_uploads/; }
+#     location /media/presentations/ { internal; alias <MEDIA_ROOT>/presentations/; }
+#
+# ("internal" = only reachable via X-Accel-Redirect from Django.)
+# Leaving these publicly served means anyone with a link can download
+# attachments forever, including users removed from the room.
+
 # =============================================================
 # EMAIL
 # =============================================================
@@ -235,6 +265,13 @@ SESSION_COOKIE_AGE = 86400 * 7  # 7 days
 SESSION_COOKIE_SECURE = config('SESSION_COOKIE_SECURE', default=False, cast=bool)
 CSRF_COOKIE_SECURE = config('CSRF_COOKIE_SECURE', default=False, cast=bool)
 
+# 🔒 Explicit hardening (HTTPONLY is Django's default for sessions, but
+# stating it makes the intent auditable; the referrer policy stops chat
+# URLs — which contain room UUIDs — leaking to external sites via links).
+SESSION_COOKIE_HTTPONLY = True
+SECURE_REFERRER_POLICY = 'same-origin'
+SECURE_CONTENT_TYPE_NOSNIFF = True
+
 # =============================================================
 # HTTPS / HSTS  (set to True in production via env vars)
 # =============================================================
@@ -245,12 +282,38 @@ SECURE_HSTS_PRELOAD            = config('SECURE_HSTS_PRELOAD', default=False, ca
 SECURE_PROXY_SSL_HEADER        = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # =============================================================
-# MESSAGING ENCRYPTION (at-rest, AES-256 via Fernet)
+# MESSAGING ENCRYPTION (at-rest, Fernet = AES-128-CBC + HMAC-SHA256)
 # =============================================================
+# NOTE: the old comment here said "AES-256" — Fernet is AES-128-CBC with
+# an HMAC-SHA256 authenticity tag. Still strong; just labelled correctly.
+#
 # Generate a key once and store it as an environment variable:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 # Never commit the key value to source control.
 MESSAGING_ENCRYPTION_KEY = config('MESSAGING_ENCRYPTION_KEY', default='')
+
+# 🔒 Fail-closed: if encryption ever fails (missing/typo'd key on a
+# worker), REJECT the message save instead of silently storing plaintext.
+# Only flip to True as a temporary, deliberate emergency measure.
+MESSAGING_ENCRYPTION_FAIL_OPEN = config(
+    'MESSAGING_ENCRYPTION_FAIL_OPEN', default=False, cast=bool
+)
+
+# 🔒 Push/email previews: False (default) sends a generic "New message"
+# instead of copying plaintext message content through Firebase and mail
+# servers — which would defeat the at-rest encryption above. Set True
+# only if you consciously accept that trade-off for nicer notifications.
+MESSAGING_NOTIFY_INCLUDE_PREVIEW = config(
+    'MESSAGING_NOTIFY_INCLUDE_PREVIEW', default=False, cast=bool
+)
+
+# 🔒 WebSocket auth: allow the DEPRECATED ?token= query-string fallback
+# while mobile clients migrate to the "Authorization: Bearer" header
+# (query strings leak JWTs into nginx/proxy access logs). Set to False
+# once all clients are updated.
+MESSAGING_WS_ALLOW_QUERY_TOKEN = config(
+    'MESSAGING_WS_ALLOW_QUERY_TOKEN', default=True, cast=bool
+)
 
 # =============================================================
 # COLLABORA ONLINE (collaborative Word/Excel/PowerPoint editor)
@@ -304,10 +367,17 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': config('DEFAULT_PAGE_SIZE', default=25, cast=int),
-    'DEFAULT_RENDERER_CLASSES': [
-        'rest_framework.renderers.JSONRenderer',
-        'rest_framework.renderers.BrowsableAPIRenderer',
-    ],
+    # 🔒 The browsable HTML API is a great dev tool but hands production
+    # visitors a point-and-click explorer of every endpoint. JSON-only in
+    # production; browsable only when DEBUG.
+    'DEFAULT_RENDERER_CLASSES': (
+        [
+            'rest_framework.renderers.JSONRenderer',
+            'rest_framework.renderers.BrowsableAPIRenderer',
+        ] if DEBUG else [
+            'rest_framework.renderers.JSONRenderer',
+        ]
+    ),
 }
 
 # =============================================================
@@ -356,6 +426,10 @@ OFFICE_CONFIG = {
 # INTERNATIONALIZATION
 # =============================================================
 LANGUAGE_CODE = config('LANGUAGE_CODE', default='en-us')
+# ⏰ NOTE for the chat date dividers ("Today"/"Yesterday"): days are
+# grouped using this TIME_ZONE. Keep it set to your office's local zone
+# (e.g. 'Africa/Banjul') via the TIME_ZONE env var — with the 'UTC'
+# default, a message sent at 00:30 local could group under the wrong day.
 TIME_ZONE = config('TIME_ZONE', default='UTC')
 USE_I18N = True
 USE_TZ = True
@@ -391,8 +465,11 @@ LOGGING = {
             'propagate': False,
         },
         'apps': {
+            # 🔒 DEBUG-level app logs can capture request bodies and message
+            # metadata. DEBUG while developing, INFO in production (override
+            # with the APPS_LOG_LEVEL env var if needed).
             'handlers': ['console'],
-            'level': 'DEBUG',
+            'level': config('APPS_LOG_LEVEL', default='DEBUG' if DEBUG else 'INFO'),
             'propagate': False,
         },
     },

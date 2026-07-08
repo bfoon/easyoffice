@@ -87,6 +87,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     'room_id': str(self.room_id),
                     'sender_id': str(user.id),
                     'sender_name': self._safe_full_name(user),
+                    'sender_initials': self._safe_initials(user),
+                    'sender_avatar_url': await self._avatar_url(user),
                 }
             )
             return
@@ -217,9 +219,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def chat_typing(self, event):
         """
         Forward a 'typing' signal from the channel-layer group out to this
-        WebSocket client. The client filters out its own sender_id so a user
-        never sees their own typing dots.
+        WebSocket client.
+
+        🔒 SERVER-SIDE SELF-FILTER: never echo the typing event back to the
+        person who is typing. Previously this relied entirely on the client
+        comparing sender_id against its own user id — an inverted or
+        type-mismatched comparison in the JS (e.g. `===` vs `!==`, or a
+        string UUID compared strictly against a numeric id) made the TYPER
+        see their own dots while the recipient saw nothing. Filtering here
+        makes the direction correct regardless of what the client does.
         """
+        if str(event.get('sender_id') or '') == str(self.user.id):
+            return
         await self.send(text_data=json.dumps({
             'type': 'chat_typing',
             'room_id': event.get('room_id', ''),
@@ -232,6 +243,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
     # --------------------------------------------------
     # DB HELPERS
     # --------------------------------------------------
+
+    @database_sync_to_async
+    def _avatar_url(self, user):
+        """Async-safe avatar lookup (staffprofile access can hit the DB)."""
+        try:
+            if getattr(user, 'avatar', None) and user.avatar:
+                return user.avatar.url
+        except Exception:
+            pass
+        try:
+            sp = getattr(user, 'staffprofile', None)
+            if sp and getattr(sp, 'profile_picture', None) and sp.profile_picture:
+                return sp.profile_picture.url
+        except Exception:
+            pass
+        return ''
 
     @database_sync_to_async
     def user_in_room(self):

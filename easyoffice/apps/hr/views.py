@@ -2023,7 +2023,11 @@ class PayrollView(LoginRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         year = int(self.request.GET.get('year', timezone.now().year))
         month = int(self.request.GET.get('month', timezone.now().month))
-        records = PayrollRecord.objects.filter(period_year=year, period_month=month).select_related('staff', 'staff__staffprofile', 'employment', 'employment__department_ref', 'employment__position').order_by('staff__last_name')
+        records = PayrollRecord.objects.filter(
+            period_year=year,
+            period_month=month,
+            employment__isnull=False,
+        ).select_related('staff', 'staff__staffprofile', 'employment', 'employment__department_ref', 'employment__position').order_by('staff__last_name')
         ctx['records'] = records
         ctx['year'] = year
         ctx['month'] = month
@@ -2108,7 +2112,8 @@ class PayrollBatchApproveView(LoginRequiredMixin, View):
 
         records = list(
             PayrollRecord.objects.filter(
-                period_year=year, period_month=month, status=PayrollRecord.Status.DRAFT
+                period_year=year, period_month=month, status=PayrollRecord.Status.DRAFT,
+                employment__isnull=False,
             ).select_related('staff', 'staff__staffprofile', 'employment')
         )
         if not records:
@@ -2240,7 +2245,9 @@ class PayrollBulkPayslipEmailView(LoginRequiredMixin, View):
             return HttpResponseForbidden('You do not have permission to email payslips.')
         year = int(request.POST.get('year') or timezone.now().year)
         month = int(request.POST.get('month') or timezone.now().month)
-        records = PayrollRecord.objects.filter(period_year=year, period_month=month).select_related('staff', 'staff__staffprofile', 'employment')
+        records = PayrollRecord.objects.filter(
+            period_year=year, period_month=month, employment__isnull=False,
+        ).select_related('staff', 'staff__staffprofile', 'employment')
         sent_count = 0
         for record in records:
             try:

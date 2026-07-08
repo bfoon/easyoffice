@@ -2274,7 +2274,7 @@ class AttendanceView(LoginRequiredMixin, TemplateView):
         q = self.request.GET.get('q', '').strip()
         selected_date = parse_date(date_str) or timezone.now().date()
 
-        staff_qs = User.objects.filter(is_active=True)
+        staff_qs = User.objects.filter(is_active=True, employment__isnull=False)
         if hasattr(User, 'status'):
             staff_qs = staff_qs.filter(status='active')
         staff_qs = staff_qs.order_by('first_name', 'last_name')
@@ -2346,7 +2346,7 @@ class AttendanceView(LoginRequiredMixin, TemplateView):
             check_in = request.POST.get(f'check_in_{staff_id}') or None
             check_out = request.POST.get(f'check_out_{staff_id}') or None
             notes = request.POST.get(f'notes_{staff_id}', '').strip()
-            staff = User.objects.filter(pk=staff_id, is_active=True).first()
+            staff = User.objects.filter(pk=staff_id, is_active=True, employment__isnull=False).first()
             if not staff:
                 continue
             if staff.id in approved_leave_staff_ids and status == 'present':
@@ -2407,7 +2407,7 @@ class AttendanceSheetView(LoginRequiredMixin, TemplateView):
             days.append({'date': current_date, 'record': rec})
 
         if is_hr_user(request_user):
-            selectable_staff = User.objects.filter(is_active=True).order_by('first_name', 'last_name')
+            selectable_staff = User.objects.filter(is_active=True, employment__isnull=False).order_by('first_name', 'last_name')
         elif is_supervisor_user(request_user):
             supervisees = get_supervisee_queryset(request_user)
             selectable_staff = User.objects.filter(Q(pk=request_user.pk) | Q(pk__in=supervisees.values_list('pk', flat=True)), is_active=True).distinct().order_by('first_name', 'last_name')

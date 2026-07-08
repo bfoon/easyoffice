@@ -5,8 +5,9 @@ from django.views.generic import TemplateView, View
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages as django_messages
 from django.db.models import Q
-from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
+from django.http import HttpResponse, HttpResponseForbidden, JsonResponse, FileResponse, Http404
 from django.utils import timezone
+from django.conf import settings
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from spellchecker import SpellChecker
@@ -167,6 +168,27 @@ def _room_project_or_403(room):
 
     return room.project
 
+def _user_accessible_files_q(user):
+    """
+    🔒 SECURITY: the single source of truth for "which SharedFiles can this
+    user see". Reused by the file picker, attach, PIN and GRANT-ACCESS
+    endpoints so none of them can be used to reach files outside the
+    user's visibility (the pin/grant views previously fetched ANY
+    SharedFile by id — a privilege-escalation hole).
+    """
+    profile = getattr(user, 'staffprofile', None)
+    unit    = profile.unit       if profile else None
+    dept    = profile.department if profile else None
+    return (
+        Q(uploaded_by=user)
+        | Q(visibility='office')
+        | Q(visibility='unit',       unit=unit)
+        | Q(visibility='department', department=dept)
+        | Q(shared_with=user)
+        | Q(share_access__user=user)
+    )
+
+
 def _can_post_in_room(user, room):
     """
     Posting is blocked for readonly rooms and for non-members.
@@ -208,9 +230,13 @@ def _room_group_name(room_id):
 
 
 def _get_msg_file_url(msg):
+    # 🔒 SECURITY: direct chat uploads are served through the authenticated
+    # ChatMessageFileView (membership re-checked on every request) instead
+    # of a raw, publicly reachable MEDIA url.
     if getattr(msg, 'file', None):
         try:
-            return msg.file.url
+            if msg.file.name:
+                return f'/messages/{msg.room_id}/message/{msg.id}/file/'
         except Exception:
             pass
 
@@ -1071,6 +1097,29 @@ class RemoveRoomMemberView(LoginRequiredMixin, View):
         deleted, _ = ChatRoomMember.objects.filter(room=room, user=member).delete()
 
         if deleted:
+            # 🔒 SECURITY FIX: the removed member may have an open WebSocket
+            # in this room's channel-layer group. Without this broadcast they
+            # would KEEP RECEIVING every new message / typing event / call
+            # signal until they closed the tab themselves. The consumer's
+            # chat_kick handler detaches and closes only the matching user's
+            # connections.
+            try:
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(channel_layer.group_send)(
+                        _room_group_name(room.id),
+                        {
+                            'type': 'chat.kick',
+                            'payload': {
+                                'type': 'removed_from_room',
+                                'room_id': str(room.id),
+                                'user_id': str(member.id),
+                            },
+                        },
+                    )
+            except Exception:
+                _presence_log.exception('Failed to broadcast member kick')
+
             django_messages.success(request, f'{_safe_full_name(member)} removed from "{room.name}".')
         else:
             django_messages.info(request, 'Member was not found in this room.')
@@ -1285,6 +1334,10 @@ class EditMessageView(LoginRequiredMixin, View):
             is_deleted=False,
         )
 
+        # ── Rule 0 (🔒): editing is posting — read-only rooms/roles block it ──
+        if not _can_post_in_room(request.user, msg.room):
+            return JsonResponse({'ok': False, 'error': 'You cannot edit messages in this room.'}, status=403)
+
         # ── Rule 5: only plain text messages ──────────────────────────────────
         if msg.message_type not in ('text', ''):
             return JsonResponse({'ok': False, 'error': 'Only text messages can be edited.'}, status=400)
@@ -1346,19 +1399,14 @@ class ChatFilePickerAPIView(LoginRequiredMixin, View):
 
         get_object_or_404(ChatRoom, id=room_id, members=request.user)
 
-        q       = request.GET.get('q', '').strip()
-        profile = getattr(request.user, 'staffprofile', None)
-        unit    = profile.unit       if profile else None
-        dept    = profile.department if profile else None
+        q = request.GET.get('q', '').strip()
 
-        qs = SharedFile.objects.filter(
-            Q(uploaded_by=request.user)
-            | Q(visibility='office')
-            | Q(visibility='unit',       unit=unit)
-            | Q(visibility='department', department=dept)
-            | Q(shared_with=request.user)
-            | Q(share_access__user=request.user)
-        ).filter(is_latest=True).distinct()
+        qs = (
+            SharedFile.objects
+            .filter(_user_accessible_files_q(request.user))
+            .filter(is_latest=True)
+            .distinct()
+        )
 
         if q:
             qs = qs.filter(name__icontains=q)
@@ -1396,8 +1444,8 @@ class ChatAttachSharedFileView(LoginRequiredMixin, View):
         from apps.files.models import SharedFile
 
         room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
-        if room.is_readonly:
-            return JsonResponse({'error': 'Room is read-only.'}, status=403)
+        if not _can_post_in_room(request.user, room):
+            return JsonResponse({'error': 'You cannot post in this room.'}, status=403)
 
         file_id     = request.POST.get('file_id',  '').strip()
         caption     = request.POST.get('caption',  '').strip()
@@ -1406,19 +1454,8 @@ class ChatAttachSharedFileView(LoginRequiredMixin, View):
         if not file_id:
             return JsonResponse({'error': 'No file_id provided.'}, status=400)
 
-        profile = getattr(request.user, 'staffprofile', None)
-        unit    = profile.unit       if profile else None
-        dept    = profile.department if profile else None
-
         shared_file = get_object_or_404(
-            SharedFile.objects.filter(
-                Q(uploaded_by=request.user)
-                | Q(visibility='office')
-                | Q(visibility='unit',       unit=unit)
-                | Q(visibility='department', department=dept)
-                | Q(shared_with=request.user)
-                | Q(share_access__user=request.user)
-            ).distinct(),
+            SharedFile.objects.filter(_user_accessible_files_q(request.user)).distinct(),
             pk=file_id,
         )
 
@@ -1631,7 +1668,16 @@ class ChatRoomFilePinView(LoginRequiredMixin, View):
         if not file_id:
             return JsonResponse({'ok': False, 'error': 'file_id is required.'}, status=400)
 
-        shared_file = get_object_or_404(SharedFile, pk=file_id)
+        # 🔒 SECURITY FIX: only allow pinning files the pinner can already
+        # access. The old lookup fetched ANY SharedFile by id, and pinning
+        # grants every room member access "bypassing normal file-visibility
+        # rules" — i.e. any user who learned a private file's UUID could
+        # create a room, pin it, and read it. Now the pinner's own
+        # visibility is enforced first.
+        shared_file = get_object_or_404(
+            SharedFile.objects.filter(_user_accessible_files_q(request.user)).distinct(),
+            pk=file_id,
+        )
 
         obj, created = ChatRoomFile.objects.get_or_create(
             room=room,
@@ -1863,7 +1909,14 @@ class ChatRoomFileGrantAccessView(LoginRequiredMixin, View):
         if not room.members.filter(id=target_user.id).exists():
             return JsonResponse({'ok': False, 'error': 'User is not in this room.'}, status=400)
 
-        shared_file = get_object_or_404(SharedFile, id=file_id)
+        # 🔒 SECURITY FIX: the granter must themselves have access to the
+        # file. The old lookup fetched ANY SharedFile by id, letting a room
+        # manager mint FileShareAccess rows (up to 'full') on files they had
+        # no rights to — a straight privilege escalation.
+        shared_file = get_object_or_404(
+            SharedFile.objects.filter(_user_accessible_files_q(request.user)).distinct(),
+            id=file_id,
+        )
 
         FileShareAccess.objects.update_or_create(
             file=shared_file,
@@ -2108,6 +2161,10 @@ class SpellCheckView(LoginRequiredMixin, View):
     def post(self, request, room_id):
         get_object_or_404(ChatRoom, id=room_id, members=request.user)
         text = (request.POST.get('text') or '').strip()
+        # 🔒 Cap input — pyspellchecker is CPU-bound and this endpoint was
+        # unbounded (cheap denial-of-service via huge payloads).
+        if len(text) > 2000:
+            text = text[:2000]
         result = _spellcheck_text(text)
         return JsonResponse({
             'ok': True,
@@ -2176,8 +2233,16 @@ def _notify_offline_members(room, sender, message):
                     preview = '📎 File'
                 elif mtype == 'poll':
                     preview = '📊 Poll'
-                else:
+                elif getattr(settings, 'MESSAGING_NOTIFY_INCLUDE_PREVIEW', False):
+                    # ⚠️ Opt-in only: this ships the plaintext through
+                    # Firebase's servers, defeating at-rest encryption.
                     preview = (message.content or '')[:120]
+                else:
+                    # 🔒 SECURITY FIX (default): message content is encrypted
+                    # at rest, but the old code copied the first 120 chars in
+                    # PLAINTEXT into every FCM push (third-party servers,
+                    # notification logs, lock screens). Keep pushes generic.
+                    preview = 'New message'
 
                 for recipient in members:
                     try:
@@ -2305,11 +2370,24 @@ def _send_offline_message_notification(recipient, sender, room, message_content)
     from_email = getattr(settings, 'DEFAULT_FROM_EMAIL',
                          f'noreply@{org_name.lower().replace(" ", "")}.org')
 
-    sender_name = _safe_full_name(sender)
-    room_name   = room.name or 'a chat'
-    preview     = (message_content or '').strip()[:120]
-    if len(message_content or '') > 120:
-        preview += '…'
+    from django.utils.html import escape
+
+    # 🔒 SECURITY FIX x2:
+    #  1. By default the email no longer embeds the message body — content
+    #     is encrypted at rest, so mailing a plaintext copy to a mail spool
+    #     defeated the encryption. Opt back in with
+    #     MESSAGING_NOTIFY_INCLUDE_PREVIEW = True if you accept that.
+    #  2. All user-controlled strings are HTML-escaped before interpolation
+    #     into the email template (the old f-string injected raw content —
+    #     HTML injection into recipients' mail clients).
+    sender_name = escape(_safe_full_name(sender))
+    room_name   = escape(room.name or 'a chat')
+    if getattr(settings, 'MESSAGING_NOTIFY_INCLUDE_PREVIEW', False):
+        preview = escape((message_content or '').strip()[:120])
+        if len(message_content or '') > 120:
+            preview += '…'
+    else:
+        preview = 'You have a new message. Open the chat to read it.'
 
     status_label = {
         'offline': 'while you were offline',
@@ -2523,10 +2601,15 @@ class CallRingView(LoginRequiredMixin, View):
         try:
             channel_layer = get_channel_layer()
             if channel_layer:
+                # 🩹 BUG FIX: this used to be sent as 'chat.typing', but the
+                # consumer's chat_typing handler reads top-level keys — the
+                # nested payload was DROPPED and clients received an empty
+                # typing event instead of the ring. chat.signal forwards the
+                # payload verbatim.
                 async_to_sync(channel_layer.group_send)(
                     _room_group_name(room.id),
                     {
-                        'type': 'chat.typing',  # reuse generic relay event
+                        'type': 'chat.signal',
                         'payload': {
                             'type': 'call_ring',
                             **ring,
@@ -2580,6 +2663,15 @@ class CallClearView(LoginRequiredMixin, View):
 
     def post(self, request, room_id):
         room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+
+        # 🔒 SECURITY FIX: this endpoint had no room_type check. In a GROUP
+        # room, `other = ...first()` grabbed an arbitrary member and deleted
+        # THEIR ring key — any group member could silently kill someone's
+        # unrelated incoming call. Calls are DM-only everywhere else; enforce
+        # it here too.
+        if room.room_type != 'direct':
+            return JsonResponse({'ok': False, 'error': 'Calls are only supported in direct messages.'}, status=400)
+
         other = room.members.exclude(id=request.user.id).first()
 
         reason    = (request.POST.get('reason') or '').strip().lower()
@@ -2615,10 +2707,12 @@ class CallClearView(LoginRequiredMixin, View):
         try:
             channel_layer = get_channel_layer()
             if channel_layer:
+                # 🩹 BUG FIX: same as call_ring — 'chat.typing' dropped the
+                # nested payload, so 'call_cleared' never reached any client.
                 async_to_sync(channel_layer.group_send)(
                     _room_group_name(room.id),
                     {
-                        'type': 'chat.typing',  # reuse generic relay
+                        'type': 'chat.signal',
                         'payload': {
                             'type': 'call_cleared',
                             'room_id': str(room.id),
@@ -3234,6 +3328,80 @@ class NotificationPollView(LoginRequiredMixin, View):
 # ─────────────────────────────────────────────────────────────────────────────
 # 📌 PERSONAL PINS — private bookmarks (requires ChatMessagePin model)
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 🔒 AUTHENTICATED CHAT ATTACHMENT DOWNLOAD
+#
+# Chat uploads live in MEDIA storage (chat_uploads/...). If MEDIA is served
+# directly by nginx / whitenoise (the common default), those URLs have NO
+# authentication: anyone holding a link — including users removed from the
+# room — could download attachments forever. Message TEXT is encrypted at
+# rest, but the files were effectively public-by-URL.
+#
+# This view is now the only URL the app hands out for direct chat uploads
+# (see ChatMessage.effective_file_url and _get_msg_file_url). It re-checks
+# room membership on EVERY request.
+#
+# ⚠️ DEPLOYMENT NOTE — to fully close the hole you must ALSO stop nginx
+# from serving /media/chat_uploads/ and /media/presentations/ directly:
+#
+#   location /media/chat_uploads/    { internal; alias /srv/media/chat_uploads/; }
+#   location /media/presentations/   { internal; alias /srv/media/presentations/; }
+#
+# For large deployments, swap the FileResponse below for an
+# X-Accel-Redirect response so nginx streams the bytes after Django has
+# authorised the request.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Content types safe to render inline in the browser. Everything else is
+# forced to download (Content-Disposition: attachment) so an uploaded
+# .html/.svg file can never execute script on your origin (stored XSS).
+_INLINE_SAFE_CONTENT_TYPES = {
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+    'application/pdf',
+}
+
+
+class ChatMessageFileView(LoginRequiredMixin, View):
+    """
+    GET /messages/<room_id>/message/<message_id>/file/
+    Streams a chat attachment to ROOM MEMBERS ONLY.
+    """
+
+    def get(self, request, room_id, message_id):
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        msg = get_object_or_404(
+            ChatMessage, id=message_id, room=room, is_deleted=False,
+        )
+
+        if not msg.file or not msg.file.name:
+            raise Http404('No file on this message.')
+
+        import mimetypes
+        display_name = msg.file_name or os.path.basename(msg.file.name)
+        ctype = (mimetypes.guess_type(display_name)[0]
+                 or mimetypes.guess_type(msg.file.name)[0]
+                 or 'application/octet-stream')
+
+        inline = ctype in _INLINE_SAFE_CONTENT_TYPES
+
+        try:
+            fh = msg.file.open('rb')
+        except Exception:
+            raise Http404('File data unavailable.')
+
+        resp = FileResponse(
+            fh,
+            content_type=ctype if inline else 'application/octet-stream',
+            as_attachment=not inline,
+            filename=display_name,
+        )
+        # Belt-and-braces against content-type sniffing attacks.
+        resp['X-Content-Type-Options'] = 'nosniff'
+        # Attachments are private; don't let shared caches keep them.
+        resp['Cache-Control'] = 'private, max-age=300'
+        return resp
+
+
 class TogglePinMessageView(LoginRequiredMixin, View):
     """
     POST /messages/<room_id>/message/<message_id>/pin/

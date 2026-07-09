@@ -113,11 +113,21 @@ class CheckFileInfoView(View):
             return _unauthorized()
         user, file, permission, _session = auth
 
+        # Size must be accurate — Collabora validates it against the bytes
+        # it later fetches. Fall back to the storage backend if the DB
+        # field was never populated.
+        size = file.file_size or 0
+        if not size and file.file:
+            try:
+                size = file.file.size
+            except Exception:
+                size = 0
+
         # Build the JSON per WOPI spec.
         info = {
             # Required
             'BaseFileName':    file.name,
-            'Size':            file.file_size or 0,
+            'Size':            size,
             'OwnerId':         str(file.uploaded_by_id),
             'UserId':          str(user.pk),
             'Version':         str(file.updated_at.timestamp()),
@@ -166,17 +176,20 @@ class FileContentsView(View):
         if not file.file:
             raise Http404('no file blob')
 
-        # Stream to avoid loading large files fully into memory.
         try:
-            f = file.file.open('rb')
+            with file.file.open('rb') as f:
+                data = f.read()
         except FileNotFoundError:
             raise Http404('file missing on disk')
 
         response = HttpResponse(
-            f.read(),
+            data,
             content_type='application/octet-stream',
         )
-        response['Content-Length'] = str(file.file_size or 0)
+        # MUST be the byte count actually served. A stale DB file_size
+        # (e.g. 0 or the pre-edit size) makes Collabora truncate or
+        # reject the stream and drop the session.
+        response['Content-Length'] = str(len(data))
         response['X-WOPI-ItemVersion'] = str(file.updated_at.timestamp())
         return response
 

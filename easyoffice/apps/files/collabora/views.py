@@ -127,12 +127,21 @@ class CollaboraEditorView(LoginRequiredMixin, View):
         token = issue_token(request.user, file, permission, session.pk)
         editor_url = _editor_url(request, file)
 
+        # WOPI's `access_token_ttl` is NOT a duration: it is the ABSOLUTE
+        # Unix timestamp in MILLISECONDS at which the token expires.
+        # Passing the TTL itself (e.g. 36_000_000 ms) tells Collabora the
+        # token expired on 1 Jan 1970 ~10:00, so it shows "Your session
+        # has expired" the moment the editor loads — every single time.
+        import time
+        ttl_seconds = getattr(settings, 'COLLABORA_TOKEN_TTL_SECONDS', 36000)
+        token_expiry_ms = int((time.time() + ttl_seconds) * 1000)
+
         ctx = {
             'file':        file,
             'session':     session,
             'editor_url':  editor_url,
             'access_token': token,
-            'token_ttl_ms': getattr(settings, 'COLLABORA_TOKEN_TTL_SECONDS', 36000) * 1000,
+            'token_ttl_ms': token_expiry_ms,
             'permission':  permission,
         }
         return TemplateResponse(request, self.template_name, ctx)

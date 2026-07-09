@@ -2162,32 +2162,23 @@ def _draw_easyoffice_text_box(c, field, value, fx, fy, fw, fh):
     EO_TEXT = (0.080, 0.110, 0.180)
 
     is_date = field.field_type == 'date'
-    label = 'EO Date' if is_date else 'EO Text'
 
-    # TRANSPARENT BACKGROUND: outline-only badge (fill=0) and no white
-    # rect behind the label, so document text behind the field stays visible.
-    c.setStrokeColorRGB(*EO_BLUE)
-    c.setLineWidth(0.9)
-    c.roundRect(fx, fy, fw, fh, radius=5, stroke=1, fill=0)
-
-    label_h = max(8, min(13, fh * 0.25))
-
-    c.setFont('Helvetica-Bold', max(5.5, min(7.5, label_h * 0.72)))
-    c.setFillColorRGB(*EO_BLUE)
-    c.drawString(fx + 8, fy + fh - label_h * 0.30, label)
-
+    # FULLY TRANSPARENT FIELD: no border, no card fill, no "EO Text"/"EO Date"
+    # label — only the value itself is stamped onto the document, so nothing
+    # covers or decorates the text behind it. The full field height is now
+    # available for the value since there is no label to reserve space for.
     display = re.sub(r'\s+', ' ', str(value or '').strip())
     if not display:
         return
 
     avail_w = fw - 16
-    avail_h = fh - label_h - 8
+    avail_h = fh - 8
 
     font_name = 'Helvetica-Bold' if is_date else 'Helvetica'
     c.setFillColorRGB(*EO_TEXT)
 
     # 1) Try a single line, shrinking from the ideal size down to 6pt.
-    max_size = max(7.5, min(fh * 0.34, 12))
+    max_size = max(7.5, min(fh * 0.42, 12))
     size = max_size
     while size > 6 and stringWidth(display, font_name, size) > avail_w:
         size -= 0.5
@@ -2227,7 +2218,7 @@ def _draw_easyoffice_text_box(c, field, value, fx, fy, fw, fh):
             lines[1] = (last + '…') if last else '…'
 
     c.setFont(font_name, size)
-    top_y = fy + fh - label_h - line_h - 1
+    top_y = fy + fh - line_h - 2
     for i, line in enumerate(lines[:2]):
         c.drawString(fx + 8, top_y - (i * line_h), line)
 

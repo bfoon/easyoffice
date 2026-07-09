@@ -15,17 +15,30 @@ User-facing views:
 
   - EndSessionView: called on beforeunload/closed-tab to mark the
     session as ended so the UI updates promptly.
+
+URL architecture (three distinct URLs — do not conflate them):
+
+  COLLABORA_SERVER_URL  http://collabora:9980   Django → Collabora, internal.
+                                                Used only to fetch discovery.
+  COLLABORA_PUBLIC_URL  https://easyoffice.gm   Browser → nginx → Collabora.
+                                                The iframe src host.
+  COLLABORA_WOPI_HOST   http://web:8000         Collabora → Django, internal.
+                                                Embedded as WOPISrc.
 """
 import logging
-from urllib.parse import urlencode
+import re
+import xml.etree.ElementTree as ET
+from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.request import urlopen
+
 from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core.cache import cache
 from django.http import JsonResponse, HttpResponseForbidden, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404
 from django.views.generic import View
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
-from django.utils import timezone
 from django.template.response import TemplateResponse
 
 from apps.files.models import SharedFile
@@ -42,23 +55,33 @@ logger = logging.getLogger(__name__)
 # File types we allow the editor to open.
 EDITABLE_EXTS = {'docx', 'xlsx', 'pptx'}
 
+_DISCOVERY_CACHE_KEY = 'collabora:discovery:urlsrc-map'
+_DISCOVERY_CACHE_TTL = 60 * 60 * 12   # 12h; refetched automatically after
 
-def _collabora_server():
-    """The Collabora Online base URL (e.g. https://cool.example.org)."""
+
+def _collabora_internal():
+    """Internal Collabora base URL (Django → Collabora over docker network)."""
     url = getattr(settings, 'COLLABORA_SERVER_URL', '').rstrip('/')
     if not url:
-        raise RuntimeError(
-            'COLLABORA_SERVER_URL is not configured in settings.'
-        )
+        raise RuntimeError('COLLABORA_SERVER_URL is not configured in settings.')
     return url
+
+
+def _collabora_public():
+    """
+    Public base URL the browser loads the editor from. With Collabora
+    mounted at root paths behind nginx this is simply the site URL.
+    """
+    url = getattr(settings, 'COLLABORA_PUBLIC_URL', '').rstrip('/')
+    return url or _collabora_internal()
 
 
 def _wopi_src_for(request, file):
     """
-    The absolute URL Collabora will call back to fetch the file.
-    Must be reachable from the Collabora container.
+    The absolute URL Collabora calls back to fetch/save the file.
+    Must be reachable FROM THE COLLABORA CONTAINER — hence the internal
+    docker-network host (http://web:8000), not the public domain.
     """
-    # Build scheme+host from the request, then append the WOPI path.
     host = getattr(settings, 'COLLABORA_WOPI_HOST', None)
     if host:
         base = host.rstrip('/')
@@ -67,34 +90,95 @@ def _wopi_src_for(request, file):
     return f'{base}/files/collabora/wopi/files/{file.pk}'
 
 
+# ── Discovery ────────────────────────────────────────────────────────────────
+
+def _discovery_map():
+    """
+    Fetch and cache Collabora's WOPI discovery document, returning
+    {ext: urlsrc}. The urlsrc contains the version-hashed editor path
+    (/browser/<hash>/cool.html) which CHANGES on every image upgrade —
+    this is why the path must never be hardcoded.
+    """
+    cached = cache.get(_DISCOVERY_CACHE_KEY)
+    if cached:
+        return cached
+
+    url = f'{_collabora_internal()}/hosting/discovery'
+    try:
+        with urlopen(url, timeout=5) as resp:
+            root = ET.fromstring(resp.read())
+    except Exception as exc:
+        logger.warning('Collabora discovery fetch failed (%s): %s', url, exc)
+        return {}
+
+    mapping = {}
+    for action in root.iter('action'):
+        ext = (action.get('ext') or '').lower()
+        name = action.get('name') or ''
+        urlsrc = action.get('urlsrc') or ''
+        if not ext or not urlsrc:
+            continue
+        # Prefer the 'edit' action; fall back to 'view'.
+        if name == 'edit' or ext not in mapping:
+            mapping[ext] = urlsrc
+
+    if mapping:
+        cache.set(_DISCOVERY_CACHE_KEY, mapping, _DISCOVERY_CACHE_TTL)
+    return mapping
+
+
+def _editor_base_url(extension):
+    """
+    Resolve the public cool.html URL for a file extension.
+
+    Discovery returns the INTERNAL host (or the server_name), so we
+    rewrite scheme+host to COLLABORA_PUBLIC_URL and strip the WOPI
+    optional-parameter placeholders (<ui=UI_LLCC&> style blocks).
+    """
+    urlsrc = _discovery_map().get(extension)
+
+    if not urlsrc:
+        # Last-resort fallback; logged loudly because it will break on
+        # image upgrades if discovery keeps failing.
+        logger.error(
+            'No discovery urlsrc for .%s — falling back to conventional path. '
+            'Check that the Collabora container is up and reachable at %s.',
+            extension, _collabora_internal(),
+        )
+        urlsrc = f'{_collabora_public()}/browser/dist/cool.html?'
+
+    # Strip <placeholder> option blocks from the discovery urlsrc.
+    urlsrc = re.sub(r'<[^>]*>', '', urlsrc)
+
+    # Rewrite to the public origin (browser-reachable, via nginx).
+    pub = urlsplit(_collabora_public())
+    parts = urlsplit(urlsrc)
+    urlsrc = urlunsplit((pub.scheme, pub.netloc, parts.path, parts.query, ''))
+
+    # Normalise so we can append our own query params.
+    if '?' not in urlsrc:
+        urlsrc += '?'
+    elif not urlsrc.endswith(('?', '&')):
+        urlsrc += '&'
+    return urlsrc
+
+
 def _editor_url(request, file, lang='en'):
-    """
-    Build the Collabora `cool.html` URL (without the access_token which
-    is submitted as a form field by the launch page).
-
-    We ask Collabora which URL to use by hitting its discovery endpoint —
-    but for simplicity we use the conventional cool.html path. If your
-    Collabora deployment uses a different entry path, set
-    COLLABORA_EDITOR_PATH in settings.
-    """
-    ext = file.extension
-    server = _collabora_server()
-    path = getattr(settings, 'COLLABORA_EDITOR_PATH', '/browser/dist/cool.html')
-
+    """Full cool.html URL (access_token is POSTed by the launch form)."""
     params = {
         'WOPISrc': _wopi_src_for(request, file),
         'lang':    lang,
         # 'closebutton': 'true',   # show Collabora's own close button
         # 'revisionhistory': 'true',
     }
-    return f'{server}{path}?{urlencode(params)}'
+    return f'{_editor_base_url(file.extension)}{urlencode(params)}'
 
 
 # ── Editor launch ────────────────────────────────────────────────────────────
 
 class CollaboraEditorView(LoginRequiredMixin, View):
     """
-    GET /files/<uuid>/edit/
+    GET /files/collabora/edit/<uuid>/
 
     Renders the editor host page. Issues a short-lived token, creates a
     CollaboraSession row, and renders a form that POSTs access_token to
@@ -137,12 +221,12 @@ class CollaboraEditorView(LoginRequiredMixin, View):
         token_expiry_ms = int((time.time() + ttl_seconds) * 1000)
 
         ctx = {
-            'file':        file,
-            'session':     session,
-            'editor_url':  editor_url,
+            'file':         file,
+            'session':      session,
+            'editor_url':   editor_url,
             'access_token': token,
             'token_ttl_ms': token_expiry_ms,
-            'permission':  permission,
+            'permission':   permission,
         }
         return TemplateResponse(request, self.template_name, ctx)
 
@@ -157,6 +241,10 @@ class PresencePingView(LoginRequiredMixin, View):
 
     Called every 30s by the editor page. Updates last_seen + broadcasts
     the refreshed presence list via Channels.
+
+    csrf_exempt is acceptable here because the endpoint only refreshes a
+    timestamp on a session owned by request.user — a forged request can't
+    read or modify anything else.
     """
 
     def post(self, request):
@@ -174,7 +262,7 @@ class PresencePingView(LoginRequiredMixin, View):
             session = CollaboraSession.objects.select_related('file').get(
                 pk=sid, user=request.user
             )
-        except CollaboraSession.DoesNotExist:
+        except (CollaboraSession.DoesNotExist, ValueError):
             return HttpResponseBadRequest('unknown session')
 
         if session.ended_at:
@@ -191,8 +279,9 @@ class EndSessionView(LoginRequiredMixin, View):
     POST /files/collabora/presence/end/
     Body: { "session_id": "<uuid>" }
 
-    Called on beforeunload so presence updates immediately when a user
-    closes the editor tab.
+    Called via navigator.sendBeacon on beforeunload (sendBeacon cannot
+    set an X-CSRFToken header, hence csrf_exempt — same low-risk
+    reasoning as the ping endpoint).
     """
 
     def post(self, request):
@@ -210,7 +299,7 @@ class EndSessionView(LoginRequiredMixin, View):
             session = CollaboraSession.objects.select_related('file').get(
                 pk=sid, user=request.user
             )
-        except CollaboraSession.DoesNotExist:
+        except (CollaboraSession.DoesNotExist, ValueError):
             return JsonResponse({'ok': True})  # idempotent
 
         session.end()
@@ -220,9 +309,9 @@ class EndSessionView(LoginRequiredMixin, View):
 
 class PresenceListView(LoginRequiredMixin, View):
     """
-    GET /files/<uuid>/presence/
+    GET /files/collabora/files/<uuid>/presence/
 
-    Returns JSON { "editors": [{ "user_id", "name", "avatar_url",
+    Returns JSON { "editors": [{ "user_id", "name", "initials",
     "permission", "since" }, ...] } for use in the file card UI.
     """
 

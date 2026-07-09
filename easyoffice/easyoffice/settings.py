@@ -13,6 +13,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # =============================================================
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-this-key')
 DEBUG = config('DEBUG', default=True, cast=bool)
+
+# 🔒 'web' is REQUIRED in production: the Collabora container calls the
+# WOPI endpoints with Host: web:8000 over the docker network. Without it,
+# every WOPI callback 400s and the editor shows "Failed to load document".
+# Set via .env:  ALLOWED_HOSTS=easyoffice.gm,www.easyoffice.gm,web,localhost
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
 
 # 🔒 Required for POSTs (login, chat sends, CSRF checks) when the site is
@@ -205,21 +210,18 @@ MAX_UPLOAD_SIZE = config('MAX_UPLOAD_SIZE', default=50, cast=int) * 1024 * 1024
 DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_SIZE
 FILE_UPLOAD_MAX_MEMORY_SIZE = min(MAX_UPLOAD_SIZE, 10 * 1024 * 1024)
 
-# 🔒🔒 MEDIA SERVING — CRITICAL DEPLOYMENT NOTE 🔒🔒
-# Chat attachments (media/chat_uploads/) and in-call presentation files
-# (media/presentations/) contain private conversation content. The app now
-# serves chat attachments ONLY through the authenticated
-# ChatMessageFileView (membership re-checked on every request) — but that
-# is only half the fix. Whatever serves /media/ directly (nginx, or
-# `static()` in urls.py during DEBUG) must STOP exposing those folders:
-#
-#   nginx:
-#     location /media/chat_uploads/  { internal; alias <MEDIA_ROOT>/chat_uploads/; }
-#     location /media/presentations/ { internal; alias <MEDIA_ROOT>/presentations/; }
-#
-# ("internal" = only reachable via X-Accel-Redirect from Django.)
-# Leaving these publicly served means anyone with a link can download
-# attachments forever, including users removed from the room.
+# 🔒 PROTECTED MEDIA (chat attachments, in-call presentations)
+# These folders under MEDIA_ROOT contain private conversation content and
+# are marked `internal` in nginx — they can only be served via an
+# X-Accel-Redirect issued by an authenticated Django view (which
+# re-checks room membership on every request). Direct URL access 404s.
+# The helper lives in apps/core/xaccel.py.
+PROTECTED_MEDIA_PREFIXES = ['chat_uploads/', 'presentations/']
+
+# True in production (nginx does the file transfer, Django only
+# authorizes). False in local dev where there is no nginx — Django then
+# streams the file itself via FileResponse.
+MEDIA_USE_XACCEL = config('MEDIA_USE_XACCEL', default=not DEBUG, cast=bool)
 
 # =============================================================
 # EMAIL
@@ -318,24 +320,25 @@ MESSAGING_WS_ALLOW_QUERY_TOKEN = config(
 # =============================================================
 # COLLABORA ONLINE (collaborative Word/Excel/PowerPoint editor)
 # =============================================================
-# Base URL of the Collabora Online server, reachable by the BROWSER.
-# e.g. https://cool.easyoffice.example.org  (no trailing slash)
-# Must be HTTPS in production — Collabora refuses to load over plain HTTP.
-COLLABORA_SERVER_URL = config('COLLABORA_SERVER_URL', default='')
+# Three DISTINCT URLs — do not conflate them:
+#
+#   COLLABORA_SERVER_URL  Django → Collabora   (internal docker network)
+#   COLLABORA_PUBLIC_URL  Browser → nginx → Collabora  (the iframe host)
+#   COLLABORA_WOPI_HOST   Collabora → Django   (internal docker network)
 
-# URL where Django is reachable FROM the Collabora container.
-# - If Collabora reaches Django over the public internet: leave blank and
-#   the current request's scheme+host will be used (this works for most
-#   single-domain deployments).
-# - If Collabora runs on the same Docker network and can reach Django via
-#   an internal DNS name, set it here to skip a public round-trip:
-#   e.g. 'http://web:8000'  (where 'web' is the Django service name).
-COLLABORA_WOPI_HOST = config('COLLABORA_WOPI_HOST', default='')
+# INTERNAL: used only by Django to fetch /hosting/discovery. Plain HTTP
+# over the docker network is correct here — the browser never sees it.
+COLLABORA_SERVER_URL = config('COLLABORA_SERVER_URL', default='http://collabora:9980')
 
-# Path to the Collabora editor entry point. Default works for the standard
-# collabora/code Docker image. Override only if your Collabora deployment
-# uses a non-standard entry path.
-COLLABORA_EDITOR_PATH = config('COLLABORA_EDITOR_PATH', default='/browser/dist/cool.html')
+# PUBLIC: origin the browser loads the editor iframe from. With Collabora
+# mounted at root paths behind nginx (/browser/, /cool/) this is simply
+# the site itself.
+COLLABORA_PUBLIC_URL = config('COLLABORA_PUBLIC_URL', default=SITE_URL)
+
+# INTERNAL: base URL Collabora uses to call the WOPI endpoints back.
+# Must match the Collabora container's aliasgroup1 exactly, and its host
+# ('web') must be present in ALLOWED_HOSTS.
+COLLABORA_WOPI_HOST = config('COLLABORA_WOPI_HOST', default='http://web:8000')
 
 # WOPI token lifetime in seconds. 10 hours is generous enough for long
 # editing stints; tokens are narrowly scoped (one file, one user, one
@@ -348,6 +351,11 @@ COLLABORA_TOKEN_TTL_SECONDS = config('COLLABORA_TOKEN_TTL_SECONDS', default=3600
 # everyone out of the rest of the site.
 # Generate with:  python -c "import secrets; print(secrets.token_urlsafe(48))"
 COLLABORA_JWT_SECRET = config('COLLABORA_JWT_SECRET', default='')
+
+# NOTE: COLLABORA_EDITOR_PATH was removed — the editor entry path is now
+# resolved at runtime from /hosting/discovery (it contains a version hash
+# that changes on every Collabora image upgrade, so it must never be
+# hardcoded).
 
 # =============================================================
 # REST FRAMEWORK

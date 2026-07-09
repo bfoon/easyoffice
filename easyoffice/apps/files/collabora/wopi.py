@@ -21,15 +21,23 @@ Security notes:
     token re-use across files.
   - PutFile saves a FileHistory(VERSIONED) entry for every save-back,
     and updates SharedFile.file_hash.
+
+IMPORTANT — request host caveat: these requests arrive from the Collabora
+container over the docker network with Host: web:8000. Therefore:
+  - 'web' MUST be in Django's ALLOWED_HOSTS.
+  - Never derive browser-facing URLs (PostMessageOrigin, breadcrumbs)
+    from request.build_absolute_uri() here — it would produce
+    http://web:8000, which the browser cannot use and which breaks
+    postMessage origin checks. Use settings.SITE_URL instead.
 """
 import hashlib
 import logging
+from django.conf import settings
 from django.core import signing
 from django.http import HttpResponse, JsonResponse, HttpResponseForbidden, Http404
 from django.views import View
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
-from django.shortcuts import get_object_or_404
 from django.core.files.base import ContentFile
 from django.utils import timezone
 
@@ -44,6 +52,15 @@ logger = logging.getLogger(__name__)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _site_url():
+    """
+    The PUBLIC site origin, for URLs that end up in the browser
+    (PostMessageOrigin, breadcrumb links). Never derive this from the
+    WOPI request — see module docstring.
+    """
+    return (getattr(settings, 'SITE_URL', '') or 'https://easyoffice.gm').rstrip('/')
+
 
 def _authenticate(request, file_id):
     """
@@ -68,17 +85,20 @@ def _authenticate(request, file_id):
         )
         return None
 
+    # Narrow exception handling: a bare `Exception` catch here would
+    # silently convert real bugs (DB outages, import errors) into 401s,
+    # which are miserable to debug from the Collabora side.
     try:
         user = User.objects.get(pk=payload['uid'])   # pk accepts str/int/uuid
         file = SharedFile.objects.get(pk=payload['fid'])
-    except (User.DoesNotExist, SharedFile.DoesNotExist, Exception):
+    except (User.DoesNotExist, SharedFile.DoesNotExist, KeyError, ValueError):
         return None
 
     session = None
     if payload.get('sid'):
         try:
             session = CollaboraSession.objects.get(pk=payload['sid'])
-        except CollaboraSession.DoesNotExist:
+        except (CollaboraSession.DoesNotExist, ValueError):
             pass
 
     return user, file, payload.get('perm', 'view'), session
@@ -123,6 +143,8 @@ class CheckFileInfoView(View):
             except Exception:
                 size = 0
 
+        site = _site_url()
+
         # Build the JSON per WOPI spec.
         info = {
             # Required
@@ -144,13 +166,14 @@ class CheckFileInfoView(View):
             # Hash so Collabora can detect external changes
             'SHA256':           file.file_hash or '',
 
-            # Post-message origin so Collabora's JS can postMessage back to us
-            'PostMessageOrigin': request.build_absolute_uri('/')[:-1],
+            # MUST be the browser-facing origin of the page that embeds the
+            # iframe, NOT this request's host (which is http://web:8000).
+            'PostMessageOrigin': site,
 
             # Branding — optional but looks nicer
-            'BreadcrumbBrandName':    'EasyOffice',
-            'BreadcrumbBrandUrl':     request.build_absolute_uri('/files/'),
-            'BreadcrumbDocName':      file.name,
+            'BreadcrumbBrandName': 'EasyOffice',
+            'BreadcrumbBrandUrl':  f'{site}/files/',
+            'BreadcrumbDocName':   file.name,
         }
         return JsonResponse(info)
 
@@ -213,10 +236,8 @@ class FileContentsView(View):
 
         sha = hashlib.sha256(data).hexdigest()
 
-        # Keep the original filename on disk — Django's storage will collision-handle.
-        from django.core.files.storage import default_storage  # noqa: F401
-
-        # Write: replace the file contents.
+        # Write: replace the file contents. Django's storage backend
+        # collision-handles the filename on disk.
         file.file.save(file.name, ContentFile(data), save=False)
         file.file_size = len(data)
         file.file_hash = sha

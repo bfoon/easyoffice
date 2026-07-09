@@ -11,8 +11,9 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-easyoffice_secret}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # Loopback-only: reachable for host-side psql, invisible to the internet.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-easyoffice}"]
       interval: 10s
@@ -24,7 +25,7 @@ services:
     container_name: easyoffice_redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -39,21 +40,30 @@ services:
       dockerfile: Dockerfile
     container_name: easyoffice_web
     restart: unless-stopped
+    # ASGI, not WSGI — Channels WebSockets (/ws/...) do not work under
+    # plain gunicorn sync workers. Requires `uvicorn` in requirements.txt.
     command: >
       sh -c "python manage.py makemigrations core organization staff tasks projects messaging files finance hr it_support dashboard reports &&
              python manage.py migrate &&
              python manage.py collectstatic --noinput &&
              python manage.py create_default_data &&
-             gunicorn easyoffice.wsgi:application --bind 0.0.0.0:8000 --workers 4 --threads 2 --timeout 120"
+             gunicorn easyoffice.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4 --timeout 120"
     environment:
+      # Internal URL Django uses to fetch /hosting/discovery:
       - COLLABORA_SERVER_URL=http://collabora:9980
+      # Public URL the BROWSER loads the editor from (via nginx):
+      - COLLABORA_PUBLIC_URL=https://easyoffice.gm
+      # WOPISrc host — Collabora calls this back over the docker network:
       - COLLABORA_WOPI_HOST=http://web:8000
+      # Used for PostMessageOrigin / breadcrumb links in WOPI responses:
+      - SITE_URL=https://easyoffice.gm
     volumes:
       - .:/app
       - media_data:/app/media
       - static_data:/app/staticfiles
-    ports:
-      - "8000:8000"
+    # No published port — nginx reaches web:8000 on the compose network.
+    expose:
+      - "8000"
     env_file:
       - .env
     depends_on:
@@ -103,25 +113,34 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+      - /etc/letsencrypt:/etc/letsencrypt:ro
       - media_data:/app/media
       - static_data:/app/staticfiles
     depends_on:
       - web
+      - collabora
 
   collabora:
     image: collabora/code:latest
     container_name: easyoffice_collabora
     restart: unless-stopped
-    ports:
-      - "9980:9980"
+    # No published port — nginx proxies /browser/, /cool/, /hosting/ to it.
+    # Publishing 9980 would expose the admin console to the internet.
+    expose:
+      - "9980"
     environment:
-      # Allow WOPI requests from the Django web container.
-      # In production replace with your actual domain.
+      # Must match the WOPISrc host Django embeds (internal callback):
       - aliasgroup1=http://web:8000
       - DONT_GEN_SSL_CERT=YES
-      - extra_params=--o:ssl.enable=false --o:ssl.termination=false
+      # ssl.termination=true    → nginx terminates TLS in front of us
+      # server_name             → discovery returns easyoffice.gm URLs
+      # net.frame_ancestors     → REQUIRED: the WOPI host (web:8000) differs
+      #                           from the embedding page (easyoffice.gm), so
+      #                           without this the iframe is blocked by CSP.
+      - extra_params=--o:ssl.enable=false --o:ssl.termination=true --o:server_name=easyoffice.gm --o:net.frame_ancestors=easyoffice.gm
       - username=admin
       - password=${COLLABORA_ADMIN_PASSWORD:-changeme}
     cap_add:

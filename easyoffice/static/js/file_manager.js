@@ -312,6 +312,10 @@
   document.addEventListener('submit', function (e) {
     var form = e.target;
     if (!form || form.tagName !== 'FORM') return;
+    // Grid/list delete forms carry .js-fm-delete and are owned by the
+    // confirm-first flow in file_manager.html — never intercept them
+    // here, or the file is deleted before the confirmation dialog shows.
+    if (form.classList && form.classList.contains('js-fm-delete')) return;
     var action = form.action || '';
     for (var i = 0; i < _interceptors.length; i++) {
       if (_interceptors[i].pattern.test(action)) {
@@ -347,15 +351,24 @@
   // ── Delete file ─────────────────────────────────────────────────────────────
   intercept(/\/files\/[0-9a-f-]+\/delete\/?/, function (form) {
     var m = form.action.match(/\/files\/([0-9a-f-]+)\/delete/);
-    post(form.action, new FormData(),
-      function (d) {
-        toast(d.message || 'File deleted.', 'success');
-        if (m) removeFileCard(m[1]);
-        closeModal('deleteFileModal');
-        closeModal('deleteModal');
-      },
-      function (err) { toast(err, 'error'); }
-    );
+    var name = form.getAttribute('data-name') || form.getAttribute('data-file-name') || 'this file';
+    var proceed = function () {
+      post(form.action, new FormData(),
+        function (d) {
+          toast(d.message || 'File deleted.', 'success');
+          if (m) removeFileCard(m[1]);
+          closeModal('deleteFileModal');
+          closeModal('deleteModal');
+        },
+        function (err) { toast(err, 'error'); }
+      );
+    };
+    // ALWAYS confirm before deleting.
+    if (typeof window.fmConfirmDelete === 'function') {
+      window.fmConfirmDelete(name, 'file').then(function (ok) { if (ok) proceed(); });
+    } else if (window.confirm('Delete \u201C' + name + '\u201D? This cannot be undone.')) {
+      proceed();
+    }
   });
 
   // ── Share file ──────────────────────────────────────────────────────────────
@@ -394,15 +407,24 @@
   // ── Delete folder ───────────────────────────────────────────────────────────
   intercept(/\/files\/folder\/[0-9a-f-]+\/delete\/?/, function (form) {
     var m = form.action.match(/\/files\/folder\/([0-9a-f-]+)\/delete/);
-    post(form.action, new FormData(),
-      function (d) {
-        toast(d.message || 'Folder deleted.', 'success');
-        if (m) removeFolderCard(m[1]);
-        closeModal('deleteFolderModal');
-        closeModal('deleteModal');
-      },
-      function (err) { toast(err, 'error'); }
-    );
+    var name = form.getAttribute('data-name') || 'this folder';
+    var proceed = function () {
+      post(form.action, new FormData(),
+        function (d) {
+          toast(d.message || 'Folder deleted.', 'success');
+          if (m) removeFolderCard(m[1]);
+          closeModal('deleteFolderModal');
+          closeModal('deleteModal');
+        },
+        function (err) { toast(err, 'error'); }
+      );
+    };
+    // ALWAYS confirm before deleting.
+    if (typeof window.fmConfirmDelete === 'function') {
+      window.fmConfirmDelete(name, 'folder').then(function (ok) { if (ok) proceed(); });
+    } else if (window.confirm('Delete \u201C' + name + '\u201D? Files inside will be moved to the root folder.')) {
+      proceed();
+    }
   });
 
   // ── Share folder ────────────────────────────────────────────────────────────

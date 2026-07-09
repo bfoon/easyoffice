@@ -9516,6 +9516,12 @@ button.fm-file-card:focus-visible {
           const cur = document.getElementById(id);
           if (fresh && cur) cur.innerHTML = fresh.innerHTML;
         });
+        // Re-run the same init hooks file_manager.js uses after a partial
+        // refresh, so drag & drop and list scrolling keep working on the
+        // freshly swapped-in markup.
+        if (typeof window.initFileGrid === 'function') window.initFileGrid();
+        if (typeof window.runBulkCheck === 'function') window.runBulkCheck();
+        if (typeof window.fmInitListScroll === 'function') window.fmInitListScroll();
         document.dispatchEvent(new CustomEvent('fm:refreshed'));
       })
       .catch(() => { /* network hiccup — leave current UI as-is */ })
@@ -9523,20 +9529,28 @@ button.fm-file-card:focus-visible {
   }
   window.fmSoftRefresh = fmSoftRefresh;
 
-  /* ── DELETE: confirm dialog + instant removal ──────────────────── */
-  document.addEventListener('submit', function (e) {
-    const form = e.target.closest('form.js-fm-delete');
-    if (!form) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
+  /* ── DELETE: confirm dialog FIRST, then instant removal ───────────
+     Interception happens at the CLICK level in capture phase, not just
+     on submit: legacy code in file_manager.js binds its own click
+     handler to the delete button and removes the file immediately —
+     document-level capture fires before any listener on the button
+     itself, so stopping the event here guarantees NOTHING runs until
+     the user has confirmed in the dialog. */
+  let _confirmOpen = false;
+
+  function handleDelete(form) {
+    if (_confirmOpen || !form || form.dataset.fmxBusy === '1') return;
+    _confirmOpen = true;
 
     const kind = form.dataset.kind || 'file';
     const name = form.dataset.name || '';
     const id   = form.dataset.itemId || form.dataset.fileId || '';
 
     fmConfirmDelete(name, kind).then(ok => {
-      if (!ok) return;
-      // Optimistic: remove from the UI immediately.
+      _confirmOpen = false;
+      if (!ok) return;                    // Cancel: nothing is deleted.
+      form.dataset.fmxBusy = '1';
+      // Confirmed: NOW remove from the UI and post in the background.
       removeItemEverywhere(kind, id);
       fmToast((kind === 'folder' ? 'Folder' : 'File') + ' \u201C' + name + '\u201D deleted');
       postForm(form)
@@ -9546,9 +9560,31 @@ button.fm-file-card:focus-visible {
         .catch(err => {
           fmToast(err.message || 'Delete failed — restoring.', true);
           fmSoftRefresh();   // bring the item back from the server truth
-        });
+        })
+        .finally(() => { delete form.dataset.fmxBusy; });
     });
-  }, true);   // capture: runs before any legacy handlers
+  }
+
+  // 1) Click on the trash button — capture phase beats the legacy
+  //    click handler in file_manager.js, so the old instant delete
+  //    can never fire before (or without) the confirmation dialog.
+  document.addEventListener('click', function (e) {
+    const btn = e.target.closest('form.js-fm-delete button, form.js-fm-delete a');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    e.stopPropagation();
+    handleDelete(btn.closest('form.js-fm-delete'));
+  }, true);
+
+  // 2) Submit (e.g. Enter key inside the form) — same protection.
+  document.addEventListener('submit', function (e) {
+    const form = e.target.closest('form.js-fm-delete');
+    if (!form) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    handleDelete(form);
+  }, true);
 
   /* ── ASYNC ACTIONS (e.g. Convert to PDF): spinner + soft refresh ── */
   document.addEventListener('submit', function (e) {

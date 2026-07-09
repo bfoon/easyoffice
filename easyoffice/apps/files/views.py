@@ -1964,6 +1964,29 @@ def normalize_initials(value, signer_name=''):
     return 'EO'
 
 
+def _strip_white_background(img, threshold=235):
+    """
+    Make white / near-white pixels of a signature image fully transparent.
+
+    Drawn or uploaded signatures (especially scans and JPEGs) usually sit on
+    a solid white canvas. Burned into the PDF as-is, that white rectangle
+    covers any document text behind the field. Pixels whose R, G and B are
+    all >= threshold become transparent; everything else (the ink) is kept.
+    Images that already carry transparency are left untouched apart from the
+    white-pixel knockout, so partially transparent PNGs still work.
+    """
+    img = img.convert('RGBA')
+    pixels = img.getdata()
+    out = []
+    for r, g, b, a in pixels:
+        if r >= threshold and g >= threshold and b >= threshold:
+            out.append((r, g, b, 0))
+        else:
+            out.append((r, g, b, a))
+    img.putdata(out)
+    return img
+
+
 def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, document):
     """
     EasyOffice DocuSign-style signature/initial badge.
@@ -1993,31 +2016,21 @@ def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, doc
 
     is_initial = field_type == 'initials'
 
-    # Main field card
-    c.setFillColorRGB(*EO_BG)
+    # TRANSPARENT BACKGROUND:
+    # The field card used to be drawn as an opaque light-blue rounded rect
+    # with an opaque white "content area" on top — both covered any document
+    # text sitting behind the field. The card is now outline-only (fill=0)
+    # and the white content rect is gone, so the underlying text stays visible.
     c.setStrokeColorRGB(*EO_BLUE)
     c.setLineWidth(1.2)
-    c.roundRect(fx, fy, fw, fh, radius=7, stroke=1, fill=1)
+    c.roundRect(fx, fy, fw, fh, radius=7, stroke=1, fill=0)
 
-    # White content area for stronger contrast
-    inner_pad = max(3, min(fw, fh) * 0.05)
-    content_x = fx + inner_pad
-    content_y = fy + inner_pad
-    content_w = fw - (inner_pad * 2)
-    content_h = fh - (inner_pad * 2)
-
-    c.setFillColorRGB(1, 1, 1)
-    c.roundRect(content_x, content_y, content_w, content_h, radius=5, stroke=0, fill=1)
-
-    # Label tab sitting on top-left
+    # Label tab sitting on top-left (no white backing rect — transparent)
     label = 'EasyOffice Signed by:' if not is_initial else 'EO Initials'
     label_w = min(fw * 0.72, max(54, len(label) * 4.1))
     label_h = max(8, min(13, fh * 0.20))
     label_x = fx + 6
     label_y = fy + fh - (label_h * 0.52)
-
-    c.setFillColorRGB(1, 1, 1)
-    c.rect(label_x - 2, label_y - 1, label_w + 4, label_h + 2, stroke=0, fill=1)
 
     c.setFont('Helvetica-Bold', max(5.5, min(7.5, label_h * 0.72)))
     c.setFillColorRGB(*EO_BLUE_DARK)
@@ -2051,7 +2064,8 @@ def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, doc
         try:
             _, b64 = value.split(',', 1)
             raw = base64.b64decode(b64)
-            img = Image.open(BytesIO(raw)).convert('RGBA')
+            # Strip the white canvas so only the ink is stamped on the PDF.
+            img = _strip_white_background(Image.open(BytesIO(raw)))
 
             img_buf = BytesIO()
             img.save(img_buf, format='PNG')
@@ -2150,15 +2164,13 @@ def _draw_easyoffice_text_box(c, field, value, fx, fy, fw, fh):
     is_date = field.field_type == 'date'
     label = 'EO Date' if is_date else 'EO Text'
 
-    c.setFillColorRGB(*EO_BG)
+    # TRANSPARENT BACKGROUND: outline-only badge (fill=0) and no white
+    # rect behind the label, so document text behind the field stays visible.
     c.setStrokeColorRGB(*EO_BLUE)
     c.setLineWidth(0.9)
-    c.roundRect(fx, fy, fw, fh, radius=5, stroke=1, fill=1)
+    c.roundRect(fx, fy, fw, fh, radius=5, stroke=1, fill=0)
 
     label_h = max(8, min(13, fh * 0.25))
-    c.setFillColorRGB(1, 1, 1)
-    c.rect(fx + 6, fy + fh - label_h * 0.55, max(38, len(label) * 4.5), label_h + 2,
-           stroke=0, fill=1)
 
     c.setFont('Helvetica-Bold', max(5.5, min(7.5, label_h * 0.72)))
     c.setFillColorRGB(*EO_BLUE)

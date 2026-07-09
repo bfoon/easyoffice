@@ -2711,7 +2711,7 @@ button.fm-file-card:focus-visible {
               {% endif %}
               {% if folder.user_permission == 'full' %}
               <form method="post" action="{% url 'folder_delete' folder.id %}" style="display:inline"
-                    onsubmit="return confirm('Delete folder {{ folder.name|escapejs }}? Files inside will be moved to root.')">
+                    class="js-fm-delete" data-kind="folder" data-item-id="{{ folder.id }}" data-name="{{ folder.name|escapejs }}">
                 {% csrf_token %}
                 <button class="fm-action-btn danger" type="submit" title="Delete folder">
                   <i class="bi bi-trash"></i>
@@ -2803,7 +2803,7 @@ button.fm-file-card:focus-visible {
                 <i class="bi bi-clock-history"></i>
               </a>
               {% if file.is_convertible %}
-              <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="display:inline">
+              <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="display:inline" class="js-fm-async" data-busy="Converting…" data-success="Converted to PDF">
                 {% csrf_token %}
                 <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
                 <button class="fm-action-btn" type="submit" title="Convert to PDF" style="color:#ef4444">
@@ -2833,7 +2833,7 @@ button.fm-file-card:focus-visible {
               {# ── full only: delete ── #}
               <form method="post"
                   action="{% url 'file_delete' file.pk %}"
-                  class="js-file-delete-form"
+                  class="js-fm-delete" data-kind="file" data-item-id="{{ file.id }}" data-name="{{ file.name|escapejs }}"
                   data-file-id="{{ file.id }}"
                   data-file-name="{{ file.name }}"
                   style="display:inline">
@@ -2960,7 +2960,7 @@ button.fm-file-card:focus-visible {
                   {% endif %}
                   {% if folder.user_permission == 'full' %}
                   <form method="post" action="{% url 'folder_delete' folder.id %}" style="display:inline"
-                        onsubmit="return confirm('Delete folder?')">
+                        class="js-fm-delete" data-kind="folder" data-item-id="{{ folder.id }}" data-name="{{ folder.name|escapejs }}">
                     {% csrf_token %}
                     <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" type="submit" title="Delete"
                             style="color:var(--eo-danger);border-color:var(--eo-danger)">
@@ -3066,7 +3066,7 @@ button.fm-file-card:focus-visible {
                       <i class="bi bi-clock-history"></i>
                     </a>
                     {% if file.is_convertible %}
-                    <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="display:inline">
+                    <form method="post" action="{% url 'file_convert_pdf' file.pk %}" style="display:inline" class="js-fm-async" data-busy="Converting…" data-success="Converted to PDF">
                       {% csrf_token %}
                       <input type="hidden" name="next" value="{{ request.get_full_path }}"/>
                       <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" type="submit"
@@ -3093,7 +3093,7 @@ button.fm-file-card:focus-visible {
                     {% if file.user_permission == 'full' %}
                     {# ── full only: delete ── #}
                     <form method="post" action="{% url 'file_delete' file.pk %}" style="display:inline"
-                          onsubmit="return confirm('Delete {{ file.name|escapejs }}?')">
+                          class="js-fm-delete" data-kind="file" data-item-id="{{ file.id }}" data-name="{{ file.name|escapejs }}">
                       {% csrf_token %}
                       <button class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" type="submit"
                               style="color:var(--eo-danger);border-color:var(--eo-danger)" title="Delete">
@@ -9273,6 +9273,254 @@ button.fm-file-card:focus-visible {
       mo.observe(_esShareModal, { attributes: true, attributeFilter: ['class'] });
     }
   }
+
+})();
+</script>
+<!-- ══════════════════════════════════════════════════════════════════
+     INSTANT ACTIONS + DELETE CONFIRMATION
+     Every file-manager action gives immediate UI feedback instead of a
+     full page reload; deleting always asks for confirmation first.
+     ══════════════════════════════════════════════════════════════════ -->
+<style>
+  .fmx-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(12px);z-index:99999;
+    background:#111827;color:#fff;padding:10px 18px;border-radius:12px;font-size:.85rem;font-weight:600;
+    box-shadow:0 12px 32px rgba(0,0,0,.28);opacity:0;transition:opacity .18s,transform .18s;pointer-events:none;
+    display:flex;align-items:center;gap:8px;max-width:min(92vw,480px)}
+  .fmx-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .fmx-toast.error{background:#b91c1c}
+  .fmx-confirm-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(2px);
+    z-index:99998;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .15s}
+  .fmx-confirm-backdrop.show{opacity:1}
+  .fmx-confirm{background:#fff;border-radius:16px;box-shadow:0 24px 64px rgba(0,0,0,.28);width:min(92vw,400px);
+    padding:22px;transform:scale(.96);transition:transform .15s}
+  .fmx-confirm-backdrop.show .fmx-confirm{transform:scale(1)}
+  .fmx-confirm-icon{width:44px;height:44px;border-radius:12px;background:#fee2e2;color:#dc2626;display:grid;
+    place-items:center;font-size:1.3rem;margin-bottom:12px}
+  .fmx-confirm-title{font-size:1rem;font-weight:800;color:#111827;margin:0 0 6px}
+  .fmx-confirm-body{font-size:.85rem;color:#4b5563;line-height:1.5;margin:0 0 18px;word-break:break-word}
+  .fmx-confirm-actions{display:flex;gap:10px;justify-content:flex-end}
+  .fmx-btn{border:0;border-radius:10px;padding:9px 16px;font-size:.85rem;font-weight:700;cursor:pointer}
+  .fmx-btn-cancel{background:#f3f4f6;color:#374151}
+  .fmx-btn-cancel:hover{background:#e5e7eb}
+  .fmx-btn-danger{background:#dc2626;color:#fff}
+  .fmx-btn-danger:hover{background:#b91c1c}
+  .fmx-removing{transition:opacity .22s,transform .22s;opacity:0!important;transform:scale(.92)!important;pointer-events:none}
+  tr.fmx-removing{transform:none!important}
+  .fmx-busy i{animation:fmxspin .8s linear infinite}
+  @keyframes fmxspin{to{transform:rotate(360deg)}}
+</style>
+<script>
+(function () {
+  'use strict';
+
+  /* ── Toast ─────────────────────────────────────────────────────── */
+  let _toastEl = null, _toastTimer = null;
+  function fmToast(msg, isError) {
+    if (!_toastEl) {
+      _toastEl = document.createElement('div');
+      _toastEl.className = 'fmx-toast';
+      document.body.appendChild(_toastEl);
+    }
+    clearTimeout(_toastTimer);
+    _toastEl.classList.toggle('error', !!isError);
+    _toastEl.innerHTML = (isError ? '<i class="bi bi-exclamation-triangle-fill"></i>'
+                                  : '<i class="bi bi-check-circle-fill"></i>') + ' ';
+    _toastEl.appendChild(document.createTextNode(msg));
+    _toastEl.classList.add('show');
+    _toastTimer = setTimeout(() => _toastEl.classList.remove('show'), isError ? 4200 : 2600);
+  }
+  window.fmToast = fmToast;
+
+  /* ── Delete confirmation dialog ────────────────────────────────── */
+  function fmConfirmDelete(name, kind) {
+    return new Promise(resolve => {
+      const backdrop = document.createElement('div');
+      backdrop.className = 'fmx-confirm-backdrop';
+      const extra = kind === 'folder'
+        ? ' Files inside will be moved to the root folder.'
+        : ' This cannot be undone.';
+      backdrop.innerHTML =
+        '<div class="fmx-confirm" role="alertdialog" aria-modal="true">' +
+          '<div class="fmx-confirm-icon"><i class="bi bi-trash"></i></div>' +
+          '<h3 class="fmx-confirm-title">Delete ' + (kind === 'folder' ? 'folder' : 'file') + '?</h3>' +
+          '<p class="fmx-confirm-body">Are you sure you want to delete <strong></strong>?' + extra + '</p>' +
+          '<div class="fmx-confirm-actions">' +
+            '<button type="button" class="fmx-btn fmx-btn-cancel">Cancel</button>' +
+            '<button type="button" class="fmx-btn fmx-btn-danger"><i class="bi bi-trash"></i> Delete</button>' +
+          '</div>' +
+        '</div>';
+      backdrop.querySelector('strong').textContent = '\u201C' + (name || 'this item') + '\u201D';
+      document.body.appendChild(backdrop);
+      requestAnimationFrame(() => backdrop.classList.add('show'));
+
+      function close(result) {
+        backdrop.classList.remove('show');
+        setTimeout(() => backdrop.remove(), 160);
+        document.removeEventListener('keydown', onKey);
+        resolve(result);
+      }
+      function onKey(e) {
+        if (e.key === 'Escape') close(false);
+        if (e.key === 'Enter')  close(true);
+      }
+      backdrop.addEventListener('click', e => { if (e.target === backdrop) close(false); });
+      backdrop.querySelector('.fmx-btn-cancel').addEventListener('click', () => close(false));
+      backdrop.querySelector('.fmx-btn-danger').addEventListener('click', () => close(true));
+      document.addEventListener('keydown', onKey);
+      backdrop.querySelector('.fmx-btn-danger').focus();
+    });
+  }
+  window.fmConfirmDelete = fmConfirmDelete;
+
+  /* ── Helpers ───────────────────────────────────────────────────── */
+  function csrfOf(form) {
+    const el = form.querySelector('input[name=csrfmiddlewaretoken]');
+    return el ? el.value : '';
+  }
+
+  function postForm(form) {
+    return fetch(form.action, {
+      method: 'POST',
+      body: new FormData(form),
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'same-origin',
+      redirect: 'follow',
+    });
+  }
+
+  /* Remove an item from BOTH grid and list views instantly. */
+  function removeItemEverywhere(kind, id) {
+    let nodes = [];
+    if (kind === 'file') {
+      nodes = document.querySelectorAll(
+        '.fm-file-card-wrap[data-file-id="' + id + '"], tr[data-file-id="' + id + '"]'
+      );
+    } else {
+      nodes = document.querySelectorAll(
+        '[data-item-type="folder"][data-item-id="' + id + '"], tr[data-folder-id="' + id + '"]'
+      );
+    }
+    nodes.forEach(n => {
+      n.classList.add('fmx-removing');
+      setTimeout(() => n.remove(), 230);
+    });
+    return nodes.length;
+  }
+
+  /* Soft refresh: re-fetch the page and swap the grid + list content
+     in place — no full reload, scroll position preserved. */
+  let _refreshing = false;
+  function fmSoftRefresh() {
+    if (_refreshing) return Promise.resolve();
+    _refreshing = true;
+    return fetch(window.location.href, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'same-origin',
+    })
+      .then(r => r.text())
+      .then(html => {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        ['viewGrid', 'viewList'].forEach(id => {
+          const fresh = doc.getElementById(id);
+          const cur = document.getElementById(id);
+          if (fresh && cur) cur.innerHTML = fresh.innerHTML;
+        });
+        document.dispatchEvent(new CustomEvent('fm:refreshed'));
+      })
+      .catch(() => { /* network hiccup — leave current UI as-is */ })
+      .finally(() => { _refreshing = false; });
+  }
+  window.fmSoftRefresh = fmSoftRefresh;
+
+  /* ── DELETE: confirm dialog + instant removal ──────────────────── */
+  document.addEventListener('submit', function (e) {
+    const form = e.target.closest('form.js-fm-delete');
+    if (!form) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+
+    const kind = form.dataset.kind || 'file';
+    const name = form.dataset.name || '';
+    const id   = form.dataset.itemId || form.dataset.fileId || '';
+
+    fmConfirmDelete(name, kind).then(ok => {
+      if (!ok) return;
+      // Optimistic: remove from the UI immediately.
+      removeItemEverywhere(kind, id);
+      fmToast((kind === 'folder' ? 'Folder' : 'File') + ' \u201C' + name + '\u201D deleted');
+      postForm(form)
+        .then(r => {
+          if (!r.ok) throw new Error('Delete failed (' + r.status + ')');
+        })
+        .catch(err => {
+          fmToast(err.message || 'Delete failed — restoring.', true);
+          fmSoftRefresh();   // bring the item back from the server truth
+        });
+    });
+  }, true);   // capture: runs before any legacy handlers
+
+  /* ── ASYNC ACTIONS (e.g. Convert to PDF): spinner + soft refresh ── */
+  document.addEventListener('submit', function (e) {
+    const form = e.target.closest('form.js-fm-async');
+    if (!form) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+
+    const btn = form.querySelector('button[type=submit], button:not([type])');
+    let oldHtml = '';
+    if (btn) {
+      oldHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.classList.add('fmx-busy');
+      btn.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
+    }
+    fmToast(form.dataset.busy || 'Working\u2026');
+
+    postForm(form)
+      .then(r => {
+        if (!r.ok) throw new Error('Action failed (' + r.status + ')');
+        return fmSoftRefresh();
+      })
+      .then(() => fmToast(form.dataset.success || 'Done'))
+      .catch(err => fmToast(err.message || 'Action failed.', true))
+      .finally(() => {
+        if (btn) {
+          btn.disabled = false;
+          btn.classList.remove('fmx-busy');
+          btn.innerHTML = oldHtml;
+        }
+      });
+  }, true);
+
+  /* ── UPLOAD + NEW FOLDER: submit in background, update instantly ──
+     Bubble phase + defaultPrevented check so any richer handler in
+     file_manager.js (e.g. upload progress) keeps priority if present. */
+  document.addEventListener('submit', function (e) {
+    if (e.defaultPrevented) return;
+    const form = e.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    const inUpload = !!form.closest('#uploadModal');
+    const inFolder = !!form.closest('#newFolderModal');
+    if (!inUpload && !inFolder) return;
+    e.preventDefault();
+
+    const btn = form.querySelector('button[type=submit]');
+    if (btn) { btn.disabled = true; }
+    fmToast(inUpload ? 'Uploading\u2026' : 'Creating folder\u2026');
+
+    postForm(form)
+      .then(r => {
+        if (!r.ok) throw new Error((inUpload ? 'Upload' : 'Create folder') + ' failed (' + r.status + ')');
+        if (typeof window.closeModal === 'function') {
+          window.closeModal(inUpload ? 'uploadModal' : 'newFolderModal');
+        }
+        form.reset();
+        return fmSoftRefresh();
+      })
+      .then(() => fmToast(inUpload ? 'Upload complete' : 'Folder created'))
+      .catch(err => fmToast(err.message, true))
+      .finally(() => { if (btn) btn.disabled = false; });
+  });
 
 })();
 </script>

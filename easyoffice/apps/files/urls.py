@@ -48,6 +48,20 @@ urlpatterns = [
         name='signature_request_documents_manage',
     ),
 
+    # ── Draft rework workbench ──────────────────────────────────────────────
+    # Replace primary / add / remove documents, add / remove signers,
+    # rotate / remove pages in place, and send the draft — all draft-only.
+    path(
+        'signatures/<uuid:pk>/rework/',
+        views.SignatureDraftReworkView.as_view(),
+        name='signature_request_rework',
+    ),
+    path(
+        'signatures/<uuid:pk>/rework/files/',
+        views.SignatureDraftFilesView.as_view(),
+        name='signature_request_rework_files',
+    ),
+
     path(
         '<uuid:pk>/convert-for-signing/',
         views.SignatureConvertForSigningView.as_view(),
@@ -103,9 +117,6 @@ urlpatterns = [
     path('note/bulk-status/',                   views.FileNoteBulkStatusView.as_view(),          name='file_note_bulk_status'),
     path('recycle-bin/<int:pk>/delete/',        views.PermanentDeleteTrashFileView.as_view(),   name='delete_trash_file'),
     path('<uuid:pk>/annotations/',              views.FileAnnotationView.as_view(),              name='file_annotations'),
-
-    path('<uuid:pk>/convert-for-signing/', views.SignatureConvertForSigningView.as_view(), name='convert_for_signing'),
-
 
     # ── Live Preview Session ─────────────────────────────────────────────────
     path('<uuid:pk>/live-preview/start/',       views.LivePreviewStartView.as_view(),           name='live_preview_start'),

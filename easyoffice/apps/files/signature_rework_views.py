@@ -271,6 +271,62 @@ class SignatureDraftFilesView(LoginRequiredMixin, View):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Signer autocomplete feed (JSON)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SignatureSignerUserSearchView(LoginRequiredMixin, View):
+    """
+    GET /files/signatures/<pk>/rework/users/?q=<term>
+
+    Searches active system users by name or email for the add-signer
+    autocomplete on the draft rework screen. Picking a result fills both
+    the name and the email; anything not found can still be typed in
+    manually — the add_signer action links a User by email when one
+    exists and stores a plain external signer otherwise.
+    """
+
+    def get(self, request, pk):
+        sig_req = get_object_or_404(SignatureRequest, pk=pk)
+        if sig_req.created_by_id != request.user.id and not request.user.is_superuser:
+            return _json_err('Forbidden', status=403)
+
+        q = (request.GET.get('q') or '').strip()
+        if len(q) < 2:
+            return JsonResponse({'status': 'ok', 'users': []})
+
+        from apps.core.models import User as CoreUser
+        from django.db.models import Q as _Q
+
+        already = set(
+            sig_req.signers.values_list('email', flat=True)
+        )
+        already = {e.lower() for e in already if e}
+
+        users = (
+            CoreUser.objects
+            .filter(is_active=True, status='active')
+            .filter(
+                _Q(first_name__icontains=q)
+                | _Q(last_name__icontains=q)
+                | _Q(email__icontains=q)
+            )
+            .order_by('first_name', 'last_name')[:8]
+        )
+
+        payload = []
+        for u in users:
+            email = (u.email or '').strip()
+            payload.append({
+                'id': str(u.pk),
+                'name': getattr(u, 'full_name', '') or email,
+                'email': email,
+                'already_signer': email.lower() in already,
+            })
+
+        return JsonResponse({'status': 'ok', 'users': payload})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # The rework workbench endpoint
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -193,11 +193,48 @@
   .sd-add-signer{
     display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;
     border-top:1px dashed var(--c-border);
+    position:relative;
   }
   .sd-add-signer input{
     flex:1;min-width:140px;padding:8px 10px;
     border:1px solid var(--c-border);border-radius:var(--c-radius-sm);
     font-size:.82rem;color:var(--c-text);
+  }
+  .sd-add-signer input.linked{border-color:var(--c-success);background:var(--c-success-soft)}
+  .sd-suggest{
+    display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:1055;
+    background:var(--c-surface);border:1px solid var(--c-border);
+    border-radius:var(--c-radius);box-shadow:0 10px 30px rgba(15,23,42,.16);
+    max-height:260px;overflow:auto;padding:4px;
+  }
+  .sd-suggest.open{display:block}
+  .sd-suggest-item{
+    display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+    background:none;border:none;border-radius:var(--c-radius-sm);
+    padding:8px 10px;cursor:pointer;
+  }
+  .sd-suggest-item:hover,.sd-suggest-item.active{background:var(--c-accent-soft)}
+  .sd-suggest-item[disabled]{opacity:.45;cursor:not-allowed}
+  .sd-suggest-avatar{
+    width:28px;height:28px;border-radius:50%;flex-shrink:0;
+    background:var(--c-accent-soft);color:var(--c-accent);
+    border:1px solid #bfdbfe;
+    display:inline-flex;align-items:center;justify-content:center;
+    font-size:.72rem;font-weight:700;
+  }
+  .sd-suggest-body{flex:1;min-width:0}
+  .sd-suggest-name{font-size:.82rem;font-weight:600;color:var(--c-text);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sd-suggest-email{font-size:.72rem;color:var(--c-text-muted);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sd-suggest-tag{
+    font-size:.64rem;font-weight:700;padding:2px 7px;border-radius:999px;flex-shrink:0;
+    background:var(--c-success-soft);color:var(--c-success-strong);border:1px solid #a7f3d0;
+  }
+  .sd-suggest-tag.dup{background:var(--c-surface-2);color:var(--c-text-muted);border-color:var(--c-border)}
+  .sd-suggest-hint{
+    padding:7px 10px;font-size:.7rem;color:var(--c-text-muted);
+    border-top:1px solid var(--c-border);margin-top:2px;
   }
 
   /* ─────────── Document rows ─────────── */
@@ -524,12 +561,22 @@
         </div>
 
         {% if is_creator and sig_req.status == 'draft' %}
-        <div class="sd-add-signer">
-          <input type="text" id="newSignerName" placeholder="Signer name"/>
-          <input type="email" id="newSignerEmail" placeholder="Signer email"/>
+        <div class="sd-add-signer" id="addSignerWrap">
+          <input type="text" id="newSignerName" placeholder="Signer name — type to search staff"
+                 autocomplete="off" oninput="signerTyped(this)" onfocus="signerTyped(this)"
+                 onkeydown="suggestKeys(event)"/>
+          <input type="email" id="newSignerEmail" placeholder="Signer email — type to search staff"
+                 autocomplete="off" oninput="signerTyped(this)" onfocus="signerTyped(this)"
+                 onkeydown="suggestKeys(event)"/>
           <button type="button" class="sd-btn sd-btn-ghost" onclick="addSigner()">
             <i class="bi bi-person-plus"></i> Add Signer
           </button>
+          <div class="sd-suggest" id="signerSuggest"></div>
+        </div>
+        <div style="margin-top:6px;font-size:.72rem;color:var(--c-text-muted)">
+          <i class="bi bi-lightbulb me-1"></i>
+          Start typing a name or email — matching staff appear for one-click fill.
+          External signers: just type the name and email manually.
         </div>
         {% endif %}
       </div>
@@ -974,6 +1021,112 @@
     });
   }
 
+  // ── Signer autocomplete (search system users by name or email) ────────
+  var USERS_URL = "{% url 'signature_request_rework_users' sig_req.pk %}";
+  var suggestTimer = null, suggestItems = [], suggestIdx = -1, suggestSeq = 0;
+
+  function signerTyped(input) {
+    // Manual edit breaks the "linked to a system user" state.
+    document.getElementById('newSignerName').classList.remove('linked');
+    document.getElementById('newSignerEmail').classList.remove('linked');
+
+    var q = input.value.trim();
+    clearTimeout(suggestTimer);
+    if (q.length < 2) { closeSuggest(); return; }
+
+    suggestTimer = setTimeout(function () {
+      var seq = ++suggestSeq;
+      fetch(USERS_URL + '?q=' + encodeURIComponent(q), {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin'
+      })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (seq !== suggestSeq) return;   // a newer query is in flight
+        renderSuggest((d && d.users) || []);
+      })
+      .catch(function () { closeSuggest(); });
+    }, 250);
+  }
+
+  function renderSuggest(users) {
+    var box = document.getElementById('signerSuggest');
+    suggestItems = users;
+    suggestIdx = -1;
+
+    if (!users.length) { closeSuggest(); return; }
+
+    box.innerHTML = users.map(function (u, i) {
+      var initials = (u.name || u.email || '?').split(/\s+/)
+        .map(function (p) { return p.charAt(0); }).join('').slice(0, 2).toUpperCase();
+      var dis = u.already_signer ? ' disabled' : '';
+      var tag = u.already_signer
+        ? '<span class="sd-suggest-tag dup">Already a signer</span>'
+        : '<span class="sd-suggest-tag">Staff</span>';
+      return '<button type="button" class="sd-suggest-item" data-idx="' + i + '"' + dis +
+             ' onmousedown="event.preventDefault(); pickSuggest(' + i + ')">' +
+             '<span class="sd-suggest-avatar">' + escapeHtml(initials) + '</span>' +
+             '<span class="sd-suggest-body">' +
+               '<span class="sd-suggest-name">' + escapeHtml(u.name) + '</span>' +
+               '<span class="sd-suggest-email">' + escapeHtml(u.email) + '</span>' +
+             '</span>' + tag +
+             '</button>';
+    }).join('') +
+    '<div class="sd-suggest-hint">No match? Keep typing — external signers are added exactly as entered.</div>';
+
+    box.classList.add('open');
+  }
+
+  function pickSuggest(i) {
+    var u = suggestItems[i];
+    if (!u || u.already_signer) return;
+    var nameEl = document.getElementById('newSignerName');
+    var emailEl = document.getElementById('newSignerEmail');
+    nameEl.value = u.name;
+    emailEl.value = u.email;
+    nameEl.classList.add('linked');
+    emailEl.classList.add('linked');
+    closeSuggest();
+  }
+
+  function suggestKeys(e) {
+    var box = document.getElementById('signerSuggest');
+    if (!box.classList.contains('open')) return;
+    var btns = box.querySelectorAll('.sd-suggest-item:not([disabled])');
+    if (!btns.length) return;
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      suggestIdx += (e.key === 'ArrowDown' ? 1 : -1);
+      if (suggestIdx < 0) suggestIdx = btns.length - 1;
+      if (suggestIdx >= btns.length) suggestIdx = 0;
+      box.querySelectorAll('.sd-suggest-item').forEach(function (b) { b.classList.remove('active'); });
+      btns[suggestIdx].classList.add('active');
+      btns[suggestIdx].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      if (suggestIdx >= 0 && btns[suggestIdx]) {
+        e.preventDefault();
+        pickSuggest(parseInt(btns[suggestIdx].dataset.idx, 10));
+      }
+    } else if (e.key === 'Escape') {
+      closeSuggest();
+    }
+  }
+
+  function closeSuggest() {
+    var box = document.getElementById('signerSuggest');
+    box.classList.remove('open');
+    box.innerHTML = '';
+    suggestItems = [];
+    suggestIdx = -1;
+  }
+
+  // Click anywhere outside the add-signer area closes the dropdown.
+  document.addEventListener('click', function (e) {
+    var wrap = document.getElementById('addSignerWrap');
+    if (wrap && !wrap.contains(e.target)) closeSuggest();
+  });
+
   // ── Signers: remove / add ─────────────────────────────────────────────
   function removeSigner(signerId, name) {
     if (!confirm('Remove ' + name + ' from the signer list? Their placed fields will be deleted.')) return;
@@ -986,7 +1139,10 @@
     var name = document.getElementById('newSignerName').value.trim();
     var email = document.getElementById('newSignerEmail').value.trim();
     if (!email) { toast('Enter the signer\u2019s email address.', true); return; }
+    closeSuggest();
     reworkAction({ action: 'add_signer', name: name, email: email }, function () {
+      document.getElementById('newSignerName').value = '';
+      document.getElementById('newSignerEmail').value = '';
       setTimeout(function () { window.location.reload(); }, 700);
     });
   }

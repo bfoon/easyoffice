@@ -8750,5 +8750,7 @@ from apps.files.external_share_views import (  # noqa: E402
 from apps.files.signature_rework_views import (  # noqa: E402
     SignatureDraftReworkView,
     SignatureDraftFilesView,
+    SignatureSignerUserSearchView,
 )
+
 

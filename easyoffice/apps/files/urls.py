@@ -61,6 +61,11 @@ urlpatterns = [
         views.SignatureDraftFilesView.as_view(),
         name='signature_request_rework_files',
     ),
+    path(
+        'signatures/<uuid:pk>/rework/users/',
+        views.SignatureSignerUserSearchView.as_view(),
+        name='signature_request_rework_users',
+    ),
 
     path(
         '<uuid:pk>/convert-for-signing/',

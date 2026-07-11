@@ -128,6 +128,99 @@
   font-size:.82rem; font-weight:600; color:var(--eo-text);
 }
 .mn-agenda-upload-trigger:hover { background:var(--eo-bg); }
+
+/* ── Recording & AI panel ───────────────────────────────────────── */
+.rec-panel-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+.rec-controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.rec-mic {
+  width:52px; height:52px; border-radius:50%; border:none; cursor:pointer;
+  background:#ef4444; color:#fff; font-size:1.3rem;
+  display:inline-flex; align-items:center; justify-content:center;
+  box-shadow:0 4px 14px rgba(239,68,68,.35); transition:transform .12s;
+}
+.rec-mic:hover { transform:scale(1.05); }
+.rec-mic.recording { animation:recpulse 1.4s ease-in-out infinite; }
+@keyframes recpulse {
+  0%,100% { box-shadow:0 0 0 0 rgba(239,68,68,.45); }
+  50%     { box-shadow:0 0 0 12px rgba(239,68,68,0); }
+}
+.rec-timer {
+  font-variant-numeric:tabular-nums; font-weight:800; font-size:1.15rem; color:var(--eo-text);
+  min-width:74px;
+}
+.rec-status { font-size:.78rem; color:var(--eo-text-muted); }
+.rec-item {
+  display:flex; flex-direction:column; gap:8px;
+  padding:12px 14px; border:1px solid var(--eo-border); border-radius:10px;
+  background:var(--eo-bg); margin-bottom:10px;
+}
+.rec-item-top { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.rec-item-title { font-size:.87rem; font-weight:700; color:var(--eo-text); flex:1; min-width:140px; }
+.rec-item-meta { font-size:.73rem; color:var(--eo-text-muted); }
+.rec-pill {
+  font-size:.68rem; font-weight:700; padding:3px 9px; border-radius:12px;
+  display:inline-flex; align-items:center; gap:4px; flex-shrink:0;
+}
+.rec-item audio { width:100%; height:36px; }
+.rec-item-actions { display:flex; gap:6px; flex-wrap:wrap; }
+.rec-transcript {
+  display:none; background:var(--eo-surface); border:1px solid var(--eo-border);
+  border-radius:8px; padding:12px 14px; font-size:.84rem; line-height:1.7;
+  color:var(--eo-text); max-height:260px; overflow:auto; white-space:pre-wrap;
+}
+.rec-transcript.open { display:block; }
+.rec-spin { display:inline-block; animation:recspin 1s linear infinite; }
+@keyframes recspin { to { transform:rotate(360deg); } }
+
+/* Quick-insert menu */
+.qi-wrap { position:relative; }
+.qi-menu {
+  display:none; position:absolute; top:calc(100% + 4px); left:0; z-index:30;
+  background:var(--eo-surface); border:1px solid var(--eo-border); border-radius:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.14); min-width:230px; padding:5px;
+}
+.qi-menu.open { display:block; }
+.qi-item {
+  display:flex; align-items:center; gap:9px; width:100%; text-align:left;
+  background:none; border:none; border-radius:7px; padding:8px 10px; cursor:pointer;
+  font-size:.83rem; color:var(--eo-text); font-family:inherit;
+}
+.qi-item:hover { background:var(--eo-bg); }
+.qi-item .bi { color:var(--eo-text-muted); }
+
+/* Autosave chip */
+.mn-autosave { display:inline-flex; align-items:center; gap:6px; font-size:.73rem; color:var(--eo-text-muted); }
+.mn-autosave.saving { color:var(--eo-primary); }
+.mn-autosave.saved  { color:#10b981; }
+.mn-autosave.error  { color:#ef4444; }
+
+/* AI modal */
+.aim-backdrop { display:none; position:fixed; inset:0; z-index:1065; background:rgba(15,23,42,.55);
+  align-items:center; justify-content:center; padding:16px; }
+.aim-backdrop.open { display:flex; }
+.aim-panel { background:var(--eo-surface); border-radius:14px; width:100%; max-width:760px;
+  max-height:90vh; display:flex; flex-direction:column; overflow:hidden;
+  box-shadow:0 24px 64px rgba(0,0,0,.28); }
+.aim-head { display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:16px 22px; border-bottom:1px solid var(--eo-border); }
+.aim-body { overflow:auto; padding:18px 22px; }
+.aim-sec-label { font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--eo-text-muted); margin:14px 0 6px; }
+.aim-preview { border:1px solid var(--eo-border); border-radius:10px; padding:12px 16px;
+  background:var(--eo-bg); font-size:.88rem; line-height:1.7; max-height:260px; overflow:auto; }
+.aim-foot { display:flex; gap:10px; padding:14px 22px; border-top:1px solid var(--eo-border);
+  flex-wrap:wrap; align-items:center; }
+
+/* Toast */
+.mn-toast {
+  position:fixed; bottom:22px; left:50%; transform:translateX(-50%) translateY(20px);
+  z-index:1080; background:#0f172a; color:#fff;
+  padding:10px 18px; border-radius:999px; font-size:.82rem; font-weight:500;
+  opacity:0; pointer-events:none; transition:all .25s; max-width:90vw;
+  box-shadow:0 8px 24px rgba(15,23,42,.35);
+}
+.mn-toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+.mn-toast.err { background:#dc2626; }
 </style>
 
 <!-- Header -->
@@ -203,6 +296,52 @@
   </div>
 </div>
 {% endif %}
+
+{# ────────── RECORDING & AI TRANSCRIPTION (all states) ────────── #}
+<div class="eo-card mb-4" id="recPanel">
+  <div class="rec-panel-head">
+    <h3 class="eo-card-title" style="margin:0">
+      <i class="bi bi-mic-fill me-2" style="color:{{ meeting.type_color }}"></i>Recording &amp; AI Transcription
+    </h3>
+    <span style="font-size:.74rem;color:var(--eo-text-muted)">
+      Record the meeting, transcribe it with AI, then draft the minutes automatically.
+    </span>
+  </div>
+
+  {% if can_edit %}
+  <div class="rec-controls" id="recControls">
+    <button type="button" class="rec-mic" id="recMicBtn" onclick="toggleRecording()" title="Start recording">
+      <i class="bi bi-mic-fill" id="recMicIcon"></i>
+    </button>
+    <div>
+      <div class="rec-timer" id="recTimer">0:00</div>
+      <div class="rec-status" id="recStatusText">Click the microphone to start recording</div>
+    </div>
+    <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" id="recPauseBtn"
+            style="display:none" onclick="pauseRecording()">
+      <i class="bi bi-pause-fill"></i> Pause
+    </button>
+    <div style="flex:1"></div>
+    <label class="eo-btn eo-btn-secondary eo-btn-sm" style="cursor:pointer">
+      <i class="bi bi-upload"></i> Upload Audio
+      <input type="file" id="recUploadInput" accept="audio/*,.webm,.m4a,.mp3,.wav,.ogg,.aac"
+             style="display:none" onchange="uploadAudioFile(this)"/>
+    </label>
+    <button type="button" class="eo-btn eo-btn-primary eo-btn-sm" id="aiDraftAllBtn"
+            style="display:none" onclick="generateAIDraft('')">
+      <i class="bi bi-stars"></i> Generate Minutes with AI
+    </button>
+  </div>
+  <div style="font-size:.72rem;color:var(--eo-text-muted);margin-top:8px" id="recProviderNote"></div>
+  <hr style="border:none;border-top:1px solid var(--eo-border);margin:14px 0"/>
+  {% endif %}
+
+  <div id="recList">
+    <div style="text-align:center;padding:16px;color:var(--eo-text-muted);font-size:.83rem">
+      <i class="bi bi-hourglass-split me-1"></i> Loading recordings…
+    </div>
+  </div>
+</div>
 
 {# ────────── READ-ONLY body (submitted or adopted) ────────── #}
 {% if not can_edit and not request.user.is_superuser %}
@@ -332,7 +471,7 @@
   </div>
 
   {% if meeting.agenda %}
-  <div class="mn-rendered">{{ meeting.agenda|safe }}</div>
+  <div class="mn-rendered" id="agendaSource">{{ meeting.agenda|safe }}</div>
   {% else %}
   <p style="font-size:.86rem;color:var(--eo-text-muted);margin:0">
     No typed agenda — you can attach one as a file below, or
@@ -430,12 +569,32 @@
           <button type="button" class="mn-btn" data-cmd="redo" title="Redo (Ctrl+Y)">
             <i class="bi bi-arrow-clockwise"></i>
           </button>
+          <div class="mn-sep"></div>
+          <div class="qi-wrap">
+            <button type="button" class="mn-btn wide" id="qiToggle" title="Quick insert">
+              <i class="bi bi-lightning-charge-fill me-1" style="color:#f59e0b"></i>Quick Insert <i class="bi bi-chevron-down ms-1" style="font-size:.6rem"></i>
+            </button>
+            <div class="qi-menu" id="qiMenu">
+              <button type="button" class="qi-item" onclick="insertTemplate('standard')">
+                <i class="bi bi-file-earmark-text"></i> Standard minutes template
+              </button>
+              <button type="button" class="qi-item" onclick="insertTemplate('brief')">
+                <i class="bi bi-lightning"></i> Brief notes template
+              </button>
+              <button type="button" class="qi-item" onclick="insertAttendees()">
+                <i class="bi bi-people"></i> Insert attendee list
+              </button>
+              <button type="button" class="qi-item" onclick="insertAgenda()">
+                <i class="bi bi-list-check"></i> Insert agenda as headings
+              </button>
+            </div>
+          </div>
         </div>
 
         <div class="mn-section-label">Meeting Notes</div>
         <div class="mn-doc" id="notesDoc" contenteditable="true"
              data-target="contentInput"
-             data-placeholder="Record what was discussed. Use the toolbar to format. You can paste from Word or Google Docs."></div>
+             data-placeholder="Record what was discussed. Use the toolbar to format, Quick Insert for templates, or record the meeting above and let AI draft the minutes."></div>
         <input type="hidden" name="content" id="contentInput" value="{{ minutes.content }}"/>
 
         <div class="mn-section-label">Decisions Made</div>
@@ -514,11 +673,17 @@
           Submitting locks the minutes for editing and notifies attendees to review. The organiser then formally adopts them.
         </div>
 
-        {% if minutes.updated_at %}
-        <div style="font-size:.74rem;color:var(--eo-text-muted);padding-top:10px;border-top:1px solid var(--eo-border)">
-          Last saved {{ minutes.updated_at|naturaltime }}{% if minutes.author %} by {{ minutes.author.full_name }}{% endif %}
+        <div style="padding-top:10px;border-top:1px solid var(--eo-border);display:flex;flex-direction:column;gap:4px">
+          <span class="mn-autosave" id="autosaveChip">
+            <i class="bi bi-cloud-check"></i>
+            <span id="autosaveText">Autosave is on — drafts save as you type (Ctrl+S to save now)</span>
+          </span>
+          {% if minutes.updated_at %}
+          <span style="font-size:.72rem;color:var(--eo-text-muted)">
+            Last saved {{ minutes.updated_at|naturaltime }}{% if minutes.author %} by {{ minutes.author.full_name }}{% endif %}
+          </span>
+          {% endif %}
         </div>
-        {% endif %}
       </div>
 
       <!-- PDF download -->
@@ -536,8 +701,15 @@
         {% for att in meeting.attendees.all %}
         <div style="display:flex;align-items:center;gap:8px;padding:5px 0;{% if not forloop.last %}border-bottom:1px solid var(--eo-border);{% endif %}">
           <div style="width:24px;height:24px;border-radius:50%;background:{{ meeting.type_color }};color:#fff;font-size:.6rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ att.user.initials }}</div>
-          <span style="font-size:.82rem;color:var(--eo-text);flex:1">{{ att.user.full_name }}</span>
+          <span style="font-size:.82rem;color:var(--eo-text);flex:1" data-attendee-name>{{ att.user.full_name }}</span>
           <span style="font-size:.68rem;color:{{ att.rsvp_color }}">{{ att.get_rsvp_display }}</span>
+        </div>
+        {% endfor %}
+        {% for ext in meeting.external_attendees.all %}
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 0">
+          <div style="width:24px;height:24px;border-radius:50%;background:var(--eo-border);color:var(--eo-text-muted);font-size:.58rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ ext.full_name|slice:":2"|upper }}</div>
+          <span style="font-size:.82rem;color:var(--eo-text);flex:1" data-attendee-name>{{ ext.full_name }}{% if ext.organisation %} <span style="font-size:.7rem;color:var(--eo-text-muted)">({{ ext.organisation }})</span>{% endif %}</span>
+          <span style="font-size:.68rem;color:{{ ext.rsvp_color }}">{{ ext.get_rsvp_display }}</span>
         </div>
         {% endfor %}
       </div>
@@ -633,9 +805,59 @@
   </div>
 </div>
 
+<!-- ── AI DRAFT PREVIEW MODAL ── -->
+<div class="aim-backdrop" id="aiModal" onclick="if(event.target===this) closeAIModal()">
+  <div class="aim-panel">
+    <div class="aim-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:38px;height:38px;border-radius:10px;background:#ede9fe;color:#7c3aed;display:flex;align-items:center;justify-content:center;font-size:1.1rem">
+          <i class="bi bi-stars"></i>
+        </div>
+        <div>
+          <h3 style="font-size:1rem;font-weight:800;color:var(--eo-text);margin:0">AI-Drafted Minutes</h3>
+          <span style="font-size:.74rem;color:var(--eo-text-muted)" id="aiModalSub">Review before inserting — you stay in control.</span>
+        </div>
+      </div>
+      <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="closeAIModal()"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div class="aim-body" id="aiModalBody">
+      <div style="text-align:center;padding:44px 0;color:var(--eo-text-muted)">
+        <i class="bi bi-stars rec-spin" style="font-size:1.6rem;display:block;margin-bottom:10px;color:#7c3aed"></i>
+        Drafting minutes from the transcript… this can take up to a minute.
+      </div>
+    </div>
+    <div class="aim-foot" id="aiModalFoot" style="display:none">
+      <button type="button" class="eo-btn eo-btn-primary" onclick="applyAIDraft('replace')">
+        <i class="bi bi-arrow-repeat"></i> Replace minutes with draft
+      </button>
+      <button type="button" class="eo-btn eo-btn-secondary" onclick="applyAIDraft('append')">
+        <i class="bi bi-plus-circle"></i> Append to existing
+      </button>
+      <span style="font-size:.72rem;color:var(--eo-text-muted)">Action items are added as editable rows — nothing is saved until you save the draft.</span>
+    </div>
+  </div>
+</div>
+
+<div class="mn-toast" id="mnToast"></div>
+<form id="mnCsrf" style="display:none">{% csrf_token %}</form>
+
 <script>
 (function () {
   'use strict';
+
+  // ── Config from server ─────────────────────────────────────────────────
+  window.MN_CAN_EDIT   = {% if can_edit %}true{% else %}false{% endif %};
+  window.MN_REC_URL    = "{% url 'meeting_recordings' meeting.pk %}";
+  window.MN_REC_BASE   = "{% url 'meeting_recording_manage' meeting.pk '00000000-0000-0000-0000-000000000000' %}";
+  window.MN_AI_URL     = "{% url 'meeting_minutes_ai_draft' meeting.pk %}";
+  window.MN_AUTOSAVE   = "{% url 'meeting_minutes_autosave' meeting.pk %}";
+  window.MN_MEETING    = {
+    title: "{{ meeting.title|escapejs }}",
+    date: "{{ meeting.start_datetime|date:'l, N j, Y'|escapejs }}",
+    time: "{{ meeting.start_datetime|date:'H:i'|escapejs }} – {{ meeting.end_datetime|date:'H:i'|escapejs }}",
+    location: "{{ meeting.location|escapejs }}",
+    organizer: "{{ meeting.organizer.full_name|escapejs }}"
+  };
 
   // ── WYSIWYG editor ─────────────────────────────────────────────────────
   // Pair each .mn-doc contenteditable with its hidden <input> via data-target.
@@ -659,10 +881,12 @@
       var hasMedia = !!d.querySelector('img,table,ul,ol,blockquote,h1,h2,h3');
       d.dataset.empty = (!t && !hasMedia) ? 'true' : 'false';
     }
+    doc._refreshEmptyState = function () { refreshEmptyState(doc); };
 
     doc.addEventListener('input', function () {
       hidden.value = doc.innerHTML;
       refreshEmptyState(doc);
+      scheduleAutosave();
     });
 
     // Paste — strip styles/colours/fonts from Word/Google Docs paste.
@@ -682,6 +906,7 @@
       }
       hidden.value = doc.innerHTML;
       refreshEmptyState(doc);
+      scheduleAutosave();
     });
 
     // Keep undo/redo state visible
@@ -726,6 +951,7 @@
     walk(tmp);
     return tmp.innerHTML;
   }
+  window.mnSanitizeHTML = sanitizePastedHTML;
 
   // ── Toolbar wiring ─────────────────────────────────────────────────────
   function focusedDoc() {
@@ -796,6 +1022,17 @@
         fmt.selectedIndex = 0; // reset to "Paragraph"
       });
     }
+
+    // Quick-insert menu toggle
+    var qiToggle = document.getElementById('qiToggle');
+    var qiMenu = document.getElementById('qiMenu');
+    if (qiToggle && qiMenu) {
+      qiToggle.addEventListener('click', function (e) {
+        e.stopPropagation();
+        qiMenu.classList.toggle('open');
+      });
+      document.addEventListener('click', function () { qiMenu.classList.remove('open'); });
+    }
   }
 
   // ── Submit hook ────────────────────────────────────────────────────────
@@ -805,6 +1042,7 @@
       if (hidden) hidden.value = doc.innerHTML;
     });
   }
+  window.mnSyncBeforeSubmit = syncBeforeSubmit;
 
   document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.mn-doc').forEach(initEditor);
@@ -859,6 +1097,10 @@
         }
       });
     }
+
+    // Kick off recordings + autosave wiring
+    loadRecordings();
+    if (window.MN_CAN_EDIT) wireAutosaveHotkey();
   });
 
   function escapeHtml(s) {
@@ -866,6 +1108,7 @@
       return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c];
     });
   }
+  window.mnEscape = escapeHtml;
 
   // ── Action items (kept) ────────────────────────────────────────────────
   var staffOptions = `
@@ -877,7 +1120,7 @@
     {% for val, label in action_statuses %}<option value="{{ val }}">{{ label }}</option>{% endfor %}
   `;
 
-  window.addActionRow = function () {
+  window.addActionRow = function (desc, ownerId, due) {
     var empty = document.getElementById('aiEmpty');
     if (empty) empty.style.display = 'none';
     var div = document.createElement('div');
@@ -889,7 +1132,10 @@
       '<select name="ai_status" class="eo-form-select" style="font-size:.82rem">' + statusOptions + '</select>' +
       '<button type="button" onclick="removeRow(this)" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon" style="color:var(--eo-danger)"><i class="bi bi-trash"></i></button>';
     document.getElementById('aiContainer').appendChild(div);
-    div.querySelector('input').focus();
+    if (desc) div.querySelector('input[name=ai_description]').value = desc;
+    if (ownerId) div.querySelector('select[name=ai_owner]').value = ownerId;
+    if (due) div.querySelector('input[name=ai_due]').value = due;
+    if (!desc) div.querySelector('input').focus();
   };
 
   window.removeRow = function (btn) {
@@ -919,6 +1165,631 @@
     if (el) el.addEventListener('click', function (e) {
       if (e.target === this) this.style.display = 'none';
     });
+  });
+
+  // ── Shared helpers ─────────────────────────────────────────────────────
+  window.mnCsrf = function () {
+    return document.querySelector('#mnCsrf input[name=csrfmiddlewaretoken]').value;
+  };
+
+  var toastTimer = null;
+  window.mnToast = function (msg, isErr) {
+    var el = document.getElementById('mnToast');
+    el.textContent = msg;
+    el.classList.toggle('err', !!isErr);
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.classList.remove('show'); }, 4200);
+  };
+
+  // ── Autosave ───────────────────────────────────────────────────────────
+  var autosaveTimer = null;
+  var autosaveInFlight = false;
+
+  window.scheduleAutosave = function () {
+    if (!window.MN_CAN_EDIT) return;
+    clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(doAutosave, 4000);
+  };
+
+  function setAutosaveState(cls, text) {
+    var chip = document.getElementById('autosaveChip');
+    var txt = document.getElementById('autosaveText');
+    if (!chip || !txt) return;
+    chip.className = 'mn-autosave ' + (cls || '');
+    txt.textContent = text;
+  }
+
+  function doAutosave() {
+    if (!window.MN_CAN_EDIT || autosaveInFlight) return;
+    syncBeforeSubmit();
+    var content = document.getElementById('contentInput');
+    var decisions = document.getElementById('decisionsInput');
+    if (!content || !decisions) return;
+
+    autosaveInFlight = true;
+    setAutosaveState('saving', 'Saving draft…');
+
+    var fd = new FormData();
+    fd.append('content', content.value);
+    fd.append('decisions', decisions.value);
+    fd.append('csrfmiddlewaretoken', window.mnCsrf());
+
+    fetch(window.MN_AUTOSAVE, {
+      method: 'POST', body: fd,
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'same-origin'
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      autosaveInFlight = false;
+      if (d.status === 'ok') {
+        setAutosaveState('saved', 'Draft autosaved at ' + d.saved_at);
+      } else {
+        setAutosaveState('error', d.message || 'Autosave failed — use Save Draft.');
+      }
+    })
+    .catch(function () {
+      autosaveInFlight = false;
+      setAutosaveState('error', 'Autosave failed — check your connection.');
+    });
+  }
+  window.mnAutosaveNow = doAutosave;
+
+  function wireAutosaveHotkey() {
+    document.addEventListener('keydown', function (e) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        doAutosave();
+      }
+    });
+    // Periodic safety-net save every 60s while the tab is open.
+    setInterval(function () {
+      if (document.visibilityState === 'visible') doAutosave();
+    }, 60000);
+  }
+
+  // ── Quick Insert ───────────────────────────────────────────────────────
+  function notesDoc() { return document.getElementById('notesDoc'); }
+
+  function insertHtmlIntoNotes(html, replace) {
+    var doc = notesDoc();
+    if (!doc) return;
+    if (replace || !doc.textContent.trim()) {
+      doc.innerHTML = html;
+    } else {
+      doc.innerHTML += html;
+    }
+    doc.dispatchEvent(new Event('input', { bubbles: true }));
+    if (doc._refreshEmptyState) doc._refreshEmptyState();
+    doc.focus();
+  }
+  window.mnInsertNotes = insertHtmlIntoNotes;
+
+  window.insertTemplate = function (kind) {
+    var m = window.MN_MEETING;
+    var head = '<h2>' + escapeHtml(m.title) + '</h2>' +
+      '<p><b>Date:</b> ' + escapeHtml(m.date) + ' · ' + escapeHtml(m.time) +
+      (m.location ? ' · <b>Venue:</b> ' + escapeHtml(m.location) : '') +
+      '</p><p><b>Chair:</b> ' + escapeHtml(m.organizer) + '</p>';
+    var html;
+    if (kind === 'standard') {
+      html = head +
+        '<h3>1. Opening and Welcome</h3><p></p>' +
+        '<h3>2. Adoption of the Agenda</h3><p></p>' +
+        '<h3>3. Review of Previous Action Items</h3><p></p>' +
+        '<h3>4. Matters Discussed</h3><p></p>' +
+        '<h3>5. Any Other Business</h3><p></p>' +
+        '<h3>6. Closing</h3><p></p>';
+    } else {
+      html = head + '<h3>Discussion</h3><ul><li></li></ul><h3>Next Steps</h3><ul><li></li></ul>';
+    }
+    if (notesDoc() && notesDoc().textContent.trim() &&
+        !confirm('Insert the template at the end of your current notes?')) return;
+    insertHtmlIntoNotes(html, false);
+  };
+
+  window.insertAttendees = function () {
+    var names = [];
+    document.querySelectorAll('[data-attendee-name]').forEach(function (el) {
+      names.push(el.textContent.trim().replace(/\s+/g, ' '));
+    });
+    if (!names.length) { window.mnToast('No attendees found on this meeting.', true); return; }
+    var html = '<h3>Attendance</h3><ul>' +
+      names.map(function (n) { return '<li>' + escapeHtml(n) + '</li>'; }).join('') + '</ul>';
+    insertHtmlIntoNotes(html, false);
+  };
+
+  window.insertAgenda = function () {
+    var src = document.getElementById('agendaSource');
+    if (!src || !src.textContent.trim()) {
+      window.mnToast('This meeting has no typed agenda to insert.', true); return;
+    }
+    var items = [];
+    src.querySelectorAll('li').forEach(function (li) { items.push(li.textContent.trim()); });
+    var html;
+    if (items.length) {
+      html = items.map(function (t, i) {
+        return '<h3>' + (i + 1) + '. ' + escapeHtml(t) + '</h3><p></p>';
+      }).join('');
+    } else {
+      html = '<h3>Agenda</h3><p>' + escapeHtml(src.textContent.trim()) + '</p>';
+    }
+    insertHtmlIntoNotes(html, false);
+  };
+
+})();
+
+/* ═══════════════════ Recording & AI Transcription ═══════════════════ */
+(function () {
+  'use strict';
+
+  var recUrlFor = function (id) {
+    return window.MN_REC_BASE.replace('00000000-0000-0000-0000-000000000000', id);
+  };
+
+  var state = {
+    canContribute: false,
+    transcribeAvailable: false,
+    aiAvailable: false,
+    recordings: [],
+    mediaRecorder: null,
+    chunks: [],
+    startedAt: 0,
+    pausedTotal: 0,
+    pauseStart: 0,
+    timerInt: null,
+    pollInt: null
+  };
+
+  // ── Load & render list ─────────────────────────────────────────────────
+  window.loadRecordings = function () {
+    fetch(window.MN_REC_URL, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'same-origin'
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.status !== 'ok') throw new Error();
+      state.canContribute = !!d.can_contribute;
+      state.transcribeAvailable = !!d.transcribe_available;
+      state.aiAvailable = !!d.ai_available;
+      state.recordings = d.recordings || [];
+      renderRecordings();
+      renderProviderNote();
+      startPollingIfNeeded();
+    })
+    .catch(function () {
+      document.getElementById('recList').innerHTML =
+        '<div style="text-align:center;padding:14px;color:var(--eo-text-muted);font-size:.83rem">Could not load recordings.</div>';
+    });
+  };
+
+  function renderProviderNote() {
+    var note = document.getElementById('recProviderNote');
+    if (!note) return;
+    var bits = [];
+    if (!state.transcribeAvailable) {
+      bits.push('<i class="bi bi-info-circle me-1"></i>AI transcription is not configured yet — recordings still save and play. Ask your administrator to set OPENAI_API_KEY or install faster-whisper.');
+    }
+    if (state.transcribeAvailable && !state.aiAvailable) {
+      bits.push('<i class="bi bi-info-circle me-1"></i>Transcription is ready. Set ANTHROPIC_API_KEY or OPENAI_API_KEY to also enable AI minutes drafting.');
+    }
+    note.innerHTML = bits.join('<br>');
+  }
+
+  function renderRecordings() {
+    var list = document.getElementById('recList');
+    var esc = window.mnEscape;
+
+    // Show the "Generate with AI" button once at least one transcript exists.
+    var anyTranscript = state.recordings.some(function (r) { return r.has_transcript; });
+    var allBtn = document.getElementById('aiDraftAllBtn');
+    if (allBtn) allBtn.style.display = (anyTranscript && state.aiAvailable && window.MN_CAN_EDIT) ? '' : 'none';
+
+    if (!state.recordings.length) {
+      list.innerHTML =
+        '<div style="text-align:center;padding:20px 12px;color:var(--eo-text-muted);font-size:.84rem">' +
+        '<i class="bi bi-mic" style="font-size:1.6rem;display:block;margin-bottom:8px;opacity:.3"></i>' +
+        'No recordings yet.' + (window.MN_CAN_EDIT ? ' Click the microphone to record this meeting, or upload an audio file.' : '') +
+        '</div>';
+      return;
+    }
+
+    list.innerHTML = state.recordings.map(function (r) {
+      var pill = '<span class="rec-pill" style="background:' + r.status_color + '18;color:' + r.status_color + '">' +
+        (r.transcript_status === 'processing' || r.transcript_status === 'pending'
+          ? '<i class="bi bi-arrow-repeat rec-spin"></i>' : '<i class="bi bi-soundwave"></i>') +
+        ' ' + esc(r.transcript_status_display) + '</span>';
+
+      var actions = '';
+      if (window.MN_CAN_EDIT && state.canContribute) {
+        if (r.transcript_status === 'none' || r.transcript_status === 'failed') {
+          actions += '<button type="button" class="eo-btn eo-btn-primary eo-btn-sm" onclick="startTranscription(\'' + r.id + '\')">' +
+                     '<i class="bi bi-soundwave"></i> Transcribe with AI</button>';
+        }
+        if (r.has_transcript && state.aiAvailable) {
+          actions += '<button type="button" class="eo-btn eo-btn-primary eo-btn-sm" onclick="generateAIDraft(\'' + r.id + '\')">' +
+                     '<i class="bi bi-stars"></i> AI Draft Minutes</button>';
+        }
+      }
+      if (r.has_transcript) {
+        actions += '<button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="toggleTranscript(\'' + r.id + '\')">' +
+                   '<i class="bi bi-card-text"></i> Transcript</button>';
+        if (window.MN_CAN_EDIT) {
+          actions += '<button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="insertTranscript(\'' + r.id + '\')">' +
+                     '<i class="bi bi-box-arrow-in-down"></i> Insert into Notes</button>';
+        }
+      }
+      if (window.MN_CAN_EDIT && state.canContribute) {
+        actions += '<button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" style="color:var(--eo-danger)" onclick="deleteRecording(\'' + r.id + '\')">' +
+                   '<i class="bi bi-trash"></i></button>';
+      }
+
+      var err = r.transcript_status === 'failed' && r.transcript_error
+        ? '<div style="font-size:.74rem;color:#ef4444"><i class="bi bi-exclamation-triangle me-1"></i>' + esc(r.transcript_error) + '</div>'
+        : '';
+
+      return '<div class="rec-item" data-rec="' + r.id + '">' +
+        '<div class="rec-item-top">' +
+          '<i class="bi bi-mic-fill" style="color:var(--eo-text-muted)"></i>' +
+          '<span class="rec-item-title">' + esc(r.title) + '</span>' +
+          pill +
+        '</div>' +
+        '<div class="rec-item-meta">' + esc(r.duration) + ' · ' + esc(r.size) +
+          (r.recorded_by ? ' · by ' + esc(r.recorded_by) : '') + ' · ' + esc(r.created) + '</div>' +
+        (r.url ? '<audio controls preload="none" src="' + r.url + '"></audio>' : '') +
+        err +
+        (actions ? '<div class="rec-item-actions">' + actions + '</div>' : '') +
+        '<div class="rec-transcript" id="tr-' + r.id + '">' + esc(r.transcript || '') + '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  function startPollingIfNeeded() {
+    var busy = state.recordings.some(function (r) {
+      return r.transcript_status === 'pending' || r.transcript_status === 'processing';
+    });
+    if (busy && !state.pollInt) {
+      state.pollInt = setInterval(pollBusy, 5000);
+    } else if (!busy && state.pollInt) {
+      clearInterval(state.pollInt);
+      state.pollInt = null;
+    }
+  }
+
+  function pollBusy() {
+    var busy = state.recordings.filter(function (r) {
+      return r.transcript_status === 'pending' || r.transcript_status === 'processing';
+    });
+    if (!busy.length) { startPollingIfNeeded(); return; }
+    busy.forEach(function (r) {
+      fetch(recUrlFor(r.id), {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'same-origin'
+      })
+      .then(function (resp) { return resp.json(); })
+      .then(function (d) {
+        if (d.status !== 'ok') return;
+        var idx = state.recordings.findIndex(function (x) { return x.id === r.id; });
+        if (idx > -1) state.recordings[idx] = d.recording;
+        var done = d.recording.transcript_status === 'completed';
+        var failed = d.recording.transcript_status === 'failed';
+        if (done) window.mnToast('Transcription completed for "' + d.recording.title + '".');
+        if (failed) window.mnToast('Transcription failed: ' + (d.recording.transcript_error || 'unknown error'), true);
+        if (done || failed) { renderRecordings(); startPollingIfNeeded(); }
+      })
+      .catch(function () {});
+    });
+  }
+
+  // ── Record with the microphone ─────────────────────────────────────────
+  window.toggleRecording = function () {
+    if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
+
+  function startRecording() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      window.mnToast('Recording is not supported in this browser.', true);
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      var mime = '';
+      ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].some(function (m) {
+        if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) { mime = m; return true; }
+        return false;
+      });
+      state.chunks = [];
+      state.mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      state.mediaRecorder.ondataavailable = function (e) {
+        if (e.data && e.data.size) state.chunks.push(e.data);
+      };
+      state.mediaRecorder.onstop = function () {
+        stream.getTracks().forEach(function (t) { t.stop(); });
+        finishRecording();
+      };
+      state.mediaRecorder.start(1000);
+      state.startedAt = Date.now();
+      state.pausedTotal = 0;
+
+      setMicUI(true);
+      state.timerInt = setInterval(updateTimer, 500);
+    }).catch(function () {
+      window.mnToast('Microphone access was denied. Allow it in your browser and try again.', true);
+    });
+  }
+
+  window.pauseRecording = function () {
+    var mr = state.mediaRecorder;
+    if (!mr) return;
+    var btn = document.getElementById('recPauseBtn');
+    if (mr.state === 'recording') {
+      mr.pause();
+      state.pauseStart = Date.now();
+      btn.innerHTML = '<i class="bi bi-play-fill"></i> Resume';
+      document.getElementById('recStatusText').textContent = 'Paused — click Resume to continue';
+      document.getElementById('recMicBtn').classList.remove('recording');
+    } else if (mr.state === 'paused') {
+      mr.resume();
+      state.pausedTotal += Date.now() - state.pauseStart;
+      btn.innerHTML = '<i class="bi bi-pause-fill"></i> Pause';
+      document.getElementById('recStatusText').textContent = 'Recording… click the button to stop';
+      document.getElementById('recMicBtn').classList.add('recording');
+    }
+  };
+
+  function stopRecording() {
+    if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
+      if (state.mediaRecorder.state === 'paused') {
+        state.pausedTotal += Date.now() - state.pauseStart;
+      }
+      state.mediaRecorder.stop();
+    }
+  }
+
+  function elapsedSeconds() {
+    return Math.max(0, Math.round((Date.now() - state.startedAt - state.pausedTotal) / 1000));
+  }
+
+  function updateTimer() {
+    var s = elapsedSeconds();
+    var m = Math.floor(s / 60), sec = s % 60;
+    var h = Math.floor(m / 60); m = m % 60;
+    document.getElementById('recTimer').textContent =
+      (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
+  }
+
+  function setMicUI(recording) {
+    var mic = document.getElementById('recMicBtn');
+    var icon = document.getElementById('recMicIcon');
+    var pause = document.getElementById('recPauseBtn');
+    var status = document.getElementById('recStatusText');
+    if (!mic) return;
+    if (recording) {
+      mic.classList.add('recording');
+      mic.title = 'Stop recording';
+      icon.className = 'bi bi-stop-fill';
+      pause.style.display = '';
+      pause.innerHTML = '<i class="bi bi-pause-fill"></i> Pause';
+      status.textContent = 'Recording… click the button to stop';
+    } else {
+      mic.classList.remove('recording');
+      mic.title = 'Start recording';
+      icon.className = 'bi bi-mic-fill';
+      pause.style.display = 'none';
+      status.textContent = 'Click the microphone to start recording';
+    }
+  }
+
+  function finishRecording() {
+    clearInterval(state.timerInt);
+    var duration = elapsedSeconds();
+    setMicUI(false);
+    document.getElementById('recTimer').textContent = '0:00';
+
+    if (!state.chunks.length || duration < 1) {
+      window.mnToast('Recording was too short — nothing was saved.', true);
+      return;
+    }
+
+    var blob = new Blob(state.chunks, { type: state.chunks[0].type || 'audio/webm' });
+    var title = window.prompt('Label this recording (optional):', '') || '';
+    uploadBlob(blob, duration, title);
+  }
+
+  function uploadBlob(blob, duration, title) {
+    document.getElementById('recStatusText').textContent = 'Uploading recording…';
+    var fd = new FormData();
+    fd.append('audio', blob, 'recording.webm');
+    fd.append('duration_seconds', duration);
+    fd.append('title', title);
+    fd.append('csrfmiddlewaretoken', window.mnCsrf());
+
+    fetch(window.MN_REC_URL, {
+      method: 'POST', body: fd,
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'same-origin'
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      document.getElementById('recStatusText').textContent = 'Click the microphone to start recording';
+      if (d.status === 'ok') {
+        window.mnToast('Recording saved.' + (state.transcribeAvailable ? ' Click "Transcribe with AI" when ready.' : ''));
+        state.recordings.push(d.recording);
+        renderRecordings();
+      } else {
+        window.mnToast(d.message || 'Upload failed.', true);
+      }
+    })
+    .catch(function () {
+      document.getElementById('recStatusText').textContent = 'Click the microphone to start recording';
+      window.mnToast('Upload failed — check your connection.', true);
+    });
+  }
+
+  window.uploadAudioFile = function (input) {
+    var f = input.files && input.files[0];
+    input.value = '';
+    if (!f) return;
+    if (f.size > 200 * 1024 * 1024) {
+      window.mnToast('Audio file too large (max 200 MB).', true);
+      return;
+    }
+    uploadBlob(f, 0, f.name.replace(/\.[^.]+$/, ''));
+  };
+
+  // ── Transcription controls ─────────────────────────────────────────────
+  window.startTranscription = function (id) {
+    var fd = new FormData();
+    fd.append('action', 'transcribe');
+    fd.append('csrfmiddlewaretoken', window.mnCsrf());
+    fetch(recUrlFor(id), {
+      method: 'POST', body: fd,
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'same-origin'
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.status === 'ok') {
+        window.mnToast(d.message || 'Transcription started.');
+        var idx = state.recordings.findIndex(function (x) { return x.id === id; });
+        if (idx > -1) state.recordings[idx] = d.recording;
+        renderRecordings();
+        startPollingIfNeeded();
+      } else {
+        window.mnToast(d.message || 'Could not start transcription.', true);
+      }
+    })
+    .catch(function () { window.mnToast('Could not start transcription.', true); });
+  };
+
+  window.toggleTranscript = function (id) {
+    var box = document.getElementById('tr-' + id);
+    if (box) box.classList.toggle('open');
+  };
+
+  window.insertTranscript = function (id) {
+    var rec = state.recordings.find(function (x) { return x.id === id; });
+    if (!rec || !rec.transcript) return;
+    var esc = window.mnEscape;
+    var paragraphs = rec.transcript.split(/\n{2,}/).map(function (p) {
+      return '<p>' + esc(p.trim()) + '</p>';
+    }).join('');
+    window.mnInsertNotes('<h3>Transcript — ' + esc(rec.title) + '</h3><blockquote>' + paragraphs + '</blockquote>', false);
+    window.mnToast('Transcript inserted into the notes.');
+  };
+
+  window.deleteRecording = function (id) {
+    if (!confirm('Delete this recording and its transcript? This cannot be undone.')) return;
+    var fd = new FormData();
+    fd.append('action', 'delete');
+    fd.append('csrfmiddlewaretoken', window.mnCsrf());
+    fetch(recUrlFor(id), {
+      method: 'POST', body: fd,
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'same-origin'
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.status === 'ok') {
+        state.recordings = state.recordings.filter(function (x) { return x.id !== id; });
+        renderRecordings();
+        window.mnToast('Recording deleted.');
+      } else {
+        window.mnToast(d.message || 'Could not delete.', true);
+      }
+    })
+    .catch(function () { window.mnToast('Could not delete.', true); });
+  };
+
+  // ── AI minutes drafting ────────────────────────────────────────────────
+  var aiDraft = null;
+
+  window.generateAIDraft = function (recordingId) {
+    var modal = document.getElementById('aiModal');
+    var body = document.getElementById('aiModalBody');
+    var foot = document.getElementById('aiModalFoot');
+    aiDraft = null;
+    foot.style.display = 'none';
+    body.innerHTML =
+      '<div style="text-align:center;padding:44px 0;color:var(--eo-text-muted)">' +
+      '<i class="bi bi-stars rec-spin" style="font-size:1.6rem;display:block;margin-bottom:10px;color:#7c3aed"></i>' +
+      'Drafting minutes from the transcript… this can take up to a minute.</div>';
+    modal.classList.add('open');
+
+    var fd = new FormData();
+    if (recordingId) fd.append('recording_id', recordingId);
+    fd.append('csrfmiddlewaretoken', window.mnCsrf());
+
+    fetch(window.MN_AI_URL, {
+      method: 'POST', body: fd,
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'same-origin'
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.status !== 'ok') {
+        body.innerHTML = '<div style="padding:20px;text-align:center;color:#ef4444;font-size:.88rem">' +
+          '<i class="bi bi-exclamation-triangle me-1"></i>' + window.mnEscape(d.message || 'Drafting failed.') + '</div>';
+        return;
+      }
+      aiDraft = d;
+      var esc = window.mnEscape;
+      var summary = window.mnSanitizeHTML(d.summary_html || '');
+      var decisions = window.mnSanitizeHTML(d.decisions_html || '');
+      var itemsHtml = (d.action_items || []).map(function (it) {
+        return '<li>' + esc(it.description) +
+          (it.owner_name ? ' — <b>' + esc(it.owner_name) + '</b>' : '') +
+          (it.due_date ? ' (due ' + esc(it.due_date) + ')' : '') + '</li>';
+      }).join('');
+
+      body.innerHTML =
+        '<div class="aim-sec-label">Meeting Notes (draft)</div>' +
+        '<div class="aim-preview mn-rendered">' + (summary || '<i style="color:var(--eo-text-muted)">No summary generated.</i>') + '</div>' +
+        '<div class="aim-sec-label">Decisions (draft)</div>' +
+        '<div class="aim-preview mn-rendered">' + (decisions || '<i style="color:var(--eo-text-muted)">No decisions detected.</i>') + '</div>' +
+        '<div class="aim-sec-label">Action Items (' + (d.action_items || []).length + ')</div>' +
+        '<div class="aim-preview">' + (itemsHtml ? '<ul style="margin:0 0 0 1.2em;padding:0">' + itemsHtml + '</ul>'
+                                                 : '<i style="color:var(--eo-text-muted)">No action items detected.</i>') + '</div>';
+      document.getElementById('aiModalSub').textContent =
+        'Drafted from ' + d.source_recordings + ' transcript(s). Review before inserting — you stay in control.';
+      if (window.MN_CAN_EDIT) foot.style.display = '';
+    })
+    .catch(function () {
+      body.innerHTML = '<div style="padding:20px;text-align:center;color:#ef4444;font-size:.88rem">Drafting failed — please try again.</div>';
+    });
+  };
+
+  window.closeAIModal = function () {
+    document.getElementById('aiModal').classList.remove('open');
+  };
+
+  window.applyAIDraft = function (mode) {
+    if (!aiDraft || !window.MN_CAN_EDIT) return;
+    var notes = document.getElementById('notesDoc');
+    var decisions = document.getElementById('decisionsDoc');
+
+    if (aiDraft.summary_html) {
+      window.mnInsertNotes(window.mnSanitizeHTML(aiDraft.summary_html), mode === 'replace');
+    }
+    if (decisions && aiDraft.decisions_html) {
+      var clean = window.mnSanitizeHTML(aiDraft.decisions_html);
+      if (mode === 'replace' || !decisions.textContent.trim()) {
+        decisions.innerHTML = clean;
+      } else {
+        decisions.innerHTML += clean;
+      }
+      decisions.dispatchEvent(new Event('input', { bubbles: true }));
+      if (decisions._refreshEmptyState) decisions._refreshEmptyState();
+    }
+    (aiDraft.action_items || []).forEach(function (it) {
+      window.addActionRow(it.description, it.owner_id || '', it.due_date || '');
+    });
+
+    closeAIModal();
+    window.mnToast('AI draft inserted — review, adjust, then Save Draft.');
+    window.mnAutosaveNow();
+  };
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') window.closeAIModal();
   });
 })();
 </script>

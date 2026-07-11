@@ -407,3 +407,91 @@ class MeetingMinutesExternalReview(models.Model):
             'adopted':  '#10b981',
             'declined': '#ef4444',
         }.get(self.decision, '#64748b')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Meeting recordings + AI transcription
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _recording_upload_to(instance, filename):
+    return f'meeting_recordings/{timezone.now():%Y/%m}/{instance.meeting_id}/{filename}'
+
+
+class MeetingRecording(models.Model):
+    """
+    An audio recording captured (or uploaded) on the minutes page.
+
+    Transcription runs asynchronously in a background thread; the status
+    field drives the polling UI. The transcript feeds the AI minutes
+    drafting endpoint, which turns it into structured notes, decisions,
+    and action items the minute-taker can insert with one click.
+    """
+
+    class TranscriptStatus(models.TextChoices):
+        NONE       = 'none',       _('Not Transcribed')
+        PENDING    = 'pending',    _('Queued')
+        PROCESSING = 'processing', _('Transcribing…')
+        COMPLETED  = 'completed',  _('Transcribed')
+        FAILED     = 'failed',     _('Failed')
+
+    id          = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    meeting     = models.ForeignKey(Meeting, on_delete=models.CASCADE,
+                                    related_name='recordings')
+    recorded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True,
+                                    related_name='meeting_recordings')
+    title       = models.CharField(max_length=200, blank=True,
+                                   help_text='Optional label, e.g. "Part 1 — Budget discussion"')
+    audio_file  = models.FileField(upload_to=_recording_upload_to)
+    mime_type   = models.CharField(max_length=100, blank=True)
+    file_size   = models.BigIntegerField(default=0)
+    duration_seconds = models.PositiveIntegerField(default=0)
+
+    # ── Transcription ─────────────────────────────────────────────────────────
+    transcript_status   = models.CharField(max_length=20,
+                                           choices=TranscriptStatus.choices,
+                                           default=TranscriptStatus.NONE)
+    transcript          = models.TextField(blank=True)
+    transcript_language = models.CharField(max_length=10, blank=True)
+    transcript_error    = models.CharField(max_length=500, blank=True)
+    transcribed_at      = models.DateTimeField(null=True, blank=True)
+
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return self.title or f'Recording — {self.meeting}'
+
+    @property
+    def display_title(self):
+        return self.title or f'Recording {self.created_at:%b %d · %H:%M}'
+
+    @property
+    def duration_display(self):
+        s = self.duration_seconds or 0
+        h, rem = divmod(s, 3600)
+        m, sec = divmod(rem, 60)
+        if h:
+            return f'{h}:{m:02d}:{sec:02d}'
+        return f'{m}:{sec:02d}'
+
+    @property
+    def size_display(self):
+        n = self.file_size or 0
+        for unit in ('B', 'KB', 'MB', 'GB'):
+            if n < 1024:
+                return f'{n:.0f} {unit}' if unit == 'B' else f'{n:.1f} {unit}'
+            n /= 1024
+        return f'{n:.1f} TB'
+
+    @property
+    def status_color(self):
+        return {
+            'none':       '#64748b',
+            'pending':    '#f59e0b',
+            'processing': '#3b82f6',
+            'completed':  '#10b981',
+            'failed':     '#ef4444',
+        }.get(self.transcript_status, '#64748b')

@@ -4,6 +4,64 @@
 {% block breadcrumb %}<span>Meetings</span>{% endblock %}
 {% block content %}
 
+<style>
+/* ── Calendar ─────────────────────────────────────────────────────────── */
+.mcal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.mcal-title{font-size:1.15rem;font-weight:800;color:var(--eo-text);min-width:190px}
+.mcal-nav{display:flex;gap:6px;align-items:center}
+.mcal-legend{display:flex;gap:10px;flex-wrap:wrap;font-size:.72rem;color:var(--eo-text-muted)}
+.mcal-legend span{display:inline-flex;align-items:center;gap:5px}
+.mcal-legend i{width:9px;height:9px;border-radius:3px;display:inline-block}
+
+.mcal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.mcal-dow{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--eo-text-muted);text-align:center;padding:4px 0}
+.mcal-day{
+  min-height:112px;background:var(--eo-surface);border:1px solid var(--eo-border);
+  border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:4px;
+  cursor:pointer;transition:border-color .12s, box-shadow .12s;overflow:hidden;
+}
+.mcal-day:hover{border-color:var(--eo-primary);box-shadow:0 3px 12px rgba(0,0,0,.06)}
+.mcal-day.other{background:var(--eo-bg);opacity:.55}
+.mcal-day.today{border-color:var(--eo-primary);box-shadow:inset 0 0 0 1px var(--eo-primary)}
+.mcal-daynum{font-size:.76rem;font-weight:700;color:var(--eo-text);display:flex;justify-content:space-between;align-items:center}
+.mcal-day.today .mcal-daynum .n{
+  background:var(--eo-primary);color:#fff;width:22px;height:22px;border-radius:50%;
+  display:inline-flex;align-items:center;justify-content:center;font-size:.72rem;
+}
+.mcal-chip{
+  font-size:.68rem;font-weight:600;color:#fff;border-radius:6px;padding:2px 6px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:4px;
+}
+.mcal-chip.cancelled{opacity:.5;text-decoration:line-through}
+.mcal-more{font-size:.66rem;font-weight:700;color:var(--eo-text-muted)}
+@media(max-width:760px){
+  .mcal-day{min-height:74px}
+  .mcal-chip .t{display:none}
+}
+
+/* Day panel modal */
+.mcal-backdrop{display:none;position:fixed;inset:0;z-index:1060;background:rgba(15,23,42,.5);
+  align-items:center;justify-content:center;padding:16px}
+.mcal-backdrop.open{display:flex}
+.mcal-panel{background:var(--eo-surface);border-radius:14px;width:100%;max-width:520px;
+  max-height:85vh;display:flex;flex-direction:column;overflow:hidden;
+  box-shadow:0 24px 60px rgba(0,0,0,.25)}
+.mcal-panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:16px 20px;border-bottom:1px solid var(--eo-border)}
+.mcal-panel-body{overflow:auto;padding:12px 16px}
+.mcal-event{
+  display:flex;gap:12px;align-items:flex-start;padding:11px 10px;border-radius:10px;
+  text-decoration:none;border-left:3px solid var(--ev-color,#3b82f6);
+  background:var(--eo-bg);margin-bottom:8px;
+}
+.mcal-event:hover{background:var(--eo-border)}
+.mcal-ev-time{font-size:.74rem;font-weight:700;color:var(--eo-text);width:82px;flex-shrink:0;line-height:1.5}
+.mcal-ev-body{flex:1;min-width:0}
+.mcal-ev-title{font-size:.86rem;font-weight:700;color:var(--eo-text)}
+.mcal-ev-meta{font-size:.73rem;color:var(--eo-text-muted);margin-top:2px}
+</style>
+
 <div class="eo-page-header">
   <div>
     <h1 class="eo-page-title">Meetings</h1>
@@ -25,7 +83,7 @@
     </div>
     <div class="col-sm-3">
       <label class="eo-form-label">Type</label>
-      <select name="type" class="eo-form-select">
+      <select name="type" class="eo-form-select" id="typeFilterSelect">
         <option value="">All Types</option>
         {% for val, label in meeting_types %}
         <option value="{{ val }}" {% if type_filter == val %}selected{% endif %}>{{ label }}</option>
@@ -37,16 +95,220 @@
       <select name="view" class="eo-form-select">
         <option value="upcoming" {% if view == 'upcoming' %}selected{% endif %}>Upcoming</option>
         <option value="past"     {% if view == 'past'     %}selected{% endif %}>Past</option>
+        <option value="calendar" {% if view == 'calendar' %}selected{% endif %}>Calendar</option>
       </select>
     </div>
     <div class="col-auto d-flex gap-2">
       <button type="submit" class="eo-btn eo-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
       <a href="{% url 'meeting_list' %}" class="eo-btn eo-btn-secondary">Reset</a>
+      {% if view != 'calendar' %}
+      <a href="?view=calendar" class="eo-btn eo-btn-secondary"><i class="bi bi-calendar3"></i> Calendar</a>
+      {% endif %}
     </div>
   </form>
 </div>
 
-{% if view == 'past' %}
+{% if view == 'calendar' %}
+{# ────────── CALENDAR VIEW ────────── #}
+<div class="eo-card">
+  <div class="mcal-head">
+    <div class="mcal-title" id="mcalTitle">Loading…</div>
+    <div class="mcal-legend">
+      {% for val, label in meeting_types %}
+      <span><i data-type-color="{{ val }}"></i>{{ label }}</span>
+      {% endfor %}
+    </div>
+    <div class="mcal-nav">
+      <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="mcalShift(-1)" title="Previous month">
+        <i class="bi bi-chevron-left"></i>
+      </button>
+      <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="mcalToday()">Today</button>
+      <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="mcalShift(1)" title="Next month">
+        <i class="bi bi-chevron-right"></i>
+      </button>
+    </div>
+  </div>
+
+  <div class="mcal-grid" id="mcalDow"></div>
+  <div class="mcal-grid" id="mcalGrid" style="margin-top:6px">
+    <div style="grid-column:1/-1;text-align:center;padding:60px 0;color:var(--eo-text-muted)">
+      <i class="bi bi-hourglass-split me-1"></i> Loading calendar…
+    </div>
+  </div>
+</div>
+
+{# Day drill-down modal #}
+<div class="mcal-backdrop" id="mcalDayBackdrop" onclick="if(event.target===this) closeDayPanel()">
+  <div class="mcal-panel">
+    <div class="mcal-panel-head">
+      <div style="font-size:1rem;font-weight:800;color:var(--eo-text)" id="mcalDayTitle">Day</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <a href="{% url 'meeting_create' %}" class="eo-btn eo-btn-primary eo-btn-sm">
+          <i class="bi bi-plus-lg"></i> New Meeting
+        </a>
+        <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" onclick="closeDayPanel()">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
+    </div>
+    <div class="mcal-panel-body" id="mcalDayBody"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var FEED_URL = "{% url 'meeting_calendar_feed' %}";
+  var TYPE_COLORS = {
+    one_on_one:'#8b5cf6', team:'#3b82f6', unit:'#10b981',
+    department:'#f59e0b', all_hands:'#ef4444', external:'#64748b'
+  };
+  var MONTHS = ['January','February','March','April','May','June','July',
+                'August','September','October','November','December'];
+  var DOWS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+  // Legend swatches
+  document.querySelectorAll('[data-type-color]').forEach(function (i) {
+    i.style.background = TYPE_COLORS[i.dataset.typeColor] || '#3b82f6';
+  });
+
+  var current = new Date();       // month being shown
+  current.setDate(1);
+  var eventsByDay = {};           // 'YYYY-MM-DD' → [events]
+  var typeFilter = document.getElementById('typeFilterSelect');
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+
+  window.mcalShift = function (delta) {
+    current.setMonth(current.getMonth() + delta);
+    loadMonth();
+  };
+  window.mcalToday = function () {
+    current = new Date(); current.setDate(1);
+    loadMonth();
+  };
+
+  function gridRange() {
+    // Monday-start grid covering the whole month.
+    var first = new Date(current.getFullYear(), current.getMonth(), 1);
+    var start = new Date(first);
+    var dow = (first.getDay() + 6) % 7;   // 0 = Monday
+    start.setDate(first.getDate() - dow);
+    var end = new Date(start);
+    end.setDate(start.getDate() + 41);    // 6 rows
+    return [start, end];
+  }
+
+  function loadMonth() {
+    var range = gridRange();
+    document.getElementById('mcalTitle').textContent =
+      MONTHS[current.getMonth()] + ' ' + current.getFullYear();
+
+    fetch(FEED_URL + '?start=' + ymd(range[0]) + '&end=' + ymd(range[1]), {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'same-origin'
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      eventsByDay = {};
+      (d.events || []).forEach(function (ev) {
+        if (typeFilter && typeFilter.value &&
+            TYPE_COLORS[typeFilter.value] && ev.color !== TYPE_COLORS[typeFilter.value]) return;
+        (eventsByDay[ev.date] = eventsByDay[ev.date] || []).push(ev);
+      });
+      render(range[0]);
+    })
+    .catch(function () {
+      document.getElementById('mcalGrid').innerHTML =
+        '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--eo-text-muted)">Could not load the calendar. Please refresh.</div>';
+    });
+  }
+
+  function esc(s) {
+    return String(s || '').replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+
+  function render(gridStart) {
+    var dowRow = document.getElementById('mcalDow');
+    dowRow.innerHTML = DOWS.map(function (d) { return '<div class="mcal-dow">' + d + '</div>'; }).join('');
+
+    var todayStr = ymd(new Date());
+    var html = '';
+    var d = new Date(gridStart);
+
+    for (var i = 0; i < 42; i++) {
+      var key = ymd(d);
+      var inMonth = d.getMonth() === current.getMonth();
+      var evs = eventsByDay[key] || [];
+      var cls = 'mcal-day' + (inMonth ? '' : ' other') + (key === todayStr ? ' today' : '');
+
+      var chips = '';
+      evs.slice(0, 3).forEach(function (ev) {
+        chips += '<div class="mcal-chip' + (ev.status === 'cancelled' ? ' cancelled' : '') + '" ' +
+                 'style="background:' + ev.color + '" title="' + esc(ev.start + ' — ' + ev.title) + '">' +
+                 '<span class="t">' + ev.start + '</span> ' + esc(ev.title) + '</div>';
+      });
+      if (evs.length > 3) chips += '<div class="mcal-more">+' + (evs.length - 3) + ' more</div>';
+
+      html += '<div class="' + cls + '" data-day="' + key + '" onclick="openDayPanel(\'' + key + '\')">' +
+              '<div class="mcal-daynum"><span class="n">' + d.getDate() + '</span>' +
+              (evs.length ? '<span style="font-size:.62rem;color:var(--eo-text-muted)">' + evs.length + '</span>' : '') +
+              '</div>' + chips + '</div>';
+      d.setDate(d.getDate() + 1);
+    }
+    document.getElementById('mcalGrid').innerHTML = html;
+  }
+
+  window.openDayPanel = function (key) {
+    var evs = eventsByDay[key] || [];
+    var parts = key.split('-');
+    var dt = new Date(parseInt(parts[0],10), parseInt(parts[1],10)-1, parseInt(parts[2],10));
+    document.getElementById('mcalDayTitle').textContent =
+      dt.toLocaleDateString(undefined, { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+
+    var body = document.getElementById('mcalDayBody');
+    if (!evs.length) {
+      body.innerHTML = '<div style="text-align:center;padding:36px 12px;color:var(--eo-text-muted);font-size:.86rem">' +
+                       '<i class="bi bi-calendar-x" style="font-size:1.6rem;display:block;margin-bottom:8px;opacity:.35"></i>' +
+                       'No meetings on this day.</div>';
+    } else {
+      body.innerHTML = evs.map(function (ev) {
+        return '<a class="mcal-event" href="' + ev.url + '" style="--ev-color:' + ev.color + '">' +
+          '<div class="mcal-ev-time">' + ev.start + '<br><span style="color:var(--eo-text-muted);font-weight:500">' + ev.end + '</span></div>' +
+          '<div class="mcal-ev-body">' +
+            '<div class="mcal-ev-title">' + esc(ev.title) + '</div>' +
+            '<div class="mcal-ev-meta"><i class="bi ' + ev.icon + ' me-1"></i>' + esc(ev.type) +
+              (ev.location ? ' · <i class="bi bi-geo-alt"></i> ' + esc(ev.location) : '') +
+              (ev.virtual ? ' · <i class="bi bi-camera-video"></i> Virtual' : '') +
+              (ev.has_minutes ? ' · <i class="bi bi-journal-check" style="color:#10b981"></i> Minutes' : '') +
+            '</div>' +
+            (ev.status !== 'scheduled' ? '<div class="mcal-ev-meta" style="font-weight:600">' + esc(ev.status_display) + '</div>' : '') +
+          '</div></a>';
+      }).join('');
+    }
+    document.getElementById('mcalDayBackdrop').classList.add('open');
+  };
+
+  window.closeDayPanel = function () {
+    document.getElementById('mcalDayBackdrop').classList.remove('open');
+  };
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeDayPanel();
+  });
+  if (typeFilter) typeFilter.addEventListener('change', function () {
+    // Live re-filter without a page reload while on the calendar tab.
+    loadMonth();
+  });
+
+  loadMonth();
+})();
+</script>
+
+{% elif view == 'past' %}
   {% with display_meetings=past %}
   {% if display_meetings %}
   <div class="row g-3">

@@ -1377,3 +1377,5 @@ class FinanceAnomaly(models.Model):
             'resolved': '#10b981',
             'dismissed': '#94a3b8',
         }.get(self.status, '#94a3b8')
+
+from apps.finance.models_sales_targets import SalesTarget, SalesRewardPayout  # noqa

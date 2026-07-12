@@ -109,8 +109,51 @@
                 class="eo-btn eo-btn-secondary eo-btn-sm"><i class="bi bi-plus"></i> Add</button>
         {% endif %}
       </div>
-      {% if documents %}
+      {% if documents or invoice_documents %}
       <div style="display:flex;flex-direction:column;gap:8px">
+
+        {# ── Documents generated in the Invoice Builder (invoices, delivery notes, proformas…) ── #}
+        {% if invoice_documents %}
+        <div style="font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--eo-text-muted);margin-bottom:2px">
+          From Invoice Builder
+        </div>
+        {% for idoc in invoice_documents %}
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
+          {% if idoc.doc_type == 'delivery_note' %}
+            <i class="bi bi-truck" style="font-size:1.3rem;color:#8b5cf6;flex-shrink:0"></i>
+          {% elif idoc.doc_type == 'invoice' %}
+            <i class="bi bi-receipt" style="font-size:1.3rem;color:var(--eo-primary);flex-shrink:0"></i>
+          {% else %}
+            <i class="bi bi-file-earmark-text" style="font-size:1.3rem;color:#0ea5e9;flex-shrink:0"></i>
+          {% endif %}
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.86rem;font-weight:600;color:var(--eo-text)">
+              {{ idoc.get_doc_type_display }} {{ idoc.number|default:"(draft)" }}
+            </div>
+            <div style="font-size:.72rem;color:var(--eo-text-muted)">
+              {{ idoc.get_status_display }} · {{ idoc.invoice_date|date:"N j, Y"|default:idoc.created_at|date:"N j, Y" }}
+              {% if idoc.total %} · {{ idoc.currency }} {{ idoc.total|floatformat:2 }}{% endif %}
+            </div>
+          </div>
+          <a href="{% url 'invoices:invoice_preview_pdf' idoc.pk %}" target="_blank"
+             class="eo-btn eo-btn-secondary eo-btn-sm" title="View PDF">
+            <i class="bi bi-file-earmark-pdf"></i>
+          </a>
+          <a href="{% url 'invoices:invoice_detail' idoc.pk %}"
+             class="eo-btn eo-btn-secondary eo-btn-sm" title="Open in Invoice Builder">
+            <i class="bi bi-arrow-up-right"></i>
+          </a>
+        </div>
+        {% endfor %}
+        {% endif %}
+
+        {# ── Manually uploaded files ── #}
+        {% if documents %}
+        {% if invoice_documents %}
+        <div style="font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--eo-text-muted);margin:6px 0 2px">
+          Uploaded Files
+        </div>
+        {% endif %}
         {% for doc in documents %}
         <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--eo-border);border-radius:10px;background:var(--eo-bg)">
           <i class="bi bi-file-earmark-fill" style="font-size:1.3rem;color:var(--eo-primary);flex-shrink:0"></i>
@@ -123,6 +166,8 @@
           </a>
         </div>
         {% endfor %}
+        {% endif %}
+
       </div>
       {% else %}
       <div style="text-align:center;padding:24px;color:var(--eo-text-muted);font-size:.84rem">

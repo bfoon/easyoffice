@@ -1896,6 +1896,81 @@ class IncomingPaymentRequestCreateView(LoginRequiredMixin, View):
         return redirect('incoming_payment_request_detail', pk=ipr.pk)
 
 
+def _linked_invoice_documents(ipr):
+    """
+    Every document generated in the Invoice Builder app (apps.invoices)
+    that belongs to this incoming payment request:
+
+      1. InvoiceDocuments linked directly via `linked_receivable` — the
+         finalized invoice(s) that created this receivable.
+      2. The whole conversion family of those documents — delivery notes,
+         proformas, quotations, receipts converted from or into them.
+         Self-referential links on InvoiceDocument are discovered through
+         model introspection, so this keeps working whatever the FK is
+         called (converted_from, source_document, …).
+
+    Returns a list sorted newest-first. Never raises — an empty list is
+    returned if the invoices app is unavailable.
+    """
+    try:
+        from apps.invoices.models import InvoiceDocument
+    except Exception:
+        return []
+
+    try:
+        docs = list(
+            InvoiceDocument.objects
+            .filter(linked_receivable=ipr)
+            .order_by('-created_at')
+        )
+    except Exception:
+        return []
+
+    seen = {d.pk for d in docs}
+
+    # Self-referential relations (conversion chains) on InvoiceDocument.
+    forward_fks, reverse_accessors = [], []
+    try:
+        for f in InvoiceDocument._meta.get_fields():
+            if not getattr(f, 'is_relation', False):
+                continue
+            if f.related_model is not InvoiceDocument:
+                continue
+            if getattr(f, 'many_to_one', False):        # e.g. converted_from
+                forward_fks.append(f.name)
+            elif getattr(f, 'one_to_many', False):      # reverse of the above
+                reverse_accessors.append(f.get_accessor_name())
+    except Exception:
+        pass
+
+    frontier = list(docs)
+    while frontier:
+        d = frontier.pop()
+        related = []
+        for name in forward_fks:
+            try:
+                obj = getattr(d, name, None)
+                if obj is not None:
+                    related.append(obj)
+            except Exception:
+                pass
+        for accessor in reverse_accessors:
+            try:
+                mgr = getattr(d, accessor, None)
+                if mgr is not None and hasattr(mgr, 'all'):
+                    related.extend(mgr.all())
+            except Exception:
+                pass
+        for r in related:
+            if r.pk not in seen:
+                seen.add(r.pk)
+                docs.append(r)
+                frontier.append(r)
+
+    docs.sort(key=lambda d: d.created_at or timezone.now(), reverse=True)
+    return docs
+
+
 class IncomingPaymentRequestDetailView(LoginRequiredMixin, View):
     template_name = 'finance/incoming_payment_request_detail.html'
 
@@ -1928,6 +2003,7 @@ class IncomingPaymentRequestDetailView(LoginRequiredMixin, View):
         return render(request, self.template_name, {
             'ipr': ipr,
             'documents': ipr.documents.all(),
+            'invoice_documents': _linked_invoice_documents(ipr),
             'is_finance': _is_finance(request.user),
             'is_ceo': _is_ceo(request.user),
             'doc_type_choices': IncomingPaymentDocument.DocType.choices,

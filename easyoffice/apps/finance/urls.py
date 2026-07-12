@@ -2,6 +2,7 @@ from django.urls import path
 from apps.finance import views
 from apps.finance import views_financial_system as fs
 from apps.finance import views_invoice_followup
+from apps.finance import views_sales_targets as st
 
 urlpatterns = [
     # ── Existing finance URLs ────────────────────────────────────────────────
@@ -126,4 +127,26 @@ urlpatterns = [
     path('control-center/invoices/<uuid:pk>/mark-paid/',
          fs.FinanceInvoiceMarkPaidView.as_view(),
          name='finance_invoice_mark_paid'),
+
+    # ════════════════════════════════════════════════════════════════════════
+    # SALES TARGETS & REWARDS — set by CEO / Office Administrator
+    # ════════════════════════════════════════════════════════════════════════
+    path('sales-targets/',
+         st.SalesTargetDashboardView.as_view(),
+         name='sales_target_dashboard'),
+    path('sales-targets/new/',
+         st.SalesTargetCreateView.as_view(),
+         name='sales_target_create'),
+    path('sales-targets/<uuid:pk>/edit/',
+         st.SalesTargetUpdateView.as_view(),
+         name='sales_target_update'),
+    path('sales-targets/<uuid:pk>/delete/',
+         st.SalesTargetDeleteView.as_view(),
+         name='sales_target_delete'),
+    path('sales-targets/evaluate/',
+         st.SalesTargetEvaluateView.as_view(),
+         name='sales_target_evaluate'),
+    path('sales-rewards/<uuid:pk>/action/',
+         st.SalesRewardActionView.as_view(),
+         name='sales_reward_action'),
 ]

@@ -1,0 +1,527 @@
+{% extends "base.html" %}
+{% block title %}Sales Targets & Rewards{% endblock %}
+{% block breadcrumb %}<span>Sales Targets & Rewards</span>{% endblock %}
+{% block content %}
+<style>
+  :root {
+    --st-primary: #2563eb;
+    --st-success: #10b981;
+    --st-warning: #f59e0b;
+    --st-danger:  #ef4444;
+    --st-purple:  #8b5cf6;
+  }
+  .st-kpi {
+    background:#fff; border:1px solid var(--eo-border,#e5e7eb); border-radius:16px;
+    padding:16px; position:relative; overflow:hidden; height:100%;
+    transition:transform .15s, box-shadow .15s;
+  }
+  .st-kpi:hover { transform:translateY(-2px); box-shadow:0 10px 24px rgba(15,23,42,.08); }
+  .st-kpi::before { content:''; position:absolute; inset:0 0 auto 0; height:4px;
+    background:var(--kpi-color,var(--st-primary)); }
+  .st-kpi-label { font-size:.72rem; font-weight:700; text-transform:uppercase;
+    letter-spacing:.06em; color:#64748b; margin:0 0 6px; }
+  .st-kpi-value { font-size:1.7rem; font-weight:800; line-height:1.1;
+    color:var(--eo-text,#0f172a); font-variant-numeric:tabular-nums; }
+
+  .st-card { background:#fff; border:1px solid var(--eo-border,#e5e7eb);
+    border-radius:16px; }
+  .st-card .card-header { background:transparent; border-bottom:1px solid var(--eo-border,#e5e7eb);
+    font-weight:700; }
+
+  .st-progress { height:10px; border-radius:6px; background:#f1f5f9; overflow:hidden; }
+  .st-progress > div { height:100%; border-radius:6px; transition:width .3s; }
+
+  .st-badge { font-size:.7rem; font-weight:700; padding:.25em .6em; border-radius:999px; }
+  .st-badge-current  { background:#dbeafe; color:#1d4ed8; }
+  .st-badge-upcoming { background:#f1f5f9; color:#475569; }
+  .st-badge-ended    { background:#e2e8f0; color:#334155; }
+  .st-badge-met      { background:#d1fae5; color:#047857; }
+  .st-badge-missed   { background:#fee2e2; color:#b91c1c; }
+  .st-badge-pending  { background:#fef3c7; color:#92400e; }
+  .st-badge-approved { background:#dbeafe; color:#1d4ed8; }
+  .st-badge-paid     { background:#d1fae5; color:#047857; }
+  .st-badge-rejected { background:#fee2e2; color:#b91c1c; }
+
+  .st-table td, .st-table th { vertical-align: middle; }
+  .st-amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
+</style>
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+  <div>
+    <h4 class="mb-0"><i class="bi bi-bullseye me-2"></i>Sales Targets &amp; Rewards</h4>
+    <div class="text-muted small">Monthly &amp; quarterly sales goals with cash rewards for agents and the sales department.</div>
+  </div>
+  <div class="d-flex flex-wrap gap-2 align-items-center">
+    <form method="get" class="d-flex gap-2">
+      <select name="year" class="form-select form-select-sm" onchange="this.form.submit()">
+        {% for y in years %}
+          <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+      <select name="period" class="form-select form-select-sm" onchange="this.form.submit()">
+        <option value="all" {% if period_filter == 'all' %}selected{% endif %}>All periods</option>
+        <option value="monthly" {% if period_filter == 'monthly' %}selected{% endif %}>Monthly</option>
+        <option value="quarterly" {% if period_filter == 'quarterly' %}selected{% endif %}>Quarterly</option>
+      </select>
+    </form>
+    {% if can_manage %}
+      <form method="post" action="{% url 'sales_target_evaluate' %}" class="d-inline">
+        {% csrf_token %}
+        <button class="btn btn-outline-secondary btn-sm" title="Create reward payouts for ended targets that were met">
+          <i class="bi bi-arrow-repeat me-1"></i>Evaluate now
+        </button>
+      </form>
+      <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#newTargetModal">
+        <i class="bi bi-plus-lg me-1"></i>Set Target
+      </button>
+    {% endif %}
+  </div>
+</div>
+
+<!-- KPI tiles -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-lg-3">
+    <div class="st-kpi" style="--kpi-color: var(--st-primary);">
+      <p class="st-kpi-label">Active targets</p>
+      <div class="st-kpi-value">{{ active_count }}</div>
+      <div class="small text-muted">running or upcoming in {{ year }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="st-kpi" style="--kpi-color: var(--st-success);">
+      <p class="st-kpi-label">Targets met</p>
+      <div class="st-kpi-value">{{ met_count }}</div>
+      <div class="small text-muted">goal reached in {{ year }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="st-kpi" style="--kpi-color: var(--st-warning);">
+      <p class="st-kpi-label">Rewards pending</p>
+      <div class="st-kpi-value st-amount">{{ pending_rewards|floatformat:2 }}</div>
+      <div class="small text-muted">awaiting approval / payment</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="st-kpi" style="--kpi-color: var(--st-purple);">
+      <p class="st-kpi-label">Rewards paid</p>
+      <div class="st-kpi-value st-amount">{{ paid_rewards|floatformat:2 }}</div>
+      <div class="small text-muted">cash paid out in {{ year }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- Targets -->
+<div class="st-card card mb-4">
+  <div class="card-header d-flex align-items-center">
+    <i class="bi bi-flag me-2"></i>Targets — {{ year }}
+  </div>
+  <div class="card-body p-0">
+    {% if rows %}
+    <div class="table-responsive">
+      <table class="table st-table mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Who</th>
+            <th>Period</th>
+            <th class="text-end">Target</th>
+            <th class="text-end">Achieved</th>
+            <th style="min-width:180px;">Progress</th>
+            <th class="text-end">Reward</th>
+            <th>Status</th>
+            {% if can_manage %}<th class="text-end">Actions</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          {% with t=r.target %}
+          <tr>
+            <td>
+              <div class="fw-semibold">
+                {% if t.scope == 'department' %}
+                  <i class="bi bi-people-fill me-1 text-primary"></i>Sales Department
+                {% else %}
+                  <i class="bi bi-person-badge me-1 text-secondary"></i>{{ t.scope_label }}
+                {% endif %}
+              </div>
+              <div class="small text-muted">{{ t.get_basis_display }} · {{ t.currency }}</div>
+            </td>
+            <td>
+              <div>{{ t.period_label }}</div>
+              <div class="small">
+                {% if t.is_period_current %}
+                  <span class="st-badge st-badge-current">Current</span>
+                {% elif t.is_period_over %}
+                  <span class="st-badge st-badge-ended">Ended</span>
+                {% else %}
+                  <span class="st-badge st-badge-upcoming">Upcoming</span>
+                {% endif %}
+                {% if not t.is_active %}<span class="st-badge st-badge-rejected">Inactive</span>{% endif %}
+              </div>
+            </td>
+            <td class="text-end st-amount">{{ t.target_amount|floatformat:2 }}</td>
+            <td class="text-end st-amount">
+              {{ r.achieved|floatformat:2 }}
+              <div class="small text-muted">{{ r.invoice_count }} invoice{{ r.invoice_count|pluralize }}</div>
+            </td>
+            <td>
+              <div class="st-progress">
+                <div style="width: {% if r.pct > 100 %}100{% else %}{{ r.pct|floatformat:0 }}{% endif %}%;
+                            background: {% if r.met %}var(--st-success){% elif t.is_period_over %}var(--st-danger){% else %}var(--st-primary){% endif %};"></div>
+              </div>
+              <div class="small text-muted mt-1">{{ r.pct|floatformat:1 }}%</div>
+            </td>
+            <td class="text-end st-amount">{{ t.reward_amount|floatformat:2 }}</td>
+            <td>
+              {% if r.met %}
+                <span class="st-badge st-badge-met"><i class="bi bi-trophy me-1"></i>Met</span>
+              {% elif t.is_period_over %}
+                <span class="st-badge st-badge-missed">Missed</span>
+              {% else %}
+                <span class="st-badge st-badge-current">In progress</span>
+              {% endif %}
+            </td>
+            {% if can_manage %}
+            <td class="text-end">
+              <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal"
+                      data-bs-target="#editTargetModal-{{ t.pk }}" title="Edit">
+                <i class="bi bi-pencil"></i>
+              </button>
+              <button class="btn btn-sm btn-outline-danger" data-bs-toggle="modal"
+                      data-bs-target="#deleteTargetModal-{{ t.pk }}" title="Delete">
+                <i class="bi bi-trash"></i>
+              </button>
+            </td>
+            {% endif %}
+          </tr>
+          {% endwith %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-5">
+      <i class="bi bi-bullseye" style="font-size:2rem;"></i>
+      <div class="mt-2">No sales targets for {{ year }} yet.</div>
+      {% if can_manage %}
+      <button class="btn btn-primary btn-sm mt-3" data-bs-toggle="modal" data-bs-target="#newTargetModal">
+        <i class="bi bi-plus-lg me-1"></i>Set the first target
+      </button>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Reward payouts -->
+<div class="st-card card mb-4">
+  <div class="card-header d-flex align-items-center">
+    <i class="bi bi-cash-coin me-2"></i>Cash Reward Payouts — {{ year }}
+  </div>
+  <div class="card-body p-0">
+    {% if payouts %}
+    <div class="table-responsive">
+      <table class="table st-table mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Beneficiary</th>
+            <th>Period</th>
+            <th class="text-end">Achieved</th>
+            <th class="text-end">Reward</th>
+            <th>Status</th>
+            <th>Details</th>
+            {% if can_manage %}<th class="text-end">Actions</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in payouts %}
+          <tr>
+            <td class="fw-semibold">
+              {% if p.target.scope == 'department' %}
+                <i class="bi bi-people-fill me-1 text-primary"></i>
+              {% else %}
+                <i class="bi bi-person-badge me-1 text-secondary"></i>
+              {% endif %}
+              {{ p.beneficiary_label }}
+            </td>
+            <td>{{ p.target.period_label }}</td>
+            <td class="text-end st-amount">{{ p.currency }} {{ p.achieved_amount|floatformat:2 }}</td>
+            <td class="text-end st-amount fw-semibold">{{ p.currency }} {{ p.reward_amount|floatformat:2 }}</td>
+            <td>
+              {% if p.status == 'pending' %}<span class="st-badge st-badge-pending">Pending approval</span>
+              {% elif p.status == 'approved' %}<span class="st-badge st-badge-approved">Approved</span>
+              {% elif p.status == 'paid' %}<span class="st-badge st-badge-paid">Paid</span>
+              {% else %}<span class="st-badge st-badge-rejected">Rejected</span>{% endif %}
+            </td>
+            <td class="small text-muted">
+              {% if p.status == 'paid' %}
+                {{ p.get_status_display }} {{ p.paid_at|date:"d M Y" }}
+                {% if p.payment_method %}· {{ p.payment_method }}{% endif %}
+                {% if p.payment_reference %}· ref {{ p.payment_reference }}{% endif %}
+              {% elif p.approved_by %}
+                by {{ p.approved_by.get_full_name|default:p.approved_by.username }}
+                {{ p.approved_at|date:"d M Y" }}
+              {% else %}
+                created {{ p.created_at|date:"d M Y" }}
+              {% endif %}
+            </td>
+            {% if can_manage %}
+            <td class="text-end">
+              {% if p.status == 'pending' %}
+                <form method="post" action="{% url 'sales_reward_action' p.pk %}" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="approve">
+                  <button class="btn btn-sm btn-outline-primary" title="Approve">
+                    <i class="bi bi-check2-circle"></i>
+                  </button>
+                </form>
+              {% endif %}
+              {% if p.status == 'pending' or p.status == 'approved' %}
+                <button class="btn btn-sm btn-success" data-bs-toggle="modal"
+                        data-bs-target="#payRewardModal-{{ p.pk }}" title="Mark paid">
+                  <i class="bi bi-cash"></i> Pay
+                </button>
+                <form method="post" action="{% url 'sales_reward_action' p.pk %}" class="d-inline"
+                      onsubmit="return confirm('Reject this reward payout?');">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="reject">
+                  <button class="btn btn-sm btn-outline-danger" title="Reject">
+                    <i class="bi bi-x-circle"></i>
+                  </button>
+                </form>
+              {% endif %}
+            </td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-4">
+      <i class="bi bi-cash-coin" style="font-size:1.6rem;"></i>
+      <div class="mt-2">No reward payouts yet — payouts appear automatically when an ended target has been met.</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if can_manage %}
+<!-- ═══ New target modal ═══ -->
+<div class="modal fade" id="newTargetModal" tabindex="-1">
+  <div class="modal-dialog">
+    <form method="post" action="{% url 'sales_target_create' %}" class="modal-content">
+      {% csrf_token %}
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-bullseye me-2"></i>Set Sales Target</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-6">
+            <label class="form-label">Scope</label>
+            <select name="scope" class="form-select" id="ntScope"
+                    onchange="document.getElementById('ntAgentWrap').style.display = this.value === 'agent' ? '' : 'none';">
+              <option value="agent">Individual sales agent</option>
+              <option value="department">Whole sales department</option>
+            </select>
+          </div>
+          <div class="col-6" id="ntAgentWrap">
+            <label class="form-label">Sales agent</label>
+            <select name="agent" class="form-select">
+              <option value="">— select agent —</option>
+              {% for a in agents %}
+                <option value="{{ a.pk }}">{{ a.get_full_name|default:a.username }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Period type</label>
+            <select name="period_type" class="form-select" id="ntPeriodType"
+                    onchange="var m = this.value === 'monthly';
+                              document.getElementById('ntMonthWrap').style.display = m ? '' : 'none';
+                              document.getElementById('ntQuarterWrap').style.display = m ? 'none' : '';">
+              <option value="monthly">Monthly</option>
+              <option value="quarterly">Quarterly</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Year</label>
+            <select name="year" class="form-select">
+              {% for y in years %}
+                <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-6" id="ntMonthWrap">
+            <label class="form-label">Month</label>
+            <select name="month" class="form-select">
+              {% for num, name in months %}
+                <option value="{{ num }}" {% if num == today.month %}selected{% endif %}>{{ name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-6" id="ntQuarterWrap" style="display:none;">
+            <label class="form-label">Quarter</label>
+            <select name="quarter" class="form-select">
+              {% for q in quarters %}<option value="{{ q }}">Q{{ q }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Target amount</label>
+            <input type="number" step="0.01" min="0.01" name="target_amount" class="form-control" required
+                   placeholder="e.g. 500000">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Cash reward if met</label>
+            <input type="number" step="0.01" min="0" name="reward_amount" class="form-control"
+                   placeholder="e.g. 10000">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Currency</label>
+            <input type="text" name="currency" class="form-control" value="GMD" maxlength="8">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Counted by</label>
+            <select name="basis" class="form-select">
+              <option value="invoiced">Invoiced (invoice date)</option>
+              <option value="paid">Paid (payment received)</option>
+            </select>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Notes <span class="text-muted">(optional)</span></label>
+            <textarea name="notes" class="form-control" rows="2"
+                      placeholder="e.g. Q3 push on hardware sales"></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary"><i class="bi bi-check2 me-1"></i>Set Target</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ═══ Per-target edit / delete modals ═══ -->
+{% for r in rows %}
+{% with t=r.target %}
+<div class="modal fade" id="editTargetModal-{{ t.pk }}" tabindex="-1">
+  <div class="modal-dialog">
+    <form method="post" action="{% url 'sales_target_update' t.pk %}" class="modal-content">
+      {% csrf_token %}
+      <div class="modal-header">
+        <h5 class="modal-title">Edit — {{ t.scope_label }} · {{ t.period_label }}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-6">
+            <label class="form-label">Target amount ({{ t.currency }})</label>
+            <input type="number" step="0.01" min="0.01" name="target_amount"
+                   class="form-control" value="{{ t.target_amount }}">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Cash reward ({{ t.currency }})</label>
+            <input type="number" step="0.01" min="0" name="reward_amount"
+                   class="form-control" value="{{ t.reward_amount }}">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Counted by</label>
+            <select name="basis" class="form-select">
+              <option value="invoiced" {% if t.basis == 'invoiced' %}selected{% endif %}>Invoiced (invoice date)</option>
+              <option value="paid" {% if t.basis == 'paid' %}selected{% endif %}>Paid (payment received)</option>
+            </select>
+          </div>
+          <div class="col-6 d-flex align-items-end">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" name="is_active"
+                     id="active-{{ t.pk }}" {% if t.is_active %}checked{% endif %}>
+              <label class="form-check-label" for="active-{{ t.pk }}">Active</label>
+            </div>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Notes</label>
+            <textarea name="notes" class="form-control" rows="2">{{ t.notes }}</textarea>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal fade" id="deleteTargetModal-{{ t.pk }}" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <form method="post" action="{% url 'sales_target_delete' t.pk %}" class="modal-content">
+      {% csrf_token %}
+      <div class="modal-header">
+        <h5 class="modal-title text-danger">Delete target?</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        This removes the target for <strong>{{ t.scope_label }}</strong> — {{ t.period_label }}
+        {% if r.payout %}and its unpaid reward payout record{% endif %}. This cannot be undone.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-danger">Delete</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endwith %}
+{% endfor %}
+
+<!-- ═══ Mark-paid modals ═══ -->
+{% for p in payouts %}
+{% if p.status == 'pending' or p.status == 'approved' %}
+<div class="modal fade" id="payRewardModal-{{ p.pk }}" tabindex="-1">
+  <div class="modal-dialog">
+    <form method="post" action="{% url 'sales_reward_action' p.pk %}" class="modal-content">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="mark_paid">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-cash-coin me-2"></i>Pay Reward — {{ p.beneficiary_label }}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-success py-2">
+          <strong>{{ p.currency }} {{ p.reward_amount|floatformat:2 }}</strong>
+          cash reward for meeting the {{ p.target.period_label }} target
+          ({{ p.currency }} {{ p.achieved_amount|floatformat:2 }} achieved vs
+          {{ p.currency }} {{ p.target.target_amount|floatformat:2 }} target).
+        </div>
+        <div class="row g-3">
+          <div class="col-6">
+            <label class="form-label">Payment method</label>
+            <select name="method" class="form-select">
+              {% for value, label in payment_method_choices %}
+                <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Reference <span class="text-muted">(optional)</span></label>
+            <input type="text" name="reference" class="form-control" maxlength="120"
+                   placeholder="voucher / transfer no.">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Note <span class="text-muted">(optional)</span></label>
+            <input type="text" name="notes" class="form-control" placeholder="e.g. paid at month-end payroll">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-success"><i class="bi bi-check2 me-1"></i>Confirm Paid</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endblock %}

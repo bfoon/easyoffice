@@ -4,6 +4,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import TemplateView, View, DetailView
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
+from django.core.paginator import Paginator
 from django.utils import timezone
 from django.db.models import Sum, Q, Count
 from django.http import HttpResponseForbidden
@@ -1792,19 +1793,27 @@ class IncomingPaymentRequestListView(LoginRequiredMixin, TemplateView):
         if status:
             qs = qs.filter(status=status)
 
-        # Auto-mark overdue
-        for ipr in qs:
-            if ipr.is_overdue and ipr.status == IncomingPaymentRequest.Status.SENT:
-                ipr.status = IncomingPaymentRequest.Status.OVERDUE
-                ipr.save(update_fields=['status', 'updated_at'])
+        # Auto-mark overdue (single UPDATE instead of a per-row loop)
+        IncomingPaymentRequest.objects.filter(
+            status=IncomingPaymentRequest.Status.SENT,
+            due_date__lt=timezone.now().date(),
+        ).update(
+            status=IncomingPaymentRequest.Status.OVERDUE,
+            updated_at=timezone.now(),
+        )
 
         total_outstanding = (
             qs.exclude(status__in=['paid', 'cancelled']).aggregate(t=Sum('amount'))['t']
             or Decimal('0')
         )
 
+        # ── Pagination ───────────────────────────────────────────────
+        paginator = Paginator(qs, 25)
+        page = paginator.get_page(self.request.GET.get('page'))
+
         ctx.update({
-            'invoices':          qs[:100],
+            'invoices':          page,          # page is iterable — template loop unchanged
+            'page':              page,
             'q':                 q,
             'status_filter':     status,
             'status_choices':    IncomingPaymentRequest.Status.choices,

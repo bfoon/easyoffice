@@ -21,18 +21,21 @@ class DocType(models.TextChoices):
     INVOICE       = 'invoice',       'Invoice'
     PROFORMA      = 'proforma',      'Proforma Invoice'
     DELIVERY_NOTE = 'delivery_note', 'Delivery Note'
+    RECEIPT = 'receipt', 'Receipt'
 
 
 DOC_TYPE_PREFIX = {
     DocType.INVOICE:       'INV',
     DocType.PROFORMA:      'PRO',
     DocType.DELIVERY_NOTE: 'DN',
+    DocType.RECEIPT:       'RCT',
 }
 
 DOC_TYPE_TITLE = {
     DocType.INVOICE:       'INVOICE',
     DocType.PROFORMA:      'PROFORMA INVOICE',
     DocType.DELIVERY_NOTE: 'DELIVERY NOTE',
+    DocType.RECEIPT:       'RECEIPT',
 }
 
 
@@ -204,6 +207,19 @@ class InvoiceDocument(models.Model):
         related_name='converted_to',
         help_text='The document that was converted to create this one (e.g. Proforma → Invoice).',
     )
+    # Receipt linkage — deliberately a ForeignKey, NOT a OneToOneField, and
+    # deliberately separate from `converted_from`. A receipt acknowledges
+    # payment; it is not a stage in the conversion chain. If receipts went
+    # through `converted_from`, issuing one would consume the invoice's single
+    # `converted_to` slot and you could never raise a Delivery Note afterwards.
+    # FK rather than O2O so a bad receipt can be voided and re-issued;
+    # can_issue_receipt() enforces at most one LIVE receipt per invoice.
+    receipt_for     = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='receipts',
+        limit_choices_to={'doc_type': DocType.INVOICE},
+        help_text='The invoice this receipt acknowledges payment for.',
+    )
     created_at      = models.DateTimeField(auto_now_add=True)
     updated_at      = models.DateTimeField(auto_now=True)
 
@@ -212,6 +228,8 @@ class InvoiceDocument(models.Model):
         indexes = [
             models.Index(fields=['doc_type', 'year', 'sequence']),
             models.Index(fields=['status']),
+            # Receipt lookups: get_receipt_for_invoice() filters on both.
+            models.Index(fields=['doc_type', 'receipt_for']),
         ]
 
     def __str__(self):
@@ -261,11 +279,17 @@ class InvoiceDocument(models.Model):
 
     @property
     def next_doc_type(self):
-        """The doc type this one can be converted to, or None if terminal."""
+        """
+        The doc type this one can be converted to, or None if terminal.
+
+        RECEIPT is terminal: a receipt is a side branch off an invoice
+        (see `receipt_for`), not a link in the conversion chain.
+        """
         return {
             DocType.PROFORMA:      DocType.INVOICE,
             DocType.INVOICE:       DocType.DELIVERY_NOTE,
             DocType.DELIVERY_NOTE: None,
+            DocType.RECEIPT:       None,
         }.get(self.doc_type)
 
     @property
@@ -281,6 +305,36 @@ class InvoiceDocument(models.Model):
     def is_locked_by_conversion(self):
         """True if this doc can no longer be edited/voided because it was converted."""
         return self.is_converted_source
+
+    # ── Receipt helpers ──────────────────────────────────────────────────────
+    @property
+    def is_receipt(self):
+        return self.doc_type == DocType.RECEIPT
+
+    @property
+    def live_receipt(self):
+        """The non-voided receipt issued for this invoice, or None."""
+        if not self.pk:
+            return None
+        return (
+            self.receipts
+            .exclude(status=self.Status.VOIDED)
+            .order_by('-created_at')
+            .first()
+        )
+
+    @property
+    def can_issue_receipt(self):
+        """
+        True if a receipt can be issued for this document right now.
+        Mirrors receipt_services.can_issue_receipt() for template use.
+        """
+        return (
+            self.doc_type == DocType.INVOICE
+            and self.is_finalized
+            and not self.is_voided
+            and self.live_receipt is None
+        )
 
     @property
     def title_text(self):
@@ -298,7 +352,14 @@ class InvoiceDocument(models.Model):
     # ── Payment-bridge helpers ────────────────────────────────────────────────
     @property
     def is_billable(self):
-        """Only Invoices generate receivables; Proformas/Delivery Notes don't."""
+        """
+        Only Invoices generate receivables.
+
+        Proformas and Delivery Notes aren't real revenue. Receipts record
+        money ALREADY received against an invoice that has its own
+        receivable — giving a receipt one too would double-count revenue in
+        the AR ageing and the income statement.
+        """
         return self.doc_type == DocType.INVOICE
 
     @property

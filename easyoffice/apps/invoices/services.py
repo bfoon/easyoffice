@@ -272,7 +272,8 @@ def mark_invoice_paid(invoice: InvoiceDocument,
                      method: str = 'bank_transfer',
                      reference: str = '',
                      paid_on=None,
-                     create_payment: bool = False) -> InvoiceDocument:
+                     create_payment: bool = False,
+                     issue_receipt: bool = False) -> InvoiceDocument:
     """
     Mark a finalized billable invoice as paid. Atomically:
         1. Lock the invoice row.
@@ -297,6 +298,11 @@ def mark_invoice_paid(invoice: InvoiceDocument,
     The `create_payment` parameter is retained ONLY for backward compatibility
     with any caller that explicitly passes it; it is now ignored. Default
     is False.
+
+    Pass `issue_receipt=True` to also generate a numbered Receipt document
+    (RCT-YYYY-NNNN) with its own PDF, filed in the Invoices folder. This is
+    fail-soft: a receipt is a courtesy document, so if PDF generation or the
+    files app hiccups the payment record itself still stands.
 
     All side-effects fire signals — so audit logs and anomaly checks happen
     automatically via apps/finance/signals.py without us calling them here.
@@ -361,6 +367,28 @@ def mark_invoice_paid(invoice: InvoiceDocument,
         'payment_method', 'payment_reference',
         'updated_at',
     ])
+
+    # ── Optional receipt ────────────────────────────────────────────────────
+    # Fail-soft: the payment is recorded above and must stand on its own. A
+    # receipt can always be issued later from the invoice detail page.
+    # allow_partial=True because the amount was already validated against the
+    # invoice above — an under-payment recorded here is intentional, and the
+    # receipt should reflect what was actually received.
+    if issue_receipt:
+        try:
+            from .receipt_services import create_receipt_from_invoice, ReceiptError
+            create_receipt_from_invoice(
+                invoice, actor=actor,
+                amount_paid=amount,
+                payment_method=method,
+                payment_reference=reference,
+                paid_at=invoice.paid_at,
+                allow_partial=True,
+            )
+        except ReceiptError as exc:
+            log.warning('Receipt not issued for %s: %s', invoice.number, exc)
+        except Exception:
+            log.exception('Receipt generation failed for invoice %s', invoice.pk)
 
     return invoice
 
@@ -494,10 +522,15 @@ def apply_template_update_to_invoices(template: InvoiceTemplate):
 #  Conversion chain (Proforma → Invoice → Delivery Note)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Receipts are NOT in this chain. A Receipt is issued via
+# receipt_services.create_receipt_from_invoice(), which links through
+# `receipt_for` and does NOT consume the source's `converted_to` slot —
+# so an invoice can be receipted AND still converted to a Delivery Note.
 NEXT_DOC_TYPE = {
     DocType.PROFORMA:      DocType.INVOICE,
     DocType.INVOICE:       DocType.DELIVERY_NOTE,
     DocType.DELIVERY_NOTE: None,
+    DocType.RECEIPT:       None,
 }
 
 
@@ -528,6 +561,8 @@ def convert_invoice(source: InvoiceDocument, actor, new_letterhead=None) -> Invo
         raise ValueError('Only finalized documents can be converted.')
     if source.is_converted_source:
         raise ValueError('This document has already been converted.')
+    if source.doc_type == DocType.RECEIPT:
+        raise ValueError('A Receipt cannot be converted into another document.')
     target_type = NEXT_DOC_TYPE.get(source.doc_type)
     if target_type is None:
         raise ValueError(f'{source.get_doc_type_display()} cannot be converted further.')

@@ -9,6 +9,9 @@ URL surface:
     /invoices/<uuid>/delete/                → delete draft
     /invoices/<uuid>/void/                  → void finalized
     /invoices/<uuid>/duplicate/             → copy into a new draft
+    /invoices/<uuid>/receipt/               → issue a receipt for an invoice
+    /invoices/<uuid>/receipt/void/          → void a receipt to re-issue
+    /invoices/receiptable/                  GET  → JSON list of receiptable invoices
 
     AJAX:
     /invoices/<uuid>/metadata/              POST → save client/dates/totals
@@ -19,7 +22,9 @@ URL surface:
     /invoices/letterheads/                  GET  → JSON list of PDFs user can use
 """
 import json
+import logging
 import uuid
+from datetime import date as _date, datetime as _datetime, time as _time
 from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
@@ -50,6 +55,12 @@ from .services import (
     save_invoice_as_template, create_invoice_from_template,
     apply_template_update_to_invoices, convert_invoice, mark_invoice_paid,
 )
+from .receipt_services import (
+    create_receipt_from_invoice, void_receipt, can_issue_receipt,
+    get_receipt_for_invoice, get_all_receipts_for_invoice, ReceiptError,
+)
+
+_log = logging.getLogger(__name__)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -125,7 +136,13 @@ class InvoiceDashboardView(InvoiceAccessMixin, TemplateView):
         agg = finalized_this_year.aggregate(total=Sum('total'), n=Count('id'))
 
         ctx.update({
-            'invoices':         qs.select_related('generated_pdf', 'created_by')
+            # receipt_for / converted_from are select_related because the
+            # dashboard renders a badge for each; without it that's 2 extra
+            # queries per row.
+            'invoices':         qs.select_related(
+                                      'generated_pdf', 'created_by',
+                                      'receipt_for', 'converted_from',
+                                  )
                                   .prefetch_related('generated_pdf__signature_requests')[:200],
             'by_type':          by_type,
             'total_count':      agg['n'] or 0,
@@ -150,7 +167,12 @@ class NewInvoiceView(InvoiceAccessMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         pdfs = _user_accessible_pdfs(self.request.user).order_by('-created_at')[:100]
         ctx['pdfs'] = pdfs
-        ctx['doc_type_choices'] = DocType.choices
+        # RECEIPT is excluded from "Start Fresh": a receipt must derive from a
+        # finalized invoice (it carries that invoice's number, items and
+        # payment stamps), so it's created via the Issue Receipt flow only.
+        ctx['doc_type_choices'] = [
+            (v, l) for v, l in DocType.choices if v != DocType.RECEIPT
+        ]
 
         # Templates available to this user: own + shared
         user = self.request.user
@@ -168,6 +190,14 @@ class NewInvoiceView(InvoiceAccessMixin, TemplateView):
         letterhead_id = request.POST.get('letterhead_id')
         if doc_type not in DocType.values or not letterhead_id:
             messages.error(request, 'Please choose a document type and letterhead.')
+            return redirect('invoices:invoice_new')
+        # Server-side guard — the picker hides Receipt, but don't trust the form.
+        if doc_type == DocType.RECEIPT:
+            messages.error(
+                request,
+                'A receipt cannot be created from scratch. Open the finalized '
+                'invoice it relates to and click "Issue Receipt".'
+            )
             return redirect('invoices:invoice_new')
         try:
             letterhead = _user_accessible_pdfs(request.user).get(pk=letterhead_id)
@@ -225,6 +255,13 @@ class InvoiceDetailView(InvoiceAccessMixin, TemplateView):
         invoice = get_object_or_404(InvoiceDocument, pk=kwargs['pk'])
         ctx['invoice'] = invoice
         ctx['items']   = invoice.items.all().order_by('position', 'id')
+        # Receipt state — drives the "Issue Receipt" button, the
+        # "Receipt RCT-2026-0007 issued" banner, and (on a receipt itself)
+        # the back-link to the invoice it settles.
+        ctx['can_issue_receipt'] = can_issue_receipt(invoice)
+        ctx['existing_receipt']  = get_receipt_for_invoice(invoice)
+        ctx['all_receipts']      = get_all_receipts_for_invoice(invoice)
+        ctx['source_invoice']    = invoice.receipt_for if invoice.is_receipt else None
         return ctx
 
 
@@ -723,10 +760,11 @@ class InvoiceMarkPaidView(InvoiceAccessMixin, View):
     POST-only; redirects back to the invoice detail page.
 
     Form fields:
-        amount     (optional — defaults to invoice.total)
-        method     (default 'bank_transfer')
-        reference  (optional)
-        paid_on    (YYYY-MM-DD, default today)
+        amount         (optional — defaults to invoice.total)
+        method         (default 'bank_transfer')
+        reference      (optional)
+        paid_on        (YYYY-MM-DD, default today)
+        issue_receipt  ('1' to also generate the numbered receipt PDF)
     """
     http_method_names = ['post']
 
@@ -739,7 +777,7 @@ class InvoiceMarkPaidView(InvoiceAccessMixin, View):
                 f'This invoice cannot be marked paid '
                 f'({invoice.payment_status_label}).'
             )
-            return redirect('invoice_detail', pk=invoice.pk)
+            return redirect('invoices:invoice_detail', pk=invoice.pk)
 
         raw_amount = (request.POST.get('amount') or '').strip()
         amount = None
@@ -748,7 +786,7 @@ class InvoiceMarkPaidView(InvoiceAccessMixin, View):
                 amount = Decimal(raw_amount)
             except InvalidOperation:
                 messages.error(request, 'Invalid amount entered.')
-                return redirect('invoice_detail', pk=invoice.pk)
+                return redirect('invoices:invoice_detail', pk=invoice.pk)
 
         method = (request.POST.get('method') or 'bank_transfer').strip()
         reference = (request.POST.get('reference') or '').strip()
@@ -759,7 +797,9 @@ class InvoiceMarkPaidView(InvoiceAccessMixin, View):
                 paid_on = _date.fromisoformat(raw_paid_on)
             except ValueError:
                 messages.error(request, 'Invalid payment date — use YYYY-MM-DD.')
-                return redirect('invoice_detail', pk=invoice.pk)
+                return redirect('invoices:invoice_detail', pk=invoice.pk)
+
+        issue_receipt = request.POST.get('issue_receipt') in ('1', 'true', 'on', 'True')
 
         try:
             mark_invoice_paid(
@@ -768,21 +808,222 @@ class InvoiceMarkPaidView(InvoiceAccessMixin, View):
                 method=method,
                 reference=reference,
                 paid_on=paid_on,
+                issue_receipt=issue_receipt,
             )
         except ValueError as exc:
             messages.error(request, str(exc))
-            return redirect('invoice_detail', pk=invoice.pk)
+            return redirect('invoices:invoice_detail', pk=invoice.pk)
         except Exception:
             _log.exception('mark_invoice_paid failed for invoice %s', invoice.pk)
             messages.error(
                 request,
                 'Could not mark the invoice paid — please contact finance.'
             )
-            return redirect('invoice_detail', pk=invoice.pk)
+            return redirect('invoices:invoice_detail', pk=invoice.pk)
+
+        # Receipt generation is fail-soft inside mark_invoice_paid(), so check
+        # whether it actually landed rather than assuming it did.
+        invoice.refresh_from_db()
+        receipt = get_receipt_for_invoice(invoice)
+        if issue_receipt and receipt is not None:
+            messages.success(
+                request,
+                f'Invoice {invoice.number} marked paid. Receipt '
+                f'{receipt.number} generated and saved to the Invoices folder.'
+            )
+        elif issue_receipt:
+            messages.warning(
+                request,
+                f'Invoice {invoice.number} marked paid, but the receipt could '
+                f'not be generated. You can issue it from this page.'
+            )
+        else:
+            messages.success(
+                request,
+                f'Invoice {invoice.number} marked paid. Recorded in the finance ledger.'
+            )
+        return redirect('invoices:invoice_detail', pk=invoice.pk)
+
+
+# ── Receipts ─────────────────────────────────────────────────────────────────
+
+class InvoiceReceiptView(InvoiceAccessMixin, View):
+    """
+    Issue a receipt for a finalized invoice.
+
+    GET  → confirmation page (amount / method / reference / date form).
+    POST → creates + finalizes the receipt, then redirects to it.
+
+    If a live receipt already exists, both verbs redirect to it rather than
+    creating a duplicate.
+    """
+    template_name = 'invoices/receipt_confirm.html'
+
+    def get(self, request, pk):
+        invoice = get_object_or_404(InvoiceDocument, pk=pk)
+
+        existing = get_receipt_for_invoice(invoice)
+        if existing is not None:
+            messages.info(
+                request,
+                f'Receipt {existing.number or "(draft)"} already exists for '
+                f'{invoice.number}.'
+            )
+            return redirect('invoices:invoice_detail', pk=existing.pk)
+
+        if not can_issue_receipt(invoice):
+            messages.error(
+                request,
+                'A receipt can only be issued for a finalized, non-voided invoice.'
+            )
+            return redirect('invoices:invoice_detail', pk=invoice.pk)
+
+        return render(request, self.template_name, {
+            'invoice': invoice,
+            'default_amount': invoice.paid_amount or invoice.total,
+            'default_method': invoice.payment_method or 'cash',
+            'default_reference': invoice.payment_reference or '',
+            'today': timezone.localdate(),
+        })
+
+    def post(self, request, pk):
+        invoice = get_object_or_404(InvoiceDocument, pk=pk)
+
+        existing = get_receipt_for_invoice(invoice)
+        if existing is not None:
+            messages.info(
+                request,
+                f'Receipt {existing.number or "(draft)"} already exists for '
+                f'{invoice.number}.'
+            )
+            return redirect('invoices:invoice_detail', pk=existing.pk)
+
+        raw_amount = (request.POST.get('amount') or '').strip()
+        amount = None
+        if raw_amount:
+            try:
+                amount = Decimal(raw_amount)
+            except InvalidOperation:
+                messages.error(request, 'Invalid amount entered.')
+                return redirect('invoices:invoice_receipt', pk=invoice.pk)
+
+        method = (request.POST.get('method') or '').strip()
+        reference = (request.POST.get('reference') or '').strip()
+        notes = (request.POST.get('notes') or '').strip()
+        allow_partial = request.POST.get('allow_partial') in ('1', 'true', 'on', 'True')
+
+        paid_at = None
+        raw_paid_on = (request.POST.get('paid_on') or '').strip()
+        if raw_paid_on:
+            try:
+                naive = _datetime.combine(_date.fromisoformat(raw_paid_on), _time(12, 0))
+                paid_at = timezone.make_aware(naive) if timezone.is_naive(naive) else naive
+            except (ValueError, TypeError):
+                messages.error(request, 'Invalid payment date — use YYYY-MM-DD.')
+                return redirect('invoices:invoice_receipt', pk=invoice.pk)
+
+        try:
+            receipt = create_receipt_from_invoice(
+                invoice,
+                actor=request.user,
+                amount_paid=amount,
+                payment_method=method,
+                payment_reference=reference,
+                paid_at=paid_at,
+                notes=notes,
+                finalize=True,
+                allow_partial=allow_partial,
+            )
+        except ReceiptError as exc:
+            messages.error(request, str(exc))
+            return redirect('invoices:invoice_receipt', pk=invoice.pk)
+        except Exception:
+            _log.exception('Receipt generation failed for invoice %s', invoice.pk)
+            messages.error(
+                request,
+                'Could not generate the receipt — please try again or contact IT.'
+            )
+            return redirect('invoices:invoice_detail', pk=invoice.pk)
 
         messages.success(
             request,
-            f'Invoice {invoice.number} marked paid. Recorded in the finance ledger.'
+            f'Receipt {receipt.number} issued for {invoice.number} and saved '
+            f'to the Invoices folder.'
         )
-        return redirect('invoice_detail', pk=invoice.pk)
+        return redirect('invoices:invoice_detail', pk=receipt.pk)
 
+
+@method_decorator(require_POST, name='dispatch')
+class InvoiceReceiptVoidView(InvoiceAccessMixin, View):
+    """
+    Void a receipt so a corrected one can be issued for the same invoice.
+    The receipt number stays reserved — receipts are financial records.
+    """
+    def post(self, request, pk):
+        receipt = get_object_or_404(InvoiceDocument, pk=pk)
+        reason = (request.POST.get('reason') or 'Voided to re-issue').strip()
+
+        try:
+            void_receipt(receipt, request.user, reason=reason)
+        except ReceiptError as exc:
+            messages.error(request, str(exc))
+            return redirect('invoices:invoice_detail', pk=receipt.pk)
+        except Exception:
+            _log.exception('Failed to void receipt %s', receipt.pk)
+            messages.error(request, 'Could not void the receipt.')
+            return redirect('invoices:invoice_detail', pk=receipt.pk)
+
+        messages.success(
+            request,
+            f'Receipt {receipt.number} voided. You can now issue a new one.'
+        )
+        source = receipt.receipt_for
+        if source is not None:
+            return redirect('invoices:invoice_detail', pk=source.pk)
+        return redirect('invoices:invoice_detail', pk=receipt.pk)
+
+
+class ReceiptableInvoicesListView(InvoiceAccessMixin, View):
+    """
+    JSON endpoint returning finalized invoices that can still be receipted —
+    powers the "Issue a Receipt" tab on the New Invoice page.
+
+    An invoice qualifies when it is a finalized, non-voided INVOICE with no
+    live receipt. Paid invoices are listed first (they're the common case),
+    but unpaid ones are included too — cash-on-collection is normal here, and
+    the receipt form captures the amount either way.
+    """
+    def get(self, request):
+        qs = (
+            InvoiceDocument.objects
+            .filter(
+                doc_type=DocType.INVOICE,
+                status=InvoiceDocument.Status.FINALIZED,
+            )
+            .prefetch_related('receipts')
+            .select_related('created_by')
+            .order_by('-paid_at', '-finalized_at')[:150]
+        )
+
+        out = []
+        for d in qs:
+            # Skip anything that already has a live (non-voided) receipt.
+            if any(r.status != InvoiceDocument.Status.VOIDED for r in d.receipts.all()):
+                continue
+            out.append({
+                'id':            str(d.id),
+                'number':        d.number,
+                'client_name':   d.client_name or '—',
+                'total':         str(d.total),
+                'currency':      d.currency,
+                'is_paid':       d.is_paid,
+                'paid_amount':   str(d.paid_amount) if d.paid_amount is not None else '',
+                'status_label':  d.payment_status_label,
+                'status_color':  d.payment_status_color,
+                'invoice_date':  d.invoice_date.strftime('%d %b %Y') if d.invoice_date else '',
+                'finalized_at':  d.finalized_at.strftime('%d %b %Y') if d.finalized_at else '',
+            })
+            if len(out) >= 100:
+                break
+
+        return JsonResponse({'invoices': out})

@@ -154,6 +154,9 @@
     <button type="button" class="mode-tab" data-mode="convert">
       <i class="bi bi-arrow-right-circle"></i> Create from Existing
     </button>
+    <button type="button" class="mode-tab" data-mode="receipt">
+      <i class="bi bi-receipt"></i> Issue a Receipt
+    </button>
   </div>
 
   <!-- ── Template mode ───────────────────────────────────────────────── -->
@@ -356,6 +359,27 @@
       </div>
     </div>
   </div>
+
+  <!-- ── Issue a Receipt mode ────────────────────────────────────────── -->
+  <div id="mode-receipt" style="display:none;">
+    <div class="nw-card">
+      <div class="nw-label">Issue a Receipt</div>
+      <div class="nw-sub">
+        Pick a finalized invoice to acknowledge payment for. The receipt copies the
+        invoice's letterhead, client and line items, and gets its own
+        <strong>RCT-</strong> number. Invoices that already have a receipt are hidden.
+      </div>
+
+      <input type="text" class="lh-search" id="rcpt-search"
+             placeholder="Filter by number or client…">
+
+      <div id="receipt-list" class="lh-list" style="max-height: 460px;">
+        <div style="padding: 24px; text-align:center; color:#64748b;">
+          <i class="bi bi-hourglass" style="font-size: 20px;"></i> Loading…
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -371,6 +395,10 @@
       document.getElementById('mode-convert').style.display = (mode === 'convert') ? '' : 'none';
       if (mode === 'convert' && !window._convertLoaded) { loadConvertibles(''); window._convertLoaded = true; }
     }
+    if (document.getElementById('mode-receipt')) {
+      document.getElementById('mode-receipt').style.display = (mode === 'receipt') ? '' : 'none';
+      if (mode === 'receipt' && !window._receiptLoaded) { loadReceiptable(); window._receiptLoaded = true; }
+    }
   }));
 
   // Doc type cards
@@ -381,8 +409,10 @@
     c.querySelector('input').checked = true;
   }));
 
-  // Browse/Upload tabs
-  const tabs = document.querySelectorAll('.pick-tab');
+  // Browse/Upload tabs — scoped to [data-tab] only. The convert panel's
+  // filter buttons also carry .pick-tab; an unscoped selector would match
+  // them, read an undefined data-tab, and hide the browse pane.
+  const tabs = document.querySelectorAll('.pick-tab[data-tab]');
   tabs.forEach(t => t.addEventListener('click', () => {
     tabs.forEach(x => x.classList.remove('active'));
     t.classList.add('active');
@@ -548,6 +578,98 @@
       loadConvertibles(t.dataset.convFilter || '');
     });
   });
+
+  // ── Receipt mode — fetch + render receiptable invoices ───────────────
+  let receiptRows = [];
+
+  async function loadReceiptable() {
+    const list = document.getElementById('receipt-list');
+    list.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;"><i class="bi bi-hourglass"></i> Loading…</div>';
+    try {
+      const res = await fetch(`{% url 'invoices:invoice_receiptable' %}`);
+      const data = await res.json();
+      receiptRows = data.invoices || [];
+      renderReceiptable('');
+    } catch (e) {
+      console.error(e);
+      list.innerHTML = '<div style="padding:24px;text-align:center;color:#dc2626;">Failed to load: ' + e.message + '</div>';
+    }
+  }
+
+  function renderReceiptable(filter) {
+    const list = document.getElementById('receipt-list');
+    const q = (filter || '').toLowerCase();
+    const rows = receiptRows.filter(s =>
+      !q || (s.number || '').toLowerCase().includes(q)
+         || (s.client_name || '').toLowerCase().includes(q)
+    );
+
+    if (!rows.length) {
+      list.innerHTML = `
+        <div style="padding: 30px; text-align:center; color:#64748b;">
+          <i class="bi bi-inbox" style="font-size: 30px; color:#cbd5e1; display:block; margin-bottom: 8px;"></i>
+          <strong>${receiptRows.length ? 'No matches.' : 'No invoices awaiting a receipt.'}</strong>
+          <div style="font-size: 12.5px; margin-top: 4px;">
+            ${receiptRows.length
+              ? 'Try a different number or client name.'
+              : 'Finalized invoices without a receipt will appear here.'}
+          </div>
+        </div>`;
+      return;
+    }
+
+    list.innerHTML = '';
+    rows.forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'lh-item';
+      row.style.cssText = 'padding: 14px; flex-direction: column; align-items: stretch; gap: 8px;';
+
+      const paidBadge = `<span style="font-size:10px; font-weight:700; padding:2px 7px; border-radius:999px; text-transform:uppercase; background:${s.status_color}22; color:${s.status_color};">${s.status_label}</span>`;
+
+      const head = document.createElement('div');
+      head.style.cssText = 'display:flex; align-items:center; gap:12px;';
+      head.innerHTML = `
+        <div style="width:38px; height:38px; border-radius:8px; background: linear-gradient(135deg,#16a34a,#15803d); color:#fff; display:flex; align-items:center; justify-content:center; font-size:15px;">
+          <i class="bi bi-receipt"></i>
+        </div>
+        <div style="flex:1; min-width:0;">
+          <div style="font-weight:700; color:#0f172a; font-family:monospace;"></div>
+          <div style="font-size:11.5px; color:#64748b; margin-top:2px;" class="rc-meta"></div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-weight:600; color:#0f172a; font-variant-numeric: tabular-nums;"></div>
+          <div style="margin-top:3px;">${paidBadge}</div>
+        </div>`;
+      // textContent for user data — avoids HTML injection via client names.
+      head.querySelector('div[style*="monospace"]').textContent = s.number;
+      head.querySelector('.rc-meta').textContent =
+        `${s.client_name} · Finalized ${s.finalized_at}`;
+      head.querySelector('div[style*="tabular-nums"]').textContent =
+        `${s.currency} ${parseFloat(s.total).toFixed(2)}`;
+
+      const form = document.createElement('form');
+      form.method = 'get';
+      form.action = `/invoices/${s.id}/receipt/`;
+      form.style.margin = '0';
+      form.innerHTML = `
+        <button type="submit" class="btn-inv primary" style="width:100%; justify-content:center; padding: 8px; background:#16a34a;">
+          <i class="bi bi-receipt"></i> Issue Receipt
+        </button>`;
+
+      row.appendChild(head);
+      row.appendChild(form);
+      list.appendChild(row);
+    });
+  }
+
+  const rcptSearch = document.getElementById('rcpt-search');
+  if (rcptSearch) {
+    let rcptTimer = null;
+    rcptSearch.addEventListener('input', () => {
+      clearTimeout(rcptTimer);
+      rcptTimer = setTimeout(() => renderReceiptable(rcptSearch.value.trim()), 150);
+    });
+  }
 })();
 </script>
 {% endblock %}

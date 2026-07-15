@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Track {{ job.maintenance_number }}{% endblock %}
+{% block content %}
+<div style="max-width:900px;margin:0 auto">
+  <div class="eo-card mb-4" style="border-top:5px solid {{ job.status_color }}">
+    <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap"><div><div class="text-muted small">SECURE MAINTENANCE TRACKING</div><h1 class="h3 mb-1">{{ job.maintenance_number }}</h1><p class="mb-0">{{ job.equipment_name }} · {{ job.make }} {{ job.model }}</p></div><span style="background:{{ job.status_color }}18;color:{{ job.status_color }};padding:7px 13px;border-radius:999px;font-weight:700">{{ job.get_status_display }}</span></div>
+    <div class="mt-4"><div class="d-flex justify-content-between small mb-1"><span>Progress</span><span>{{ job.progress_percent }}%</span></div><div class="progress" style="height:10px"><div class="progress-bar" style="width:{{ job.progress_percent }}%;background:{{ job.status_color }}"></div></div></div>
+  </div>
+
+  <div class="row g-4">
+    <div class="col-lg-7">
+      <div class="eo-card mb-4"><div class="eo-card-header"><h2 class="eo-card-title">Progress Timeline</h2></div>{% for event in events %}<div class="d-flex gap-3 pb-3 mb-3 {% if not forloop.last %}border-bottom{% endif %}"><div style="width:34px;height:34px;border-radius:50%;background:{{ job.status_color }}18;color:{{ job.status_color }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="bi bi-check2"></i></div><div><div class="fw-semibold">{{ event.get_kind_display }}</div><div>{{ event.message }}</div><small class="text-muted">{{ event.created_at|date:"d M Y H:i" }}</small></div></div>{% empty %}<p class="text-muted">No public updates yet.</p>{% endfor %}</div>
+
+      {% if job.status == 'awaiting_approval' %}
+      <div class="eo-card mb-4" style="border-left:4px solid #f59e0b"><h2 class="h5">Your approval is required</h2><p>Please review the repair charges and approve or decline the work.</p><form method="post">{% csrf_token %}<textarea class="form-control mb-3" name="note" rows="2" placeholder="Optional comment"></textarea><div class="d-flex gap-2"><button class="eo-btn eo-btn-success" name="action" value="approve_quote"><i class="bi bi-check-circle"></i> Approve Repair</button><button class="eo-btn eo-btn-danger" name="action" value="decline_quote"><i class="bi bi-x-circle"></i> Decline</button></div></form></div>
+      {% endif %}
+
+      {% if attachments %}<div class="eo-card"><div class="eo-card-header"><h2 class="eo-card-title">Shared Files</h2></div>{% for file in attachments %}<a class="d-block py-2" href="{{ file.file.url }}" target="_blank"><i class="bi bi-paperclip"></i> {{ file.caption|default:file.file.name }}</a>{% endfor %}</div>{% endif %}
+    </div>
+
+    <div class="col-lg-5">
+      <div class="eo-card mb-4"><div class="eo-card-header"><h2 class="eo-card-title">Service Summary</h2></div><dl class="row small mb-0"><dt class="col-6">Owner</dt><dd class="col-6">{{ job.owner_display_name }}</dd><dt class="col-6">Technician</dt><dd class="col-6">{% if job.assigned_to %}{{ job.assigned_to.full_name }}{% else %}Pending assignment{% endif %}</dd><dt class="col-6">Promised completion</dt><dd class="col-6">{{ job.promised_completion_at|date:"d M Y H:i"|default:'To be confirmed' }}</dd><dt class="col-6">Pickup deadline</dt><dd class="col-6">{{ job.pickup_deadline_at|date:"d M Y H:i"|default:'Not ready yet' }}</dd><dt class="col-6">Warranty until</dt><dd class="col-6">{{ job.warranty_until|date:"d M Y"|default:'Pending completion' }}</dd></dl>{% if job.owner_visible_note %}<hr><strong>Latest note</strong><p class="mb-0 mt-1">{{ job.owner_visible_note }}</p>{% endif %}</div>
+      <div class="eo-card"><div class="eo-card-header"><h2 class="eo-card-title">Charges</h2></div>{% for line in charge_lines %}<div class="d-flex justify-content-between py-2 border-bottom"><span>{{ line.description }} <small class="text-muted">× {{ line.quantity }}</small></span><strong>{{ line.line_total }} {{ job.currency }}</strong></div>{% empty %}<p class="text-muted small">Charges have not been finalized.</p>{% endfor %}<div class="d-flex justify-content-between fs-5 mt-3"><span>Total</span><strong>{{ job.total_amount }} {{ job.currency }}</strong></div><div class="d-flex justify-content-between"><span>Paid</span><span>{{ job.amount_paid }}</span></div><div class="d-flex justify-content-between"><span>Balance</span><strong>{{ job.balance_due }}</strong></div></div>
+    </div>
+  </div>
+</div>
+{% endblock %}

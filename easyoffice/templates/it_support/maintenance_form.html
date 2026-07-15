@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}New Equipment Maintenance{% endblock %}
+{% block breadcrumb %}<span>IT Support</span><i class="bi bi-chevron-right"></i><a href="{% url 'maintenance_list' %}">Maintenance</a><i class="bi bi-chevron-right"></i><span>New</span>{% endblock %}
+{% block content %}
+<div class="eo-page-header"><div><h1 class="eo-page-title">Receive Equipment for Maintenance</h1><p class="eo-page-subtitle">Create the repair record, secure tracking link, SLA deadlines and owner notification.</p></div></div>
+<form method="post" enctype="multipart/form-data">{% csrf_token %}
+<div class="row g-4">
+  <div class="col-xl-8">
+    <div class="eo-card mb-4">
+      <div class="eo-card-header"><div><h2 class="eo-card-title">Equipment</h2><p class="eo-card-subtitle">Select an existing asset or enter walk-in equipment.</p></div></div>
+      <div class="row g-3">
+        <div class="col-12"><label class="form-label">Existing equipment</label><select class="form-select" name="equipment_id" id="equipmentSelect"><option value="">Walk-in / external equipment</option>{% for item in equipment_list %}<option value="{{ item.pk }}" data-name="{{ item.name }}" data-category="{{ item.category }}" data-make="{{ item.make }}" data-model="{{ item.model }}" data-serial="{{ item.serial_number }}" data-asset="{{ item.asset_tag }}" {% if data.equipment_id == item.pk|stringformat:'s' %}selected{% endif %}>{{ item.asset_tag }} — {{ item.name }}{% if item.current_user %} ({{ item.current_user.full_name }}){% endif %}</option>{% endfor %}</select></div>
+        <div class="col-md-6"><label class="form-label">Equipment name *</label><input class="form-control" required name="equipment_name" id="equipmentName" value="{{ data.equipment_name }}"></div>
+        <div class="col-md-6"><label class="form-label">Category</label><input class="form-control" name="equipment_category" id="equipmentCategory" value="{{ data.equipment_category }}"></div>
+        <div class="col-md-3"><label class="form-label">Make</label><input class="form-control" name="make" id="make" value="{{ data.make }}"></div>
+        <div class="col-md-3"><label class="form-label">Model</label><input class="form-control" name="model" id="model" value="{{ data.model }}"></div>
+        <div class="col-md-3"><label class="form-label">Serial number</label><input class="form-control" name="serial_number" id="serialNumber" value="{{ data.serial_number }}"></div>
+        <div class="col-md-3"><label class="form-label">Asset tag</label><input class="form-control" name="asset_tag" id="assetTag" value="{{ data.asset_tag }}"></div>
+        <div class="col-12"><label class="form-label">Reported problem *</label><textarea class="form-control" required rows="3" name="reported_problem">{{ data.reported_problem }}</textarea></div>
+        <div class="col-md-6"><label class="form-label">Condition received</label><textarea class="form-control" rows="3" name="condition_received">{{ data.condition_received }}</textarea></div>
+        <div class="col-md-6"><label class="form-label">Accessories received</label><textarea class="form-control" rows="3" name="accessories_received" placeholder="Charger, bag, battery, mouse...">{{ data.accessories_received }}</textarea></div>
+      </div>
+    </div>
+
+    <div class="eo-card mb-4">
+      <div class="eo-card-header"><h2 class="eo-card-title">Owner / Customer</h2></div>
+      <div class="row g-3">
+        <div class="col-12"><label class="form-label">Existing user (optional)</label><select class="form-select" name="owner_user_id"><option value="">External / walk-in owner</option>{% for user in owners %}<option value="{{ user.pk }}" {% if data.owner_user_id == user.pk|stringformat:'s' %}selected{% endif %}>{{ user.full_name }} — {{ user.email }}</option>{% endfor %}</select></div>
+        <div class="col-md-6"><label class="form-label">Owner name *</label><input class="form-control" required name="owner_name" value="{{ data.owner_name }}"></div>
+        <div class="col-md-6"><label class="form-label">Company</label><input class="form-control" name="owner_company" value="{{ data.owner_company }}"></div>
+        <div class="col-md-6"><label class="form-label">Email</label><input class="form-control" type="email" name="owner_email" value="{{ data.owner_email }}"><small class="text-muted">The secure tracking link, invoice and receipt are sent here.</small></div>
+        <div class="col-md-6"><label class="form-label">Phone</label><input class="form-control" name="owner_phone" value="{{ data.owner_phone }}"></div>
+        <div class="col-12"><label class="form-label">Address</label><textarea class="form-control" rows="2" name="owner_address">{{ data.owner_address }}</textarea></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-xl-4">
+    <div class="eo-card mb-4">
+      <div class="eo-card-header"><h2 class="eo-card-title">Assignment & SLA</h2></div>
+      <div class="mb-3"><label class="form-label">Technician</label><select class="form-select" name="assigned_to_id"><option value="">Assign later</option>{% for tech in technicians %}<option value="{{ tech.pk }}" {% if data.assigned_to_id == tech.pk|stringformat:'s' %}selected{% endif %}>{{ tech.full_name }}</option>{% endfor %}</select></div>
+      <div class="mb-3"><label class="form-label">Priority</label><select class="form-select" name="priority">{% for value,label in priority_choices %}<option value="{{ value }}" {% if data.priority == value or not data.priority and value == 'normal' %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+      <div class="mb-3"><label class="form-label">Intake channel</label><select class="form-select" name="intake_channel">{% for value,label in intake_choices %}<option value="{{ value }}" {% if data.intake_channel == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+      <div class="mb-3"><label class="form-label">Diagnosis deadline</label><input type="datetime-local" class="form-control" name="diagnosis_due_at" value="{{ data.diagnosis_due_at }}"></div>
+      <div class="mb-3"><label class="form-label">Promised completion</label><input type="datetime-local" class="form-control" name="promised_completion_at" value="{{ data.promised_completion_at }}"></div>
+    </div>
+
+    <div class="eo-card mb-4">
+      <div class="eo-card-header"><h2 class="eo-card-title">Consent & Evidence</h2></div>
+      <div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="data_privacy_consent" id="privacy"><label class="form-check-label" for="privacy">Owner consents to necessary diagnostic access.</label></div>
+      <div class="form-check mb-3"><input class="form-check-input" type="checkbox" name="backup_authorized" id="backup"><label class="form-check-label" for="backup">Backup/data transfer authorized.</label></div>
+      <label class="form-label">Intake photo/document</label><input class="form-control mb-2" type="file" name="intake_file">
+      <input class="form-control mb-2" name="intake_caption" placeholder="Caption">
+      <div class="form-check"><input class="form-check-input" type="checkbox" name="intake_file_public" id="publicFile"><label class="form-check-label" for="publicFile">Visible on owner tracking page</label></div>
+    </div>
+
+    <div class="eo-card mb-4">
+      <div class="row g-2"><div class="col-4"><label class="form-label">Currency</label><input class="form-control" name="currency" value="GMD" maxlength="3"></div><div class="col-4"><label class="form-label">Tax %</label><input class="form-control" name="tax_rate" value="0" type="number" step="0.01"></div><div class="col-4"><label class="form-label">Discount</label><input class="form-control" name="discount_amount" value="0" type="number" step="0.01"></div></div>
+    </div>
+    <button class="eo-btn eo-btn-primary w-100 py-3"><i class="bi bi-shield-check"></i> Create Secure Maintenance Record</button>
+  </div>
+</div>
+</form>
+<script>
+document.getElementById('equipmentSelect').addEventListener('change', function(){
+  const o=this.options[this.selectedIndex];
+  if(!o.value) return;
+  document.getElementById('equipmentName').value=o.dataset.name||'';
+  document.getElementById('equipmentCategory').value=o.dataset.category||'';
+  document.getElementById('make').value=o.dataset.make||'';
+  document.getElementById('model').value=o.dataset.model||'';
+  document.getElementById('serialNumber').value=o.dataset.serial||'';
+  document.getElementById('assetTag').value=o.dataset.asset||'';
+});
+</script>
+{% endblock %}

@@ -14,11 +14,16 @@ urlpatterns = [
     path('api/products/quick-add/',   views_products.ProductQuickAddAPIView.as_view(), name='product_quick_add_api'),
 
     # Templates
-    path('templates/',                 views.TemplateListView.as_view(),              name='template_list'),
-    path('templates/<uuid:pk>/use/',   views.TemplateUseView.as_view(),               name='template_use'),
-    path('templates/<uuid:pk>/edit/',  views.TemplateEditView.as_view(),              name='template_edit'),
-    path('templates/<uuid:pk>/delete/', views.TemplateDeleteView.as_view(),           name='template_delete'),
-    path('<uuid:pk>/save-as-template/', views.TemplateCreateFromInvoiceView.as_view(), name='template_create_from_invoice'),
+    path('templates/',                  views.TemplateListView.as_view(),               name='template_list'),
+    path('templates/<uuid:pk>/use/',    views.TemplateUseView.as_view(),                name='template_use'),
+    path('templates/<uuid:pk>/edit/',   views.TemplateEditView.as_view(),               name='template_edit'),
+    path('templates/<uuid:pk>/delete/', views.TemplateDeleteView.as_view(),             name='template_delete'),
+    path('<uuid:pk>/save-as-template/', views.TemplateCreateFromInvoiceView.as_view(),  name='template_create_from_invoice'),
+
+    # Listing endpoints — these MUST come before '<uuid:pk>/' so the literal
+    # path segments aren't swallowed by the UUID converter.
+    path('convertible-sources/',      views.ConvertibleSourcesListView.as_view(),  name='invoice_convertible_sources'),
+    path('receiptable/',              views.ReceiptableInvoicesListView.as_view(), name='invoice_receiptable'),
 
     path('<uuid:pk>/',                views.InvoiceDetailView.as_view(),     name='invoice_detail'),
     path('<uuid:pk>/edit/',           views.InvoiceBuilderView.as_view(),    name='invoice_edit'),
@@ -26,15 +31,15 @@ urlpatterns = [
     path('<uuid:pk>/void/',           views.InvoiceVoidView.as_view(),       name='invoice_void'),
     path('<uuid:pk>/duplicate/',      views.InvoiceDuplicateView.as_view(),  name='invoice_duplicate'),
     path('<uuid:pk>/convert/',        views.InvoiceConvertView.as_view(),    name='invoice_convert'),
-    path('convertible-sources/',     views.ConvertibleSourcesListView.as_view(), name='invoice_convertible_sources'),
 
     path('<uuid:pk>/metadata/',       views.InvoiceMetadataSaveView.as_view(), name='invoice_metadata'),
     path('<uuid:pk>/items/',          views.InvoiceItemsSaveView.as_view(),    name='invoice_items'),
     path('<uuid:pk>/layout/',         views.InvoiceLayoutSaveView.as_view(),   name='invoice_layout'),
     path('<uuid:pk>/preview-pdf/',    views.InvoicePreviewPDFView.as_view(),   name='invoice_preview_pdf'),
     path('<uuid:pk>/finalize/',       views.InvoiceFinalizeView.as_view(),     name='invoice_finalize'),
-    path('<uuid:pk>/mark-paid/',
-             views.InvoiceMarkPaidView.as_view(),
-             name='invoice_mark_paid'),
+    path('<uuid:pk>/mark-paid/',      views.InvoiceMarkPaidView.as_view(),     name='invoice_mark_paid'),
 
+    # Receipts
+    path('<uuid:pk>/receipt/',        views.InvoiceReceiptView.as_view(),      name='invoice_receipt'),
+    path('<uuid:pk>/receipt/void/',   views.InvoiceReceiptVoidView.as_view(),  name='invoice_receipt_void'),
 ]

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Equipment Maintenance{% endblock %}
+{% block breadcrumb %}<span>IT Support</span><i class="bi bi-chevron-right"></i><span>Maintenance</span>{% endblock %}
+{% block content %}
+<div class="eo-page-header">
+  <div>
+    <h1 class="eo-page-title">Equipment Maintenance Command Centre</h1>
+    <p class="eo-page-subtitle">Track every intake, technician deadline, customer approval, repair, pickup and payment.</p>
+  </div>
+  <a href="{% url 'maintenance_create' %}" class="eo-btn eo-btn-primary"><i class="bi bi-plus-lg"></i> New Maintenance</a>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-lg"><a href="?view=active" class="text-decoration-none"><div class="eo-stat eo-stat-info"><div class="eo-stat-label">Active</div><div class="eo-stat-value">{{ stats.active }}</div><i class="bi bi-tools eo-stat-icon"></i></div></a></div>
+  <div class="col-6 col-lg"><a href="?view=ready" class="text-decoration-none"><div class="eo-stat eo-stat-success"><div class="eo-stat-label">Ready for Pickup</div><div class="eo-stat-value">{{ stats.ready }}</div><i class="bi bi-box-arrow-up-right eo-stat-icon"></i></div></a></div>
+  <div class="col-6 col-lg"><a href="?view=overdue" class="text-decoration-none"><div class="eo-stat eo-stat-danger"><div class="eo-stat-label">Repair Overdue</div><div class="eo-stat-value">{{ stats.overdue }}</div><i class="bi bi-exclamation-triangle eo-stat-icon"></i></div></a></div>
+  <div class="col-6 col-lg"><a href="?view=pickup_overdue" class="text-decoration-none"><div class="eo-stat eo-stat-warning"><div class="eo-stat-label">Pickup Overdue</div><div class="eo-stat-value">{{ stats.pickup_overdue }}</div><i class="bi bi-clock-history eo-stat-icon"></i></div></a></div>
+  <div class="col-6 col-lg"><div class="eo-stat"><div class="eo-stat-label">All Records</div><div class="eo-stat-value">{{ stats.total }}</div><i class="bi bi-archive eo-stat-icon"></i></div></div>
+</div>
+
+<div class="eo-card mb-4">
+  <form method="get" class="row g-2 align-items-end">
+    <div class="col-lg-4"><label class="form-label">Search</label><input class="form-control" name="q" value="{{ q }}" placeholder="Reference, owner, serial, asset tag..."></div>
+    <div class="col-md-2"><label class="form-label">Status</label><select class="form-select" name="status"><option value="">All</option>{% for value,label in status_choices %}<option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+    <div class="col-md-2"><label class="form-label">Priority</label><select class="form-select" name="priority"><option value="">All</option>{% for value,label in priority_choices %}<option value="{{ value }}" {% if priority_filter == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+    <div class="col-md-2"><label class="form-label">Technician</label><select class="form-select" name="technician"><option value="">All</option>{% for tech in technicians %}<option value="{{ tech.pk }}" {% if technician_filter == tech.pk|stringformat:'s' %}selected{% endif %}>{{ tech.full_name }}</option>{% endfor %}</select></div>
+    <div class="col-md-2 d-flex gap-2"><button class="eo-btn eo-btn-primary flex-fill">Filter</button><a href="{% url 'maintenance_list' %}" class="eo-btn eo-btn-secondary">Clear</a></div>
+  </form>
+</div>
+
+<div class="eo-card p-0 overflow-hidden">
+  <div class="table-responsive">
+    <table class="eo-table mb-0">
+      <thead><tr><th>Reference / Equipment</th><th>Owner</th><th>Technician</th><th>Status</th><th>Deadline</th><th>Financial</th><th></th></tr></thead>
+      <tbody>
+      {% for job in jobs %}
+      <tr {% if job.is_overdue or job.pickup_is_overdue %}style="background:#fff7ed"{% endif %}>
+        <td><div class="fw-bold">{{ job.maintenance_number }}</div><div>{{ job.equipment_name }}</div><small class="text-muted">{{ job.make }} {{ job.model }}{% if job.serial_number %} · S/N {{ job.serial_number }}{% endif %}</small></td>
+        <td><div>{{ job.owner_display_name }}</div><small class="text-muted">{{ job.owner_phone|default:job.effective_owner_email|default:'No contact' }}</small></td>
+        <td>{% if job.assigned_to %}{{ job.assigned_to.full_name }}{% else %}<span class="text-warning">Unassigned</span>{% endif %}</td>
+        <td><span style="background:{{ job.status_color }}18;color:{{ job.status_color }};padding:4px 9px;border-radius:999px;font-size:.75rem;font-weight:700">{{ job.get_status_display }}</span><div class="mt-1"><small class="text-muted">{{ job.get_priority_display }}</small></div></td>
+        <td>
+          {% if job.status == 'ready_pickup' %}
+            {% if job.pickup_deadline_at %}<div class="{% if job.pickup_is_overdue %}text-danger fw-bold{% endif %}">{{ job.pickup_deadline_at|date:"d M Y H:i" }}</div><small>Pickup deadline</small>{% else %}—{% endif %}
+          {% else %}
+            {% if job.promised_completion_at %}<div class="{% if job.is_overdue %}text-danger fw-bold{% endif %}">{{ job.promised_completion_at|date:"d M Y H:i" }}</div><small>Completion</small>{% else %}—{% endif %}
+          {% endif %}
+        </td>
+        <td><div class="fw-semibold">{{ job.total_amount }} {{ job.currency }}</div><small class="text-muted">{{ job.get_payment_status_display }}</small></td>
+        <td><a class="eo-btn eo-btn-secondary eo-btn-sm" href="{% url 'maintenance_detail' job.pk %}">Open</a></td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="7" class="text-center py-5 text-muted"><i class="bi bi-tools d-block fs-2 mb-2"></i>No maintenance records match the filter.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

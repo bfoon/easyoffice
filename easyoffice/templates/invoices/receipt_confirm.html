@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Issue Receipt · {{ invoice.number }} · EasyOffice{% endblock %}
+
+{% block extra_css %}
+<style>
+  .rc-shell { max-width: 900px; margin: 0 auto; padding: 24px; }
+  .rc-head { margin-bottom: 20px; }
+  .rc-title { font-size: 22px; font-weight: 700; color:#0f172a; margin:0; }
+  .rc-sub { color:#64748b; font-size: 13px; margin-top: 4px; }
+
+  .rc-flow {
+    display: flex; align-items: center; gap: 16px; padding: 18px;
+    background: linear-gradient(135deg, #f0fdf4, #ecfdf5);
+    border: 1px solid #bbf7d0; border-radius: 12px; margin-bottom: 20px;
+  }
+  .rc-node {
+    background: #fff; border-radius: 10px; padding: 14px 18px;
+    border: 1px solid #e2e8f0; flex: 1; min-width: 0;
+  }
+  .rc-node.target { border-color: #16a34a; box-shadow: 0 0 0 3px rgba(22,163,74,0.12); }
+  .rc-node .type-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.05em; color:#64748b; margin-bottom: 4px;
+  }
+  .rc-node .num { font-size: 16px; font-weight: 700; color:#0f172a; font-family: monospace; }
+  .rc-node .meta { font-size: 12px; color:#64748b; margin-top: 2px; }
+  .rc-arrow { color: #16a34a; font-size: 26px; flex-shrink: 0; }
+
+  .rc-card {
+    background:#fff; border:1px solid #e2e8f0; border-radius: 12px;
+    padding: 20px; margin-bottom: 16px;
+  }
+  .rc-label { font-size: 11px; font-weight:600; color:#475569; text-transform:uppercase;
+              letter-spacing: 0.04em; margin-bottom: 10px; }
+
+  .fld { margin-bottom: 14px; }
+  .fld label {
+    display:block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 5px;
+  }
+  .fld input, .fld select, .fld textarea {
+    width: 100%; padding: 9px 12px; border: 1px solid #e2e8f0;
+    border-radius: 7px; font-size: 13.5px; font-family: inherit;
+  }
+  .fld input:focus, .fld select:focus, .fld textarea:focus {
+    outline: none; border-color: #16a34a; box-shadow: 0 0 0 3px rgba(22,163,74,0.15);
+  }
+  .fld .help { font-size: 11.5px; color: #94a3b8; margin-top: 4px; }
+  .row2 { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  .check-card {
+    display:flex; align-items:flex-start; gap:10px; padding: 12px 14px;
+    background:#fffbeb; border:1px solid #fde68a; border-radius: 8px;
+    cursor: pointer; margin-top: 4px;
+  }
+  .check-card:hover { background:#fef3c7; }
+  .check-card input { margin-top: 3px; }
+  .check-card .lbl { font-weight: 600; color: #78350f; font-size: 13.5px; }
+  .check-card .desc { font-size: 12px; color: #92400e; margin-top: 2px; }
+
+  .info-box {
+    background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px;
+    padding: 10px 14px; font-size: 12.5px; color: #0c4a6e; margin-bottom: 16px;
+  }
+
+  .amount-hint {
+    display:flex; justify-content:space-between; font-size: 12px;
+    padding: 8px 12px; background:#f8fafc; border-radius: 6px; margin-top: 6px;
+  }
+  .amount-hint .v { font-weight: 700; color:#0f172a; font-variant-numeric: tabular-nums; }
+
+  .actions { display:flex; gap:10px; justify-content: flex-end; }
+  .btn-inv {
+    display:inline-flex; align-items:center; gap:6px; padding: 10px 18px; border-radius: 8px;
+    font-size: 13px; font-weight:600; text-decoration:none; cursor:pointer;
+    border:1px solid transparent; font-family: inherit;
+  }
+  .btn-inv.success { background:#16a34a; color:#fff; }
+  .btn-inv.success:hover { background:#15803d; }
+  .btn-inv.ghost { background:#fff; color:#0f172a; border-color:#e2e8f0; }
+  .btn-inv.ghost:hover { background:#f8fafc; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="rc-shell">
+  <div class="rc-head">
+    <h1 class="rc-title">Issue Receipt</h1>
+    <div class="rc-sub">
+      Acknowledge payment received against {{ invoice.number }}. The receipt gets
+      its own number and PDF, saved to the Invoices folder.
+    </div>
+  </div>
+
+  <div class="rc-flow">
+    <div class="rc-node">
+      <div class="type-label">{{ invoice.get_doc_type_display }}</div>
+      <div class="num">{{ invoice.number }}</div>
+      <div class="meta">
+        {{ invoice.client_name|default:"No client" }} ·
+        {{ invoice.currency }} {{ invoice.total|floatformat:2 }}
+      </div>
+    </div>
+    <i class="bi bi-arrow-right-circle-fill rc-arrow"></i>
+    <div class="rc-node target">
+      <div class="type-label">New Receipt</div>
+      <div class="num" style="color:#16a34a;">(RCT number on issue)</div>
+      <div class="meta">Same letterhead, client and line items</div>
+    </div>
+  </div>
+
+  <div class="info-box">
+    <i class="bi bi-info-circle"></i>
+    {{ invoice.number }} stays fully usable — issuing a receipt does
+    <strong>not</strong> lock it, and you can still convert it to a Delivery Note.
+  </div>
+
+  <form method="post" id="receipt-form">
+    {% csrf_token %}
+
+    <div class="rc-card">
+      <div class="rc-label">Payment Details</div>
+
+      <div class="row2">
+        <div class="fld">
+          <label for="amount">Amount received ({{ invoice.currency }})</label>
+          <input type="number" step="0.01" min="0.01" name="amount" id="amount"
+                 value="{{ default_amount|floatformat:2 }}">
+          <div class="amount-hint">
+            <span style="color:#64748b;">Invoice total</span>
+            <span class="v" id="inv-total" data-total="{{ invoice.total|floatformat:2 }}">
+              {{ invoice.currency }} {{ invoice.total|floatformat:2 }}
+            </span>
+          </div>
+        </div>
+
+        <div class="fld">
+          <label for="paid_on">Date received</label>
+          <input type="date" name="paid_on" id="paid_on" value="{{ today|date:'Y-m-d' }}">
+          <div class="help">Defaults to today.</div>
+        </div>
+      </div>
+
+      <div class="row2">
+        <div class="fld">
+          <label for="method">Payment method</label>
+          <select name="method" id="method">
+            <option value="cash"          {% if default_method == 'cash' %}selected{% endif %}>Cash</option>
+            <option value="bank_transfer" {% if default_method == 'bank_transfer' %}selected{% endif %}>Bank transfer</option>
+            <option value="cheque"        {% if default_method == 'cheque' %}selected{% endif %}>Cheque</option>
+            <option value="mobile_money"  {% if default_method == 'mobile_money' %}selected{% endif %}>Mobile money</option>
+            <option value="card"          {% if default_method == 'card' %}selected{% endif %}>Card</option>
+            <option value="other"         {% if default_method == 'other' %}selected{% endif %}>Other</option>
+          </select>
+        </div>
+
+        <div class="fld">
+          <label for="reference">Reference</label>
+          <input type="text" name="reference" id="reference"
+                 value="{{ default_reference }}" placeholder="Cheque no. / txn id / bank ref">
+        </div>
+      </div>
+
+      <div class="fld" style="margin-bottom: 0;">
+        <label for="notes">Notes (optional)</label>
+        <textarea name="notes" id="notes" rows="2"
+                  placeholder="Anything else to print on the receipt…"></textarea>
+      </div>
+    </div>
+
+    <div class="rc-card" id="partial-card" style="display:none;">
+      <div class="rc-label">Part Payment</div>
+      <label class="check-card" for="allow_partial">
+        <input type="checkbox" name="allow_partial" id="allow_partial" value="1">
+        <div>
+          <div class="lbl">
+            <i class="bi bi-exclamation-triangle-fill"></i>
+            Allow a part-payment receipt
+          </div>
+          <div class="desc">
+            The amount entered is less than the invoice total. Tick this to issue
+            a receipt for what was actually received — the outstanding balance
+            will be printed on it.
+          </div>
+        </div>
+      </label>
+    </div>
+
+    <div class="actions">
+      <a href="{% url 'invoices:invoice_detail' invoice.pk %}" class="btn-inv ghost">Cancel</a>
+      <button type="submit" class="btn-inv success">
+        <i class="bi bi-receipt"></i> Issue Receipt
+      </button>
+    </div>
+  </form>
+</div>
+
+<script>
+(function(){
+  // Reveal the part-payment confirmation only when the amount is under the
+  // invoice total — mirrors the allow_partial guard in receipt_services.
+  const amountInput = document.getElementById('amount');
+  const totalEl     = document.getElementById('inv-total');
+  const partialCard = document.getElementById('partial-card');
+  const partialCb   = document.getElementById('allow_partial');
+  const total = parseFloat(totalEl.dataset.total || '0');
+
+  function sync(){
+    const v = parseFloat(amountInput.value || '0');
+    const isPartial = !isNaN(v) && v > 0 && v < total;
+    partialCard.style.display = isPartial ? '' : 'none';
+    if (!isPartial) partialCb.checked = false;
+  }
+  amountInput.addEventListener('input', sync);
+  sync();
+})();
+</script>
+{% endblock %}

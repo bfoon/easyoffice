@@ -42,6 +42,22 @@
   .btn-inv.ghost:hover { background:#f8fafc; }
   .btn-inv.danger { background:#fff; color:#dc2626; border-color:#fecaca;}
   .btn-inv.danger:hover { background:#fef2f2; }
+  .btn-inv.success { background:#16a34a; color:#fff; border-color:#16a34a;}
+  .btn-inv.success:hover { background:#15803d; }
+
+  .badge-paid { background:#dcfce7; color:#166534; }
+
+  .rcpt-banner {
+    border-radius: 12px; padding: 14px 18px; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .rcpt-banner.issued {
+    background: linear-gradient(135deg, #f0fdf4, #dcfce7);
+    border: 1px solid #86efac;
+  }
+  .rcpt-banner.source {
+    background: #f0f9ff; border: 1px solid #bae6fd;
+  }
 
   .item-list { font-size: 12.5px; }
   .item-list .it { display:flex; justify-content:space-between; padding: 5px 0; border-bottom: 1px solid #f1f5f9; }
@@ -91,6 +107,17 @@
           {% if invoice.next_doc_type == 'invoice' %}Convert to Invoice
           {% elif invoice.next_doc_type == 'delivery_note' %}Convert to Delivery Note
           {% endif %}
+        </a>
+      {% endif %}
+
+      {% if can_issue_receipt %}
+        <a href="{% url 'invoices:invoice_receipt' invoice.pk %}" class="btn-inv success">
+          <i class="bi bi-receipt"></i> Issue Receipt
+        </a>
+      {% elif existing_receipt %}
+        <a href="{% url 'invoices:invoice_detail' existing_receipt.pk %}" class="btn-inv ghost"
+           style="color:#16a34a; border-color:#bbf7d0; background:#f0fdf4;">
+          <i class="bi bi-receipt"></i> View Receipt {{ existing_receipt.number }}
         </a>
       {% endif %}
 
@@ -148,6 +175,55 @@
       </div>
       <a href="{% url 'invoices:invoice_detail' invoice.converted_from.pk %}" class="btn-inv ghost" style="padding: 5px 10px; font-size: 12px;">
         <i class="bi bi-eye"></i> View Source
+      </a>
+    </div>
+  {% endif %}
+
+  {% if source_invoice %}
+    <div class="rcpt-banner source">
+      <i class="bi bi-receipt-cutoff" style="font-size: 22px; color:#0284c7;"></i>
+      <div style="flex: 1; color:#0c4a6e; font-size: 13px;">
+        This receipt acknowledges payment for
+        {{ source_invoice.get_doc_type_display }}
+        <strong>{{ source_invoice.number }}</strong>
+        ({{ source_invoice.currency }} {{ source_invoice.total|floatformat:2 }}).
+      </div>
+      <a href="{% url 'invoices:invoice_detail' source_invoice.pk %}" class="btn-inv ghost"
+         style="padding: 5px 10px; font-size: 12px; background:#fff;">
+        <i class="bi bi-eye"></i> View Invoice
+      </a>
+    </div>
+
+    {% if invoice.is_finalized %}
+      <div style="text-align:right; margin: -8px 0 16px;">
+        <form method="post" action="{% url 'invoices:invoice_receipt_void' invoice.pk %}"
+              style="display:inline;"
+              onsubmit="return confirm('Void this receipt? The number stays reserved and you can then issue a corrected one.');">
+          {% csrf_token %}
+          <input type="hidden" name="reason" value="Voided to re-issue">
+          <button type="submit" class="btn-inv danger" style="padding: 5px 10px; font-size: 12px;">
+            <i class="bi bi-ban"></i> Void &amp; re-issue receipt
+          </button>
+        </form>
+      </div>
+    {% endif %}
+  {% endif %}
+
+  {% if existing_receipt and not invoice.is_receipt %}
+    <div class="rcpt-banner issued">
+      <i class="bi bi-check-circle-fill" style="font-size: 22px; color:#15803d;"></i>
+      <div style="flex: 1;">
+        <div style="font-weight: 700; color:#14532d; font-size: 14px;">
+          Receipt {{ existing_receipt.number|default:"(draft)" }} issued for this invoice
+        </div>
+        <div style="font-size: 12.5px; color:#166534; margin-top: 2px;">
+          {{ existing_receipt.currency }} {{ existing_receipt.paid_amount|floatformat:2 }} received
+          {% if existing_receipt.payment_method %}by {{ existing_receipt.payment_method }}{% endif %}
+          on {{ existing_receipt.paid_at|date:"d M Y" }}.
+        </div>
+      </div>
+      <a href="{% url 'invoices:invoice_detail' existing_receipt.pk %}" class="btn-inv ghost" style="background:#fff;">
+        <i class="bi bi-arrow-right"></i> View Receipt
       </a>
     </div>
   {% endif %}
@@ -211,6 +287,67 @@
           </span>
         </div>
       </div>
+
+      {% if invoice.is_billable or invoice.is_receipt %}
+      <div class="side" style="margin-top: 14px;">
+        <h4>Payment</h4>
+        <div class="row">
+          <span class="l">Status</span>
+          <span class="v">
+            <span class="badge-pill" style="background: {{ invoice.payment_status_color }}22; color: {{ invoice.payment_status_color }};">
+              {{ invoice.payment_status_label }}
+            </span>
+          </span>
+        </div>
+        {% if invoice.is_paid %}
+          <div class="row"><span class="l">Amount paid</span><span class="v">{{ invoice.currency }} {{ invoice.paid_amount|floatformat:2 }}</span></div>
+          {% if invoice.payment_method %}<div class="row"><span class="l">Method</span><span class="v">{{ invoice.payment_method }}</span></div>{% endif %}
+          {% if invoice.payment_reference %}<div class="row"><span class="l">Reference</span><span class="v">{{ invoice.payment_reference }}</span></div>{% endif %}
+          <div class="row"><span class="l">Paid on</span><span class="v">{{ invoice.paid_at|date:"d M Y" }}</span></div>
+          {% if invoice.paid_by %}<div class="row"><span class="l">Recorded by</span><span class="v">{{ invoice.paid_by.full_name|default:invoice.paid_by.username }}</span></div>{% endif %}
+        {% endif %}
+
+        {% if invoice.can_be_marked_paid %}
+          <form method="post" action="{% url 'invoices:invoice_mark_paid' invoice.pk %}"
+                style="margin-top: 12px; border-top: 1px solid #f1f5f9; padding-top: 12px;">
+            {% csrf_token %}
+            <label style="display:block; font-size:11.5px; font-weight:600; color:#475569; margin-bottom:4px;">
+              Amount received ({{ invoice.currency }})
+            </label>
+            <input type="number" step="0.01" min="0.01" name="amount"
+                   value="{{ invoice.total|floatformat:2 }}"
+                   style="width:100%; padding:7px 10px; border:1px solid #e2e8f0; border-radius:6px; font-size:13px; margin-bottom:8px;">
+
+            <label style="display:block; font-size:11.5px; font-weight:600; color:#475569; margin-bottom:4px;">
+              Method
+            </label>
+            <select name="method"
+                    style="width:100%; padding:7px 10px; border:1px solid #e2e8f0; border-radius:6px; font-size:13px; margin-bottom:8px;">
+              <option value="bank_transfer">Bank transfer</option>
+              <option value="cash">Cash</option>
+              <option value="cheque">Cheque</option>
+              <option value="mobile_money">Mobile money</option>
+              <option value="card">Card</option>
+            </select>
+
+            <label style="display:block; font-size:11.5px; font-weight:600; color:#475569; margin-bottom:4px;">
+              Reference
+            </label>
+            <input type="text" name="reference" placeholder="Txn / cheque no."
+                   style="width:100%; padding:7px 10px; border:1px solid #e2e8f0; border-radius:6px; font-size:13px; margin-bottom:8px;">
+
+            <label style="display:flex; gap:7px; align-items:flex-start; font-size:12px; color:#475569; margin-bottom:10px; cursor:pointer;">
+              <input type="checkbox" name="issue_receipt" value="1" checked style="margin-top:2px;">
+              <span>Also generate the receipt PDF now</span>
+            </label>
+
+            <button type="submit" class="btn-inv success" style="width:100%; justify-content:center;">
+              <i class="bi bi-cash-coin"></i> Mark as Paid
+            </button>
+          </form>
+        {% endif %}
+      </div>
+      {% endif %}
 
       {% if invoice.generated_pdf and invoice.generated_pdf.signature_requests.all %}
       <div class="side" style="margin-top: 14px;">

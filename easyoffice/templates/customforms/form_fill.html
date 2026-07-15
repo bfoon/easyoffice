@@ -173,6 +173,10 @@
   }
 
   // ── Approver search ───────────────────────────────────────────────────
+  // Results carry data-uid / data-name attributes and one delegated
+  // mousedown handler does the picking. This works with any user PK type
+  // (int or UUID) and any characters in names — no JS injected into
+  // onclick attributes.
   let timer = null;
   FF.userSearch = function (input) {
     clearTimeout(timer);
@@ -185,19 +189,31 @@
         { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
       const d = await res.json();
       box.innerHTML = (d.users || []).map(u =>
-        `<div onclick="FF.pick('${input.dataset.choiceStep}', ${u.id}, this)">
+        `<div class="ff-uopt" data-uid="${esc(String(u.id))}" data-name="${esc(u.name)}">
            <i class="bi bi-person"></i> ${esc(u.name)}
            <span style="color:var(--eo-text-muted)">@${esc(u.username)}</span></div>`
       ).join('') || '<div style="color:var(--eo-text-muted)">No matches</div>';
       box.style.display = 'block';
     }, 250);
   };
-  FF.pick = function (stepId, userId, el) {
-    FF.chosen[stepId] = userId;
-    const wrap = el.closest('.ff-usearch');
-    wrap.querySelector('input').value = el.textContent.trim().split('@')[0].trim();
-    wrap.querySelector('.ff-uresults').style.display = 'none';
-  };
+
+  // Delegated: mousedown fires before any blur can hide the dropdown.
+  document.addEventListener('mousedown', function (e) {
+    const opt = e.target.closest('.ff-uopt');
+    if (opt) {
+      e.preventDefault();
+      const wrap = opt.closest('.ff-usearch');
+      const input = wrap.querySelector('input');
+      FF.chosen[input.dataset.choiceStep] = opt.dataset.uid;
+      input.value = opt.dataset.name;
+      wrap.querySelector('.ff-uresults').style.display = 'none';
+      return;
+    }
+    // Click anywhere else closes open dropdowns.
+    if (!e.target.closest('.ff-usearch')) {
+      document.querySelectorAll('.ff-uresults').forEach(b => b.style.display = 'none');
+    }
+  });
 
   // ── Submit ────────────────────────────────────────────────────────────
   FF.submit = async function () {

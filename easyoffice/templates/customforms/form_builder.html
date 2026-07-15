@@ -635,13 +635,21 @@
       const res = await fetch(`${API.directory}?q=${encodeURIComponent(q)}`,
         { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
       const data = await res.json();
+      // data-* attributes + delegated mousedown: safe for UUID user PKs
+      // and names with quotes (no JS interpolated into onclick).
       box.innerHTML = (data.users || []).map(u =>
-        `<div onclick="FB.pickUser('${stepId}',${u.id},'${esc(u.name).replace(/'/g, '&#39;')}')">
+        `<div class="fb-uopt" data-step="${esc(stepId)}" data-uid="${esc(String(u.id))}" data-name="${esc(u.name)}">
            <i class="bi bi-person"></i> ${esc(u.name)} <span style="color:var(--eo-text-muted)">@${esc(u.username)}</span>
          </div>`).join('') || '<div style="color:var(--eo-text-muted)">No matches</div>';
       box.style.display = 'block';
     }, 250);
   };
+  document.addEventListener('mousedown', function (e) {
+    const opt = e.target.closest('.fb-uopt');
+    if (!opt) return;
+    e.preventDefault(); e.stopPropagation();
+    FB.pickUser(opt.dataset.step, opt.dataset.uid, opt.dataset.name);
+  });
   FB.pickUser = function (stepId, userId, name) {
     const s = FB.state.approval_flow.find(x => x.id === stepId);
     if (!s) return;

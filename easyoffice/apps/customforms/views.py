@@ -405,7 +405,7 @@ class FormSubmitView(LoginRequiredMixin, View):
                     status=400)
             try:
                 resolved_choice[s['id']] = User.objects.get(pk=uid, is_active=True)
-            except (User.DoesNotExist, ValueError):
+            except Exception:
                 return JsonResponse({'error': 'Chosen approver not found.'}, status=400)
 
         sub = FormSubmission.objects.create(
@@ -419,7 +419,10 @@ class FormSubmitView(LoginRequiredMixin, View):
         for i, s in enumerate(flow):
             assigned = None
             if s.get('assignee_type') == 'user':
-                assigned = User.objects.filter(pk=s.get('assignee_value')).first()
+                try:
+                    assigned = User.objects.filter(pk=s.get('assignee_value')).first()
+                except Exception:
+                    assigned = None
             elif s.get('assignee_type') == 'submitter_choice':
                 assigned = resolved_choice[s['id']]
             SubmissionStep.objects.create(
@@ -540,33 +543,124 @@ class _ExportBase(LoginRequiredMixin, View):
     """Shared HTML-building + LibreOffice conversion (same infra as letterheads)."""
 
     # -- letterhead header -------------------------------------------------
+    #
+    # LibreOffice's HTML import does NOT understand flexbox, grid, or
+    # border-radius — so every layout below is built from plain <table>s
+    # and simple borders.  The logo is embedded as a base64 data URI so it
+    # renders regardless of media paths.
+
+    def _logo_data_uri(self, lh):
+        if not lh or not lh.logo:
+            return ''
+        try:
+            import base64
+            import mimetypes
+            path = lh.logo.path
+            mime = mimetypes.guess_type(path)[0] or 'image/png'
+            with open(path, 'rb') as fh:
+                return f'data:{mime};base64,{base64.b64encode(fh.read()).decode()}'
+        except Exception:
+            return ''
 
     def _letterhead_html(self, lh) -> str:
         if not lh:
             return ''
-        logo = ''
-        if lh.logo:
-            try:
-                logo_path = lh.logo.path if hasattr(lh.logo, 'path') else lh.logo.url
-                logo = f'<img src="{logo_path}" style="height:48px;margin-right:12px;" alt="">'
-            except Exception:
-                pass
         esc = html.escape
-        tagline = (f'<div style="font-size:12px;font-style:italic;color:{lh.color_primary};'
-                   f'margin:2px 0 6px;">{esc(lh.tagline)}</div>') if lh.tagline else ''
+        p, s = lh.color_primary, lh.color_secondary
+        hf = f"{lh.font_header}, Georgia, serif"
+        name = esc(lh.company_name)
+        tagline = esc(lh.tagline or '')
         address = esc(lh.address or '').replace('\n', '<br>')
+        contact = esc(lh.contact_info or '')
+        logo_uri = self._logo_data_uri(lh)
+        logo_cell = (f'<td style="width:60px;vertical-align:middle;padding-right:12px;">'
+                     f'<img src="{logo_uri}" height="48" alt=""></td>') if logo_uri else ''
+        key = getattr(lh, 'template_key', 'classic') or 'classic'
+
+        tagline_div = (f'<div style="font-size:12px;font-style:italic;color:{p};margin-top:2px;">'
+                       f'{tagline}</div>') if tagline else ''
+        contact_div = f'<div style="font-size:10.5px;color:#777;">{address}</div>' \
+                      f'<div style="font-size:10.5px;color:#777;">{contact}</div>'
+
+        if key == 'bold':
+            logo_band = (f'<td style="width:60px;padding:10px 12px 10px 0;vertical-align:middle;">'
+                         f'<img src="{logo_uri}" height="44" alt=""></td>') if logo_uri else ''
+            return f"""
+  <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:14px;">
+    <tr><td style="background:{p};padding:12px 16px;">
+      <table cellspacing="0" cellpadding="0"><tr>{logo_band}
+        <td style="vertical-align:middle;">
+          <span style="font-family:{hf};font-size:22px;font-weight:bold;color:#ffffff;">{name}</span>
+          {f'<div style="font-size:11.5px;color:#ffffff;font-style:italic;">{tagline}</div>' if tagline else ''}
+        </td></tr></table>
+    </td></tr>
+    <tr><td style="padding:6px 2px 0;">{contact_div}</td></tr>
+  </table>"""
+
+        if key == 'minimal':
+            return f"""
+  <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:14px;">
+    <tr>{logo_cell}<td style="vertical-align:middle;">
+      <span style="font-family:{hf};font-size:17px;font-weight:bold;color:{s};">{name}</span>
+      {tagline_div}
+    </td></tr>
+    <tr><td colspan="2" style="padding-top:3px;">{contact_div}</td></tr>
+  </table>"""
+
+        if key == 'split':
+            return f"""
+  <table width="100%" cellspacing="0" cellpadding="0"
+         style="border-collapse:collapse;border-bottom:2px solid {p};margin-bottom:14px;">
+    <tr>
+      <td style="vertical-align:middle;padding-bottom:8px;">
+        <table cellspacing="0" cellpadding="0"><tr>{logo_cell}<td style="vertical-align:middle;">
+          <span style="font-family:{hf};font-size:20px;font-weight:bold;color:{s};">{name}</span>
+          {tagline_div}
+        </td></tr></table>
+      </td>
+      <td style="vertical-align:middle;text-align:right;padding-bottom:8px;">{contact_div}</td>
+    </tr>
+  </table>"""
+
+        if key == 'elegant':
+            logo_row = (f'<tr><td align="center" style="padding-bottom:6px;">'
+                        f'<img src="{logo_uri}" height="46" alt=""></td></tr>') if logo_uri else ''
+            return f"""
+  <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:14px;">
+    {logo_row}
+    <tr><td align="center">
+      <span style="font-family:{hf};font-size:23px;font-weight:bold;color:{s};letter-spacing:1px;">{name}</span>
+      {tagline_div}
+      <div style="padding-top:4px;">{contact_div}</div>
+    </td></tr>
+    <tr><td style="border-bottom:1px solid {p};padding-top:8px;font-size:1px;">&nbsp;</td></tr>
+    <tr><td style="border-bottom:1px solid {p};padding-top:2px;font-size:1px;">&nbsp;</td></tr>
+  </table>"""
+
+        if key == 'modern':
+            return f"""
+  <table width="100%" cellspacing="0" cellpadding="0"
+         style="border-collapse:collapse;border-bottom:3px solid {p};margin-bottom:14px;">
+    <tr>{logo_cell}
+      <td style="vertical-align:middle;padding-bottom:8px;">
+        <span style="font-family:{hf};font-size:21px;font-weight:bold;color:{p};">{name}</span>
+        {tagline_div}
+      </td>
+      <td style="vertical-align:bottom;text-align:right;padding-bottom:8px;">{contact_div}</td>
+    </tr>
+  </table>"""
+
+        # 'classic' (default)
         return f"""
-  <div style="border-top:4px solid {lh.color_primary};padding-top:14px;margin-bottom:6px;">
-    <div style="display:flex;align-items:center;gap:12px;">
-      {logo}
-      <div style="font-family:'{lh.font_header}',Georgia,serif;font-size:21px;
-                  font-weight:700;color:{lh.color_secondary};">{esc(lh.company_name)}</div>
-    </div>
-    {tagline}
-    <div style="font-size:11px;color:#777;">{address}</div>
-    <div style="font-size:11px;color:#777;">{esc(lh.contact_info or '')}</div>
-    <div style="border-bottom:1.5px solid {lh.color_primary};margin:10px 0 0;"></div>
-  </div>"""
+  <table width="100%" cellspacing="0" cellpadding="0"
+         style="border-collapse:collapse;border-top:4px solid {p};margin-bottom:14px;">
+    <tr>{logo_cell}<td style="vertical-align:middle;padding-top:10px;">
+      <span style="font-family:{hf};font-size:21px;font-weight:bold;color:{s};">{name}</span>
+      {tagline_div}
+    </td></tr>
+    <tr><td colspan="2" style="padding-top:4px;">{contact_div}</td></tr>
+    <tr><td colspan="2" style="border-bottom:2px solid {p};padding-top:8px;font-size:1px;">&nbsp;</td></tr>
+  </table>"""
 
     # -- one field, empty or filled ----------------------------------------
 
@@ -692,10 +786,11 @@ class _ExportBase(LoginRequiredMixin, View):
 
     # -- document shell + conversion -----------------------------------------
 
-    def _document(self, title, letterhead_html, meta_html, body_html, approvals_html) -> str:
+    def _document(self, title, letterhead_html, meta_html, body_html, approvals_html,
+                  body_font='Arial') -> str:
         return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ font-family: Arial, sans-serif; padding:36px 44px; color:#222; }}
+  body {{ font-family: {body_font}, Arial, sans-serif; padding:36px 44px; color:#222; }}
 </style></head><body>
   {letterhead_html}
   <h2 style="font-size:16px;margin:14px 0 2px;">{html.escape(title)}</h2>
@@ -745,12 +840,14 @@ class FormTemplateExportView(_ExportBase):
 
     def get(self, request, pk, fmt):
         t = get_object_or_404(FormTemplate, pk=pk)
-        lh_html = self._letterhead_html(t.resolve_letterhead())
+        lh = t.resolve_letterhead()
+        lh_html = self._letterhead_html(lh)
         meta = ('<div style="font-size:10.5px;color:#777;margin-bottom:10px;">'
                 'Ref No: ______________ &nbsp;&nbsp; Date: ______________</div>')
         body = ''.join(self._field_html(f, filled=False) for f in (t.schema or []))
         approvals = self._approval_block_empty(t.approval_flow or [])
-        doc = self._document(t.title, lh_html, meta, body, approvals)
+        doc = self._document(t.title, lh_html, meta, body, approvals,
+                             body_font=getattr(lh, 'font_body', 'Arial') if lh else 'Arial')
         safe = t.title.replace(' ', '_')[:60] or 'form'
         return self._convert(doc, fmt, safe)
 
@@ -770,7 +867,8 @@ class SubmissionExportView(_ExportBase):
         if not is_party:
             return JsonResponse({'error': 'Not allowed.'}, status=403)
 
-        lh_html = self._letterhead_html(sub.template.resolve_letterhead())
+        lh = sub.template.resolve_letterhead()
+        lh_html = self._letterhead_html(lh)
         submitter = sub.submitted_by.get_full_name() or sub.submitted_by.get_username()
         meta = (f'<div style="font-size:10.5px;color:#777;margin-bottom:10px;">'
                 f'Ref No: <b>{sub.ref_no}</b> &nbsp;·&nbsp; '
@@ -781,5 +879,6 @@ class SubmissionExportView(_ExportBase):
             self._field_html(f, value=sub.data.get(f.get('id')), filled=True)
             for f in (sub.schema_snapshot or []))
         approvals = self._approval_block_filled(steps)
-        doc = self._document(sub.template.title, lh_html, meta, body, approvals)
+        doc = self._document(sub.template.title, lh_html, meta, body, approvals,
+                             body_font=getattr(lh, 'font_body', 'Arial') if lh else 'Arial')
         return self._convert(doc, fmt, sub.ref_no)

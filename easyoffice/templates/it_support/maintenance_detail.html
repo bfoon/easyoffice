@@ -119,8 +119,113 @@
 
     <div class="eo-card">
       <div class="eo-card-header"><h2 class="eo-card-title">Files & Evidence</h2></div>
-      {% for file in attachments %}<div class="d-flex justify-content-between align-items-start py-2 border-bottom"><div><a href="{{ file.file.url }}" target="_blank">{{ file.caption|default:file.file.name }}</a><div><small class="text-muted">{{ file.get_category_display }}{% if file.is_public %} · Owner visible{% endif %}</small></div></div></div>{% empty %}<p class="small text-muted">No files uploaded.</p>{% endfor %}
-      <hr><form method="post" enctype="multipart/form-data" action="{% url 'maintenance_action' job.pk %}">{% csrf_token %}<input type="hidden" name="action" value="add_attachment"><div class="mb-2"><input class="form-control" required type="file" name="file"></div><div class="mb-2"><select class="form-select" name="category">{% for value,label in attachment_categories %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></div><div class="mb-2"><input class="form-control" name="caption" placeholder="Caption"></div><div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="is_public" id="attachmentPublic"><label class="form-check-label" for="attachmentPublic">Owner can see this file</label></div><button class="eo-btn eo-btn-secondary w-100">Upload</button></form>
+      {% for file in attachments %}<div class="d-flex justify-content-between align-items-start py-2 border-bottom"><div style="min-width:0">{% if file.is_missing %}<span class="text-muted"><i class="bi bi-exclamation-triangle"></i> {{ file.display_name }}</span><div><small class="text-danger">Source file was deleted from the files app</small></div>{% else %}<a href="{{ file.url }}" target="_blank">{% if file.is_reference %}<i class="bi bi-link-45deg"></i>{% endif %} {{ file.display_name }}</a><div><small class="text-muted">{{ file.get_category_display }}{% if file.is_public %} · Owner visible{% endif %}{% if file.is_reference %} · Linked from files app{% endif %}</small></div>{% endif %}</div></div>{% empty %}<p class="small text-muted">No files uploaded.</p>{% endfor %}
+      <hr>
+      <form method="post" enctype="multipart/form-data" action="{% url 'maintenance_action' job.pk %}">{% csrf_token %}<input type="hidden" name="action" value="add_attachment">
+        {% if file_picker_available %}
+        <ul class="nav nav-pills mb-2" id="attSourceTabs">
+          <li class="nav-item"><button type="button" class="nav-link active btn-sm" data-src="upload"><i class="bi bi-upload"></i> Upload</button></li>
+          <li class="nav-item"><button type="button" class="nav-link btn-sm" data-src="browse"><i class="bi bi-folder2-open"></i> Files App</button></li>
+        </ul>
+        {% endif %}
+        <div id="attUploadPane" class="mb-2"><input class="form-control" type="file" name="file" id="attFileInput"></div>
+        {% if file_picker_available %}
+        <div id="attBrowsePane" style="display:none">
+          <div class="position-relative mb-2">
+            <input class="form-control" id="attFileSearch" autocomplete="off" placeholder="Search files you can access…">
+            <div id="attFileResults" class="list-group position-absolute w-100 shadow" style="z-index:1000;max-height:240px;overflow-y:auto;display:none"></div>
+          </div>
+          <input type="hidden" name="shared_file_id" id="attSharedFileId">
+          <div id="attFileChosen" class="mb-2" style="display:none">
+            <span class="badge bg-primary" style="font-size:.8rem;padding:6px 10px"><i class="bi bi-file-earmark-check"></i> <span id="attFileChosenName"></span></span>
+            <button type="button" class="btn btn-sm btn-link text-danger" id="attFileClear">Clear</button>
+          </div>
+          <small class="text-muted d-block mb-2">Links the existing document — it is not copied.</small>
+        </div>
+        {% endif %}
+        <div class="mb-2"><select class="form-select" name="category">{% for value,label in attachment_categories %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></div><div class="mb-2"><input class="form-control" name="caption" placeholder="Caption"></div><div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="is_public" id="attachmentPublic"><label class="form-check-label" for="attachmentPublic">Owner can see this file</label></div><button class="eo-btn eo-btn-secondary w-100">Add Evidence</button></form>
+
+      {% if file_picker_available %}
+      <script>
+      (function(){
+        const tabs = document.getElementById('attSourceTabs');
+        if (!tabs) return;
+        const uploadPane = document.getElementById('attUploadPane');
+        const browsePane = document.getElementById('attBrowsePane');
+        const fileInput  = document.getElementById('attFileInput');
+        const search     = document.getElementById('attFileSearch');
+        const results    = document.getElementById('attFileResults');
+        const hidden     = document.getElementById('attSharedFileId');
+        const chosen     = document.getElementById('attFileChosen');
+        const chosenName = document.getElementById('attFileChosenName');
+        let timer = null;
+
+        function hide(){ results.style.display='none'; results.innerHTML=''; }
+
+        // Exactly one source reaches the server — switching clears the other.
+        tabs.querySelectorAll('[data-src]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            tabs.querySelectorAll('[data-src]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const browse = btn.dataset.src === 'browse';
+            uploadPane.style.display = browse ? 'none' : '';
+            browsePane.style.display = browse ? '' : 'none';
+            if (browse) fileInput.value = '';
+            else { hidden.value=''; chosen.style.display='none'; hide(); }
+          });
+        });
+
+        document.getElementById('attFileClear').addEventListener('click', () => {
+          hidden.value=''; chosen.style.display='none';
+        });
+
+        async function load(q){
+          try {
+            const res = await fetch(`{% url 'maintenance_file_search' %}?q=${encodeURIComponent(q)}`);
+            const data = await res.json();
+            results.innerHTML = '';
+            if (!(data.results || []).length) {
+              results.innerHTML = '<div class="list-group-item text-muted small">No matching files you can access.</div>';
+              results.style.display=''; return;
+            }
+            data.results.forEach(f => {
+              const b = document.createElement('button');
+              b.type='button';
+              b.className='list-group-item list-group-item-action d-flex align-items-center gap-2';
+              const i = document.createElement('i');
+              i.className = f.is_image ? 'bi bi-file-earmark-image text-primary'
+                          : f.is_pdf  ? 'bi bi-file-earmark-pdf text-danger'
+                                      : 'bi bi-file-earmark-text text-secondary';
+              const w = document.createElement('div'); w.style.minWidth='0';
+              const n = document.createElement('div');
+              n.className='fw-semibold text-truncate';
+              n.textContent = f.name;         // textContent — never innerHTML
+              const m = document.createElement('small');
+              m.className='text-muted';
+              m.textContent = `${f.folder} · ${f.size}`;
+              w.appendChild(n); w.appendChild(m);
+              b.appendChild(i); b.appendChild(w);
+              b.addEventListener('click', () => {
+                hidden.value=f.id; chosenName.textContent=f.name;
+                chosen.style.display=''; search.value=''; hide();
+              });
+              results.appendChild(b);
+            });
+            results.style.display='';
+          } catch(e){ hide(); }
+        }
+
+        search.addEventListener('focus', () => { if (!results.innerHTML) load(''); });
+        search.addEventListener('input', function(){
+          clearTimeout(timer);
+          timer = setTimeout(() => load(this.value.trim()), 220);
+        });
+        document.addEventListener('click', e => {
+          if (!results.contains(e.target) && e.target !== search) hide();
+        });
+      })();
+      </script>
+      {% endif %}
     </div>
   </div>
 </div>

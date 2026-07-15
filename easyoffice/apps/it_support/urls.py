@@ -18,10 +18,17 @@ urlpatterns = [
     # swallowed by the UUID converter.
     path('maintenance/customers/search/', views.MaintenanceCustomerSearchView.as_view(),
          name='maintenance_customer_search'),
+    path('maintenance/files/search/', views.MaintenanceFileSearchView.as_view(),
+         name='maintenance_file_search'),
     path('maintenance/<uuid:pk>/', views.MaintenanceDetailView.as_view(), name='maintenance_detail'),
     path('maintenance/<uuid:pk>/action/', views.MaintenanceActionView.as_view(), name='maintenance_action'),
     path('maintenance/<uuid:pk>/print/', views.MaintenancePrintView.as_view(), name='maintenance_print'),
     path('track/maintenance/<uuid:token>/', views.MaintenancePublicView.as_view(), name='maintenance_public'),
+    # No-login attachment download, authorised by the tracking token itself.
+    # Owner-visible attachments only; see MaintenancePublicAttachmentView.
+    path('track/maintenance/<uuid:token>/file/<uuid:attachment_id>/',
+         views.MaintenancePublicAttachmentView.as_view(),
+         name='maintenance_public_attachment'),
 
     # Technician portal links (IT-managed)
     path('technician-links/', tl.TechnicianLinkListView.as_view(), name='technician_link_list'),

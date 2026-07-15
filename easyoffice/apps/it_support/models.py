@@ -551,6 +551,21 @@ class MaintenanceEvent(models.Model):
 
 
 class MaintenanceAttachment(models.Model):
+    """
+    Evidence attached to a maintenance record.
+
+    Two sources, one model:
+      • Uploaded from the technician's computer → `file` holds the upload.
+      • Picked from the files app              → `shared_file` points at the
+        existing SharedFile and `file` stays empty.
+
+    Picking references rather than copies: a 4MB intake photo already in the
+    files app shouldn't be duplicated on disk, and the file keeps its single
+    version history / audit trail there. Use `.url`, `.display_name` and
+    `.size_bytes` below instead of touching `.file` directly, so callers
+    don't have to care which source a row came from.
+    """
+
     class Category(models.TextChoices):
         INTAKE = 'intake', 'Intake / Condition'
         DIAGNOSIS = 'diagnosis', 'Diagnosis'
@@ -566,7 +581,16 @@ class MaintenanceAttachment(models.Model):
     category = models.CharField(
         max_length=30, choices=Category.choices, default=Category.OTHER
     )
-    file = models.FileField(upload_to='it_maintenance/%Y/%m/')
+    # Blank when the evidence is a reference to a files-app document.
+    file = models.FileField(upload_to='it_maintenance/%Y/%m/', blank=True)
+    # SET_NULL, not CASCADE: if someone deletes the source document in the
+    # files app, the maintenance record must keep its audit row (with the
+    # caption and who added it) rather than silently losing evidence.
+    shared_file = models.ForeignKey(
+        'files.SharedFile', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='maintenance_attachments',
+        help_text='Set when this evidence references a document in the files app.',
+    )
     caption = models.CharField(max_length=250, blank=True)
     is_public = models.BooleanField(default=False)
     uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
@@ -574,6 +598,70 @@ class MaintenanceAttachment(models.Model):
 
     class Meta:
         ordering = ['created_at']
+        constraints = [
+            # Forbid only the AMBIGUOUS case (both sources set) — never
+            # require one to be present.
+            #
+            # The obvious "exactly one of" constraint is a trap here:
+            # shared_file is SET_NULL, so deleting a referenced document in
+            # the files app would leave file='' AND shared_file=NULL. A
+            # CHECK demanding one-or-the-other is enforced on UPDATE, so
+            # Postgres would raise mid-cascade and make any file referenced
+            # by a maintenance record permanently undeletable. The orphan
+            # state is legitimate and expected — see `is_missing`.
+            models.CheckConstraint(
+                check=~(models.Q(shared_file__isnull=False) & ~models.Q(file='')),
+                name='maintenance_attachment_single_source',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.job_id} — {self.display_name}'
+
+    @property
+    def is_reference(self):
+        """True when this points at a files-app document instead of an upload."""
+        return self.shared_file_id is not None
+
+    @property
+    def is_missing(self):
+        """Source document was deleted from the files app after linking."""
+        return not self.file and self.shared_file_id is None
+
+    @property
+    def display_name(self):
+        if self.caption:
+            return self.caption
+        if self.shared_file_id:
+            return self.shared_file.name
+        if self.file:
+            return self.file.name.rsplit('/', 1)[-1]
+        return 'Missing file'
+
+    @property
+    def url(self):
+        """
+        Where to fetch this attachment.
+
+        Files-app documents go through the files app's own download view so
+        its permission checks and download counter still apply — never a
+        direct media URL that would bypass them.
+        """
+        if self.shared_file_id:
+            from django.urls import reverse
+            return reverse('file_download', kwargs={'pk': self.shared_file_id})
+        if self.file:
+            return self.file.url
+        return ''
+
+    @property
+    def size_bytes(self):
+        if self.shared_file_id:
+            return self.shared_file.file_size or 0
+        try:
+            return self.file.size if self.file else 0
+        except Exception:
+            return 0
 
 
 class MaintenanceAccessToken(models.Model):

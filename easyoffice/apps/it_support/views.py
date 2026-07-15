@@ -10,9 +10,14 @@ from apps.it_support.models import (
     MaintenanceChargeLine, MaintenanceEvent, MaintenanceAttachment,
     MaintenanceAccessToken, MaintenanceReminder,
 )
-from django.http import JsonResponse
+import logging
+
+from django.http import JsonResponse, Http404, FileResponse
 from apps.core.models import User
 from apps.it_support import customer_link
+from apps.it_support import file_picker
+
+logger = logging.getLogger(__name__)
 
 
 def _is_it_staff(user):
@@ -572,6 +577,8 @@ class MaintenanceCreateView(LoginRequiredMixin, View):
             # Drives the customer autocomplete; hidden entirely when the
             # customer_service app isn't installed.
             'customer_search_available': customer_link.customer_service_available(),
+            # Drives the "pick from files app" tab on the intake attachment.
+            'file_picker_available': file_picker.files_app_available(),
             'data': data or {},
         }
 
@@ -590,11 +597,27 @@ class MaintenanceCreateView(LoginRequiredMixin, View):
             job = maintenance_services.create_maintenance_job(
                 payload, actor=request.user, request=request
             )
-            if request.FILES.get('intake_file'):
+            if request.FILES.get('intake_file') or request.POST.get('intake_shared_file_id'):
+                # Two sources, same evidence row: an upload from the
+                # technician's computer, or a reference to a document
+                # already in the files app. Never both.
+                picked = None
+                if not request.FILES.get('intake_file'):
+                    picked = file_picker.get_file_for_user(
+                        request.user, request.POST.get('intake_shared_file_id')
+                    )
+                    if picked is None:
+                        # Re-checked server-side: a posted id the user can't
+                        # actually see is silently dropped, not attached.
+                        raise ValueError(
+                            'The selected file is not available to you. '
+                            'Choose another or upload the file directly.'
+                        )
                 attachment = MaintenanceAttachment.objects.create(
                     job=job,
                     category=MaintenanceAttachment.Category.INTAKE,
-                    file=request.FILES['intake_file'],
+                    file=request.FILES.get('intake_file') or '',
+                    shared_file=picked,
                     caption=request.POST.get('intake_caption', ''),
                     is_public=request.POST.get('intake_file_public') == 'on',
                     uploaded_by=request.user,
@@ -603,7 +626,11 @@ class MaintenanceCreateView(LoginRequiredMixin, View):
                     job=job,
                     kind=MaintenanceEvent.Kind.ATTACHMENT,
                     actor=request.user,
-                    message=f'Intake attachment added: {attachment.file.name}.',
+                    message=(
+                        f'Intake document linked from files app: {attachment.display_name}.'
+                        if picked else
+                        f'Intake attachment added: {attachment.display_name}.'
+                    ),
                     is_public=attachment.is_public,
                 )
             messages.success(
@@ -646,7 +673,8 @@ class MaintenanceDetailView(LoginRequiredMixin, TemplateView):
             'events': job.events.select_related('actor').order_by('-created_at'),
             'public_events': job.events.filter(is_public=True).order_by('created_at'),
             'charge_lines': job.charge_lines.all(),
-            'attachments': job.attachments.select_related('uploaded_by'),
+            'attachments': job.attachments.select_related('uploaded_by', 'shared_file'),
+            'file_picker_available': file_picker.files_app_available(),
             'reminders': job.reminders.all(),
             'technicians': User.objects.filter(
                 Q(groups__name='IT') | Q(groups__name='Technician'),
@@ -785,12 +813,24 @@ class MaintenanceActionView(LoginRequiredMixin, View):
 
             elif action == 'add_attachment':
                 upload = request.FILES.get('file')
+                shared_file_id = request.POST.get('shared_file_id')
+                if not upload and not shared_file_id:
+                    raise ValueError('Choose a file to upload, or pick one from the files app.')
+
+                picked = None
                 if not upload:
-                    raise ValueError('Choose a file to upload.')
+                    picked = file_picker.get_file_for_user(request.user, shared_file_id)
+                    if picked is None:
+                        raise ValueError(
+                            'The selected file is not available to you. '
+                            'Choose another or upload the file directly.'
+                        )
+
                 attachment = MaintenanceAttachment.objects.create(
                     job=job,
                     category=request.POST.get('category') or MaintenanceAttachment.Category.OTHER,
-                    file=upload,
+                    file=upload or '',
+                    shared_file=picked,
                     caption=request.POST.get('caption', '').strip(),
                     is_public=request.POST.get('is_public') == 'on',
                     uploaded_by=request.user,
@@ -799,10 +839,17 @@ class MaintenanceActionView(LoginRequiredMixin, View):
                     job=job,
                     kind=MaintenanceEvent.Kind.ATTACHMENT,
                     actor=request.user,
-                    message=f'Attachment added: {attachment.file.name}.',
+                    message=(
+                        f'Document linked from files app: {attachment.display_name}.'
+                        if picked else
+                        f'Attachment added: {attachment.display_name}.'
+                    ),
                     is_public=attachment.is_public,
                 )
-                messages.success(request, 'Attachment uploaded.')
+                messages.success(
+                    request,
+                    'Document linked from the files app.' if picked else 'Attachment uploaded.'
+                )
 
             else:
                 messages.error(request, 'Unknown maintenance action.')
@@ -835,8 +882,10 @@ class MaintenancePublicView(View):
         job = token_obj.job
         return render(request, self.template_name, {
             'job': job,
+            # The template builds per-attachment download links from this.
+            'token': token,
             'events': job.events.filter(is_public=True).order_by('created_at'),
-            'attachments': job.attachments.filter(is_public=True),
+            'attachments': job.attachments.filter(is_public=True).select_related('shared_file'),
             'charge_lines': job.charge_lines.filter(billable=True),
         })
 
@@ -926,3 +975,89 @@ class MaintenanceCustomerSearchView(LoginRequiredMixin, View):
             for c in customer_link.search_customers(q, limit=15)
         ]
         return JsonResponse({'ok': True, 'results': results, 'available': True})
+
+
+class MaintenanceFileSearchView(LoginRequiredMixin, View):
+    """
+    JSON search over the files the user can already see, for the
+    "pick from files app" attachment picker.
+
+        GET /it/maintenance/files/search/?q=<text>
+            → {ok, results: [...], available: bool}
+
+    Visibility is delegated to apps.files' own _visible_files_qs — this
+    endpoint never widens what a user can see.
+    """
+    http_method_names = ['get']
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _is_it_staff(request.user):
+            return JsonResponse({'ok': False, 'error': 'IT staff only.'}, status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request):
+        if not file_picker.files_app_available():
+            return JsonResponse({'ok': True, 'results': [], 'available': False})
+
+        q = (request.GET.get('q') or '').strip()
+        results = [
+            file_picker.serialize_file(f)
+            for f in file_picker.search_files(request.user, q)
+        ]
+        return JsonResponse({'ok': True, 'results': results, 'available': True})
+
+
+class MaintenancePublicAttachmentView(View):
+    """
+    No-login download of an owner-visible attachment, scoped to a tracking
+    token.
+
+    Why this exists: attachments that REFERENCE a files-app document can't
+    use FileDownloadView on the public page — that view is LoginRequired and
+    runs a per-user permission check, so an external customer would hit a
+    login wall or a 404.
+
+    Authorisation here is the token itself, exactly like the tracking page:
+      • the token must be valid and its job not closed
+      • the attachment must belong to THAT token's job
+      • the attachment must be flagged is_public
+
+    That last check is what keeps internal diagnosis photos private: IT ticks
+    "owner can see this file" or the customer never gets it. The attachment
+    id alone is never sufficient — it must match the token's job.
+    """
+    def get(self, request, token, attachment_id):
+        access = (
+            MaintenanceAccessToken.objects
+            .select_related('job')
+            .filter(token=token)
+            .first()
+        )
+        if not access or access.job.is_terminal:
+            raise Http404
+
+        attachment = (
+            MaintenanceAttachment.objects
+            .select_related('shared_file')
+            .filter(pk=attachment_id, job=access.job, is_public=True)
+            .first()
+        )
+        if not attachment or attachment.is_missing:
+            raise Http404
+
+        if attachment.shared_file_id:
+            handle = attachment.shared_file.file
+            download_name = attachment.shared_file.name
+        else:
+            handle = attachment.file
+            download_name = attachment.display_name
+
+        try:
+            handle.open('rb')
+        except Exception:
+            logger.exception(
+                'Public attachment %s could not be opened', attachment.pk
+            )
+            raise Http404
+
+        return FileResponse(handle, as_attachment=True, filename=download_name)

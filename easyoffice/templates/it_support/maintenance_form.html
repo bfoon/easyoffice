@@ -81,7 +81,39 @@
       <div class="eo-card-header"><h2 class="eo-card-title">Consent & Evidence</h2></div>
       <div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="data_privacy_consent" id="privacy"><label class="form-check-label" for="privacy">Owner consents to necessary diagnostic access.</label></div>
       <div class="form-check mb-3"><input class="form-check-input" type="checkbox" name="backup_authorized" id="backup"><label class="form-check-label" for="backup">Backup/data transfer authorized.</label></div>
-      <label class="form-label">Intake photo/document</label><input class="form-control mb-2" type="file" name="intake_file">
+      <label class="form-label">Intake photo/document</label>
+      {% if file_picker_available %}
+      <ul class="nav nav-pills nav-sm mb-2" id="intakeSourceTabs">
+        <li class="nav-item"><button type="button" class="nav-link active btn-sm" data-src="upload"><i class="bi bi-upload"></i> Upload</button></li>
+        <li class="nav-item"><button type="button" class="nav-link btn-sm" data-src="browse"><i class="bi bi-folder2-open"></i> From Files App</button></li>
+      </ul>
+      {% endif %}
+
+      <div id="intakeUploadPane">
+        <input class="form-control mb-2" type="file" name="intake_file" id="intakeFileInput"
+               accept="image/*,.pdf,.doc,.docx,.txt">
+        <small class="text-muted d-block mb-2">Take a photo or choose a file from this computer.</small>
+      </div>
+
+      {% if file_picker_available %}
+      <div id="intakeBrowsePane" style="display:none">
+        <div class="position-relative">
+          <input class="form-control mb-2" id="intakeFileSearch" autocomplete="off"
+                 placeholder="Search files you have access to…">
+          <div id="intakeFileResults" class="list-group position-absolute w-100 shadow"
+               style="z-index:1000;max-height:260px;overflow-y:auto;display:none"></div>
+        </div>
+        <input type="hidden" name="intake_shared_file_id" id="intakeSharedFileId">
+        <div id="intakeFileChosen" class="mb-2" style="display:none">
+          <span class="badge bg-primary" style="font-size:.82rem;padding:7px 11px">
+            <i class="bi bi-file-earmark-check"></i> <span id="intakeFileChosenName"></span>
+          </span>
+          <button type="button" class="btn btn-sm btn-link text-danger" id="intakeFileClear">Clear</button>
+        </div>
+        <small class="text-muted d-block mb-2">Links the existing document — it is not copied.</small>
+      </div>
+      {% endif %}
+
       <input class="form-control mb-2" name="intake_caption" placeholder="Caption">
       <div class="form-check"><input class="form-check-input" type="checkbox" name="intake_file_public" id="publicFile"><label class="form-check-label" for="publicFile">Visible on owner tracking page</label></div>
     </div>
@@ -207,6 +239,100 @@ document.getElementById('equipmentSelect').addEventListener('change', function()
   });
 
   if (hidden.value) { chosenName.textContent = 'Existing customer linked'; chosen.style.display=''; }
+})();
+
+// ── Files-app picker (intake evidence) ───────────────────────────────────
+(function(){
+  const tabs = document.getElementById('intakeSourceTabs');
+  if (!tabs) return;  // files app unavailable
+
+  const uploadPane = document.getElementById('intakeUploadPane');
+  const browsePane = document.getElementById('intakeBrowsePane');
+  const fileInput  = document.getElementById('intakeFileInput');
+  const search     = document.getElementById('intakeFileSearch');
+  const results    = document.getElementById('intakeFileResults');
+  const hidden     = document.getElementById('intakeSharedFileId');
+  const chosen     = document.getElementById('intakeFileChosen');
+  const chosenName = document.getElementById('intakeFileChosenName');
+  const clearBtn   = document.getElementById('intakeFileClear');
+
+  let timer = null;
+
+  function hide(){ results.style.display='none'; results.innerHTML=''; }
+
+  // Only ever one source: switching tabs clears the other side, so the
+  // server can't receive both an upload and a reference.
+  tabs.querySelectorAll('[data-src]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      tabs.querySelectorAll('[data-src]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const browse = btn.dataset.src === 'browse';
+      uploadPane.style.display = browse ? 'none' : '';
+      browsePane.style.display = browse ? '' : 'none';
+      if (browse) { fileInput.value = ''; }
+      else { hidden.value=''; chosen.style.display='none'; hide(); }
+    });
+  });
+
+  clearBtn.addEventListener('click', () => {
+    hidden.value=''; chosen.style.display='none';
+  });
+
+  function render(list){
+    results.innerHTML = '';
+    if (!list.length) {
+      results.innerHTML = '<div class="list-group-item text-muted small">No matching files you can access.</div>';
+      results.style.display = '';
+      return;
+    }
+    list.forEach(f => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'list-group-item list-group-item-action d-flex align-items-center gap-2';
+      const icon = document.createElement('i');
+      icon.className = f.is_image ? 'bi bi-file-earmark-image text-primary'
+                     : f.is_pdf  ? 'bi bi-file-earmark-pdf text-danger'
+                                 : 'bi bi-file-earmark-text text-secondary';
+      const wrap = document.createElement('div');
+      wrap.style.minWidth = '0';
+      const nm = document.createElement('div');
+      nm.className = 'fw-semibold text-truncate';
+      nm.textContent = f.name;              // textContent — never innerHTML
+      const meta = document.createElement('small');
+      meta.className = 'text-muted';
+      meta.textContent = `${f.folder} · ${f.size} · ${f.created_at}`;
+      wrap.appendChild(nm); wrap.appendChild(meta);
+      btn.appendChild(icon); btn.appendChild(wrap);
+      btn.addEventListener('click', () => {
+        hidden.value = f.id;
+        chosenName.textContent = f.name;
+        chosen.style.display = '';
+        search.value = '';
+        hide();
+      });
+      results.appendChild(btn);
+    });
+    results.style.display = '';
+  }
+
+  async function load(q){
+    try {
+      const res = await fetch(`{% url 'maintenance_file_search' %}?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      render(data.results || []);
+    } catch(e) { hide(); }
+  }
+
+  // Empty query is valid — opens on recent files, which is what you want
+  // when the scan was uploaded two minutes ago.
+  search.addEventListener('focus', () => { if (!results.innerHTML) load(''); });
+  search.addEventListener('input', function(){
+    clearTimeout(timer);
+    timer = setTimeout(() => load(this.value.trim()), 220);
+  });
+  document.addEventListener('click', e => {
+    if (!results.contains(e.target) && e.target !== search) hide();
+  });
 })();
 </script>
 {% endblock %}

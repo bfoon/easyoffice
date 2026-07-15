@@ -73,6 +73,7 @@ urlpatterns = [
     path('inventory/',     include('apps.inventory.urls')),
     path('api/inventory/', include('apps.inventory.api.urls')),
     path('pos/', include('apps.pos.urls')),
+    path('forms/', include('apps.customforms.urls')),
 
 ]
 

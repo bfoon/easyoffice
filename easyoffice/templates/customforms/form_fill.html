@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+
+{% block title %}{{ template.title }}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'forms_home' %}">Forms</a> / <span>{{ template.title }}</span>{% endblock %}
+
+{% block content %}
+<style>
+  .ff-card { max-width:760px; margin:0 auto; background:var(--eo-surface);
+             border:1px solid var(--eo-border); border-radius:var(--eo-radius,10px); padding:26px 30px; }
+  .ff-title { font-size:1.25rem; font-weight:800; color:var(--eo-text); }
+  .ff-desc { font-size:.85rem; color:var(--eo-text-muted); margin:6px 0 18px; }
+  .ff-field { margin:14px 0; }
+  .ff-field.w-half { width:calc(50% - 8px); display:inline-block; vertical-align:top; margin-right:8px; }
+  .ff-field.w-third { width:calc(33.3% - 8px); display:inline-block; vertical-align:top; margin-right:8px; }
+  .ff-lbl { display:block; font-size:.82rem; font-weight:700; color:var(--eo-text); margin-bottom:5px; }
+  .ff-req { color:var(--eo-danger); }
+  .ff-help { font-size:.72rem; color:var(--eo-text-muted); margin:-2px 0 5px; }
+  .ff-input, .ff-select, .ff-textarea {
+      width:100%; padding:9px 11px; font-size:.85rem; border:1px solid var(--eo-border);
+      border-radius:8px; background:var(--eo-bg); color:var(--eo-text); }
+  .ff-input:focus, .ff-select:focus, .ff-textarea:focus { outline:none; border-color:var(--eo-accent); }
+  .ff-opt { display:flex; align-items:center; gap:8px; font-size:.84rem; color:var(--eo-text); margin:5px 0; }
+  .ff-table { border-collapse:collapse; width:100%; }
+  .ff-table th { border:1px solid var(--eo-border); background:var(--eo-bg); padding:6px 9px;
+                 font-size:.75rem; text-align:left; color:var(--eo-text-muted); }
+  .ff-table td { border:1px solid var(--eo-border); padding:0; }
+  .ff-table td input { width:100%; border:none; background:transparent; padding:8px 9px;
+                       font-size:.82rem; color:var(--eo-text); }
+  .ff-heading { font-size:1rem; font-weight:800; color:var(--eo-text);
+                border-bottom:1px solid var(--eo-border); padding-bottom:5px; margin:22px 0 4px; }
+  .ff-para { font-size:.82rem; color:var(--eo-text-muted); margin:8px 0; }
+  .ff-error { color:var(--eo-danger); font-size:.8rem; margin-top:10px; display:none; }
+  .ff-approver-box { border:1.5px dashed var(--eo-border); border-radius:10px;
+                     padding:14px 16px; margin-top:22px; }
+  .ff-usearch { position:relative; }
+  .ff-uresults { position:absolute; top:100%; left:0; right:0; z-index:30; background:var(--eo-surface);
+                 border:1px solid var(--eo-border); border-radius:8px; max-height:200px; overflow:auto;
+                 box-shadow:0 8px 22px rgba(0,0,0,.12); display:none; }
+  .ff-uresults div { padding:8px 11px; font-size:.82rem; cursor:pointer; }
+  .ff-uresults div:hover { background:var(--eo-bg); }
+</style>
+
+<div class="ff-card">
+  <div class="ff-title">{{ template.title }}</div>
+  {% if template.description %}<div class="ff-desc">{{ template.description }}</div>{% endif %}
+
+  <div id="ffFields"></div>
+
+  {% if choice_steps %}
+  <div class="ff-approver-box">
+    <div style="font-size:.82rem;font-weight:800;color:var(--eo-text);margin-bottom:4px;">
+      <i class="bi bi-diagram-3" style="color:var(--eo-accent)"></i> Choose your approver{{ choice_steps|length|pluralize }}
+    </div>
+    <div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:10px;">
+      This form lets you decide who should approve it.</div>
+    {% for step in choice_steps %}
+    <div class="ff-field">
+      <label class="ff-lbl">{{ step.label }} <span class="ff-req">*</span></label>
+      <div class="ff-usearch">
+        <input type="text" class="ff-input" placeholder="Search a person…"
+               data-choice-step="{{ step.id }}" oninput="FF.userSearch(this)" autocomplete="off">
+        <div class="ff-uresults"></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="ff-error" id="ffError"></div>
+
+  <div style="display:flex;gap:10px;margin-top:24px;">
+    <button class="eo-btn eo-btn-primary" id="ffSubmit" onclick="FF.submit()">
+      <i class="bi bi-send"></i> Submit form</button>
+    <a class="eo-btn" href="{% url 'forms_home' %}">Cancel</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  'use strict';
+  const TEMPLATE = {{ template_json|safe }};
+  const SUBMIT_URL = "{% url 'form_submit' pk=template.pk %}";
+  const DIRECTORY_URL = "{% url 'forms_api_directory' %}";
+
+  function csrfToken() {
+    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? m[1] : (document.querySelector('[name=csrfmiddlewaretoken]')?.value || '');
+  }
+  const esc = s => String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+  const FF = window.FF = { chosen: {} };
+
+  // ── Render fields ─────────────────────────────────────────────────────
+  function inputType(t) {
+    return { number:'number', currency:'number', date:'date', time:'time',
+             email:'email', phone:'tel' }[t] || 'text';
+  }
+
+  function renderField(f) {
+    const w = f.width === 'half' ? ' w-half' : f.width === 'third' ? ' w-third' : '';
+    const lbl = `<label class="ff-lbl">${esc(f.label)}${f.required ? ' <span class="ff-req">*</span>' : ''}</label>`;
+    const help = f.help ? `<div class="ff-help">${esc(f.help)}</div>` : '';
+    switch (f.type) {
+      case 'heading':   return `<div class="ff-heading">${esc(f.label)}</div>`;
+      case 'paragraph': return `<div class="ff-para">${esc(f.label)}</div>`;
+      case 'divider':   return `<hr style="border:none;border-top:1px solid var(--eo-border);margin:16px 0;">`;
+      case 'textarea':
+        return `<div class="ff-field${w}">${lbl}${help}
+          <textarea class="ff-textarea" rows="4" data-fid="${f.id}" placeholder="${esc(f.placeholder||'')}"></textarea></div>`;
+      case 'select':
+        return `<div class="ff-field${w}">${lbl}${help}
+          <select class="ff-select" data-fid="${f.id}"><option value="">— choose —</option>
+          ${(f.options||[]).map(o=>`<option>${esc(o)}</option>`).join('')}</select></div>`;
+      case 'radio': case 'yesno': {
+        const opts = f.type === 'yesno' ? ['Yes','No'] : (f.options||[]);
+        return `<div class="ff-field${w}">${lbl}${help}
+          ${opts.map(o=>`<label class="ff-opt"><input type="radio" name="r_${f.id}" value="${esc(o)}" data-fid="${f.id}"> ${esc(o)}</label>`).join('')}</div>`;
+      }
+      case 'checkboxes':
+        return `<div class="ff-field${w}">${lbl}${help}
+          ${(f.options||[]).map(o=>`<label class="ff-opt"><input type="checkbox" value="${esc(o)}" data-fid-cb="${f.id}"> ${esc(o)}</label>`).join('')}</div>`;
+      case 'table': {
+        const cols = f.columns || [];
+        const head = cols.map(c=>`<th>${esc(c)}</th>`).join('');
+        const row = () => `<tr>${cols.map(()=>'<td><input type="text"></td>').join('')}</tr>`;
+        let rows = ''; for (let i=0;i<(f.rows||3);i++) rows += row();
+        return `<div class="ff-field">${lbl}${help}
+          <table class="ff-table" data-fid-table="${f.id}"><thead><tr>${head}</tr></thead>
+          <tbody>${rows}</tbody></table>
+          <button class="eo-btn" style="margin-top:6px;font-size:.75rem;padding:4px 10px;"
+                  onclick="FF.addRow('${f.id}', ${cols.length})"><i class="bi bi-plus"></i> Add row</button></div>`;
+      }
+      default:
+        return `<div class="ff-field${w}">${lbl}${help}
+          <input class="ff-input" type="${inputType(f.type)}" ${f.type==='currency'?'step="0.01"':''}
+                 data-fid="${f.id}" placeholder="${esc(f.placeholder||'')}"></div>`;
+    }
+  }
+
+  FF.addRow = function (fid, ncols) {
+    const tbody = document.querySelector(`[data-fid-table="${fid}"] tbody`);
+    const tr = document.createElement('tr');
+    tr.innerHTML = Array.from({length: ncols}, () => '<td><input type="text"></td>').join('');
+    tbody.appendChild(tr);
+  };
+
+  // ── Collect values ────────────────────────────────────────────────────
+  function collect() {
+    const data = {};
+    document.querySelectorAll('[data-fid]').forEach(el => {
+      if (el.type === 'radio') { if (el.checked) data[el.dataset.fid] = el.value; }
+      else data[el.dataset.fid] = el.value;
+    });
+    const cbGroups = {};
+    document.querySelectorAll('[data-fid-cb]').forEach(el => {
+      const id = el.dataset.fidCb;
+      cbGroups[id] = cbGroups[id] || [];
+      if (el.checked) cbGroups[id].push(el.value);
+    });
+    Object.assign(data, cbGroups);
+    document.querySelectorAll('[data-fid-table]').forEach(tbl => {
+      const rows = [];
+      tbl.querySelectorAll('tbody tr').forEach(tr => {
+        const row = Array.from(tr.querySelectorAll('input')).map(i => i.value);
+        if (row.some(v => v.trim())) rows.push(row);
+      });
+      data[tbl.dataset.fidTable] = rows;
+    });
+    return data;
+  }
+
+  // ── Approver search ───────────────────────────────────────────────────
+  let timer = null;
+  FF.userSearch = function (input) {
+    clearTimeout(timer);
+    const box = input.parentElement.querySelector('.ff-uresults');
+    delete FF.chosen[input.dataset.choiceStep];   // typing invalidates a prior pick
+    timer = setTimeout(async () => {
+      const q = input.value.trim();
+      if (!q) { box.style.display = 'none'; return; }
+      const res = await fetch(`${DIRECTORY_URL}?q=${encodeURIComponent(q)}`,
+        { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      const d = await res.json();
+      box.innerHTML = (d.users || []).map(u =>
+        `<div onclick="FF.pick('${input.dataset.choiceStep}', ${u.id}, this)">
+           <i class="bi bi-person"></i> ${esc(u.name)}
+           <span style="color:var(--eo-text-muted)">@${esc(u.username)}</span></div>`
+      ).join('') || '<div style="color:var(--eo-text-muted)">No matches</div>';
+      box.style.display = 'block';
+    }, 250);
+  };
+  FF.pick = function (stepId, userId, el) {
+    FF.chosen[stepId] = userId;
+    const wrap = el.closest('.ff-usearch');
+    wrap.querySelector('input').value = el.textContent.trim().split('@')[0].trim();
+    wrap.querySelector('.ff-uresults').style.display = 'none';
+  };
+
+  // ── Submit ────────────────────────────────────────────────────────────
+  FF.submit = async function () {
+    const err = document.getElementById('ffError');
+    err.style.display = 'none';
+    const btn = document.getElementById('ffSubmit');
+    btn.disabled = true;
+    try {
+      const res = await fetch(SUBMIT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json',
+                   'X-Requested-With': 'XMLHttpRequest',
+                   'X-CSRFToken': csrfToken() },
+        body: JSON.stringify({ data: collect(), chosen_approvers: FF.chosen }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        err.textContent = d.error + (d.missing ? ' Missing: ' + d.missing.join(', ') : '');
+        err.style.display = 'block';
+        return;
+      }
+      window.location = "{% url 'form_submission_detail' pk='00000000-0000-0000-0000-000000000000' %}"
+        .replace('00000000-0000-0000-0000-000000000000', d.submission_id);
+    } finally { btn.disabled = false; }
+  };
+
+  document.getElementById('ffFields').innerHTML =
+    (TEMPLATE.schema || []).map(renderField).join('');
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,793 @@
+{% extends "base.html" %}
+
+{% block title %}Form Builder{% endblock %}
+{% block breadcrumb %}<a href="{% url 'forms_home' %}">Forms</a> / <span>Builder</span>{% endblock %}
+
+{% block content %}
+<style>
+  .fb-wrap { display:grid; grid-template-columns: 230px 1fr 300px; gap:14px; align-items:start; }
+  @media (max-width: 1100px) { .fb-wrap { grid-template-columns: 1fr; } }
+
+  .fb-panel { background:var(--eo-surface); border:1px solid var(--eo-border);
+              border-radius:var(--eo-radius, 10px); }
+  .fb-panel h4 { font-size:.72rem; text-transform:uppercase; letter-spacing:.06em;
+                 color:var(--eo-text-muted); padding:12px 14px 6px; margin:0; }
+
+  /* ── Palette ── */
+  .fb-palette { padding:6px 10px 12px; display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .fb-pitem { display:flex; align-items:center; gap:7px; padding:8px 9px; font-size:.78rem;
+              font-weight:600; color:var(--eo-text); background:var(--eo-bg);
+              border:1px solid var(--eo-border); border-radius:8px; cursor:grab; user-select:none; }
+  .fb-pitem:hover { border-color:var(--eo-accent); color:var(--eo-accent); }
+  .fb-pitem i { color:var(--eo-accent); }
+
+  /* ── Canvas ── */
+  .fb-canvas { min-height:480px; padding:18px; }
+  .fb-canvas.drag-over { outline:2px dashed var(--eo-accent); outline-offset:-6px; }
+  .fb-empty { text-align:center; padding:70px 20px; color:var(--eo-text-muted); font-size:.85rem; }
+
+  .fb-field { border:1.5px solid transparent; border-radius:8px; padding:10px 12px; margin-bottom:6px;
+              position:relative; cursor:grab; background:var(--eo-surface); }
+  .fb-field:hover { border-color:var(--eo-border); }
+  .fb-field.selected { border-color:var(--eo-accent); background:color-mix(in srgb, var(--eo-accent) 4%, var(--eo-surface)); }
+  .fb-field.drag-target-above { box-shadow: 0 -3px 0 var(--eo-accent); }
+  .fb-field.drag-target-below { box-shadow: 0 3px 0 var(--eo-accent); }
+  .fb-field .fb-lbl { font-size:.82rem; font-weight:700; color:var(--eo-text); }
+  .fb-field .fb-req { color:var(--eo-danger); }
+  .fb-field .fb-help { font-size:.72rem; color:var(--eo-text-muted); }
+  .fb-mock { border:1px solid var(--eo-border); border-radius:6px; background:var(--eo-bg);
+             padding:7px 10px; font-size:.78rem; color:var(--eo-text-light); margin-top:5px; }
+  .fb-tools { position:absolute; top:6px; right:8px; display:none; gap:4px; }
+  .fb-field:hover .fb-tools, .fb-field.selected .fb-tools { display:flex; }
+  .fb-tools button { border:1px solid var(--eo-border); background:var(--eo-surface);
+                     border-radius:6px; padding:2px 7px; font-size:.72rem; cursor:pointer;
+                     color:var(--eo-text-muted); }
+  .fb-tools button:hover { color:var(--eo-accent); border-color:var(--eo-accent); }
+  .fb-w-half { width:calc(50% - 4px); display:inline-block; vertical-align:top; }
+  .fb-w-third { width:calc(33.33% - 5px); display:inline-block; vertical-align:top; }
+
+  /* ── Inspector ── */
+  .fb-inspector { padding:12px 14px 16px; }
+  .fb-inspector label { display:block; font-size:.72rem; font-weight:700;
+                        color:var(--eo-text-muted); margin:10px 0 4px; }
+  .fb-inspector input[type=text], .fb-inspector input[type=number],
+  .fb-inspector select, .fb-inspector textarea {
+      width:100%; padding:7px 9px; font-size:.8rem; border:1px solid var(--eo-border);
+      border-radius:7px; background:var(--eo-bg); color:var(--eo-text); }
+  .fb-check { display:flex; align-items:center; gap:7px; font-size:.8rem;
+              color:var(--eo-text); margin-top:10px; }
+
+  /* ── Tabs ── */
+  .fb-tabs { display:flex; gap:2px; border-bottom:1px solid var(--eo-border); padding:0 14px; }
+  .fb-tab { padding:11px 14px; font-size:.82rem; font-weight:700; color:var(--eo-text-muted);
+            cursor:pointer; border-bottom:2px solid transparent; }
+  .fb-tab.active { color:var(--eo-accent); border-bottom-color:var(--eo-accent); }
+
+  /* ── Approval flow ── */
+  .fb-steps { padding:16px; max-width:640px; }
+  .fb-step { display:flex; gap:12px; align-items:flex-start; border:1.5px solid var(--eo-border);
+             border-radius:10px; padding:12px 14px; margin-bottom:10px; background:var(--eo-surface);
+             cursor:grab; position:relative; }
+  .fb-step.selected { border-color:var(--eo-accent); }
+  .fb-step.drag-target-above { box-shadow:0 -3px 0 var(--eo-accent); }
+  .fb-step.drag-target-below { box-shadow:0 3px 0 var(--eo-accent); }
+  .fb-step-num { flex:0 0 30px; height:30px; border-radius:50%; background:var(--eo-accent);
+                 color:#fff; display:flex; align-items:center; justify-content:center;
+                 font-weight:800; font-size:.82rem; }
+  .fb-step-body { flex:1; }
+  .fb-step-title { font-size:.86rem; font-weight:700; color:var(--eo-text); }
+  .fb-step-sub { font-size:.75rem; color:var(--eo-text-muted); margin-top:2px; }
+  .fb-connector { width:2px; height:16px; background:var(--eo-border); margin:0 0 10px 14px; }
+
+  .fb-badge { display:inline-flex; align-items:center; gap:4px; padding:2px 9px; border-radius:20px;
+              font-size:.68rem; font-weight:700; }
+  .fb-badge-sign { background:#8250df1a; color:#8250df; }
+  .fb-badge-appr { background:var(--eo-accent)1a; color:var(--eo-accent); }
+
+  /* ── Topbar ── */
+  .fb-topbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+  .fb-topbar input { font-size:1.05rem; font-weight:800; border:1px solid transparent;
+                     background:transparent; color:var(--eo-text); padding:6px 8px;
+                     border-radius:8px; min-width:280px; }
+  .fb-topbar input:hover, .fb-topbar input:focus { border-color:var(--eo-border); background:var(--eo-surface); }
+  .fb-status { font-size:.7rem; font-weight:800; text-transform:uppercase; padding:3px 10px;
+               border-radius:20px; letter-spacing:.05em; }
+  .fb-status-draft { background:#b8860b1a; color:#b8860b; }
+  .fb-status-published { background:var(--eo-accent)1a; color:var(--eo-accent); }
+  .fb-status-archived { background:#8881; color:var(--eo-text-muted); }
+  .fb-saved { font-size:.74rem; color:var(--eo-text-muted); }
+
+  /* ── User search dropdown ── */
+  .fb-usearch { position:relative; }
+  .fb-uresults { position:absolute; top:100%; left:0; right:0; z-index:40; background:var(--eo-surface);
+                 border:1px solid var(--eo-border); border-radius:8px; max-height:220px; overflow:auto;
+                 box-shadow:0 8px 22px rgba(0,0,0,.12); display:none; }
+  .fb-uresults div { padding:8px 11px; font-size:.8rem; cursor:pointer; color:var(--eo-text); }
+  .fb-uresults div:hover { background:var(--eo-bg); }
+
+  /* ── Preview modal ── */
+  .fb-modal { position:fixed; inset:0; z-index:1050; background:rgba(0,0,0,.45);
+              display:none; align-items:flex-start; justify-content:center; padding:30px 14px; overflow:auto; }
+  .fb-modal.open { display:flex; }
+  .fb-modal-card { background:#fff; color:#222; border-radius:12px; width:min(780px, 100%);
+                   padding:34px 40px; }
+</style>
+
+<div class="fb-topbar">
+  <input id="fbTitle" type="text" placeholder="Untitled form" maxlength="200">
+  <span id="fbStatus" class="fb-status fb-status-draft">Draft</span>
+  <span class="fb-saved" id="fbSaved"></span>
+  <div style="flex:1"></div>
+  <button class="eo-btn" onclick="FB.preview()"><i class="bi bi-eye"></i> Preview</button>
+  <div class="dropdown" style="position:relative">
+    <button class="eo-btn" onclick="FB.toggleExportMenu(event)"><i class="bi bi-download"></i> Download empty</button>
+    <div id="fbExportMenu" class="fb-uresults" style="min-width:160px; right:0; left:auto;">
+      <div onclick="FB.exportEmpty('pdf')"><i class="bi bi-file-earmark-pdf"></i> PDF</div>
+      <div onclick="FB.exportEmpty('docx')"><i class="bi bi-file-earmark-word"></i> Word</div>
+    </div>
+  </div>
+  <button class="eo-btn" onclick="FB.save()" id="fbSaveBtn"><i class="bi bi-save"></i> Save</button>
+  <button class="eo-btn eo-btn-primary" onclick="FB.publish()" id="fbPublishBtn">
+    <i class="bi bi-send"></i> Publish</button>
+</div>
+
+<div class="fb-panel" style="margin-bottom:14px;">
+  <div class="fb-tabs">
+    <div class="fb-tab active" data-tab="fields" onclick="FB.tab('fields')"><i class="bi bi-ui-checks"></i> Fields</div>
+    <div class="fb-tab" data-tab="flow" onclick="FB.tab('flow')"><i class="bi bi-diagram-3"></i> Approval flow</div>
+    <div class="fb-tab" data-tab="settings" onclick="FB.tab('settings')"><i class="bi bi-gear"></i> Settings</div>
+  </div>
+
+  <!-- ════════ TAB: FIELDS ════════ -->
+  <div id="tab-fields">
+    <div class="fb-wrap" style="padding:14px;">
+      <!-- Palette -->
+      <div class="fb-panel">
+        <h4>Add a field <span style="font-weight:400;text-transform:none;">(drag or click)</span></h4>
+        <div class="fb-palette" id="fbPalette"></div>
+      </div>
+
+      <!-- Canvas -->
+      <div class="fb-panel fb-canvas" id="fbCanvas"
+           ondragover="FB.canvasDragOver(event)" ondrop="FB.canvasDrop(event)"
+           ondragleave="this.classList.remove('drag-over')">
+      </div>
+
+      <!-- Inspector -->
+      <div class="fb-panel fb-inspector" id="fbInspector">
+        <h4 style="padding:0 0 2px;">Field settings</h4>
+        <div id="fbInspectorBody" style="font-size:.8rem;color:var(--eo-text-muted);">
+          Select a field on the canvas to edit it.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════ TAB: APPROVAL FLOW ════════ -->
+  <div id="tab-flow" style="display:none;">
+    <div class="fb-steps" id="fbSteps"></div>
+    <div style="padding:0 16px 18px; display:flex; gap:10px;">
+      <button class="eo-btn" onclick="FB.addStep()"><i class="bi bi-plus-lg"></i> Add approval step</button>
+      <span style="font-size:.76rem;color:var(--eo-text-muted);align-self:center;">
+        Steps run in order, top to bottom. Drag to reorder.</span>
+    </div>
+  </div>
+
+  <!-- ════════ TAB: SETTINGS ════════ -->
+  <div id="tab-settings" style="display:none; padding:18px; max-width:560px;">
+    <label style="display:block;font-size:.72rem;font-weight:700;color:var(--eo-text-muted);margin-bottom:4px;">Description (shown above the form)</label>
+    <textarea id="fbDesc" rows="3" style="width:100%;padding:8px 10px;font-size:.82rem;border:1px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);"
+              oninput="FB.state.description=this.value; FB.dirty()"></textarea>
+
+    <label style="display:block;font-size:.72rem;font-weight:700;color:var(--eo-text-muted);margin:16px 0 4px;">Letterhead on exported PDF / Word</label>
+    <select id="fbLhMode" style="width:100%;padding:8px 10px;font-size:.82rem;border:1px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);"
+            onchange="FB.lhModeChanged(this.value)">
+      <option value="none">No letterhead — keep it simple</option>
+      <option value="active">Company default (active letterhead)</option>
+      <option value="specific">Choose a specific letterhead…</option>
+    </select>
+    <select id="fbLhPick" style="display:none;width:100%;margin-top:8px;padding:8px 10px;font-size:.82rem;border:1px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);"
+            onchange="FB.state.letterhead_id=this.value||null; FB.dirty()"></select>
+  </div>
+</div>
+
+<!-- Preview modal -->
+<div class="fb-modal" id="fbPreviewModal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="fb-modal-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <strong style="font-size:.9rem;color:#666;">Preview — how the printed form looks</strong>
+      <button class="eo-btn" onclick="document.getElementById('fbPreviewModal').classList.remove('open')">Close</button>
+    </div>
+    <div id="fbPreviewBody"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  'use strict';
+
+  // ── Bootstrapped data ─────────────────────────────────────────────────
+  const INITIAL     = {{ template_json|safe }};
+  const LETTERHEADS = {{ letterheads_json|safe }};
+  const DIRECTORY   = {{ directory_json|safe }};
+
+  const API = {
+    list:      "{% url 'forms_api_list' %}",
+    directory: "{% url 'forms_api_directory' %}",
+    detail:    id => `{% url 'forms_api_detail' pk='00000000-0000-0000-0000-000000000000' %}`.replace('00000000-0000-0000-0000-000000000000', id),
+  };
+
+  function csrfToken() {
+    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    if (m) return m[1];
+    const el = document.querySelector('[name=csrfmiddlewaretoken]');
+    return el ? el.value : '';
+  }
+  const jsonHeaders = () => ({
+    'Content-Type': 'application/json',
+    'X-Requested-With': 'XMLHttpRequest',
+    'X-CSRFToken': csrfToken(),
+  });
+  const uid = p => p + '_' + Math.random().toString(36).slice(2, 8);
+  const esc = s => String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+  // ── Field type catalogue ──────────────────────────────────────────────
+  const TYPES = [
+    { t:'heading',    icon:'type-h2',            name:'Heading',    layout:true },
+    { t:'paragraph',  icon:'text-paragraph',     name:'Paragraph',  layout:true },
+    { t:'divider',    icon:'hr',                 name:'Divider',    layout:true },
+    { t:'text',       icon:'input-cursor-text',  name:'Text' },
+    { t:'textarea',   icon:'textarea-resize',    name:'Long text' },
+    { t:'number',     icon:'123',                name:'Number' },
+    { t:'currency',   icon:'cash',               name:'Amount' },
+    { t:'date',       icon:'calendar3',          name:'Date' },
+    { t:'time',       icon:'clock',              name:'Time' },
+    { t:'email',      icon:'envelope',           name:'Email' },
+    { t:'phone',      icon:'telephone',          name:'Phone' },
+    { t:'select',     icon:'menu-button-wide',   name:'Dropdown',   opts:true },
+    { t:'radio',      icon:'ui-radios',          name:'Choice',     opts:true },
+    { t:'checkboxes', icon:'ui-checks',          name:'Checkboxes', opts:true },
+    { t:'yesno',      icon:'toggle-on',          name:'Yes / No' },
+    { t:'table',      icon:'table',              name:'Table' },
+  ];
+  const TYPE = Object.fromEntries(TYPES.map(x => [x.t, x]));
+
+  // ── State ─────────────────────────────────────────────────────────────
+  const FB = window.FB = {
+    state: INITIAL || {
+      id: null, title: '', description: '', status: 'draft',
+      schema: [], approval_flow: [], letterhead_mode: 'none', letterhead_id: null,
+    },
+    selectedField: null,
+    selectedStep: null,
+    isDirty: false,
+  };
+
+  FB.dirty = function () { FB.isDirty = true; document.getElementById('fbSaved').textContent = 'Unsaved changes'; };
+
+  // ══════════════════════ FIELDS TAB ══════════════════════
+
+  function buildPalette() {
+    const pal = document.getElementById('fbPalette');
+    pal.innerHTML = TYPES.map(x => `
+      <div class="fb-pitem" draggable="true" data-type="${x.t}"
+           ondragstart="FB.paletteDrag(event,'${x.t}')" onclick="FB.addField('${x.t}')">
+        <i class="bi bi-${x.icon}"></i>${x.name}
+      </div>`).join('');
+  }
+
+  function newField(t) {
+    const meta = TYPE[t];
+    const f = { id: uid('f'), type: t, label: meta.name, help: '', required: false, width: 'full' };
+    if (t === 'heading')   f.label = 'Section title';
+    if (t === 'paragraph') f.label = 'Add explanatory text here…';
+    if (meta.opts)         f.options = ['Option 1', 'Option 2'];
+    if (t === 'table')   { f.columns = ['Item', 'Qty', 'Amount']; f.rows = 3; }
+    return f;
+  }
+
+  FB.addField = function (t, index) {
+    const f = newField(t);
+    if (index == null) FB.state.schema.push(f);
+    else FB.state.schema.splice(index, 0, f);
+    FB.selectedField = f.id;
+    FB.dirty(); renderCanvas(); renderInspector();
+  };
+
+  // — drag & drop —
+  let dragPayload = null; // {kind:'new'|'move', type?, id?}
+
+  FB.paletteDrag = (e, t) => {
+    dragPayload = { kind: 'new', type: t };
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+  FB.fieldDrag = (e, id) => {
+    dragPayload = { kind: 'move', id };
+    e.dataTransfer.effectAllowed = 'move';
+    e.stopPropagation();
+  };
+  FB.canvasDragOver = e => {
+    e.preventDefault();
+    document.getElementById('fbCanvas').classList.add('drag-over');
+    // Highlight insertion point on hovered field
+    document.querySelectorAll('.fb-field').forEach(el =>
+      el.classList.remove('drag-target-above', 'drag-target-below'));
+    const over = e.target.closest('.fb-field');
+    if (over) {
+      const r = over.getBoundingClientRect();
+      over.classList.add(e.clientY < r.top + r.height / 2 ? 'drag-target-above' : 'drag-target-below');
+    }
+  };
+  FB.canvasDrop = e => {
+    e.preventDefault();
+    const canvas = document.getElementById('fbCanvas');
+    canvas.classList.remove('drag-over');
+    if (!dragPayload) return;
+
+    let index = FB.state.schema.length;
+    const over = e.target.closest('.fb-field');
+    if (over) {
+      const r = over.getBoundingClientRect();
+      index = FB.state.schema.findIndex(f => f.id === over.dataset.id);
+      if (e.clientY >= r.top + r.height / 2) index += 1;
+    }
+    if (dragPayload.kind === 'new') {
+      FB.addField(dragPayload.type, index);
+    } else {
+      const from = FB.state.schema.findIndex(f => f.id === dragPayload.id);
+      if (from > -1) {
+        const [f] = FB.state.schema.splice(from, 1);
+        if (from < index) index -= 1;
+        FB.state.schema.splice(index, 0, f);
+        FB.dirty(); renderCanvas();
+      }
+    }
+    dragPayload = null;
+    document.querySelectorAll('.fb-field').forEach(el =>
+      el.classList.remove('drag-target-above', 'drag-target-below'));
+  };
+
+  FB.selectField = id => { FB.selectedField = id; renderCanvas(); renderInspector(); };
+  FB.removeField = (id, ev) => {
+    ev && ev.stopPropagation();
+    FB.state.schema = FB.state.schema.filter(f => f.id !== id);
+    if (FB.selectedField === id) FB.selectedField = null;
+    FB.dirty(); renderCanvas(); renderInspector();
+  };
+  FB.dupField = (id, ev) => {
+    ev && ev.stopPropagation();
+    const i = FB.state.schema.findIndex(f => f.id === id);
+    if (i < 0) return;
+    const copy = JSON.parse(JSON.stringify(FB.state.schema[i]));
+    copy.id = uid('f');
+    FB.state.schema.splice(i + 1, 0, copy);
+    FB.dirty(); renderCanvas();
+  };
+
+  function mockControl(f) {
+    switch (f.type) {
+      case 'heading':   return '';
+      case 'paragraph': return '';
+      case 'divider':   return '<hr style="border:none;border-top:1px solid var(--eo-border);">';
+      case 'textarea':  return '<div class="fb-mock" style="height:56px;">Long answer…</div>';
+      case 'table': {
+        const head = (f.columns || []).map(c => `<th style="border:1px solid var(--eo-border);padding:4px 8px;font-size:.72rem;background:var(--eo-bg);">${esc(c)}</th>`).join('');
+        return `<table style="border-collapse:collapse;width:100%;margin-top:5px;"><tr>${head}</tr>
+                <tr>${(f.columns||[]).map(()=>'<td style="border:1px solid var(--eo-border);padding:9px;"></td>').join('')}</tr></table>`;
+      }
+      case 'select':     return `<div class="fb-mock">${esc((f.options||[])[0]||'Choose…')} ▾</div>`;
+      case 'radio':
+      case 'checkboxes': {
+        const box = f.type === 'radio' ? '◯' : '☐';
+        return `<div style="margin-top:5px;font-size:.78rem;color:var(--eo-text-muted);">${(f.options||[]).map(o=>`${box} ${esc(o)}`).join(' &nbsp; ')}</div>`;
+      }
+      case 'yesno': return '<div style="margin-top:5px;font-size:.78rem;color:var(--eo-text-muted);">◯ Yes &nbsp; ◯ No</div>';
+      default:      return `<div class="fb-mock">${esc(f.placeholder || TYPE[f.type].name + '…')}</div>`;
+    }
+  }
+
+  function renderCanvas() {
+    const canvas = document.getElementById('fbCanvas');
+    if (!FB.state.schema.length) {
+      canvas.innerHTML = `<div class="fb-empty">
+        <i class="bi bi-magic" style="font-size:2.2rem;display:block;margin-bottom:10px;color:var(--eo-text-light);"></i>
+        Drag a field here from the left — or just click one — to start building.</div>`;
+      return;
+    }
+    canvas.innerHTML = FB.state.schema.map(f => {
+      const sel = FB.selectedField === f.id ? ' selected' : '';
+      const w = f.width === 'half' ? ' fb-w-half' : f.width === 'third' ? ' fb-w-third' : '';
+      const isHeading = f.type === 'heading';
+      const isPara = f.type === 'paragraph';
+      const label = isHeading
+        ? `<div style="font-size:1rem;font-weight:800;color:var(--eo-text);border-bottom:1px solid var(--eo-border);padding-bottom:4px;">${esc(f.label)}</div>`
+        : isPara
+        ? `<div style="font-size:.8rem;color:var(--eo-text-muted);">${esc(f.label)}</div>`
+        : f.type === 'divider' ? ''
+        : `<span class="fb-lbl">${esc(f.label)}${f.required ? ' <span class="fb-req">*</span>' : ''}</span>
+           ${f.help ? `<div class="fb-help">${esc(f.help)}</div>` : ''}`;
+      return `<div class="fb-field${sel}${w}" data-id="${f.id}" draggable="true"
+                   ondragstart="FB.fieldDrag(event,'${f.id}')" onclick="FB.selectField('${f.id}')">
+        <div class="fb-tools">
+          <button title="Duplicate" onclick="FB.dupField('${f.id}',event)"><i class="bi bi-files"></i></button>
+          <button title="Remove" onclick="FB.removeField('${f.id}',event)"><i class="bi bi-trash"></i></button>
+        </div>
+        ${label}${mockControl(f)}
+      </div>`;
+    }).join('');
+  }
+
+  // — inspector —
+  function renderInspector() {
+    const body = document.getElementById('fbInspectorBody');
+    const f = FB.state.schema.find(x => x.id === FB.selectedField);
+    if (!f) { body.innerHTML = 'Select a field on the canvas to edit it.'; return; }
+    const meta = TYPE[f.type];
+    let h = `
+      <label>${f.type === 'paragraph' ? 'Text' : 'Label'}</label>
+      ${f.type === 'paragraph'
+        ? `<textarea rows="3" oninput="FB.patch('label',this.value)">${esc(f.label)}</textarea>`
+        : `<input type="text" value="${esc(f.label)}" oninput="FB.patch('label',this.value)">`}`;
+
+    if (!meta.layout) {
+      h += `
+      <label>Helper text</label>
+      <input type="text" value="${esc(f.help||'')}" oninput="FB.patch('help',this.value)">
+      <label>Placeholder</label>
+      <input type="text" value="${esc(f.placeholder||'')}" oninput="FB.patch('placeholder',this.value)">
+      <label>Width</label>
+      <select onchange="FB.patch('width',this.value)">
+        <option value="full"  ${f.width==='full'?'selected':''}>Full width</option>
+        <option value="half"  ${f.width==='half'?'selected':''}>Half</option>
+        <option value="third" ${f.width==='third'?'selected':''}>One third</option>
+      </select>
+      <div class="fb-check"><input type="checkbox" id="fbReq" ${f.required?'checked':''}
+        onchange="FB.patch('required',this.checked)"><label for="fbReq" style="margin:0;">Required</label></div>`;
+    }
+    if (meta.opts) {
+      h += `<label>Options (one per line)</label>
+      <textarea rows="4" oninput="FB.patch('options', this.value.split('\\n').map(s=>s.trim()).filter(Boolean))">${esc((f.options||[]).join('\n'))}</textarea>`;
+    }
+    if (f.type === 'table') {
+      h += `<label>Columns (one per line)</label>
+      <textarea rows="4" oninput="FB.patch('columns', this.value.split('\\n').map(s=>s.trim()).filter(Boolean))">${esc((f.columns||[]).join('\n'))}</textarea>
+      <label>Starting rows</label>
+      <input type="number" min="1" max="30" value="${f.rows||3}" oninput="FB.patch('rows', parseInt(this.value)||3)">`;
+    }
+    body.innerHTML = h;
+  }
+
+  FB.patch = function (key, value) {
+    const f = FB.state.schema.find(x => x.id === FB.selectedField);
+    if (!f) return;
+    f[key] = value;
+    FB.dirty(); renderCanvas();
+  };
+
+  // ══════════════════════ APPROVAL FLOW TAB ══════════════════════
+
+  function newStep() {
+    return { id: uid('s'), label: `Approval ${FB.state.approval_flow.length + 1}`,
+             action: 'approve', assignee_type: 'submitter_choice', assignee_value: '',
+             assignee_display: '' };
+  }
+  FB.addStep = () => { FB.state.approval_flow.push(newStep()); FB.dirty(); renderSteps(); };
+  FB.removeStep = (id, ev) => {
+    ev && ev.stopPropagation();
+    FB.state.approval_flow = FB.state.approval_flow.filter(s => s.id !== id);
+    FB.dirty(); renderSteps();
+  };
+  FB.stepDrag = (e, id) => { dragPayload = { kind: 'step', id }; e.stopPropagation(); };
+  FB.stepDragOver = e => {
+    e.preventDefault();
+    document.querySelectorAll('.fb-step').forEach(el =>
+      el.classList.remove('drag-target-above','drag-target-below'));
+    const over = e.target.closest('.fb-step');
+    if (over) {
+      const r = over.getBoundingClientRect();
+      over.classList.add(e.clientY < r.top + r.height/2 ? 'drag-target-above' : 'drag-target-below');
+    }
+  };
+  FB.stepDrop = e => {
+    e.preventDefault();
+    if (!dragPayload || dragPayload.kind !== 'step') return;
+    const over = e.target.closest('.fb-step');
+    let index = FB.state.approval_flow.length;
+    if (over) {
+      const r = over.getBoundingClientRect();
+      index = FB.state.approval_flow.findIndex(s => s.id === over.dataset.id);
+      if (e.clientY >= r.top + r.height/2) index += 1;
+    }
+    const from = FB.state.approval_flow.findIndex(s => s.id === dragPayload.id);
+    if (from > -1) {
+      const [s] = FB.state.approval_flow.splice(from, 1);
+      if (from < index) index -= 1;
+      FB.state.approval_flow.splice(index, 0, s);
+      FB.dirty(); renderSteps();
+    }
+    dragPayload = null;
+  };
+
+  function assigneeSummary(s) {
+    switch (s.assignee_type) {
+      case 'user':             return `<i class="bi bi-person"></i> ${esc(s.assignee_display || s.assignee_value)}`;
+      case 'role':             return `<i class="bi bi-person-badge"></i> Anyone with role “${esc(s.assignee_value)}”`;
+      case 'position':         return `<i class="bi bi-briefcase"></i> Anyone with position “${esc(s.assignee_value)}”`;
+      case 'unit':             return `<i class="bi bi-building"></i> Anyone in unit “${esc(s.assignee_value)}”`;
+      case 'submitter_choice': return `<i class="bi bi-hand-index"></i> Submitter picks the approver`;
+    }
+    return '';
+  }
+
+  function renderSteps() {
+    const wrap = document.getElementById('fbSteps');
+    wrap.ondragover = FB.stepDragOver;
+    wrap.ondrop = FB.stepDrop;
+    if (!FB.state.approval_flow.length) {
+      wrap.innerHTML = `<div class="fb-empty" style="padding:36px;">
+        No approval steps — submissions will be approved instantly.<br>
+        Add a step to route submissions through people.</div>`;
+      return;
+    }
+    wrap.innerHTML = FB.state.approval_flow.map((s, i) => {
+      const badge = s.action === 'sign'
+        ? '<span class="fb-badge fb-badge-sign"><i class="bi bi-pen"></i> Signature</span>'
+        : '<span class="fb-badge fb-badge-appr"><i class="bi bi-check2-circle"></i> Approve</span>';
+      const sel = FB.selectedStep === s.id ? ' selected' : '';
+      const editor = FB.selectedStep === s.id ? stepEditor(s) : '';
+      const conn = i < FB.state.approval_flow.length - 1 ? '<div class="fb-connector"></div>' : '';
+      return `
+      <div class="fb-step${sel}" data-id="${s.id}" draggable="true"
+           ondragstart="FB.stepDrag(event,'${s.id}')" onclick="FB.editStep('${s.id}')">
+        <div class="fb-step-num">${i + 1}</div>
+        <div class="fb-step-body">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span class="fb-step-title">${esc(s.label)}</span>${badge}
+          </div>
+          <div class="fb-step-sub">${assigneeSummary(s)}</div>
+          ${editor}
+        </div>
+        <button style="border:none;background:none;color:var(--eo-text-muted);cursor:pointer;"
+                title="Remove step" onclick="FB.removeStep('${s.id}',event)"><i class="bi bi-x-lg"></i></button>
+      </div>${conn}`;
+    }).join('');
+  }
+
+  FB.editStep = id => {
+    if (FB.selectedStep === id) return;
+    FB.selectedStep = id; renderSteps();
+  };
+
+  function optionList(values, current) {
+    return values.map(v => `<option value="${esc(v)}" ${v===current?'selected':''}>${esc(v)}</option>`).join('');
+  }
+
+  function stepEditor(s) {
+    let assigneeCtl = '';
+    if (s.assignee_type === 'user') {
+      assigneeCtl = `
+        <div class="fb-usearch" onclick="event.stopPropagation()">
+          <input type="text" placeholder="Search a person…" value="${esc(s.assignee_display||'')}"
+                 style="width:100%;padding:7px 9px;font-size:.8rem;border:1px solid var(--eo-border);border-radius:7px;background:var(--eo-bg);color:var(--eo-text);"
+                 oninput="FB.userSearch(this,'${s.id}')">
+          <div class="fb-uresults"></div>
+        </div>`;
+    } else if (['role','position','unit'].includes(s.assignee_type)) {
+      const values = DIRECTORY[s.assignee_type + 's'] || [];
+      assigneeCtl = values.length
+        ? `<select onclick="event.stopPropagation()" onchange="FB.patchStep('${s.id}','assignee_value',this.value)"
+                   style="width:100%;padding:7px 9px;font-size:.8rem;border:1px solid var(--eo-border);border-radius:7px;background:var(--eo-bg);color:var(--eo-text);">
+             <option value="">— choose —</option>${optionList(values, s.assignee_value)}</select>`
+        : `<input type="text" placeholder="Type the ${s.assignee_type} name" value="${esc(s.assignee_value)}"
+                  onclick="event.stopPropagation()"
+                  oninput="FB.patchStep('${s.id}','assignee_value',this.value)"
+                  style="width:100%;padding:7px 9px;font-size:.8rem;border:1px solid var(--eo-border);border-radius:7px;background:var(--eo-bg);color:var(--eo-text);">`;
+    }
+    return `
+    <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px;" onclick="event.stopPropagation()">
+      <div>
+        <label style="font-size:.68rem;font-weight:700;color:var(--eo-text-muted);">Step name</label>
+        <input type="text" value="${esc(s.label)}" oninput="FB.patchStep('${s.id}','label',this.value,true)"
+               style="width:100%;padding:7px 9px;font-size:.8rem;border:1px solid var(--eo-border);border-radius:7px;background:var(--eo-bg);color:var(--eo-text);">
+      </div>
+      <div>
+        <label style="font-size:.68rem;font-weight:700;color:var(--eo-text-muted);">Action required</label>
+        <select onchange="FB.patchStep('${s.id}','action',this.value)"
+                style="width:100%;padding:7px 9px;font-size:.8rem;border:1px solid var(--eo-border);border-radius:7px;background:var(--eo-bg);color:var(--eo-text);">
+          <option value="approve" ${s.action==='approve'?'selected':''}>Approve only</option>
+          <option value="sign"    ${s.action==='sign'?'selected':''}>Approve + drawn signature</option>
+        </select>
+      </div>
+      <div style="grid-column:1/-1;">
+        <label style="font-size:.68rem;font-weight:700;color:var(--eo-text-muted);">Who approves</label>
+        <select onchange="FB.patchStep('${s.id}','assignee_type',this.value)"
+                style="width:100%;padding:7px 9px;font-size:.8rem;border:1px solid var(--eo-border);border-radius:7px;background:var(--eo-bg);color:var(--eo-text);margin-bottom:6px;">
+          <option value="user"             ${s.assignee_type==='user'?'selected':''}>A specific person</option>
+          <option value="role"             ${s.assignee_type==='role'?'selected':''}>Anyone with a role</option>
+          <option value="position"         ${s.assignee_type==='position'?'selected':''}>Anyone with a position</option>
+          <option value="unit"             ${s.assignee_type==='unit'?'selected':''}>Anyone in a unit</option>
+          <option value="submitter_choice" ${s.assignee_type==='submitter_choice'?'selected':''}>Let the submitter choose</option>
+        </select>
+        ${assigneeCtl}
+      </div>
+    </div>`;
+  }
+
+  FB.patchStep = function (id, key, value, noRender) {
+    const s = FB.state.approval_flow.find(x => x.id === id);
+    if (!s) return;
+    s[key] = value;
+    if (key === 'assignee_type') { s.assignee_value = ''; s.assignee_display = ''; }
+    FB.dirty();
+    if (!noRender) renderSteps();
+  };
+
+  let searchTimer = null;
+  FB.userSearch = function (input, stepId) {
+    clearTimeout(searchTimer);
+    const box = input.parentElement.querySelector('.fb-uresults');
+    searchTimer = setTimeout(async () => {
+      const q = input.value.trim();
+      if (!q) { box.style.display = 'none'; return; }
+      const res = await fetch(`${API.directory}?q=${encodeURIComponent(q)}`,
+        { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      const data = await res.json();
+      box.innerHTML = (data.users || []).map(u =>
+        `<div onclick="FB.pickUser('${stepId}',${u.id},'${esc(u.name).replace(/'/g, '&#39;')}')">
+           <i class="bi bi-person"></i> ${esc(u.name)} <span style="color:var(--eo-text-muted)">@${esc(u.username)}</span>
+         </div>`).join('') || '<div style="color:var(--eo-text-muted)">No matches</div>';
+      box.style.display = 'block';
+    }, 250);
+  };
+  FB.pickUser = function (stepId, userId, name) {
+    const s = FB.state.approval_flow.find(x => x.id === stepId);
+    if (!s) return;
+    s.assignee_value = String(userId);
+    s.assignee_display = name;
+    FB.dirty(); renderSteps();
+  };
+
+  // ══════════════════════ SETTINGS / TABS ══════════════════════
+
+  FB.tab = function (name) {
+    document.querySelectorAll('.fb-tab').forEach(t =>
+      t.classList.toggle('active', t.dataset.tab === name));
+    ['fields','flow','settings'].forEach(n =>
+      document.getElementById('tab-' + n).style.display = n === name ? '' : 'none');
+  };
+
+  FB.lhModeChanged = function (mode) {
+    FB.state.letterhead_mode = mode;
+    const pick = document.getElementById('fbLhPick');
+    pick.style.display = mode === 'specific' ? '' : 'none';
+    FB.dirty();
+  };
+
+  function initSettings() {
+    document.getElementById('fbDesc').value = FB.state.description || '';
+    document.getElementById('fbLhMode').value = FB.state.letterhead_mode || 'none';
+    const pick = document.getElementById('fbLhPick');
+    pick.innerHTML = '<option value="">— choose a letterhead —</option>' +
+      LETTERHEADS.map(l => `<option value="${l.id}" ${l.id===FB.state.letterhead_id?'selected':''}>
+        ${esc(l.name)}${l.is_active ? ' (active)' : ''}</option>`).join('');
+    pick.style.display = FB.state.letterhead_mode === 'specific' ? '' : 'none';
+  }
+
+  // ══════════════════════ SAVE / PUBLISH / EXPORT / PREVIEW ══════════════════════
+
+  function payload() {
+    return {
+      title: document.getElementById('fbTitle').value.trim() || 'Untitled form',
+      description: FB.state.description || '',
+      schema: FB.state.schema,
+      approval_flow: FB.state.approval_flow,
+      letterhead_mode: FB.state.letterhead_mode,
+      letterhead_id: FB.state.letterhead_mode === 'specific' ? FB.state.letterhead_id : null,
+    };
+  }
+
+  FB.save = async function () {
+    const btn = document.getElementById('fbSaveBtn');
+    btn.disabled = true;
+    try {
+      const url = FB.state.id ? API.detail(FB.state.id) + 'update/' : API.list;
+      const res = await fetch(url, { method: 'POST', headers: jsonHeaders(),
+                                     body: JSON.stringify(payload()) });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || JSON.stringify(data.errors || data)); return null; }
+      FB.state.id = data.template.id;
+      FB.state.status = data.template.status;
+      FB.isDirty = false;
+      document.getElementById('fbSaved').textContent =
+        'Saved ' + new Date().toLocaleTimeString();
+      updateStatusPill();
+      history.replaceState(null, '', `?id=${FB.state.id}`);
+      return data.template;
+    } finally { btn.disabled = false; }
+  };
+
+  FB.publish = async function () {
+    const t = await FB.save();
+    if (!t) return;
+    const res = await fetch(API.detail(FB.state.id) + 'publish/', {
+      method: 'POST', headers: jsonHeaders(),
+      body: JSON.stringify({ status: 'published' }) });
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || 'Could not publish.'); return; }
+    FB.state.status = 'published';
+    updateStatusPill();
+    alert('Published! The form is now available for everyone to fill.');
+  };
+
+  FB.exportEmpty = async function (fmt) {
+    document.getElementById('fbExportMenu').style.display = 'none';
+    if (FB.isDirty || !FB.state.id) {
+      const t = await FB.save();
+      if (!t) return;
+    }
+    window.location = API.detail(FB.state.id) + `export/${fmt}/`;
+  };
+  FB.toggleExportMenu = function (e) {
+    e.stopPropagation();
+    const m = document.getElementById('fbExportMenu');
+    m.style.display = m.style.display === 'block' ? 'none' : 'block';
+  };
+  document.addEventListener('click', () =>
+    document.getElementById('fbExportMenu').style.display = 'none');
+
+  FB.preview = function () {
+    const body = document.getElementById('fbPreviewBody');
+    body.innerHTML = FB.state.schema.map(f => previewField(f)).join('') ||
+      '<p style="color:#999;">No fields yet.</p>';
+    if (FB.state.approval_flow.length) {
+      body.innerHTML += `<h3 style="font-size:14px;margin:22px 0 8px;">Approvals</h3>` +
+        `<ol style="padding-left:20px;font-size:12.5px;color:#444;">` +
+        FB.state.approval_flow.map(s =>
+          `<li style="margin-bottom:4px;"><b>${esc(s.label)}</b> — ${
+            s.action === 'sign' ? 'approve with signature' : 'approve'}</li>`).join('') + '</ol>';
+    }
+    document.getElementById('fbPreviewModal').classList.add('open');
+  };
+
+  function previewField(f) {
+    switch (f.type) {
+      case 'heading':   return `<h3 style="font-size:15px;margin:16px 0 6px;border-bottom:1px solid #ddd;padding-bottom:4px;">${esc(f.label)}</h3>`;
+      case 'paragraph': return `<p style="font-size:12px;color:#555;margin:6px 0;">${esc(f.label)}</p>`;
+      case 'divider':   return '<hr style="border:none;border-top:1px solid #ddd;margin:14px 0;">';
+      case 'table': {
+        const head = (f.columns||[]).map(c=>`<th style="border:1px solid #bbb;background:#f2f2f2;padding:5px;font-size:11px;text-align:left;">${esc(c)}</th>`).join('');
+        const row = `<tr>${(f.columns||[]).map(()=>'<td style="border:1px solid #ccc;padding:12px;"></td>').join('')}</tr>`;
+        return `<div style="margin:10px 0;"><b style="font-size:12px;">${esc(f.label)}</b>
+          <table style="border-collapse:collapse;width:100%;margin-top:4px;"><tr>${head}</tr>${row.repeat(f.rows||3)}</table></div>`;
+      }
+      case 'radio': case 'checkboxes': case 'select': case 'yesno': {
+        const opts = f.type === 'yesno' ? ['Yes','No'] : (f.options||[]);
+        return `<div style="margin:9px 0;"><b style="font-size:12px;">${esc(f.label)}</b>
+          <div style="font-size:12px;margin-top:3px;">${opts.map(o=>`☐ ${esc(o)}`).join(' &nbsp; ')}</div></div>`;
+      }
+      default:
+        return `<div style="margin:9px 0;"><b style="font-size:12px;">${esc(f.label)}${f.required?' *':''}</b>
+          <div style="border-bottom:1px solid #999;height:${f.type==='textarea'?52:20}px;"></div></div>`;
+    }
+  }
+
+  function updateStatusPill() {
+    const pill = document.getElementById('fbStatus');
+    pill.className = `fb-status fb-status-${FB.state.status}`;
+    pill.textContent = FB.state.status.charAt(0).toUpperCase() + FB.state.status.slice(1);
+  }
+
+  // ── Init ──────────────────────────────────────────────────────────────
+  document.getElementById('fbTitle').value = FB.state.title || '';
+  document.getElementById('fbTitle').addEventListener('input', () => FB.dirty());
+  buildPalette(); renderCanvas(); renderInspector(); renderSteps();
+  initSettings(); updateStatusPill();
+  window.addEventListener('beforeunload', e => {
+    if (FB.isDirty) { e.preventDefault(); e.returnValue = ''; }
+  });
+})();
+</script>
+{% endblock %}

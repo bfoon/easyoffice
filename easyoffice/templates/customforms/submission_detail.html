@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+
+{% block title %}{{ sub.ref_no }}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'forms_home' %}">Forms</a> / <span>{{ sub.ref_no }}</span>{% endblock %}
+
+{% block content %}
+{% if permission_denied %}
+  <div style="max-width:520px;margin:60px auto;text-align:center;color:var(--eo-text-muted);">
+    <i class="bi bi-lock" style="font-size:2.4rem;"></i>
+    <p style="margin-top:12px;">You are not a party to this submission.</p>
+  </div>
+{% else %}
+<style>
+  .sd-grid { display:grid; grid-template-columns: 1fr 320px; gap:16px; align-items:start; }
+  @media (max-width: 950px) { .sd-grid { grid-template-columns: 1fr; } }
+  .sd-card { background:var(--eo-surface); border:1px solid var(--eo-border);
+             border-radius:var(--eo-radius,10px); padding:22px 26px; }
+  .sd-status { font-size:.7rem; font-weight:800; text-transform:uppercase; padding:3px 11px;
+               border-radius:20px; letter-spacing:.05em; }
+  .st-in_review { background:#b8860b1a; color:#b8860b; }
+  .st-approved  { background:var(--eo-accent)1a; color:var(--eo-accent); }
+  .st-rejected  { background:#c0392b1a; color:#c0392b; }
+  .st-cancelled { background:#8881; color:var(--eo-text-muted); }
+
+  .sd-field { margin:12px 0; }
+  .sd-lbl { font-size:.72rem; font-weight:800; text-transform:uppercase; letter-spacing:.04em;
+            color:var(--eo-text-muted); }
+  .sd-val { font-size:.88rem; color:var(--eo-text); margin-top:2px; white-space:pre-wrap; }
+  .sd-table { border-collapse:collapse; width:100%; margin-top:4px; }
+  .sd-table th, .sd-table td { border:1px solid var(--eo-border); padding:6px 9px; font-size:.8rem; }
+  .sd-table th { background:var(--eo-bg); color:var(--eo-text-muted); text-align:left; }
+
+  .tl-step { display:flex; gap:12px; position:relative; padding-bottom:20px; }
+  .tl-step:not(:last-child)::before { content:''; position:absolute; left:14px; top:30px; bottom:0;
+                                      width:2px; background:var(--eo-border); }
+  .tl-dot { flex:0 0 30px; height:30px; border-radius:50%; display:flex; align-items:center;
+            justify-content:center; font-size:.85rem; color:#fff; z-index:1; }
+  .tl-approved { background:var(--eo-accent); }
+  .tl-rejected { background:#c0392b; }
+  .tl-pending  { background:#b8860b; }
+  .tl-waiting, .tl-skipped { background:var(--eo-text-light, #bbb); }
+  .tl-name { font-size:.84rem; font-weight:700; color:var(--eo-text); }
+  .tl-sub { font-size:.74rem; color:var(--eo-text-muted); }
+  .tl-comment { font-size:.78rem; color:var(--eo-text); font-style:italic; margin-top:3px; }
+  .tl-sig { height:44px; margin-top:5px; border:1px solid var(--eo-border); border-radius:6px;
+            background:#fff; padding:2px 6px; }
+
+  .sig-modal { position:fixed; inset:0; z-index:1050; background:rgba(0,0,0,.45);
+               display:none; align-items:center; justify-content:center; padding:16px; }
+  .sig-modal.open { display:flex; }
+  .sig-card { background:var(--eo-surface); border-radius:12px; padding:20px 22px; width:min(460px,100%); }
+  #sigPad { border:1.5px dashed var(--eo-border); border-radius:10px; background:#fff;
+            width:100%; height:180px; touch-action:none; cursor:crosshair; }
+</style>
+
+<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+  <div>
+    <div style="font-size:1.2rem;font-weight:800;color:var(--eo-text);">{{ sub.template.title }}</div>
+    <div style="font-size:.78rem;color:var(--eo-text-muted);">
+      {{ sub.ref_no }} · submitted by {{ sub.submitted_by.get_full_name|default:sub.submitted_by.username }}
+      on {{ sub.submitted_at|date:"d M Y H:i" }}</div>
+  </div>
+  <span class="sd-status st-{{ sub.status }}">{{ sub.get_status_display }}</span>
+  <div style="flex:1"></div>
+  <a class="eo-btn" href="{% url 'form_submission_export' pk=sub.pk fmt='pdf' %}">
+    <i class="bi bi-file-earmark-pdf"></i> Download PDF</a>
+  <a class="eo-btn" href="{% url 'form_submission_export' pk=sub.pk fmt='docx' %}">
+    <i class="bi bi-file-earmark-word"></i> Download Word</a>
+</div>
+
+<div class="sd-grid">
+  <!-- ── Filled data ── -->
+  <div class="sd-card">
+    {% for item in fields %}
+      {% with f=item.f v=item.value %}
+        {% if f.type == 'heading' %}
+          <div style="font-size:.95rem;font-weight:800;color:var(--eo-text);border-bottom:1px solid var(--eo-border);padding-bottom:4px;margin:18px 0 4px;">{{ f.label }}</div>
+        {% elif f.type == 'paragraph' or f.type == 'divider' %}
+        {% elif f.type == 'table' %}
+          <div class="sd-field">
+            <div class="sd-lbl">{{ f.label }}</div>
+            <table class="sd-table">
+              <tr>{% for c in f.columns %}<th>{{ c }}</th>{% endfor %}</tr>
+              {% for row in v %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+              {% empty %}<tr><td colspan="{{ f.columns|length }}" style="color:var(--eo-text-muted)">—</td></tr>{% endfor %}
+            </table>
+          </div>
+        {% else %}
+          <div class="sd-field">
+            <div class="sd-lbl">{{ f.label }}</div>
+            <div class="sd-val">{% if v %}{{ v }}{% else %}<span style="color:var(--eo-text-muted)">—</span>{% endif %}</div>
+          </div>
+        {% endif %}
+      {% endwith %}
+    {% endfor %}
+  </div>
+
+  <!-- ── Approval timeline ── -->
+  <div class="sd-card">
+    <div style="font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted);margin-bottom:14px;">Approval flow</div>
+    {% for st in steps %}
+    <div class="tl-step">
+      <div class="tl-dot tl-{{ st.status }}">
+        {% if st.status == 'approved' %}<i class="bi bi-check-lg"></i>
+        {% elif st.status == 'rejected' %}<i class="bi bi-x-lg"></i>
+        {% elif st.status == 'pending' %}<i class="bi bi-hourglass-split"></i>
+        {% else %}{{ forloop.counter }}{% endif %}
+      </div>
+      <div style="flex:1;">
+        <div class="tl-name">{{ st.label }}
+          {% if st.action == 'sign' %}<i class="bi bi-pen" title="Requires signature" style="color:#8250df;font-size:.75rem;"></i>{% endif %}
+        </div>
+        <div class="tl-sub">{{ st.assignee_display }}
+          {% if st.acted_at %} · {{ st.acted_at|date:"d M Y H:i" }}{% endif %}</div>
+        {% if st.comment %}<div class="tl-comment">“{{ st.comment }}”</div>{% endif %}
+        {% if st.signature_data %}<img class="tl-sig" src="{{ st.signature_data }}" alt="Signature">{% endif %}
+
+        {% if actionable_step and actionable_step.pk == st.pk %}
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+          {% if st.action == 'sign' %}
+          <button class="eo-btn eo-btn-primary" onclick="SD.openSign()">
+            <i class="bi bi-pen"></i> Sign & approve</button>
+          {% else %}
+          <button class="eo-btn eo-btn-primary" onclick="SD.act('approve')">
+            <i class="bi bi-check2"></i> Approve</button>
+          {% endif %}
+          <button class="eo-btn" style="color:var(--eo-danger);" onclick="SD.rejectPrompt()">
+            <i class="bi bi-x-circle"></i> Reject</button>
+        </div>
+        <textarea id="sdComment" rows="2" placeholder="Comment (required to reject)"
+          style="width:100%;margin-top:8px;padding:8px 10px;font-size:.8rem;border:1px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);"></textarea>
+        {% endif %}
+      </div>
+    </div>
+    {% empty %}
+    <div style="font-size:.8rem;color:var(--eo-text-muted);">No approval steps — auto-approved.</div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Signature modal -->
+<div class="sig-modal" id="sigModal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="sig-card">
+    <div style="font-weight:800;color:var(--eo-text);margin-bottom:10px;">
+      <i class="bi bi-pen" style="color:var(--eo-accent)"></i> Draw your signature</div>
+    <canvas id="sigPad"></canvas>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button class="eo-btn" onclick="SD.clearSig()">Clear</button>
+      <div style="flex:1"></div>
+      <button class="eo-btn" onclick="document.getElementById('sigModal').classList.remove('open')">Cancel</button>
+      <button class="eo-btn eo-btn-primary" onclick="SD.submitSig()">
+        <i class="bi bi-check2"></i> Sign & approve</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{% if actionable_step %}
+<script>
+(function () {
+  'use strict';
+  const ACT_URL = "{% url 'form_step_act' pk=sub.pk step_id=actionable_step.pk %}";
+  function csrfToken() {
+    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? m[1] : (document.querySelector('[name=csrfmiddlewaretoken]')?.value || '');
+  }
+
+  const SD = window.SD = {};
+  let drawn = false;
+
+  SD.act = async function (decision, signature) {
+    const comment = (document.getElementById('sdComment')?.value || '').trim();
+    if (decision === 'reject' && !comment) {
+      alert('Please add a comment explaining the rejection.'); return;
+    }
+    const res = await fetch(ACT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json',
+                 'X-Requested-With': 'XMLHttpRequest',
+                 'X-CSRFToken': csrfToken() },
+      body: JSON.stringify({ decision, comment, signature_data: signature || '' }),
+    });
+    const d = await res.json();
+    if (!res.ok) { alert(d.error || 'Action failed.'); return; }
+    window.location.reload();
+  };
+  SD.rejectPrompt = () => SD.act('reject');
+
+  // ── Signature pad ────────────────────────────────────────────────────
+  const canvas = document.getElementById('sigPad');
+  const ctx = canvas.getContext('2d');
+  let drawing = false, last = null;
+
+  function resize() {
+    const r = canvas.getBoundingClientRect();
+    const img = drawn ? ctx.getImageData(0, 0, canvas.width, canvas.height) : null;
+    canvas.width = r.width * 2; canvas.height = r.height * 2;
+    ctx.scale(2, 2);
+    ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.strokeStyle = '#1a2b49';
+    if (img) ctx.putImageData(img, 0, 0);
+  }
+  function pos(e) {
+    const r = canvas.getBoundingClientRect();
+    const p = e.touches ? e.touches[0] : e;
+    return { x: p.clientX - r.left, y: p.clientY - r.top };
+  }
+  function start(e) { drawing = true; last = pos(e); e.preventDefault(); }
+  function move(e) {
+    if (!drawing) return;
+    const p = pos(e);
+    ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+    last = p; drawn = true; e.preventDefault();
+  }
+  function end() { drawing = false; }
+
+  canvas.addEventListener('mousedown', start);
+  canvas.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', end);
+  canvas.addEventListener('touchstart', start, { passive: false });
+  canvas.addEventListener('touchmove', move, { passive: false });
+  canvas.addEventListener('touchend', end);
+
+  SD.openSign = function () {
+    document.getElementById('sigModal').classList.add('open');
+    setTimeout(resize, 30);
+  };
+  SD.clearSig = function () {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawn = false;
+  };
+  SD.submitSig = function () {
+    if (!drawn) { alert('Please draw your signature first.'); return; }
+    document.getElementById('sigModal').classList.remove('open');
+    SD.act('approve', canvas.toDataURL('image/png'));
+  };
+})();
+</script>
+{% endif %}
+{% endblock %}

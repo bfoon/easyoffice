@@ -220,9 +220,25 @@ class MaintenanceJob(models.Model):
     asset_tag = models.CharField(max_length=80, blank=True, db_index=True)
 
     # Owner/customer. owner_user is optional so walk-in customers are supported.
+    #
+    # Two distinct notions of "who owns this", deliberately kept separate:
+    #   owner_user → internal staff member (an office laptop). Not a contact.
+    #   customer   → external contact in the customer-service book (walk-in).
+    # A job has at most one of these set; both may be NULL for a one-off the
+    # desk chose not to file. See apps/it_support/customer_link.py.
+    #
+    # The owner_* text fields below are a SNAPSHOT taken at intake, not a
+    # cache of the FK. They record who actually handed the equipment over. If
+    # a customer later changes their company name, historical service records
+    # — which may carry a signature — must not silently rewrite themselves.
     owner_user = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='owned_maintenance_jobs'
+    )
+    customer = models.ForeignKey(
+        'customer_service.Customer', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='maintenance_jobs',
+        help_text='Customer-service contact this equipment owner corresponds to.',
     )
     owner_name = models.CharField(max_length=200)
     owner_email = models.EmailField(blank=True)
@@ -326,6 +342,8 @@ class MaintenanceJob(models.Model):
             models.Index(fields=['assigned_to', 'status']),
             models.Index(fields=['pickup_deadline_at', 'status']),
             models.Index(fields=['promised_completion_at', 'status']),
+            # Customer history lookups (CustomerDetailView lists a contact's jobs).
+            models.Index(fields=['customer', '-created_at']),
         ]
 
     def __str__(self):
@@ -338,15 +356,36 @@ class MaintenanceJob(models.Model):
 
     @property
     def owner_display_name(self):
+        # The intake snapshot wins: it's what the owner was called when they
+        # handed the equipment over, and it's what's printed on the service
+        # record they signed. Falls back to the linked records only when the
+        # snapshot is empty.
+        if self.owner_name:
+            return self.owner_name
         if self.owner_user:
             return getattr(self.owner_user, 'full_name', str(self.owner_user))
-        return self.owner_name
+        if self.customer_id:
+            return self.customer.display_name
+        return ''
 
     @property
     def effective_owner_email(self):
+        if self.owner_email:
+            return self.owner_email
         if self.owner_user and getattr(self.owner_user, 'email', ''):
             return self.owner_user.email
-        return self.owner_email
+        if self.customer_id and self.customer.email:
+            return self.customer.email
+        return ''
+
+    @property
+    def owner_link_label(self):
+        """Human label for who this job's owner is linked to, for the UI."""
+        if self.customer_id:
+            return f'Customer · {self.customer.customer_code}'
+        if self.owner_user_id:
+            return 'Internal staff'
+        return 'Unlinked walk-in'
 
     @property
     def is_terminal(self):

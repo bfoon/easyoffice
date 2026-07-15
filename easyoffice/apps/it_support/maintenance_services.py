@@ -24,6 +24,7 @@ from .models import (
     MaintenanceReminder,
 )
 from . import maintenance_notifications as notifications
+from . import customer_link
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,19 @@ def create_maintenance_job(payload: dict, *, actor, request=None) -> Maintenance
     if not owner_name:
         raise ValueError('Equipment owner/customer name is required.')
 
+    # Link (or create) the customer-service contact for external owners, so a
+    # walk-in lands in the contact book instead of being retyped every visit.
+    # Staff-owned assets deliberately get no Customer row. Fail-soft: a CRM
+    # problem must never block equipment intake.
+    customer, customer_created = customer_link.resolve_customer_for_job(
+        {**payload,
+         'owner_name': owner_name,
+         'owner_email': owner_email,
+         'owner_phone': owner_phone},
+        owner_user=owner_user,
+        actor=actor,
+    )
+
     priority = payload.get('priority') or MaintenanceJob.Priority.NORMAL
     diagnosis_due, promised_due = _default_deadlines(priority)
 
@@ -174,6 +188,7 @@ def create_maintenance_job(payload: dict, *, actor, request=None) -> Maintenance
         serial_number=(payload.get('serial_number') or (equipment.serial_number if equipment else '')).strip(),
         asset_tag=(payload.get('asset_tag') or (equipment.asset_tag if equipment else '')).strip(),
         owner_user=owner_user,
+        customer=customer,
         owner_name=owner_name,
         owner_email=owner_email,
         owner_phone=owner_phone,
@@ -217,6 +232,15 @@ def create_maintenance_job(payload: dict, *, actor, request=None) -> Maintenance
         f'{job.equipment_name} received for maintenance.',
         payload={'token_id': str(token.id)},
     )
+    if customer is not None:
+        _event(
+            job, MaintenanceEvent.Kind.CREATED, actor,
+            (f'New customer contact {customer.customer_code} created from intake.'
+             if customer_created else
+             f'Linked to existing customer {customer.customer_code}.'),
+            public=False,
+            payload={'customer_id': str(customer.pk), 'created': customer_created},
+        )
     if job.assigned_to_id:
         _event(
             job, MaintenanceEvent.Kind.ASSIGNED, actor,
@@ -515,12 +539,28 @@ def update_deadlines(job: MaintenanceJob, *, actor, diagnosis_due_at=None,
 
 
 @transaction.atomic
-def record_payment(job: MaintenanceJob, *, actor, amount, method='', reference=''):
+def record_payment(job: MaintenanceJob, *, actor, amount, method='', reference='',
+                   allow_overpayment=False):
     job = MaintenanceJob.objects.select_for_update().get(pk=job.pk)
     amount = _decimal(amount)
     if amount <= 0:
         raise ValueError('Payment amount must be greater than zero.')
-    job.amount_paid = min(job.total_amount, job.amount_paid + amount)
+
+    # Reject overpayment rather than silently absorbing it. The old code did
+    # min(total, paid + amount), so handing over 5000 on a 3000 invoice
+    # recorded 3000 and the customer's receipt under-reported what they
+    # actually paid — a real dispute waiting to happen. Surface it instead
+    # and let the desk decide (change due, or an explicit override).
+    new_total_paid = job.amount_paid + amount
+    if new_total_paid > job.total_amount and not allow_overpayment:
+        excess = new_total_paid - job.total_amount
+        raise ValueError(
+            f'Payment of {amount} {job.currency} exceeds the outstanding '
+            f'balance of {job.balance_due} {job.currency} by {excess}. '
+            f'Collect the balance exactly, or confirm the overpayment.'
+        )
+
+    job.amount_paid = new_total_paid
     job.payment_method = (method or '').strip()
     job.payment_reference = (reference or '').strip()
     job.paid_at = timezone.now()
@@ -595,11 +635,17 @@ def create_invoice_for_job(job: MaintenanceJob, *, actor, finalize=True):
 
     from apps.invoices.models import DocType, InvoiceDocument, InvoiceLineItem
 
+    # Prefer the linked contact's address book entry when intake left the
+    # address blank — but never override what the desk actually typed.
+    client_address = job.owner_address
+    if not client_address and job.customer_id:
+        client_address = job.customer.address or ''
+
     invoice = InvoiceDocument.objects.create(
         doc_type=DocType.INVOICE,
         letterhead=_default_letterhead(actor),
         client_name=job.owner_display_name,
-        client_address=job.owner_address,
+        client_address=client_address,
         client_email=job.effective_owner_email,
         po_reference=job.maintenance_number,
         invoice_date=timezone.localdate(),
@@ -647,6 +693,16 @@ def create_receipt_for_job(job: MaintenanceJob, *, actor, finalize=True):
         MaintenanceJob.PaymentStatus.NOT_REQUIRED,
     }:
         raise ValueError('A receipt can only be generated after full payment or for a no-charge service.')
+
+    # A zero-value receipt is meaningless and the invoice app rejects it
+    # (receipt amount must be > 0). A no-charge job's proof of service is its
+    # invoice and signed service record, not a receipt for nothing.
+    if job.total_amount <= Decimal('0.00') and job.amount_paid <= Decimal('0.00'):
+        raise ValueError(
+            'This is a no-charge service — there is nothing to receipt. '
+            'The zero-value invoice and the printed service record are the '
+            'proof of service.'
+        )
     if not job.invoice_id:
         create_invoice_for_job(job, actor=actor, finalize=True)
         job.refresh_from_db()
@@ -667,6 +723,12 @@ def create_receipt_for_job(job: MaintenanceJob, *, actor, finalize=True):
         paid_at=job.paid_at,
         notes=f'Maintenance reference: {job.maintenance_number}',
         finalize=finalize,
+        # Required for the NOT_REQUIRED (no-charge) path allowed above: a
+        # zero-charge job has amount_paid = 0, which is less than the
+        # invoice total, and the invoice app rejects a short receipt unless
+        # part-payment is explicitly permitted. Without this, every
+        # goodwill/warranty repair raises ReceiptError on close.
+        allow_partial=True,
     )
     job.receipt = receipt
     job.save(update_fields=['receipt', 'updated_at'])

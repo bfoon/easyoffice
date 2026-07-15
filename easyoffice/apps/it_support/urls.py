@@ -14,6 +14,10 @@ urlpatterns = [
     # Equipment maintenance management
     path('maintenance/', views.MaintenanceListView.as_view(), name='maintenance_list'),
     path('maintenance/new/', views.MaintenanceCreateView.as_view(), name='maintenance_create'),
+    # Literal path — must precede 'maintenance/<uuid:pk>/' so it isn't
+    # swallowed by the UUID converter.
+    path('maintenance/customers/search/', views.MaintenanceCustomerSearchView.as_view(),
+         name='maintenance_customer_search'),
     path('maintenance/<uuid:pk>/', views.MaintenanceDetailView.as_view(), name='maintenance_detail'),
     path('maintenance/<uuid:pk>/action/', views.MaintenanceActionView.as_view(), name='maintenance_action'),
     path('maintenance/<uuid:pk>/print/', views.MaintenancePrintView.as_view(), name='maintenance_print'),

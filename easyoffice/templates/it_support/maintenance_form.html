@@ -23,14 +23,46 @@
     </div>
 
     <div class="eo-card mb-4">
-      <div class="eo-card-header"><h2 class="eo-card-title">Owner / Customer</h2></div>
+      <div class="eo-card-header"><div><h2 class="eo-card-title">Owner / Customer</h2><p class="eo-card-subtitle">Search the customer contact book, or enter a new walk-in — they'll be added automatically.</p></div></div>
       <div class="row g-3">
-        <div class="col-12"><label class="form-label">Existing user (optional)</label><select class="form-select" name="owner_user_id"><option value="">External / walk-in owner</option>{% for user in owners %}<option value="{{ user.pk }}" {% if data.owner_user_id == user.pk|stringformat:'s' %}selected{% endif %}>{{ user.full_name }} — {{ user.email }}</option>{% endfor %}</select></div>
-        <div class="col-md-6"><label class="form-label">Owner name *</label><input class="form-control" required name="owner_name" value="{{ data.owner_name }}"></div>
-        <div class="col-md-6"><label class="form-label">Company</label><input class="form-control" name="owner_company" value="{{ data.owner_company }}"></div>
-        <div class="col-md-6"><label class="form-label">Email</label><input class="form-control" type="email" name="owner_email" value="{{ data.owner_email }}"><small class="text-muted">The secure tracking link, invoice and receipt are sent here.</small></div>
-        <div class="col-md-6"><label class="form-label">Phone</label><input class="form-control" name="owner_phone" value="{{ data.owner_phone }}"></div>
-        <div class="col-12"><label class="form-label">Address</label><textarea class="form-control" rows="2" name="owner_address">{{ data.owner_address }}</textarea></div>
+        {% if customer_search_available %}
+        <div class="col-12">
+          <label class="form-label">Search existing customer</label>
+          <div class="position-relative">
+            <input class="form-control" id="customerSearch" autocomplete="off"
+                   placeholder="Type a name, company, phone or customer code…">
+            <div id="customerResults" class="list-group position-absolute w-100 shadow"
+                 style="z-index:1000;max-height:280px;overflow-y:auto;display:none"></div>
+          </div>
+          <input type="hidden" name="customer_id" id="customerId" value="{{ data.customer_id }}">
+          <div id="customerChosen" class="mt-2" style="display:none">
+            <span class="badge bg-success" style="font-size:.85rem;padding:7px 11px">
+              <i class="bi bi-person-check"></i>
+              <span id="customerChosenName"></span>
+            </span>
+            <button type="button" class="btn btn-sm btn-link text-danger" id="customerClear">Clear</button>
+          </div>
+          <small class="text-muted d-block mt-1">
+            Leave blank for a new customer — a contact record is created automatically from the details below.
+          </small>
+        </div>
+        {% endif %}
+        <div class="col-12"><label class="form-label">Internal staff owner (optional)</label><select class="form-select" name="owner_user_id" id="ownerUserSelect"><option value="">External / walk-in owner</option>{% for user in owners %}<option value="{{ user.pk }}" {% if data.owner_user_id == user.pk|stringformat:'s' %}selected{% endif %}>{{ user.full_name }} — {{ user.email }}</option>{% endfor %}</select><small class="text-muted">For internal assets. Staff are not added to the customer contact book.</small></div>
+        <div class="col-md-6"><label class="form-label">Owner name *</label><input class="form-control" required name="owner_name" id="ownerName" value="{{ data.owner_name }}"></div>
+        <div class="col-md-6"><label class="form-label">Company</label><input class="form-control" name="owner_company" id="ownerCompany" value="{{ data.owner_company }}"></div>
+        <div class="col-md-6"><label class="form-label">Email</label><input class="form-control" type="email" name="owner_email" id="ownerEmail" value="{{ data.owner_email }}"><small class="text-muted">The secure tracking link, invoice and receipt are sent here.</small></div>
+        <div class="col-md-6"><label class="form-label">Phone</label><input class="form-control" name="owner_phone" id="ownerPhone" value="{{ data.owner_phone }}"><small class="text-muted">Used to match returning customers.</small></div>
+        <div class="col-12"><label class="form-label">Address</label><textarea class="form-control" rows="2" name="owner_address" id="ownerAddress">{{ data.owner_address }}</textarea></div>
+        {% if customer_search_available %}
+        <div class="col-12">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="skip_customer_record" id="skipCustomer">
+            <label class="form-check-label" for="skipCustomer">
+              Don't add this owner to the customer contact book
+            </label>
+          </div>
+        </div>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -72,5 +104,109 @@ document.getElementById('equipmentSelect').addEventListener('change', function()
   document.getElementById('serialNumber').value=o.dataset.serial||'';
   document.getElementById('assetTag').value=o.dataset.asset||'';
 });
+
+// ── Customer autocomplete ────────────────────────────────────────────────
+(function(){
+  const search  = document.getElementById('customerSearch');
+  if (!search) return;  // customer_service not installed
+
+  const results = document.getElementById('customerResults');
+  const hidden  = document.getElementById('customerId');
+  const chosen  = document.getElementById('customerChosen');
+  const chosenName = document.getElementById('customerChosenName');
+  const clearBtn   = document.getElementById('customerClear');
+  const ownerUser  = document.getElementById('ownerUserSelect');
+
+  const f = {
+    name:    document.getElementById('ownerName'),
+    company: document.getElementById('ownerCompany'),
+    email:   document.getElementById('ownerEmail'),
+    phone:   document.getElementById('ownerPhone'),
+    address: document.getElementById('ownerAddress'),
+  };
+
+  let timer = null;
+
+  function hide(){ results.style.display='none'; results.innerHTML=''; }
+
+  function pick(c){
+    hidden.value = c.id;
+    // Populate the snapshot fields. The server still stores these as the
+    // point-in-time record — the FK is the link, this text is the record.
+    f.name.value    = c.full_name || '';
+    f.company.value = c.company_name || '';
+    f.email.value   = c.email || '';
+    f.phone.value   = c.phone || '';
+    if (!f.address.value) f.address.value = c.address || '';
+    chosenName.textContent = `${c.display_name} · ${c.code}`;
+    chosen.style.display = '';
+    search.value = '';
+    hide();
+  }
+
+  function clear(){
+    hidden.value = '';
+    chosen.style.display = 'none';
+    chosenName.textContent = '';
+  }
+  clearBtn.addEventListener('click', clear);
+
+  // Choosing an internal staff owner rules out a customer link entirely —
+  // mirrors resolve_customer_for_job() on the server.
+  if (ownerUser) {
+    ownerUser.addEventListener('change', function(){
+      const isStaff = !!this.value;
+      search.disabled = isStaff;
+      search.placeholder = isStaff
+        ? 'Internal staff asset — no customer record'
+        : 'Type a name, company, phone or customer code…';
+      if (isStaff) { clear(); hide(); }
+    });
+  }
+
+  search.addEventListener('input', function(){
+    const q = this.value.trim();
+    clearTimeout(timer);
+    if (q.length < 2) { hide(); return; }
+    timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`{% url 'maintenance_customer_search' %}?q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        if (!data.ok || !data.results.length) {
+          results.innerHTML = '<div class="list-group-item text-muted small">'
+            + 'No match — fill in the details below and a new contact will be created.</div>';
+          results.style.display = '';
+          return;
+        }
+        results.innerHTML = '';
+        data.results.forEach(c => {
+          const a = document.createElement('button');
+          a.type = 'button';
+          a.className = 'list-group-item list-group-item-action';
+          // textContent throughout — never innerHTML with customer data.
+          const top = document.createElement('div');
+          top.className = 'fw-semibold';
+          top.textContent = c.display_name;
+          const sub = document.createElement('small');
+          sub.className = 'text-muted';
+          sub.textContent = [c.code, c.phone, c.email].filter(Boolean).join(' · ');
+          a.appendChild(top);
+          a.appendChild(sub);
+          a.addEventListener('click', () => pick(c));
+          results.appendChild(a);
+        });
+        results.style.display = '';
+      } catch (e) {
+        hide();
+      }
+    }, 220);
+  });
+
+  document.addEventListener('click', e => {
+    if (!results.contains(e.target) && e.target !== search) hide();
+  });
+
+  if (hidden.value) { chosenName.textContent = 'Existing customer linked'; chosen.style.display=''; }
+})();
 </script>
 {% endblock %}

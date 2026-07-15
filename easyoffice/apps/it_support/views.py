@@ -10,7 +10,9 @@ from apps.it_support.models import (
     MaintenanceChargeLine, MaintenanceEvent, MaintenanceAttachment,
     MaintenanceAccessToken, MaintenanceReminder,
 )
+from django.http import JsonResponse
 from apps.core.models import User
+from apps.it_support import customer_link
 
 
 def _is_it_staff(user):
@@ -567,6 +569,9 @@ class MaintenanceCreateView(LoginRequiredMixin, View):
             ).distinct().order_by('first_name', 'last_name'),
             'priority_choices': MaintenanceJob.Priority.choices,
             'intake_choices': MaintenanceJob.IntakeChannel.choices,
+            # Drives the customer autocomplete; hidden entirely when the
+            # customer_service app isn't installed.
+            'customer_search_available': customer_link.customer_service_available(),
             'data': data or {},
         }
 
@@ -625,6 +630,7 @@ class MaintenanceDetailView(LoginRequiredMixin, TemplateView):
         job = get_object_or_404(
             MaintenanceJob.objects.select_related(
                 'equipment', 'owner_user', 'created_by', 'assigned_to',
+                'customer',
                 'invoice', 'receipt', 'invoice__generated_pdf', 'receipt__generated_pdf'
             ).prefetch_related('charge_lines', 'events__actor', 'attachments', 'reminders'),
             pk=kwargs['pk'],
@@ -632,7 +638,9 @@ class MaintenanceDetailView(LoginRequiredMixin, TemplateView):
         token, _ = MaintenanceAccessToken.objects.get_or_create(job=job)
         ctx.update({
             'job': job,
-            'tracking_url': request.build_absolute_uri(
+            # self.request — a bare `request` here was a NameError on every
+            # detail page load; get_context_data receives no request arg.
+            'tracking_url': self.request.build_absolute_uri(
                 reverse('maintenance_public', kwargs={'token': token.token})
             ),
             'events': job.events.select_related('actor').order_by('-created_at'),
@@ -651,6 +659,15 @@ class MaintenanceDetailView(LoginRequiredMixin, TemplateView):
                 (value, dict(MaintenanceJob.Status.choices)[value])
                 for value in maintenance_services.ALLOWED_TRANSITIONS.get(job.status, set())
             ],
+            # Prior visits by the same contact — lets a technician see at a
+            # glance that this is the third time this laptop's owner is back.
+            'customer_history': (
+                MaintenanceJob.objects
+                .filter(customer_id=job.customer_id)
+                .exclude(pk=job.pk)
+                .order_by('-created_at')[:5]
+                if job.customer_id else []
+            ),
         })
         return ctx
 
@@ -872,3 +889,40 @@ class MaintenancePrintView(LoginRequiredMixin, TemplateView):
             ),
         })
         return ctx
+
+
+# ---------------------------------------------------------------------------
+# Customer lookup for maintenance intake
+# ---------------------------------------------------------------------------
+
+class MaintenanceCustomerSearchView(LoginRequiredMixin, View):
+    """
+    JSON autocomplete over the customer-service contact book, for the
+    maintenance intake form.
+
+        GET /it/maintenance/customers/search/?q=<text>
+            → {ok, results: [...], available: bool}
+
+    Matches name, company, email, customer code and phone — including the
+    normalised phone index, so a desk operator can type the number in
+    whatever shape the customer says it.
+    """
+    http_method_names = ['get']
+
+    def dispatch(self, request, *args, **kwargs):
+        if not _is_it_staff(request.user):
+            return JsonResponse(
+                {'ok': False, 'error': 'IT staff only.'}, status=403
+            )
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request):
+        if not customer_link.customer_service_available():
+            return JsonResponse({'ok': True, 'results': [], 'available': False})
+
+        q = (request.GET.get('q') or '').strip()
+        results = [
+            customer_link.serialize_customer(c)
+            for c in customer_link.search_customers(q, limit=15)
+        ]
+        return JsonResponse({'ok': True, 'results': results, 'available': True})

@@ -16,10 +16,17 @@ _SIGNAL_ALLOWED_KEYS = {
     'call_hangup':          set(),
     'call_decline':         set(),
     'call_cancel':          set(),
-    'call_upgrade_offer':   {'sdp'},
+    # 🩹 FIX: 'ice_restart' and 'share_only' were being stripped by this
+    # whitelist. Without 'ice_restart', the peer treated every ICE-restart
+    # renegotiation as a video upgrade and grabbed the camera mid-voice-call.
+    # 'share_only' lets a voice-call peer render an incoming screen share
+    # without being forced to turn on their own camera.
+    'call_upgrade_offer':   {'sdp', 'ice_restart', 'share_only'},
     'call_upgrade_answer':  {'sdp'},
     'call_callee_ready':    set(),
-    'present_start':        {'url', 'kind', 'title', 'filename', 'page', 'total_pages'},
+    # 🩹 FIX: the client sends 'num_pages' (not 'total_pages'); it was being
+    # stripped, so the viewer always saw "1 / 1" and couldn't page forward.
+    'present_start':        {'url', 'kind', 'title', 'filename', 'page', 'total_pages', 'num_pages'},
     'present_end':          set(),
     'present_page':         {'page'},
     'present_request_page': {'page'},

@@ -184,6 +184,42 @@ def _user_brief(u):
     }
 
 
+def _letterhead_brief(lh) -> dict:
+    """
+    Serialize a letterhead with everything the builder needs to draw a
+    faithful on-screen preview (so what you see in the builder matches
+    what LibreOffice produces on export).
+    """
+    def g(attr, default=''):
+        try:
+            return getattr(lh, attr, default) or default
+        except Exception:
+            return default
+
+    logo_url = ''
+    try:
+        if getattr(lh, 'logo', None):
+            logo_url = lh.logo.url
+    except Exception:
+        logo_url = ''
+
+    return {
+        'id': str(lh.pk),
+        'name': g('name'),
+        'is_active': bool(getattr(lh, 'is_active', False)),
+        'template_key': g('template_key', 'classic') or 'classic',
+        'company_name': g('company_name'),
+        'tagline': g('tagline'),
+        'address': g('address'),
+        'contact_info': g('contact_info'),
+        'color_primary': g('color_primary', '#1D9E75'),
+        'color_secondary': g('color_secondary', '#1a2b49'),
+        'font_header': g('font_header', 'Georgia'),
+        'font_body': g('font_body', 'Arial'),
+        'logo_url': logo_url,
+    }
+
+
 # ── Pages ────────────────────────────────────────────────────────────────────
 
 class FormsHomeView(LoginRequiredMixin, TemplateView):
@@ -237,14 +273,14 @@ class FormBuilderView(LoginRequiredMixin, TemplateView):
                 pass
         ctx['template_json'] = template_json
 
-        # Letterhead choices for the settings tab.
+        # Letterhead choices for the settings tab — serialized with full
+        # detail so the builder can show a faithful preview of the header
+        # that will appear on exported PDF / Word documents.
         letterheads = []
         try:
             from apps.letterhead.models import LetterheadTemplate
-            letterheads = [
-                {'id': str(l.pk), 'name': l.name, 'is_active': l.is_active}
-                for l in LetterheadTemplate.objects.all()
-            ]
+            letterheads = [_letterhead_brief(l)
+                           for l in LetterheadTemplate.objects.all()]
         except Exception:
             pass
         ctx['letterheads_json'] = json.dumps(letterheads)
@@ -786,13 +822,29 @@ class _ExportBase(LoginRequiredMixin, View):
 
     # -- letterhead header -------------------------------------------------
     #
-    # LibreOffice's HTML import does NOT understand flexbox, grid, or
-    # border-radius — so every layout below is built from plain <table>s
-    # and simple borders.  The logo is embedded as a base64 data URI so it
-    # renders regardless of media paths.
+    # WHY THE HEADER USED TO LOOK "A BIT DIFFERENT":
+    # LibreOffice's HTML import filter silently drops a lot of the CSS the
+    # browser preview happily renders — most notably:
+    #   • CSS `border-top` / `border-bottom` on <table>/<td>  → rules vanish
+    #   • CSS `background:` on cells                          → bands vanish
+    #   • `px` font sizes                                     → remapped oddly
+    #   • letter-spacing, border-radius, flex/grid            → ignored
+    # so the exported letterhead only loosely resembled the real one.
+    #
+    # The rebuilt renderer below therefore:
+    #   1. FIRST asks the letterhead app to render its own export header
+    #      (if it exposes one) so forms and letters share pixel-identical
+    #      headers; and only if it doesn't,
+    #   2. Falls back to markup written strictly in LibreOffice's dialect:
+    #      - colour bands/rules are real table rows with the HTML
+    #        `bgcolor` attribute (never CSS background / border)
+    #      - all font sizes are in `pt`
+    #      - layout is plain nested <table>s, no flex/grid/radius
+    #   The logo stays embedded as a base64 data URI so it renders
+    #   regardless of media paths.
 
     def _logo_data_uri(self, lh):
-        if not lh or not lh.logo:
+        if not lh or not getattr(lh, 'logo', None):
             return ''
         try:
             import base64
@@ -804,46 +856,100 @@ class _ExportBase(LoginRequiredMixin, View):
         except Exception:
             return ''
 
+    def _letterhead_app_html(self, lh) -> str:
+        """
+        Ask the letterhead app for its own export header so the form's
+        header is *identical* to letterhead-app documents.  Tries the
+        common renderer names on the model, then module-level helpers.
+        Returns '' if the letterhead app doesn't expose a renderer.
+        """
+        for attr in ('render_export_html', 'export_header_html',
+                     'render_header_html', 'render_html', 'header_html'):
+            fn = getattr(lh, attr, None)
+            if callable(fn):
+                try:
+                    out = fn()
+                    if out and isinstance(out, str):
+                        return out
+                except Exception:
+                    continue
+        for mod_name, fn_names in (
+                ('apps.letterhead.utils', ('build_letterhead_html', 'letterhead_header_html')),
+                ('apps.letterhead.views', ('build_letterhead_html', 'letterhead_header_html'))):
+            try:
+                import importlib
+                mod = importlib.import_module(mod_name)
+            except Exception:
+                continue
+            for fn_name in fn_names:
+                fn = getattr(mod, fn_name, None)
+                if callable(fn):
+                    try:
+                        out = fn(lh)
+                        if out and isinstance(out, str):
+                            return out
+                    except Exception:
+                        continue
+        return ''
+
+    @staticmethod
+    def _bar_row(color: str, colspan: int = 1, height_pt: int = 3) -> str:
+        """A coloured rule that survives LibreOffice's HTML import."""
+        return (f'<tr><td colspan="{colspan}" bgcolor="{color}" '
+                f'style="background:{color};height:{height_pt}pt;'
+                f'font-size:1pt;line-height:{height_pt}pt;">&nbsp;</td></tr>')
+
     def _letterhead_html(self, lh) -> str:
         if not lh:
             return ''
+        # 1) Prefer the letterhead app's own renderer — exact match.
+        native = self._letterhead_app_html(lh)
+        if native:
+            return native
+
+        # 2) Fallback: rebuild each design in LibreOffice-safe markup.
         esc = html.escape
-        p, s = lh.color_primary, lh.color_secondary
-        hf = f"{lh.font_header}, Georgia, serif"
-        name = esc(lh.company_name)
-        tagline = esc(lh.tagline or '')
-        address = esc(lh.address or '').replace('\n', '<br>')
-        contact = esc(lh.contact_info or '')
+        p = getattr(lh, 'color_primary', '#1D9E75') or '#1D9E75'
+        s = getattr(lh, 'color_secondary', '#1a2b49') or '#1a2b49'
+        hf = f"{getattr(lh, 'font_header', 'Georgia')}, Georgia, serif"
+        name = esc(getattr(lh, 'company_name', '') or '')
+        tagline = esc(getattr(lh, 'tagline', '') or '')
+        address = esc(getattr(lh, 'address', '') or '').replace('\n', '<br>')
+        contact = esc(getattr(lh, 'contact_info', '') or '')
         logo_uri = self._logo_data_uri(lh)
-        logo_cell = (f'<td style="width:60px;vertical-align:middle;padding-right:12px;">'
-                     f'<img src="{logo_uri}" height="48" alt=""></td>') if logo_uri else ''
         key = getattr(lh, 'template_key', 'classic') or 'classic'
 
-        tagline_div = (f'<div style="font-size:12px;font-style:italic;color:{p};margin-top:2px;">'
-                       f'{tagline}</div>') if tagline else ''
-        contact_div = f'<div style="font-size:10.5px;color:#777;">{address}</div>' \
-                      f'<div style="font-size:10.5px;color:#777;">{contact}</div>'
+        logo_cell = (f'<td width="60" style="width:60px;vertical-align:middle;'
+                     f'padding-right:12px;"><img src="{logo_uri}" height="48" alt=""></td>'
+                     ) if logo_uri else ''
+        tagline_div = (f'<div style="font-size:9pt;font-style:italic;color:{p};'
+                       f'margin-top:2px;">{tagline}</div>') if tagline else ''
+        contact_div = (f'<div style="font-size:8pt;color:#777777;">{address}</div>'
+                       f'<div style="font-size:8pt;color:#777777;">{contact}</div>')
 
         if key == 'bold':
-            logo_band = (f'<td style="width:60px;padding:10px 12px 10px 0;vertical-align:middle;">'
-                         f'<img src="{logo_uri}" height="44" alt=""></td>') if logo_uri else ''
+            logo_band = (f'<td width="60" style="width:60px;padding:0 12px 0 0;'
+                         f'vertical-align:middle;"><img src="{logo_uri}" height="44" alt=""></td>'
+                         ) if logo_uri else ''
+            band_tagline = (f'<div style="font-size:9pt;color:#ffffff;'
+                            f'font-style:italic;">{tagline}</div>') if tagline else ''
             return f"""
   <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:14px;">
-    <tr><td style="background:{p};padding:12px 16px;">
+    <tr><td bgcolor="{p}" style="background:{p};padding:10px 14px;">
       <table cellspacing="0" cellpadding="0"><tr>{logo_band}
         <td style="vertical-align:middle;">
-          <span style="font-family:{hf};font-size:22px;font-weight:bold;color:#ffffff;">{name}</span>
-          {f'<div style="font-size:11.5px;color:#ffffff;font-style:italic;">{tagline}</div>' if tagline else ''}
+          <font color="#ffffff"><span style="font-family:{hf};font-size:16pt;font-weight:bold;color:#ffffff;">{name}</span></font>
+          {band_tagline}
         </td></tr></table>
     </td></tr>
-    <tr><td style="padding:6px 2px 0;">{contact_div}</td></tr>
+    <tr><td style="padding:5px 2px 0;">{contact_div}</td></tr>
   </table>"""
 
         if key == 'minimal':
             return f"""
   <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:14px;">
     <tr>{logo_cell}<td style="vertical-align:middle;">
-      <span style="font-family:{hf};font-size:17px;font-weight:bold;color:{s};">{name}</span>
+      <span style="font-family:{hf};font-size:13pt;font-weight:bold;color:{s};">{name}</span>
       {tagline_div}
     </td></tr>
     <tr><td colspan="2" style="padding-top:3px;">{contact_div}</td></tr>
@@ -851,17 +957,17 @@ class _ExportBase(LoginRequiredMixin, View):
 
         if key == 'split':
             return f"""
-  <table width="100%" cellspacing="0" cellpadding="0"
-         style="border-collapse:collapse;border-bottom:2px solid {p};margin-bottom:14px;">
+  <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:14px;">
     <tr>
-      <td style="vertical-align:middle;padding-bottom:8px;">
+      <td style="vertical-align:middle;padding-bottom:7px;">
         <table cellspacing="0" cellpadding="0"><tr>{logo_cell}<td style="vertical-align:middle;">
-          <span style="font-family:{hf};font-size:20px;font-weight:bold;color:{s};">{name}</span>
+          <span style="font-family:{hf};font-size:15pt;font-weight:bold;color:{s};">{name}</span>
           {tagline_div}
         </td></tr></table>
       </td>
-      <td style="vertical-align:middle;text-align:right;padding-bottom:8px;">{contact_div}</td>
+      <td align="right" style="vertical-align:middle;text-align:right;padding-bottom:7px;">{contact_div}</td>
     </tr>
+    {self._bar_row(p, colspan=2, height_pt=2)}
   </table>"""
 
         if key == 'elegant':
@@ -870,38 +976,42 @@ class _ExportBase(LoginRequiredMixin, View):
             return f"""
   <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:14px;">
     {logo_row}
-    <tr><td align="center">
-      <span style="font-family:{hf};font-size:23px;font-weight:bold;color:{s};letter-spacing:1px;">{name}</span>
+    <tr><td align="center" style="text-align:center;">
+      <span style="font-family:{hf};font-size:17pt;font-weight:bold;color:{s};">{name}</span>
       {tagline_div}
       <div style="padding-top:4px;">{contact_div}</div>
     </td></tr>
-    <tr><td style="border-bottom:1px solid {p};padding-top:8px;font-size:1px;">&nbsp;</td></tr>
-    <tr><td style="border-bottom:1px solid {p};padding-top:2px;font-size:1px;">&nbsp;</td></tr>
+    <tr><td style="height:6pt;font-size:1pt;">&nbsp;</td></tr>
+    {self._bar_row(p, height_pt=1)}
+    <tr><td style="height:2pt;font-size:1pt;">&nbsp;</td></tr>
+    {self._bar_row(p, height_pt=1)}
   </table>"""
 
         if key == 'modern':
             return f"""
-  <table width="100%" cellspacing="0" cellpadding="0"
-         style="border-collapse:collapse;border-bottom:3px solid {p};margin-bottom:14px;">
+  <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:14px;">
     <tr>{logo_cell}
-      <td style="vertical-align:middle;padding-bottom:8px;">
-        <span style="font-family:{hf};font-size:21px;font-weight:bold;color:{p};">{name}</span>
+      <td style="vertical-align:middle;padding-bottom:7px;">
+        <span style="font-family:{hf};font-size:16pt;font-weight:bold;color:{p};">{name}</span>
         {tagline_div}
       </td>
-      <td style="vertical-align:bottom;text-align:right;padding-bottom:8px;">{contact_div}</td>
+      <td align="right" style="vertical-align:bottom;text-align:right;padding-bottom:7px;">{contact_div}</td>
     </tr>
+    {self._bar_row(p, colspan=3 if logo_uri else 2, height_pt=3)}
   </table>"""
 
         # 'classic' (default)
+        colspan = 2 if logo_uri else 1
         return f"""
-  <table width="100%" cellspacing="0" cellpadding="0"
-         style="border-collapse:collapse;border-top:4px solid {p};margin-bottom:14px;">
-    <tr>{logo_cell}<td style="vertical-align:middle;padding-top:10px;">
-      <span style="font-family:{hf};font-size:21px;font-weight:bold;color:{s};">{name}</span>
+  <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:14px;">
+    {self._bar_row(p, colspan=colspan, height_pt=4)}
+    <tr>{logo_cell}<td style="vertical-align:middle;padding-top:8px;">
+      <span style="font-family:{hf};font-size:16pt;font-weight:bold;color:{s};">{name}</span>
       {tagline_div}
     </td></tr>
-    <tr><td colspan="2" style="padding-top:4px;">{contact_div}</td></tr>
-    <tr><td colspan="2" style="border-bottom:2px solid {p};padding-top:8px;font-size:1px;">&nbsp;</td></tr>
+    <tr><td colspan="{colspan}" style="padding-top:4px;">{contact_div}</td></tr>
+    <tr><td colspan="{colspan}" style="height:6pt;font-size:1pt;">&nbsp;</td></tr>
+    {self._bar_row(p, colspan=colspan, height_pt=2)}
   </table>"""
 
     def _upload_img_b64(self, upload_id):
@@ -1074,7 +1184,8 @@ class _ExportBase(LoginRequiredMixin, View):
                   body_font='Arial') -> str:
         return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ font-family: {body_font}, Arial, sans-serif; padding:36px 44px; color:#222; }}
+  @page {{ margin: 1.6cm 1.8cm; }}
+  body {{ font-family: {body_font}, Arial, sans-serif; color:#222; }}
 </style></head><body>
   {letterhead_html}
   <h2 style="font-size:16px;margin:14px 0 2px;">{html.escape(title)}</h2>

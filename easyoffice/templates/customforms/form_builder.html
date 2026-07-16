@@ -5,31 +5,39 @@
 
 {% block content %}
 <style>
-  .fb-wrap { display:grid; grid-template-columns: 230px 1fr 300px; gap:14px; align-items:start; }
+  .fb-wrap { display:grid; grid-template-columns: 236px 1fr 300px; gap:14px; align-items:start; }
   @media (max-width: 1100px) { .fb-wrap { grid-template-columns: 1fr; } }
 
   .fb-panel { background:var(--eo-surface); border:1px solid var(--eo-border);
               border-radius:var(--eo-radius, 10px); }
-  .fb-panel h4 { font-size:.72rem; text-transform:uppercase; letter-spacing:.06em;
+  .fb-panel h4 { font-size:.7rem; text-transform:uppercase; letter-spacing:.07em;
                  color:var(--eo-text-muted); padding:12px 14px 6px; margin:0; }
 
-  /* ── Palette ── */
-  .fb-palette { padding:6px 10px 12px; display:grid; grid-template-columns:1fr 1fr; gap:6px; }
-  .fb-pitem { display:flex; align-items:center; gap:7px; padding:8px 9px; font-size:.78rem;
+  /* ── Palette (grouped) ── */
+  .fb-pgroup { font-size:.64rem; font-weight:800; text-transform:uppercase; letter-spacing:.08em;
+               color:var(--eo-text-light,#aaa); padding:8px 14px 3px; }
+  .fb-palette { padding:0 10px 6px; display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .fb-pitem { display:flex; align-items:center; gap:7px; padding:8px 9px; font-size:.76rem;
               font-weight:600; color:var(--eo-text); background:var(--eo-bg);
-              border:1px solid var(--eo-border); border-radius:8px; cursor:grab; user-select:none; }
-  .fb-pitem:hover { border-color:var(--eo-accent); color:var(--eo-accent); }
+              border:1px solid var(--eo-border); border-radius:8px; cursor:grab; user-select:none;
+              transition:border-color .12s, box-shadow .12s, transform .12s; }
+  .fb-pitem:hover { border-color:var(--eo-accent); color:var(--eo-accent);
+                    box-shadow:0 2px 8px rgba(0,0,0,.06); transform:translateY(-1px); }
+  .fb-pitem:active { cursor:grabbing; transform:none; }
   .fb-pitem i { color:var(--eo-accent); }
 
   /* ── Canvas ── */
-  .fb-canvas { min-height:480px; padding:18px; }
+  .fb-canvas { min-height:480px; padding:20px 18px; }
   .fb-canvas.drag-over { outline:2px dashed var(--eo-accent); outline-offset:-6px; }
   .fb-empty { text-align:center; padding:70px 20px; color:var(--eo-text-muted); font-size:.85rem; }
 
   .fb-field { border:1.5px solid transparent; border-radius:8px; padding:10px 12px; margin-bottom:6px;
-              position:relative; cursor:grab; background:var(--eo-surface); }
-  .fb-field:hover { border-color:var(--eo-border); }
-  .fb-field.selected { border-color:var(--eo-accent); background:color-mix(in srgb, var(--eo-accent) 4%, var(--eo-surface)); }
+              position:relative; cursor:grab; background:var(--eo-surface);
+              transition:border-color .12s, background .12s, box-shadow .12s; }
+  .fb-field:hover { border-color:var(--eo-border); box-shadow:0 1px 6px rgba(0,0,0,.05); }
+  .fb-field.selected { border-color:var(--eo-accent);
+                       background:color-mix(in srgb, var(--eo-accent) 4%, var(--eo-surface));
+                       box-shadow:0 2px 10px color-mix(in srgb, var(--eo-accent) 14%, transparent); }
   .fb-field.drag-target-above { box-shadow: 0 -3px 0 var(--eo-accent); }
   .fb-field.drag-target-below { box-shadow: 0 3px 0 var(--eo-accent); }
   .fb-field .fb-lbl { font-size:.82rem; font-weight:700; color:var(--eo-text); }
@@ -47,27 +55,32 @@
   .fb-w-third { width:calc(33.33% - 5px); display:inline-block; vertical-align:top; }
 
   /* ── Inspector ── */
-  .fb-inspector { padding:12px 14px 16px; }
+  .fb-inspector { padding:12px 14px 16px; position:sticky; top:14px; }
   .fb-inspector label { display:block; font-size:.72rem; font-weight:700;
                         color:var(--eo-text-muted); margin:10px 0 4px; }
   .fb-inspector input[type=text], .fb-inspector input[type=number],
   .fb-inspector select, .fb-inspector textarea {
       width:100%; padding:7px 9px; font-size:.8rem; border:1px solid var(--eo-border);
       border-radius:7px; background:var(--eo-bg); color:var(--eo-text); }
+  .fb-inspector input:focus, .fb-inspector select:focus, .fb-inspector textarea:focus {
+      outline:none; border-color:var(--eo-accent);
+      box-shadow:0 0 0 3px color-mix(in srgb, var(--eo-accent) 15%, transparent); }
   .fb-check { display:flex; align-items:center; gap:7px; font-size:.8rem;
               color:var(--eo-text); margin-top:10px; }
 
   /* ── Tabs ── */
   .fb-tabs { display:flex; gap:2px; border-bottom:1px solid var(--eo-border); padding:0 14px; }
   .fb-tab { padding:11px 14px; font-size:.82rem; font-weight:700; color:var(--eo-text-muted);
-            cursor:pointer; border-bottom:2px solid transparent; }
+            cursor:pointer; border-bottom:2px solid transparent; transition:color .12s; }
+  .fb-tab:hover { color:var(--eo-text); }
   .fb-tab.active { color:var(--eo-accent); border-bottom-color:var(--eo-accent); }
 
   /* ── Approval flow ── */
   .fb-steps { padding:16px; max-width:640px; }
   .fb-step { display:flex; gap:12px; align-items:flex-start; border:1.5px solid var(--eo-border);
              border-radius:10px; padding:12px 14px; margin-bottom:10px; background:var(--eo-surface);
-             cursor:grab; position:relative; }
+             cursor:grab; position:relative; transition:border-color .12s, box-shadow .12s; }
+  .fb-step:hover { box-shadow:0 1px 8px rgba(0,0,0,.05); }
   .fb-step.selected { border-color:var(--eo-accent); }
   .fb-step.drag-target-above { box-shadow:0 -3px 0 var(--eo-accent); }
   .fb-step.drag-target-below { box-shadow:0 3px 0 var(--eo-accent); }
@@ -82,7 +95,7 @@
   .fb-badge { display:inline-flex; align-items:center; gap:4px; padding:2px 9px; border-radius:20px;
               font-size:.68rem; font-weight:700; }
   .fb-badge-sign { background:#8250df1a; color:#8250df; }
-  .fb-badge-appr { background:var(--eo-accent)1a; color:var(--eo-accent); }
+  .fb-badge-appr { background:color-mix(in srgb, var(--eo-accent) 10%, transparent); color:var(--eo-accent); }
 
   /* ── Topbar ── */
   .fb-topbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
@@ -93,7 +106,7 @@
   .fb-status { font-size:.7rem; font-weight:800; text-transform:uppercase; padding:3px 10px;
                border-radius:20px; letter-spacing:.05em; }
   .fb-status-draft { background:#b8860b1a; color:#b8860b; }
-  .fb-status-published { background:var(--eo-accent)1a; color:var(--eo-accent); }
+  .fb-status-published { background:color-mix(in srgb, var(--eo-accent) 10%, transparent); color:var(--eo-accent); }
   .fb-status-archived { background:#8881; color:var(--eo-text-muted); }
   .fb-saved { font-size:.74rem; color:var(--eo-text-muted); }
 
@@ -105,12 +118,37 @@
   .fb-uresults div { padding:8px 11px; font-size:.8rem; cursor:pointer; color:var(--eo-text); }
   .fb-uresults div:hover { background:var(--eo-bg); }
 
-  /* ── Preview modal ── */
+  /* ── Modals ── */
   .fb-modal { position:fixed; inset:0; z-index:1050; background:rgba(0,0,0,.45);
               display:none; align-items:flex-start; justify-content:center; padding:30px 14px; overflow:auto; }
   .fb-modal.open { display:flex; }
   .fb-modal-card { background:#fff; color:#222; border-radius:12px; width:min(780px, 100%);
-                   padding:34px 40px; }
+                   padding:34px 40px; box-shadow:0 24px 60px rgba(0,0,0,.25); }
+
+  /* ── Starter template gallery ── */
+  .fb-gallery-card { background:var(--eo-surface); color:var(--eo-text); border-radius:14px;
+                     width:min(880px, 100%); padding:26px 30px;
+                     box-shadow:0 24px 60px rgba(0,0,0,.25); }
+  .fb-gallery-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));
+                     gap:12px; margin-top:16px; }
+  .fb-starter { border:1.5px solid var(--eo-border); border-radius:12px; padding:16px;
+                cursor:pointer; background:var(--eo-bg); display:flex; flex-direction:column;
+                gap:8px; transition:border-color .12s, transform .12s, box-shadow .12s; }
+  .fb-starter:hover { border-color:var(--eo-accent); transform:translateY(-2px);
+                      box-shadow:0 8px 20px rgba(0,0,0,.08); }
+  .fb-starter-icon { width:38px; height:38px; border-radius:10px; display:flex; align-items:center;
+                     justify-content:center; font-size:1.05rem; color:#fff; }
+  .fb-starter-name { font-size:.88rem; font-weight:800; color:var(--eo-text); }
+  .fb-starter-desc { font-size:.74rem; color:var(--eo-text-muted); flex:1; line-height:1.45; }
+  .fb-starter-meta { font-size:.68rem; color:var(--eo-text-light,#aaa); display:flex; gap:10px; }
+  .fb-starter.blank { border-style:dashed; background:transparent; align-items:center;
+                      justify-content:center; text-align:center; min-height:150px; }
+  .fb-starter.blank .fb-starter-icon { background:var(--eo-border); color:var(--eo-text-muted); }
+
+  /* ── Letterhead preview (Settings + Preview modal) ── */
+  .fb-lh-preview { border:1px solid var(--eo-border); border-radius:10px; background:#fff;
+                   color:#222; padding:18px 20px 10px; margin-top:12px; overflow:hidden; }
+  .fb-lh-note { font-size:.7rem; color:var(--eo-text-muted); margin-top:6px; }
 </style>
 
 <div class="fb-topbar">
@@ -118,6 +156,7 @@
   <span id="fbStatus" class="fb-status fb-status-draft">Draft</span>
   <span class="fb-saved" id="fbSaved"></span>
   <div style="flex:1"></div>
+  <button class="eo-btn" onclick="FB.openGallery()"><i class="bi bi-grid"></i> Templates</button>
   <button class="eo-btn" onclick="FB.preview()"><i class="bi bi-eye"></i> Preview</button>
   <div class="dropdown" style="position:relative">
     <button class="eo-btn" onclick="FB.toggleExportMenu(event)"><i class="bi bi-download"></i> Download empty</button>
@@ -144,7 +183,7 @@
       <!-- Palette -->
       <div class="fb-panel">
         <h4>Add a field <span style="font-weight:400;text-transform:none;">(drag or click)</span></h4>
-        <div class="fb-palette" id="fbPalette"></div>
+        <div id="fbPalette"></div>
       </div>
 
       <!-- Canvas -->
@@ -174,7 +213,7 @@
   </div>
 
   <!-- ════════ TAB: SETTINGS ════════ -->
-  <div id="tab-settings" style="display:none; padding:18px; max-width:560px;">
+  <div id="tab-settings" style="display:none; padding:18px; max-width:620px;">
     <label style="display:block;font-size:.72rem;font-weight:700;color:var(--eo-text-muted);margin-bottom:4px;">Description (shown above the form)</label>
     <textarea id="fbDesc" rows="3" style="width:100%;padding:8px 10px;font-size:.82rem;border:1px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);"
               oninput="FB.state.description=this.value; FB.dirty()"></textarea>
@@ -187,7 +226,14 @@
       <option value="specific">Choose a specific letterhead…</option>
     </select>
     <select id="fbLhPick" style="display:none;width:100%;margin-top:8px;padding:8px 10px;font-size:.82rem;border:1px solid var(--eo-border);border-radius:8px;background:var(--eo-bg);color:var(--eo-text);"
-            onchange="FB.state.letterhead_id=this.value||null; FB.dirty()"></select>
+            onchange="FB.state.letterhead_id=this.value||null; FB.dirty(); FB.renderLhPreview()"></select>
+
+    <!-- Live letterhead preview -->
+    <div id="fbLhPreviewWrap" style="display:none;">
+      <div class="fb-lh-preview" id="fbLhPreview"></div>
+      <div class="fb-lh-note"><i class="bi bi-info-circle"></i>
+        This is how the letterhead will appear at the top of the exported PDF / Word document.</div>
+    </div>
   </div>
 </div>
 
@@ -199,6 +245,22 @@
       <button class="eo-btn" onclick="document.getElementById('fbPreviewModal').classList.remove('open')">Close</button>
     </div>
     <div id="fbPreviewBody"></div>
+  </div>
+</div>
+
+<!-- Starter template gallery -->
+<div class="fb-modal" id="fbGallery" onclick="if(event.target===this)FB.closeGallery()">
+  <div class="fb-gallery-card">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div>
+        <div style="font-size:1.05rem;font-weight:800;color:var(--eo-text);">Start from a template</div>
+        <div style="font-size:.78rem;color:var(--eo-text-muted);margin-top:2px;">
+          Pick a professional starting point — every field and approval step stays fully editable.</div>
+      </div>
+      <div style="flex:1"></div>
+      <button class="eo-btn" onclick="FB.closeGallery()">Close</button>
+    </div>
+    <div class="fb-gallery-grid" id="fbGalleryGrid"></div>
   </div>
 </div>
 {% endblock %}
@@ -234,28 +296,167 @@
   const esc = s => String(s == null ? '' : s)
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-  // ── Field type catalogue ──────────────────────────────────────────────
+  // ── Field type catalogue (grouped for the palette) ────────────────────
   const TYPES = [
-    { t:'heading',    icon:'type-h2',            name:'Heading',    layout:true },
-    { t:'paragraph',  icon:'text-paragraph',     name:'Paragraph',  layout:true },
-    { t:'divider',    icon:'hr',                 name:'Divider',    layout:true },
-    { t:'text',       icon:'input-cursor-text',  name:'Text' },
-    { t:'textarea',   icon:'textarea-resize',    name:'Long text' },
-    { t:'number',     icon:'123',                name:'Number' },
-    { t:'currency',   icon:'cash',               name:'Amount' },
-    { t:'date',       icon:'calendar3',          name:'Date' },
-    { t:'time',       icon:'clock',              name:'Time' },
-    { t:'email',      icon:'envelope',           name:'Email' },
-    { t:'phone',      icon:'telephone',          name:'Phone' },
-    { t:'select',     icon:'menu-button-wide',   name:'Dropdown',   opts:true },
-    { t:'radio',      icon:'ui-radios',          name:'Choice',     opts:true },
-    { t:'checkboxes', icon:'ui-checks',          name:'Checkboxes', opts:true },
-    { t:'yesno',      icon:'toggle-on',          name:'Yes / No' },
-    { t:'table',      icon:'table',              name:'Table' },
-    { t:'file',       icon:'paperclip',          name:'File upload' },
-    { t:'photo',      icon:'camera',             name:'Photo' },
+    { t:'heading',    icon:'type-h2',            name:'Heading',    layout:true, group:'Layout' },
+    { t:'paragraph',  icon:'text-paragraph',     name:'Paragraph',  layout:true, group:'Layout' },
+    { t:'divider',    icon:'hr',                 name:'Divider',    layout:true, group:'Layout' },
+    { t:'text',       icon:'input-cursor-text',  name:'Text',       group:'Inputs' },
+    { t:'textarea',   icon:'textarea-resize',    name:'Long text',  group:'Inputs' },
+    { t:'number',     icon:'123',                name:'Number',     group:'Inputs' },
+    { t:'currency',   icon:'cash',               name:'Amount',     group:'Inputs' },
+    { t:'date',       icon:'calendar3',          name:'Date',       group:'Inputs' },
+    { t:'time',       icon:'clock',              name:'Time',       group:'Inputs' },
+    { t:'email',      icon:'envelope',           name:'Email',      group:'Inputs' },
+    { t:'phone',      icon:'telephone',          name:'Phone',      group:'Inputs' },
+    { t:'select',     icon:'menu-button-wide',   name:'Dropdown',   opts:true, group:'Choices' },
+    { t:'radio',      icon:'ui-radios',          name:'Choice',     opts:true, group:'Choices' },
+    { t:'checkboxes', icon:'ui-checks',          name:'Checkboxes', opts:true, group:'Choices' },
+    { t:'yesno',      icon:'toggle-on',          name:'Yes / No',   group:'Choices' },
+    { t:'table',      icon:'table',              name:'Table',      group:'Choices' },
+    { t:'file',       icon:'paperclip',          name:'File upload', group:'Attachments' },
+    { t:'photo',      icon:'camera',             name:'Photo',      group:'Attachments' },
   ];
   const TYPE = Object.fromEntries(TYPES.map(x => [x.t, x]));
+
+  // ── Starter templates ─────────────────────────────────────────────────
+  // Field/step ids here are placeholders; they are remapped to fresh
+  // unique ids when a starter is applied.
+  const STARTERS = [
+    {
+      key:'leave', name:'Leave Request', icon:'calendar-heart', color:'#1D9E75',
+      desc:'Annual, sick and other leave with supervisor and HR approval.',
+      schema:[
+        {id:'h1',type:'heading',label:'Employee details'},
+        {id:'f1',type:'text',label:'Full name',required:true,width:'half'},
+        {id:'f2',type:'text',label:'Staff ID',width:'half'},
+        {id:'f3',type:'text',label:'Department / Unit',width:'half'},
+        {id:'f4',type:'phone',label:'Contact number while away',width:'half'},
+        {id:'h2',type:'heading',label:'Leave details'},
+        {id:'f5',type:'select',label:'Leave type',required:true,
+         options:['Annual leave','Sick leave','Maternity / Paternity','Compassionate','Study leave','Unpaid leave']},
+        {id:'f6',type:'date',label:'First day of leave',required:true,width:'half'},
+        {id:'f7',type:'date',label:'Last day of leave',required:true,width:'half'},
+        {id:'f8',type:'number',label:'Total working days',required:true,width:'half'},
+        {id:'f9',type:'text',label:'Colleague covering your duties',width:'half'},
+        {id:'f10',type:'textarea',label:'Reason / notes',help:'Optional — add anything your approvers should know.'},
+        {id:'f11',type:'file',label:'Supporting document',help:'e.g. medical certificate, if applicable.'},
+      ],
+      flow:[
+        {id:'s1',label:'Supervisor approval',action:'approve',assignee_type:'submitter_choice',assignee_value:'',assignee_display:''},
+        {id:'s2',label:'HR sign-off',action:'sign',assignee_type:'submitter_choice',assignee_value:'',assignee_display:''},
+      ],
+    },
+    {
+      key:'expense', name:'Expense Claim', icon:'receipt', color:'#b8860b',
+      desc:'Itemised expenses with receipts, manager approval and finance sign-off.',
+      schema:[
+        {id:'h1',type:'heading',label:'Claimant'},
+        {id:'f1',type:'text',label:'Full name',required:true,width:'half'},
+        {id:'f2',type:'text',label:'Department / Unit',width:'half'},
+        {id:'h2',type:'heading',label:'Expenses'},
+        {id:'f3',type:'table',label:'Expense items',required:true,
+         columns:['Date','Description','Category','Amount'],rows:4},
+        {id:'f4',type:'currency',label:'Total amount claimed',required:true,width:'half'},
+        {id:'f5',type:'yesno',label:'Was an advance received?',width:'half'},
+        {id:'f6',type:'photo',label:'Receipts',required:true,help:'Photograph or upload each receipt.'},
+        {id:'f7',type:'textarea',label:'Notes'},
+      ],
+      flow:[
+        {id:'s1',label:'Line manager approval',action:'approve',assignee_type:'submitter_choice',assignee_value:'',assignee_display:''},
+        {id:'s2',label:'Finance sign-off',action:'sign',assignee_type:'submitter_choice',assignee_value:'',assignee_display:''},
+      ],
+    },
+    {
+      key:'purchase', name:'Purchase Requisition', icon:'cart3', color:'#8250df',
+      desc:'Request goods or services with quotations and a three-step approval chain.',
+      schema:[
+        {id:'h1',type:'heading',label:'Request details'},
+        {id:'f1',type:'text',label:'Requested by',required:true,width:'half'},
+        {id:'f2',type:'text',label:'Department / Unit',width:'half'},
+        {id:'f3',type:'date',label:'Date needed by',width:'half'},
+        {id:'f4',type:'text',label:'Budget line / project code',width:'half'},
+        {id:'h2',type:'heading',label:'Items requested'},
+        {id:'f5',type:'table',label:'Items',required:true,
+         columns:['Item description','Qty','Unit price','Total'],rows:4},
+        {id:'f6',type:'currency',label:'Estimated total',required:true,width:'half'},
+        {id:'f7',type:'textarea',label:'Justification',required:true,
+         help:'Why is this purchase needed?'},
+        {id:'f8',type:'file',label:'Quotations',help:'Attach supplier quotations if available.'},
+      ],
+      flow:[
+        {id:'s1',label:'Head of unit approval',action:'approve',assignee_type:'submitter_choice',assignee_value:'',assignee_display:''},
+        {id:'s2',label:'Procurement review',action:'approve',assignee_type:'submitter_choice',assignee_value:'',assignee_display:''},
+        {id:'s3',label:'Finance authorisation',action:'sign',assignee_type:'submitter_choice',assignee_value:'',assignee_display:''},
+      ],
+    },
+    {
+      key:'travel', name:'Travel Authorization', icon:'airplane', color:'#0d6efd',
+      desc:'Official travel with costs, purpose and finance authorisation.',
+      schema:[
+        {id:'h1',type:'heading',label:'Traveller'},
+        {id:'f1',type:'text',label:'Full name',required:true,width:'half'},
+        {id:'f2',type:'text',label:'Department / Unit',width:'half'},
+        {id:'h2',type:'heading',label:'Trip details'},
+        {id:'f3',type:'text',label:'Destination',required:true},
+        {id:'f4',type:'date',label:'Departure date',required:true,width:'half'},
+        {id:'f5',type:'date',label:'Return date',required:true,width:'half'},
+        {id:'f6',type:'select',label:'Purpose of travel',required:true,
+         options:['Official mission','Training','Conference / workshop','Field work','Other']},
+        {id:'f7',type:'textarea',label:'Details of the trip',help:'Objectives, meetings, itinerary.'},
+        {id:'f8',type:'currency',label:'Estimated total cost',required:true,width:'half'},
+        {id:'f9',type:'yesno',label:'Travel advance required?',width:'half'},
+        {id:'f10',type:'file',label:'Supporting documents',help:'Invitation letter, agenda, cost breakdown…'},
+      ],
+      flow:[
+        {id:'s1',label:'Supervisor approval',action:'approve',assignee_type:'submitter_choice',assignee_value:'',assignee_display:''},
+        {id:'s2',label:'Finance authorisation',action:'sign',assignee_type:'submitter_choice',assignee_value:'',assignee_display:''},
+      ],
+    },
+    {
+      key:'it', name:'IT Support Request', icon:'pc-display', color:'#20c997',
+      desc:'Report hardware, software or access issues to the IT team.',
+      schema:[
+        {id:'f1',type:'text',label:'Your name',required:true,width:'half'},
+        {id:'f2',type:'text',label:'Office / location',width:'half'},
+        {id:'f3',type:'select',label:'Category',required:true,
+         options:['Hardware','Software','Network / Internet','Email','Access request','Other']},
+        {id:'f4',type:'select',label:'Priority',required:true,
+         options:['Low — when convenient','Medium — this week','High — today','Urgent — work is blocked']},
+        {id:'f5',type:'textarea',label:'Describe the issue',required:true,
+         help:'What happened, what you expected, and any error messages.'},
+        {id:'f6',type:'photo',label:'Screenshot / photo',help:'A picture of the error helps us fix it faster.'},
+      ],
+      flow:[
+        {id:'s1',label:'IT review',action:'approve',assignee_type:'submitter_choice',assignee_value:'',assignee_display:''},
+      ],
+    },
+    {
+      key:'incident', name:'Incident Report', icon:'exclamation-triangle', color:'#c0392b',
+      desc:'Record workplace incidents with evidence and safety sign-off.',
+      schema:[
+        {id:'h1',type:'heading',label:'Incident details'},
+        {id:'f1',type:'text',label:'Reported by',required:true,width:'half'},
+        {id:'f2',type:'date',label:'Date of incident',required:true,width:'half'},
+        {id:'f3',type:'time',label:'Time of incident',width:'half'},
+        {id:'f4',type:'text',label:'Location',required:true,width:'half'},
+        {id:'f5',type:'select',label:'Severity',required:true,
+         options:['Minor — no injury or loss','Moderate','Serious','Critical']},
+        {id:'f6',type:'textarea',label:'What happened',required:true,
+         help:'Describe the incident factually — who, what, where, when.'},
+        {id:'f7',type:'textarea',label:'Immediate action taken'},
+        {id:'f8',type:'checkboxes',label:'Who has been notified?',
+         options:['Supervisor','HR','Safety officer','Security']},
+        {id:'h2',type:'heading',label:'Evidence'},
+        {id:'f9',type:'photo',label:'Photos of the scene'},
+        {id:'f10',type:'file',label:'Other evidence',help:'Witness statements, documents…'},
+      ],
+      flow:[
+        {id:'s1',label:'Supervisor review',action:'approve',assignee_type:'submitter_choice',assignee_value:'',assignee_display:''},
+        {id:'s2',label:'Safety officer sign-off',action:'sign',assignee_type:'submitter_choice',assignee_value:'',assignee_display:''},
+      ],
+    },
+  ];
 
   // ── State ─────────────────────────────────────────────────────────────
   const FB = window.FB = {
@@ -270,15 +471,60 @@
 
   FB.dirty = function () { FB.isDirty = true; document.getElementById('fbSaved').textContent = 'Unsaved changes'; };
 
+  // ══════════════════════ STARTER GALLERY ══════════════════════
+
+  function buildGallery() {
+    const grid = document.getElementById('fbGalleryGrid');
+    grid.innerHTML = `
+      <div class="fb-starter blank" onclick="FB.applyStarter(null)">
+        <div class="fb-starter-icon"><i class="bi bi-plus-lg"></i></div>
+        <div class="fb-starter-name">Blank form</div>
+        <div class="fb-starter-desc">Start from nothing and build exactly what you need.</div>
+      </div>` +
+      STARTERS.map(s => `
+      <div class="fb-starter" onclick="FB.applyStarter('${s.key}')">
+        <div class="fb-starter-icon" style="background:${s.color};"><i class="bi bi-${s.icon}"></i></div>
+        <div class="fb-starter-name">${esc(s.name)}</div>
+        <div class="fb-starter-desc">${esc(s.desc)}</div>
+        <div class="fb-starter-meta">
+          <span><i class="bi bi-ui-checks"></i> ${s.schema.filter(f=>!TYPE[f.type]?.layout).length} fields</span>
+          <span><i class="bi bi-diagram-3"></i> ${s.flow.length} approval step${s.flow.length===1?'':'s'}</span>
+        </div>
+      </div>`).join('');
+  }
+
+  FB.openGallery  = () => document.getElementById('fbGallery').classList.add('open');
+  FB.closeGallery = () => document.getElementById('fbGallery').classList.remove('open');
+
+  FB.applyStarter = function (key) {
+    if (key && FB.state.schema.length &&
+        !confirm('Replace the current fields and approval flow with this template?')) return;
+    if (key) {
+      const s = STARTERS.find(x => x.key === key);
+      // Deep-copy with fresh unique ids.
+      FB.state.schema = JSON.parse(JSON.stringify(s.schema)).map(f => ({ ...f, id: uid('f') }));
+      FB.state.approval_flow = JSON.parse(JSON.stringify(s.flow)).map(st => ({ ...st, id: uid('s') }));
+      const titleEl = document.getElementById('fbTitle');
+      if (!titleEl.value.trim()) titleEl.value = s.name;
+      FB.dirty();
+    }
+    FB.selectedField = null; FB.selectedStep = null;
+    renderCanvas(); renderInspector(); renderSteps();
+    FB.closeGallery();
+  };
+
   // ══════════════════════ FIELDS TAB ══════════════════════
 
   function buildPalette() {
     const pal = document.getElementById('fbPalette');
-    pal.innerHTML = TYPES.map(x => `
-      <div class="fb-pitem" draggable="true" data-type="${x.t}"
-           ondragstart="FB.paletteDrag(event,'${x.t}')" onclick="FB.addField('${x.t}')">
-        <i class="bi bi-${x.icon}"></i>${x.name}
-      </div>`).join('');
+    const groups = [...new Set(TYPES.map(x => x.group))];
+    pal.innerHTML = groups.map(g => `
+      <div class="fb-pgroup">${g}</div>
+      <div class="fb-palette">${TYPES.filter(x => x.group === g).map(x => `
+        <div class="fb-pitem" draggable="true" data-type="${x.t}"
+             ondragstart="FB.paletteDrag(event,'${x.t}')" onclick="FB.addField('${x.t}')">
+          <i class="bi bi-${x.icon}"></i>${x.name}
+        </div>`).join('')}</div>`).join('');
   }
 
   function newField(t) {
@@ -398,7 +644,8 @@
     if (!FB.state.schema.length) {
       canvas.innerHTML = `<div class="fb-empty">
         <i class="bi bi-magic" style="font-size:2.2rem;display:block;margin-bottom:10px;color:var(--eo-text-light);"></i>
-        Drag a field here from the left — or just click one — to start building.</div>`;
+        Drag a field here from the left — or just click one — to start building.<br><br>
+        <button class="eo-btn" onclick="FB.openGallery()"><i class="bi bi-grid"></i> Or start from a template</button></div>`;
       return;
     }
     canvas.innerHTML = FB.state.schema.map(f => {
@@ -682,6 +929,7 @@
       t.classList.toggle('active', t.dataset.tab === name));
     ['fields','flow','settings'].forEach(n =>
       document.getElementById('tab-' + n).style.display = n === name ? '' : 'none');
+    if (name === 'settings') FB.renderLhPreview();
   };
 
   FB.lhModeChanged = function (mode) {
@@ -689,6 +937,80 @@
     const pick = document.getElementById('fbLhPick');
     pick.style.display = mode === 'specific' ? '' : 'none';
     FB.dirty();
+    FB.renderLhPreview();
+  };
+
+  // ── Letterhead live preview ───────────────────────────────────────────
+  // Mirrors what the export renderer produces so there are no surprises
+  // when the PDF / Word file comes out.
+  function resolvedLetterhead() {
+    const mode = FB.state.letterhead_mode || 'none';
+    if (mode === 'none') return null;
+    if (mode === 'specific')
+      return LETTERHEADS.find(l => l.id === FB.state.letterhead_id) || null;
+    return LETTERHEADS.find(l => l.is_active) || null;
+  }
+
+  function letterheadPreviewHtml(lh) {
+    if (!lh) return '';
+    const p = lh.color_primary || '#1D9E75';
+    const s = lh.color_secondary || '#1a2b49';
+    const hf = `${lh.font_header || 'Georgia'}, Georgia, serif`;
+    const name = esc(lh.company_name || lh.name || '');
+    const tagline = lh.tagline
+      ? `<div style="font-size:12px;font-style:italic;color:${p};margin-top:2px;">${esc(lh.tagline)}</div>` : '';
+    const contact = `
+      <div style="font-size:10.5px;color:#777;">${esc(lh.address || '').replace(/\n/g,'<br>')}</div>
+      <div style="font-size:10.5px;color:#777;">${esc(lh.contact_info || '')}</div>`;
+    const logo = lh.logo_url ? `<img src="${esc(lh.logo_url)}" style="height:44px;margin-right:12px;vertical-align:middle;">` : '';
+    const key = lh.template_key || 'classic';
+    const nameSpan = c => `<span style="font-family:${hf};font-size:21px;font-weight:bold;color:${c};">${name}</span>`;
+
+    if (key === 'bold') return `
+      <div style="background:${p};padding:12px 16px;display:flex;align-items:center;gap:12px;">
+        ${logo}<div><span style="font-family:${hf};font-size:22px;font-weight:bold;color:#fff;">${name}</span>
+        ${lh.tagline ? `<div style="font-size:11.5px;color:#fff;font-style:italic;">${esc(lh.tagline)}</div>` : ''}</div>
+      </div><div style="padding:6px 2px 0;">${contact}</div>`;
+    if (key === 'minimal') return `
+      <div style="display:flex;align-items:center;">${logo}<div>
+        <span style="font-family:${hf};font-size:17px;font-weight:bold;color:${s};">${name}</span>${tagline}
+      </div></div><div style="padding-top:3px;">${contact}</div>`;
+    if (key === 'split') return `
+      <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid ${p};padding-bottom:8px;">
+        <div style="display:flex;align-items:center;">${logo}<div>${nameSpan(s)}${tagline}</div></div>
+        <div style="text-align:right;">${contact}</div>
+      </div>`;
+    if (key === 'elegant') return `
+      <div style="text-align:center;">
+        ${lh.logo_url ? `<div><img src="${esc(lh.logo_url)}" style="height:46px;margin-bottom:6px;"></div>` : ''}
+        <span style="font-family:${hf};font-size:23px;font-weight:bold;color:${s};letter-spacing:1px;">${name}</span>
+        ${tagline}<div style="padding-top:4px;">${contact}</div>
+      </div>
+      <div style="border-bottom:1px solid ${p};margin-top:8px;"></div>
+      <div style="border-bottom:1px solid ${p};margin-top:2px;"></div>`;
+    if (key === 'modern') return `
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid ${p};padding-bottom:8px;">
+        <div style="display:flex;align-items:center;">${logo}<div>${nameSpan(p)}${tagline}</div></div>
+        <div style="text-align:right;">${contact}</div>
+      </div>`;
+    // classic
+    return `
+      <div style="border-top:4px solid ${p};padding-top:10px;display:flex;align-items:center;">
+        ${logo}<div>${nameSpan(s)}${tagline}</div>
+      </div>
+      <div style="padding-top:4px;">${contact}</div>
+      <div style="border-bottom:2px solid ${p};margin-top:8px;"></div>`;
+  }
+
+  FB.renderLhPreview = function () {
+    const wrap = document.getElementById('fbLhPreviewWrap');
+    const box = document.getElementById('fbLhPreview');
+    const lh = resolvedLetterhead();
+    if (!lh) { wrap.style.display = 'none'; return; }
+    wrap.style.display = '';
+    box.innerHTML = letterheadPreviewHtml(lh) +
+      `<div style="margin-top:14px;"><div style="font-size:15px;font-weight:800;">${esc(document.getElementById('fbTitle').value || 'Form title')}</div>
+       <div style="font-size:10px;color:#999;margin-top:2px;">Ref No: ______________ &nbsp;&nbsp; Date: ______________</div></div>`;
   };
 
   function initSettings() {
@@ -765,8 +1087,14 @@
 
   FB.preview = function () {
     const body = document.getElementById('fbPreviewBody');
-    body.innerHTML = FB.state.schema.map(f => previewField(f)).join('') ||
-      '<p style="color:#999;">No fields yet.</p>';
+    const lh = resolvedLetterhead();
+    const lhHtml = lh ? letterheadPreviewHtml(lh) +
+      '<div style="height:14px;"></div>' : '';
+    body.innerHTML = lhHtml +
+      `<h2 style="font-size:16px;margin:0 0 2px;">${esc(document.getElementById('fbTitle').value || 'Untitled form')}</h2>
+       <div style="font-size:10.5px;color:#777;margin-bottom:10px;">Ref No: ______________ &nbsp;&nbsp; Date: ______________</div>` +
+      (FB.state.schema.map(f => previewField(f)).join('') ||
+       '<p style="color:#999;">No fields yet.</p>');
     if (FB.state.approval_flow.length) {
       body.innerHTML += `<h3 style="font-size:14px;margin:22px 0 8px;">Approvals</h3>` +
         `<ol style="padding-left:20px;font-size:12.5px;color:#444;">` +
@@ -812,8 +1140,10 @@
   // ── Init ──────────────────────────────────────────────────────────────
   document.getElementById('fbTitle').value = FB.state.title || '';
   document.getElementById('fbTitle').addEventListener('input', () => FB.dirty());
-  buildPalette(); renderCanvas(); renderInspector(); renderSteps();
+  buildPalette(); buildGallery(); renderCanvas(); renderInspector(); renderSteps();
   initSettings(); updateStatusPill();
+  // Brand-new form → offer the starter templates right away.
+  if (!INITIAL) FB.openGallery();
   window.addEventListener('beforeunload', e => {
     if (FB.isDirty) { e.preventDefault(); e.returnValue = ''; }
   });

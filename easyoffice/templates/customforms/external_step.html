@@ -1,0 +1,235 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{% if sub %}{{ sub.ref_no }} — Approval requested{% else %}Approval link{% endif %}</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:-apple-system, 'Segoe UI', Arial, sans-serif; background:#f2f4f3;
+         color:#222; padding:22px 12px 60px; }
+  .x-wrap { max-width:680px; margin:0 auto; }
+  .x-card { background:#fff; border:1px solid #e2e5e3; border-radius:12px;
+            padding:22px 24px; margin-bottom:14px; }
+  .x-title { font-size:1.1rem; font-weight:800; }
+  .x-muted { font-size:.78rem; color:#7a7f7c; }
+  .x-lbl { font-size:.7rem; font-weight:800; text-transform:uppercase;
+           letter-spacing:.04em; color:#8a8f8c; margin-top:12px; }
+  .x-val { font-size:.9rem; white-space:pre-wrap; }
+  .x-table { border-collapse:collapse; width:100%; margin-top:4px; }
+  .x-table th, .x-table td { border:1px solid #ddd; padding:6px 9px; font-size:.8rem; }
+  .x-table th { background:#f5f6f5; text-align:left; color:#777; }
+  .x-btn { display:inline-flex; align-items:center; gap:7px; border:1px solid #d4d7d5;
+           background:#fff; color:#333; border-radius:9px; padding:9px 16px;
+           font-size:.86rem; font-weight:700; cursor:pointer; text-decoration:none; }
+  .x-btn-primary { background:#1D9E75; border-color:#1D9E75; color:#fff; }
+  .x-btn-danger { color:#c0392b; }
+  .x-input, .x-textarea { width:100%; padding:9px 11px; font-size:.86rem;
+           border:1px solid #d4d7d5; border-radius:9px; margin-top:5px; }
+  .x-steps { font-size:.8rem; color:#555; }
+  .x-step { padding:5px 0; display:flex; gap:8px; align-items:center; }
+  .x-dot { width:10px; height:10px; border-radius:50%; flex:0 0 10px; }
+  .d-approved { background:#1D9E75; } .d-rejected { background:#c0392b; }
+  .d-pending { background:#b8860b; } .d-waiting, .d-skipped { background:#bbb; }
+  #sigPad { border:1.5px dashed #c8ccc9; border-radius:10px; background:#fff;
+            width:100%; height:170px; touch-action:none; cursor:crosshair; margin-top:8px; }
+  .x-err { color:#c0392b; font-size:.82rem; margin-top:10px; display:none; }
+  .x-chip-img { max-height:100px; max-width:150px; border:1px solid #ddd;
+                border-radius:8px; margin:4px 6px 0 0; }
+  .x-done { text-align:center; padding:50px 16px; }
+  .x-done i { font-size:2.6rem; }
+</style>
+</head>
+<body>
+<div class="x-wrap">
+
+{% if invalid %}
+  <div class="x-card x-done">
+    <i class="bi bi-link-45deg" style="color:#c0392b;"></i>
+    <h2 style="margin:10px 0 6px;font-size:1.05rem;">This link is not valid</h2>
+    <p class="x-muted">It may have been mistyped or removed. Please contact the sender.</p>
+  </div>
+
+{% else %}
+  <div class="x-card">
+    <div class="x-title">{{ sub.template.title }}</div>
+    <div class="x-muted" style="margin-top:3px;">
+      {{ sub.ref_no }} · submitted by
+      {{ sub.submitted_by.get_full_name|default:sub.submitted_by.username }}
+      on {{ sub.submitted_at|date:"d M Y H:i" }}</div>
+    <div class="x-muted" style="margin-top:8px;">
+      <i class="bi bi-envelope"></i> You were asked to
+      <b>{% if step.action == 'sign' %}sign{% else %}approve{% endif %}</b>
+      the step “{{ step.label }}”.</div>
+  </div>
+
+  <!-- Submitted data -->
+  <div class="x-card">
+    {% for item in fields %}
+      {% with f=item.f v=item.value %}
+        {% if f.type == 'heading' %}
+          <div style="font-weight:800;border-bottom:1px solid #eee;padding-bottom:4px;margin:16px 0 2px;">{{ f.label }}</div>
+        {% elif f.type == 'paragraph' or f.type == 'divider' %}
+        {% elif f.type == 'table' %}
+          <div class="x-lbl">{{ f.label }}</div>
+          <table class="x-table">
+            <tr>{% for c in f.columns %}<th>{{ c }}</th>{% endfor %}</tr>
+            {% for row in v %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+            {% empty %}<tr><td colspan="{{ f.columns|length }}" style="color:#999;">—</td></tr>{% endfor %}
+          </table>
+        {% elif f.type == 'file' or f.type == 'photo' %}
+          <div class="x-lbl">{{ f.label }}</div>
+          {% for u in v %}
+            {% if u.is_image and u.url %}
+              <a href="{{ u.url }}" target="_blank"><img class="x-chip-img" src="{{ u.url }}" alt="{{ u.name }}"></a>
+            {% else %}
+              <div style="font-size:.84rem;margin-top:3px;"><a href="{{ u.url }}" target="_blank"
+                 style="color:#1D9E75;"><i class="bi bi-paperclip"></i> {{ u.name }}</a></div>
+            {% endif %}
+          {% empty %}<div class="x-val" style="color:#999;">—</div>{% endfor %}
+        {% else %}
+          <div class="x-lbl">{{ f.label }}</div>
+          <div class="x-val">{% if v %}{{ v }}{% else %}<span style="color:#999;">—</span>{% endif %}</div>
+        {% endif %}
+      {% endwith %}
+    {% endfor %}
+  </div>
+
+  <!-- Flow overview -->
+  <div class="x-card x-steps">
+    <div class="x-lbl" style="margin-top:0;">Approval flow</div>
+    {% for st in steps %}
+    <div class="x-step">
+      <span class="x-dot d-{{ st.status }}"></span>
+      <span><b>{{ st.label }}</b> — {{ st.assignee_display }}
+        <span style="color:#999;">({{ st.get_status_display|lower }})</span></span>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if already_done %}
+  <div class="x-card x-done">
+    <i class="bi bi-check-circle" style="color:#1D9E75;"></i>
+    <h2 style="margin:10px 0 6px;font-size:1.05rem;">This step has already been handled</h2>
+    <p class="x-muted">Status: {{ step.get_status_display }}. Nothing more to do here — thank you!</p>
+  </div>
+  {% elif not_yet %}
+  <div class="x-card x-done">
+    <i class="bi bi-hourglass-split" style="color:#b8860b;"></i>
+    <h2 style="margin:10px 0 6px;font-size:1.05rem;">Not your turn yet</h2>
+    <p class="x-muted">Earlier approval steps are still in progress. Please try this link again later.</p>
+  </div>
+  {% else %}
+  <!-- Action card -->
+  <div class="x-card">
+    <div class="x-lbl" style="margin-top:0;">Your details</div>
+    <input class="x-input" id="xName" type="text" placeholder="Your full name *" maxlength="120">
+    <textarea class="x-textarea" id="xComment" rows="2"
+              placeholder="Comment (required if rejecting)"></textarea>
+
+    {% if step.action == 'sign' %}
+    <div class="x-lbl">Draw your signature *</div>
+    <canvas id="sigPad"></canvas>
+    <button class="x-btn" style="margin-top:8px;font-size:.76rem;padding:6px 12px;"
+            onclick="X.clearSig()">Clear signature</button>
+    {% endif %}
+
+    <div class="x-err" id="xErr"></div>
+
+    <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;">
+      <button class="x-btn x-btn-primary" id="xApprove" onclick="X.act('approve')">
+        <i class="bi {% if step.action == 'sign' %}bi-pen{% else %}bi-check2{% endif %}"></i>
+        {% if step.action == 'sign' %}Sign &amp; approve{% else %}Approve{% endif %}</button>
+      <button class="x-btn x-btn-danger" onclick="X.act('reject')">
+        <i class="bi bi-x-circle"></i> Reject</button>
+    </div>
+  </div>
+  {% endif %}
+{% endif %}
+
+</div>
+
+{% if not invalid and not already_done and not not_yet %}
+{% csrf_token %}
+<script>
+(function () {
+  'use strict';
+  const ACT_URL = "{% url 'form_external_act' token=step.token %}";
+  const NEEDS_SIG = {% if step.action == 'sign' %}true{% else %}false{% endif %};
+  function csrfToken() {
+    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? m[1] : (document.querySelector('[name=csrfmiddlewaretoken]')?.value || '');
+  }
+  const X = window.X = {};
+  let drawn = false, canvas = null, ctx = null;
+
+  if (NEEDS_SIG) {
+    canvas = document.getElementById('sigPad');
+    ctx = canvas.getContext('2d');
+    let drawing = false, last = null;
+    function resize() {
+      const r = canvas.getBoundingClientRect();
+      canvas.width = r.width * 2; canvas.height = r.height * 2;
+      ctx.scale(2, 2);
+      ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.strokeStyle = '#1a2b49';
+      drawn = false;
+    }
+    function pos(e) {
+      const r = canvas.getBoundingClientRect();
+      const p = e.touches ? e.touches[0] : e;
+      return { x: p.clientX - r.left, y: p.clientY - r.top };
+    }
+    canvas.addEventListener('mousedown', e => { drawing = true; last = pos(e); e.preventDefault(); });
+    canvas.addEventListener('mousemove', e => {
+      if (!drawing) return;
+      const p = pos(e);
+      ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+      last = p; drawn = true; e.preventDefault();
+    });
+    window.addEventListener('mouseup', () => drawing = false);
+    canvas.addEventListener('touchstart', e => { drawing = true; last = pos(e); e.preventDefault(); }, { passive: false });
+    canvas.addEventListener('touchmove', e => {
+      if (!drawing) return;
+      const p = pos(e);
+      ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+      last = p; drawn = true; e.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener('touchend', () => drawing = false);
+    setTimeout(resize, 30);
+    X.clearSig = () => { ctx.clearRect(0, 0, canvas.width, canvas.height); drawn = false; };
+  }
+
+  X.act = async function (decision) {
+    const err = document.getElementById('xErr');
+    err.style.display = 'none';
+    const name = document.getElementById('xName').value.trim();
+    const comment = document.getElementById('xComment').value.trim();
+    if (!name) { err.textContent = 'Please enter your name.'; err.style.display = 'block'; return; }
+    if (decision === 'reject' && !comment) {
+      err.textContent = 'A comment is required when rejecting.'; err.style.display = 'block'; return;
+    }
+    let signature = '';
+    if (decision === 'approve' && NEEDS_SIG) {
+      if (!drawn) { err.textContent = 'Please draw your signature first.'; err.style.display = 'block'; return; }
+      signature = canvas.toDataURL('image/png');
+    }
+    const btn = document.getElementById('xApprove');
+    btn.disabled = true;
+    try {
+      const res = await fetch(ACT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
+        body: JSON.stringify({ decision, comment, name, signature_data: signature }),
+      });
+      const d = await res.json();
+      if (!res.ok) { err.textContent = d.error || 'Action failed.'; err.style.display = 'block'; return; }
+      window.location.reload();
+    } finally { btn.disabled = false; }
+  };
+})();
+</script>
+{% endif %}
+</body>
+</html>

@@ -96,6 +96,7 @@ ASSIGNEE_TYPES = [
     ('position',         'Anyone with position'),
     ('unit',             'Anyone in unit'),
     ('submitter_choice', 'Submitter chooses at submission'),
+    ('email',            'External person (email link)'),
 ]
 
 
@@ -284,6 +285,15 @@ class SubmissionStep(models.Model):
     # Drawn signature captured on 'sign' steps — PNG data URL.
     signature_data = models.TextField(blank=True, default='')
 
+    # ── External (email) approvers ───────────────────────────────────────
+    # When assignee_type == 'email' the step is actioned by someone outside
+    # the system via a tokenized link — no login required.
+    external_email = models.EmailField(blank=True, default='')
+    external_name  = models.CharField(max_length=120, blank=True, default='',
+                                      help_text='Name typed by the external approver when acting.')
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False,
+                             help_text='Secret token for the external approval link.')
+
     class Meta:
         ordering = ['order']
         unique_together = [('submission', 'order')]
@@ -302,6 +312,10 @@ class SubmissionStep(models.Model):
         return profile_matches(user, self.assignee_type, self.assignee_value)
 
     def assignee_display(self) -> str:
+        if self.assignee_type == 'email':
+            who = self.external_name or ''
+            email = self.external_email or self.assignee_value or 'external'
+            return f'{who} ({email})'.strip() if who else f'External: {email}'
         if self.assigned_user_id:
             u = self.assigned_user
             full = (u.get_full_name() or u.get_username()) if u else '—'
@@ -313,6 +327,122 @@ class SubmissionStep(models.Model):
             'submitter_choice': 'Chosen at submission',
         }
         return labels.get(self.assignee_type, self.assignee_value or '—')
+
+
+# ── FormUpload ───────────────────────────────────────────────────────────────
+
+def _upload_path(instance, filename):
+    from django.utils.text import get_valid_filename
+    now = timezone.now()
+    return f'forms/uploads/{now:%Y/%m}/{uuid.uuid4().hex[:8]}_{get_valid_filename(filename)}'
+
+
+class FormUpload(models.Model):
+    """
+    A file or photo attached to a form submission ('file' / 'photo' fields).
+
+    The binary lives under MEDIA_ROOT/forms/uploads/…  On creation the row
+    is also registered in the file-manager app (apps.files) via
+    register_in_file_app() below, so uploads show up there automatically.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    file          = models.FileField(upload_to=_upload_path)
+    original_name = models.CharField(max_length=255)
+    size          = models.PositiveBigIntegerField(default=0)
+    content_type  = models.CharField(max_length=120, blank=True, default='')
+    is_image      = models.BooleanField(default=False)
+
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='form_uploads')
+
+    # Linked once the form is actually submitted; NULL = still a draft
+    # attachment (safe to garbage-collect after a while).
+    submission = models.ForeignKey(
+        FormSubmission, on_delete=models.CASCADE,
+        null=True, blank=True, related_name='uploads')
+    field_id = models.CharField(max_length=40, blank=True, default='')
+
+    # PK of the record created in the file-manager app, if registration
+    # succeeded ('' otherwise).
+    file_app_ref = models.CharField(max_length=64, blank=True, default='')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.original_name
+
+    def to_dict(self):
+        try:
+            url = self.file.url
+        except Exception:
+            url = ''
+        return {'id': str(self.pk), 'name': self.original_name,
+                'size': self.size, 'url': url, 'is_image': self.is_image}
+
+
+# ── File-manager registration ────────────────────────────────────────────────
+#
+# Mirrors every form upload into the File Manager (apps.files.SharedFile),
+# following the exact conventions of apps.files.views.FileUploadView:
+# name / file / uploaded_by / visibility / file_size / file_type, plus the
+# SHA-256 file hash. The bytes are COPIED into a new SharedFile (under its
+# own shared_files/… path) so deleting the file in the File Manager can
+# never break a form submission's attachments, and vice-versa.
+#
+# Optional settings:
+#   FORMS_FILE_APP_FOLDER = 'Form Attachments'   # per-user folder name;
+#                                                # set to '' / None for root
+#   FORMS_FILE_APP_VISIBILITY = 'private'        # SharedFile visibility
+#
+# Registration is best-effort: any failure is logged and the form upload
+# still works inside Forms (it just won't be mirrored in the file manager).
+
+def register_in_file_app(upload: 'FormUpload') -> str:
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from django.core.files.base import ContentFile
+        from apps.files.models import SharedFile, FileFolder
+
+        # Per-user destination folder in the File Manager.
+        folder = None
+        folder_name = getattr(settings, 'FORMS_FILE_APP_FOLDER', 'Form Attachments')
+        if folder_name:
+            try:
+                folder, _ = FileFolder.objects.get_or_create(
+                    owner=upload.uploaded_by, name=folder_name, parent=None)
+            except Exception:
+                folder = None
+
+        with upload.file.open('rb') as fh:
+            content = ContentFile(fh.read(), name=upload.original_name)
+
+        sf = SharedFile.objects.create(
+            name=upload.original_name,
+            file=content,
+            folder=folder,
+            uploaded_by=upload.uploaded_by,
+            visibility=getattr(settings, 'FORMS_FILE_APP_VISIBILITY', 'private'),
+            description='Attached via a form submission.',
+            tags='forms',
+            file_size=upload.size,
+            file_type=upload.content_type or '',
+        )
+        try:
+            sf.file_hash = sf.compute_hash()
+            sf.save(update_fields=['file_hash'])
+        except Exception:
+            pass
+        return str(sf.pk)
+    except Exception as exc:
+        logger.warning('Form upload %s could not be registered in the file app: %s',
+                       upload.pk, exc)
+        return ''
 
 
 # ── Profile matching (adjust field names here if yours differ) ───────────────

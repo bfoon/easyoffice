@@ -38,6 +38,15 @@
                  box-shadow:0 8px 22px rgba(0,0,0,.12); display:none; }
   .ff-uresults div { padding:8px 11px; font-size:.82rem; cursor:pointer; }
   .ff-uresults div:hover { background:var(--eo-bg); }
+  .ff-drop { border:1.5px dashed var(--eo-border); border-radius:10px; padding:16px;
+             text-align:center; font-size:.8rem; color:var(--eo-text-muted); cursor:pointer; }
+  .ff-drop:hover { border-color:var(--eo-accent); color:var(--eo-accent); }
+  .ff-chip { display:flex; align-items:center; gap:8px; border:1px solid var(--eo-border);
+             border-radius:8px; padding:6px 10px; margin-top:6px; font-size:.78rem;
+             color:var(--eo-text); background:var(--eo-bg); }
+  .ff-chip img { height:34px; width:34px; object-fit:cover; border-radius:5px; }
+  .ff-chip .x { margin-left:auto; cursor:pointer; color:var(--eo-text-muted); }
+  .ff-chip .x:hover { color:var(--eo-danger); }
 </style>
 
 <div class="ff-card">
@@ -46,13 +55,13 @@
 
   <div id="ffFields"></div>
 
-  {% if choice_steps %}
+  {% if choice_steps or email_steps %}
   <div class="ff-approver-box">
     <div style="font-size:.82rem;font-weight:800;color:var(--eo-text);margin-bottom:4px;">
-      <i class="bi bi-diagram-3" style="color:var(--eo-accent)"></i> Choose your approver{{ choice_steps|length|pluralize }}
+      <i class="bi bi-diagram-3" style="color:var(--eo-accent)"></i> Approvers
     </div>
     <div style="font-size:.75rem;color:var(--eo-text-muted);margin-bottom:10px;">
-      This form lets you decide who should approve it.</div>
+      This form needs you to say who should approve it.</div>
     {% for step in choice_steps %}
     <div class="ff-field">
       <label class="ff-lbl">{{ step.label }} <span class="ff-req">*</span></label>
@@ -61,6 +70,15 @@
                data-choice-step="{{ step.id }}" oninput="FF.userSearch(this)" autocomplete="off">
         <div class="ff-uresults"></div>
       </div>
+    </div>
+    {% endfor %}
+    {% for step in email_steps %}
+    <div class="ff-field">
+      <label class="ff-lbl">{{ step.label }} — external approver's email <span class="ff-req">*</span></label>
+      <input type="email" class="ff-input" placeholder="name@example.com"
+             data-email-step="{{ step.id }}" autocomplete="off">
+      <div class="ff-help" style="margin-top:4px;">They'll receive a secure link by email to review and
+        {% if step.action == 'sign' %}sign{% else %}approve{% endif %} this form.</div>
     </div>
     {% endfor %}
   </div>
@@ -83,6 +101,7 @@
   const TEMPLATE = {{ template_json|safe }};
   const SUBMIT_URL = "{% url 'form_submit' pk=template.pk %}";
   const DIRECTORY_URL = "{% url 'forms_api_directory' %}";
+  const UPLOAD_URL = "{% url 'forms_api_upload' %}";
 
   function csrfToken() {
     const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
@@ -133,6 +152,19 @@
           <button class="eo-btn" style="margin-top:6px;font-size:.75rem;padding:4px 10px;"
                   onclick="FF.addRow('${f.id}', ${cols.length})"><i class="bi bi-plus"></i> Add row</button></div>`;
       }
+      case 'file': case 'photo': {
+        const isPhoto = f.type === 'photo';
+        const accept = isPhoto ? 'accept="image/*" capture="environment"' : '';
+        return `<div class="ff-field">${lbl}${help}
+          <div class="ff-drop" data-drop="${f.id}">
+            <i class="bi ${isPhoto ? 'bi-camera' : 'bi-paperclip'}" style="font-size:1.1rem;"></i>
+            ${isPhoto ? 'Take or upload a photo' : 'Click to attach file(s)'}
+          </div>
+          <input type="file" ${accept} ${isPhoto ? '' : 'multiple'} style="display:none"
+                 data-upload-input="${f.id}" data-kind="${f.type}">
+          <div data-chips="${f.id}"></div>
+        </div>`;
+      }
       default:
         return `<div class="ff-field${w}">${lbl}${help}
           <input class="ff-input" type="${inputType(f.type)}" ${f.type==='currency'?'step="0.01"':''}
@@ -146,6 +178,64 @@
     tr.innerHTML = Array.from({length: ncols}, () => '<td><input type="text"></td>').join('');
     tbody.appendChild(tr);
   };
+
+  // ── File / photo uploads ─────────────────────────────────────────────
+  FF.uploads = {};          // {field_id: [{id,name,size,url,is_image}, …]}
+
+  function renderChips(fid) {
+    const wrap = document.querySelector(`[data-chips="${fid}"]`);
+    wrap.innerHTML = (FF.uploads[fid] || []).map((u, i) => `
+      <div class="ff-chip">
+        ${u.is_image && u.url ? `<img src="${esc(u.url)}" alt="">`
+                              : '<i class="bi bi-file-earmark"></i>'}
+        <span>${esc(u.name)}</span>
+        <span style="color:var(--eo-text-muted);font-size:.7rem;">${(u.size/1024).toFixed(0)} KB</span>
+        <i class="bi bi-x-lg x" data-rm-fid="${fid}" data-rm-i="${i}" title="Remove"></i>
+      </div>`).join('');
+  }
+
+  async function doUpload(fid, kind, files) {
+    const drop = document.querySelector(`[data-drop="${fid}"]`);
+    for (const file of files) {
+      drop.innerHTML = `<i class="bi bi-arrow-repeat"></i> Uploading ${esc(file.name)}…`;
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('kind', kind);
+      try {
+        const res = await fetch(UPLOAD_URL, {
+          method: 'POST', body: fd,
+          headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken() },
+        });
+        const d = await res.json();
+        if (!res.ok) { alert(d.error || 'Upload failed.'); continue; }
+        (FF.uploads[fid] = FF.uploads[fid] || []).push(d.upload);
+        renderChips(fid);
+      } catch (e) { alert('Upload failed — check your connection.'); }
+    }
+    const isPhoto = kind === 'photo';
+    drop.innerHTML = `<i class="bi ${isPhoto ? 'bi-camera' : 'bi-paperclip'}" style="font-size:1.1rem;"></i>
+      ${isPhoto ? 'Take or upload a photo' : 'Click to attach file(s)'}`;
+  }
+
+  document.addEventListener('click', function (e) {
+    const drop = e.target.closest('[data-drop]');
+    if (drop) {
+      document.querySelector(`[data-upload-input="${drop.dataset.drop}"]`).click();
+      return;
+    }
+    const rm = e.target.closest('[data-rm-fid]');
+    if (rm) {
+      const fid = rm.dataset.rmFid;
+      FF.uploads[fid].splice(parseInt(rm.dataset.rmI), 1);
+      renderChips(fid);
+    }
+  });
+  document.addEventListener('change', function (e) {
+    const inp = e.target.closest('[data-upload-input]');
+    if (!inp || !inp.files.length) return;
+    doUpload(inp.dataset.uploadInput, inp.dataset.kind, Array.from(inp.files));
+    inp.value = '';
+  });
 
   // ── Collect values ────────────────────────────────────────────────────
   function collect() {
@@ -169,7 +259,20 @@
       });
       data[tbl.dataset.fidTable] = rows;
     });
+    // file / photo fields
+    Object.keys(FF.uploads).forEach(fid => { data[fid] = FF.uploads[fid]; });
+    (TEMPLATE.schema || []).forEach(f => {
+      if ((f.type === 'file' || f.type === 'photo') && !(f.id in data)) data[f.id] = [];
+    });
     return data;
+  }
+
+  function collectExternalEmails() {
+    const out = {};
+    document.querySelectorAll('[data-email-step]').forEach(el => {
+      out[el.dataset.emailStep] = el.value.trim();
+    });
+    return out;
   }
 
   // ── Approver search ───────────────────────────────────────────────────
@@ -227,7 +330,8 @@
         headers: { 'Content-Type': 'application/json',
                    'X-Requested-With': 'XMLHttpRequest',
                    'X-CSRFToken': csrfToken() },
-        body: JSON.stringify({ data: collect(), chosen_approvers: FF.chosen }),
+        body: JSON.stringify({ data: collect(), chosen_approvers: FF.chosen,
+                               external_emails: collectExternalEmails() }),
       });
       const d = await res.json();
       if (!res.ok) {

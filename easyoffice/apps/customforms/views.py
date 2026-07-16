@@ -38,19 +38,23 @@ import os
 import subprocess
 import tempfile
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core.validators import validate_email
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views import View
 from django.views.generic import TemplateView
 
 from .models import (
-    FormTemplate, FormSubmission, SubmissionStep,
-    profile_matches, distinct_profile_values,
+    FormTemplate, FormSubmission, SubmissionStep, FormUpload,
+    profile_matches, distinct_profile_values, register_in_file_app,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,8 +63,11 @@ User = get_user_model()
 FIELD_TYPES_WITH_DATA = {
     'text', 'textarea', 'number', 'date', 'time', 'email', 'phone',
     'select', 'radio', 'checkboxes', 'yesno', 'table', 'currency',
+    'file', 'photo',
 }
 LAYOUT_TYPES = {'heading', 'paragraph', 'divider'}
+
+MAX_UPLOAD_MB = 20
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -105,14 +112,66 @@ def _validate_flow(flow):
     for s in flow:
         if not isinstance(s, dict) or not s.get('id'):
             return 'Every step needs an id.'
-        if s.get('assignee_type') not in (
-                'user', 'role', 'position', 'unit', 'submitter_choice'):
+        atype = s.get('assignee_type')
+        if atype not in ('user', 'role', 'position', 'unit',
+                         'submitter_choice', 'email'):
             return f"Step '{s.get('label', '?')}' has an invalid assignee type."
-        if s.get('assignee_type') != 'submitter_choice' and not s.get('assignee_value'):
+        # 'submitter_choice' never needs a value; 'email' may be blank
+        # (blank = submitter enters the address at submission time).
+        if atype not in ('submitter_choice', 'email') and not s.get('assignee_value'):
             return f"Step '{s.get('label', '?')}' needs an assignee."
+        if atype == 'email' and s.get('assignee_value'):
+            try:
+                validate_email(s['assignee_value'])
+            except ValidationError:
+                return f"Step '{s.get('label', '?')}': invalid email address."
         if s.get('action') not in ('approve', 'sign'):
             return f"Step '{s.get('label', '?')}' has an invalid action."
     return None
+
+
+def notify_step(step, request=None):
+    """
+    Called whenever a step becomes pending.
+
+    External (email) steps: sends the tokenized approve/sign link.
+    Internal steps: logs only — plug your in-app/email notification here.
+    """
+    if not step:
+        return
+    if step.assignee_type == 'email' and step.external_email:
+        link = reverse('form_external_step', args=[step.token])
+        if request is not None:
+            link = request.build_absolute_uri(link)
+        else:
+            base = getattr(settings, 'SITE_URL', '').rstrip('/')
+            link = f'{base}{link}' if base else link
+        sub = step.submission
+        action_word = 'sign' if step.action == 'sign' else 'approve'
+        noun = 'signature' if step.action == 'sign' else 'approval'
+        subject = f'[{sub.ref_no}] Your {noun} is requested: {sub.template.title}'
+        body = (
+            f'Hello,\n\n'
+            f'{(sub.submitted_by.get_full_name() or sub.submitted_by.get_username())} '
+            f'has submitted "{sub.template.title}" ({sub.ref_no}) and it needs '
+            f'your review at step "{step.label}".\n\n'
+            f'Open the link below to view the submission and {action_word} it:\n'
+            f'{link}\n\n'
+            f'This link is unique to you — please do not forward it.\n'
+        )
+        try:
+            from django.core.mail import send_mail
+            send_mail(subject, body,
+                      getattr(settings, 'DEFAULT_FROM_EMAIL', None),
+                      [step.external_email], fail_silently=False)
+            logger.info('Form %s: external link emailed to %s for step "%s"',
+                        sub.ref_no, step.external_email, step.label)
+        except Exception as exc:
+            logger.error('Form %s: could not email %s (%s). Link: %s',
+                         sub.ref_no, step.external_email, exc, link)
+    else:
+        logger.info('Form %s: step "%s" now pending (%s)',
+                    step.submission.ref_no, step.label, step.assignee_display())
 
 
 def _user_brief(u):
@@ -351,6 +410,45 @@ class DirectoryView(LoginRequiredMixin, View):
 
 # ── Fill & submit ────────────────────────────────────────────────────────────
 
+class FormUploadView(LoginRequiredMixin, View):
+    """
+    POST /forms/api/upload/   (multipart: file, kind=file|photo)
+
+    Saves the file immediately, mirrors it into the File Manager app, and
+    returns {id, name, size, url, is_image}.  The returned dict is what the
+    fill page stores in the field value; on submit the rows get linked to
+    the submission.
+    """
+
+    def post(self, request):
+        up = request.FILES.get('file')
+        kind = request.POST.get('kind', 'file')
+        if not up:
+            return JsonResponse({'error': 'No file received.'}, status=400)
+        if up.size > MAX_UPLOAD_MB * 1024 * 1024:
+            return JsonResponse({'error': f'File is too large (max {MAX_UPLOAD_MB} MB).'},
+                                status=400)
+        ctype = up.content_type or ''
+        is_image = ctype.startswith('image/')
+        if kind == 'photo' and not is_image:
+            return JsonResponse({'error': 'Please choose an image file.'}, status=400)
+
+        rec = FormUpload.objects.create(
+            file=up,
+            original_name=up.name[:255],
+            size=up.size,
+            content_type=ctype[:120],
+            is_image=is_image,
+            uploaded_by=request.user,
+        )
+        # Mirror into the File Manager (best-effort; never blocks the upload).
+        ref = register_in_file_app(rec)
+        if ref:
+            rec.file_app_ref = ref
+            rec.save(update_fields=['file_app_ref'])
+        return JsonResponse({'ok': True, 'upload': rec.to_dict()}, status=201)
+
+
 class FormFillView(LoginRequiredMixin, TemplateView):
     template_name = 'customforms/form_fill.html'
 
@@ -363,13 +461,24 @@ class FormFillView(LoginRequiredMixin, TemplateView):
             s for s in (t.approval_flow or [])
             if s.get('assignee_type') == 'submitter_choice'
         ]
+        # External-email steps whose address the submitter must provide.
+        ctx['email_steps'] = [
+            s for s in (t.approval_flow or [])
+            if s.get('assignee_type') == 'email' and not s.get('assignee_value')
+        ]
         return ctx
 
 
 class FormSubmitView(LoginRequiredMixin, View):
     """
     POST /forms/<uuid>/submit/
-    Body: { data: {field_id: value}, chosen_approvers: {step_id: user_id} }
+    Body: {
+      data:             {field_id: value},
+      chosen_approvers: {step_id: user_id},     # submitter_choice steps
+      external_emails:  {step_id: email},       # blank 'email' steps
+    }
+    file/photo field values are lists of upload dicts returned by
+    /forms/api/upload/ — they get linked to the submission here.
     """
 
     @transaction.atomic
@@ -378,6 +487,7 @@ class FormSubmitView(LoginRequiredMixin, View):
         body = _parse_body(request)
         data = body.get('data') or {}
         chosen = body.get('chosen_approvers') or {}
+        ext_emails = body.get('external_emails') or {}
 
         # Required-field validation against the live schema.
         missing = []
@@ -385,8 +495,13 @@ class FormSubmitView(LoginRequiredMixin, View):
             if f.get('type') in LAYOUT_TYPES or not f.get('required'):
                 continue
             v = data.get(f['id'])
-            if v in (None, '', []) or (f.get('type') == 'table' and not any(
-                    any(str(c).strip() for c in row) for row in (v or []))):
+            empty = v in (None, '', [])
+            if f.get('type') == 'table':
+                empty = not any(any(str(c).strip() for c in row) for row in (v or []))
+            if f.get('type') in ('file', 'photo'):
+                empty = not (isinstance(v, list) and
+                             any(isinstance(u, dict) and u.get('id') for u in v))
+            if empty:
                 missing.append(f.get('label') or f['id'])
         if missing:
             return JsonResponse(
@@ -395,18 +510,32 @@ class FormSubmitView(LoginRequiredMixin, View):
 
         # Resolve submitter_choice steps up front.
         resolved_choice = {}
+        # Resolve external emails (fixed in the builder, or submitter-entered).
+        resolved_email = {}
         for s in (t.approval_flow or []):
-            if s.get('assignee_type') != 'submitter_choice':
-                continue
-            uid = chosen.get(s['id'])
-            if not uid:
-                return JsonResponse(
-                    {'error': f"Please choose an approver for step “{s.get('label', 'Approval')}”."},
-                    status=400)
-            try:
-                resolved_choice[s['id']] = User.objects.get(pk=uid, is_active=True)
-            except Exception:
-                return JsonResponse({'error': 'Chosen approver not found.'}, status=400)
+            atype = s.get('assignee_type')
+            if atype == 'submitter_choice':
+                uid = chosen.get(s['id'])
+                if not uid:
+                    return JsonResponse(
+                        {'error': f"Please choose an approver for step “{s.get('label', 'Approval')}”."},
+                        status=400)
+                try:
+                    resolved_choice[s['id']] = User.objects.get(pk=uid, is_active=True)
+                except Exception:
+                    return JsonResponse({'error': 'Chosen approver not found.'}, status=400)
+            elif atype == 'email':
+                email = (s.get('assignee_value') or ext_emails.get(s['id']) or '').strip()
+                if not email:
+                    return JsonResponse(
+                        {'error': f"Please enter the approver's email for step “{s.get('label', 'Approval')}”."},
+                        status=400)
+                try:
+                    validate_email(email)
+                except ValidationError:
+                    return JsonResponse(
+                        {'error': f"“{email}” is not a valid email address."}, status=400)
+                resolved_email[s['id']] = email
 
         sub = FormSubmission.objects.create(
             template=t,
@@ -415,24 +544,42 @@ class FormSubmitView(LoginRequiredMixin, View):
             submitted_by=request.user,
         )
 
+        # Link file/photo uploads to this submission (only rows owned by
+        # the submitter — nobody can attach somebody else's upload).
+        for f in (t.schema or []):
+            if f.get('type') not in ('file', 'photo'):
+                continue
+            for u in (data.get(f['id']) or []):
+                uid = isinstance(u, dict) and u.get('id')
+                if not uid:
+                    continue
+                try:
+                    FormUpload.objects.filter(
+                        pk=uid, uploaded_by=request.user, submission__isnull=True,
+                    ).update(submission=sub, field_id=f['id'])
+                except Exception:
+                    pass
+
         flow = t.approval_flow or []
         for i, s in enumerate(flow):
             assigned = None
-            if s.get('assignee_type') == 'user':
+            atype = s.get('assignee_type')
+            if atype == 'user':
                 try:
                     assigned = User.objects.filter(pk=s.get('assignee_value')).first()
                 except Exception:
                     assigned = None
-            elif s.get('assignee_type') == 'submitter_choice':
+            elif atype == 'submitter_choice':
                 assigned = resolved_choice[s['id']]
             SubmissionStep.objects.create(
                 submission=sub,
                 order=i,
                 label=s.get('label') or f'Step {i + 1}',
                 action=s.get('action', 'approve'),
-                assignee_type=s.get('assignee_type'),
+                assignee_type=atype,
                 assignee_value=str(s.get('assignee_value') or ''),
                 assigned_user=assigned,
+                external_email=resolved_email.get(s['id'], ''),
                 status='pending' if i == 0 else 'waiting',
             )
 
@@ -441,16 +588,11 @@ class FormSubmitView(LoginRequiredMixin, View):
             sub.completed_at = timezone.now()
             sub.save(update_fields=['status', 'completed_at'])
         else:
-            self._notify_step(sub.current_step)
+            transaction.on_commit(
+                lambda: notify_step(sub.current_step, request))
 
         return JsonResponse({'ok': True, 'submission_id': str(sub.pk),
                              'ref_no': sub.ref_no}, status=201)
-
-    def _notify_step(self, step):
-        """Hook: plug in your email/notification system here."""
-        if step:
-            logger.info('Form %s: step "%s" now pending (%s)',
-                        step.submission.ref_no, step.label, step.assignee_display())
 
 
 # ── Submission detail & approval actions ────────────────────────────────────
@@ -480,7 +622,9 @@ class SubmissionDetailView(LoginRequiredMixin, TemplateView):
         ctx['actionable_step'] = next(
             (st for st in steps if st.user_can_act(user)), None)
         def display(f, v):
-            """Normalise for the template: keep table lists, join checkbox lists."""
+            """Normalise for the template: keep table/file lists, join checkbox lists."""
+            if f.get('type') in ('file', 'photo'):
+                return v if isinstance(v, list) else []
             if f.get('type') != 'table' and isinstance(v, list):
                 return ', '.join(str(x) for x in v)
             return v
@@ -531,6 +675,104 @@ class SubmissionActionView(LoginRequiredMixin, View):
 
         if decision == 'approve':
             sub.advance()
+            transaction.on_commit(
+                lambda: notify_step(sub.current_step, request))
+        else:
+            sub.reject()
+
+        return JsonResponse({'ok': True, 'submission_status': sub.status})
+
+
+# ── External (email) approvals — tokenized, no login ─────────────────────────
+
+def _get_external_step(token):
+    return (SubmissionStep.objects
+            .select_related('submission', 'submission__template',
+                            'submission__submitted_by')
+            .filter(token=token, assignee_type='email')
+            .first())
+
+
+class ExternalStepView(TemplateView):
+    """
+    GET /forms/external/<uuid:token>/
+    Public page (no login) where an external approver reviews the submission
+    and approves / signs / rejects.  The token is the authentication.
+    """
+    template_name = 'customforms/external_step.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        step = _get_external_step(kwargs['token'])
+        if not step:
+            ctx['invalid'] = True
+            return ctx
+        sub = step.submission
+        ctx['step'] = step
+        ctx['sub'] = sub
+        ctx['already_done'] = step.status not in ('pending',)
+        ctx['not_yet'] = step.status == 'waiting'
+
+        def display(f, v):
+            if f.get('type') in ('file', 'photo'):
+                return v if isinstance(v, list) else []
+            if f.get('type') != 'table' and isinstance(v, list):
+                return ', '.join(str(x) for x in v)
+            return v
+
+        ctx['fields'] = [
+            {'f': f, 'value': display(f, sub.data.get(f.get('id')))}
+            for f in sub.schema_snapshot
+        ]
+        ctx['steps'] = list(sub.steps.select_related('assigned_user', 'acted_by'))
+        return ctx
+
+
+class ExternalStepActView(View):
+    """
+    POST /forms/external/<uuid:token>/act/
+    Body: { decision, comment, signature_data, name }
+    """
+
+    @transaction.atomic
+    def post(self, request, token):
+        step = _get_external_step(token)
+        if not step:
+            return JsonResponse({'error': 'This link is not valid.'}, status=404)
+        if step.status == 'waiting':
+            return JsonResponse({'error': 'Earlier approval steps are not finished yet. '
+                                          'Please try again later.'}, status=409)
+        if step.status != 'pending':
+            return JsonResponse({'error': 'This step has already been handled.'}, status=409)
+
+        body = _parse_body(request)
+        decision = body.get('decision')
+        comment = (body.get('comment') or '').strip()
+        signature = body.get('signature_data') or ''
+        name = (body.get('name') or '').strip()
+
+        if decision not in ('approve', 'reject'):
+            return JsonResponse({'error': 'decision must be approve or reject.'}, status=400)
+        if not name:
+            return JsonResponse({'error': 'Please enter your name.'}, status=400)
+        if decision == 'reject' and not comment:
+            return JsonResponse({'error': 'A comment is required when rejecting.'}, status=400)
+        if decision == 'approve' and step.action == 'sign' and not signature.startswith('data:image/'):
+            return JsonResponse({'error': 'This step requires a drawn signature.'}, status=400)
+
+        step.status = 'approved' if decision == 'approve' else 'rejected'
+        step.acted_at = timezone.now()
+        step.comment = comment
+        step.external_name = name[:120]
+        if decision == 'approve' and step.action == 'sign':
+            step.signature_data = signature
+        step.save()
+
+        sub = step.submission
+        if decision == 'approve':
+            sub.advance()
+            transaction.on_commit(
+                lambda: notify_step(sub.current_step, request))
         else:
             sub.reject()
 
@@ -662,6 +904,22 @@ class _ExportBase(LoginRequiredMixin, View):
     <tr><td colspan="2" style="border-bottom:2px solid {p};padding-top:8px;font-size:1px;">&nbsp;</td></tr>
   </table>"""
 
+    def _upload_img_b64(self, upload_id):
+        """Return a data URI for an uploaded image, or '' if unavailable."""
+        if not upload_id:
+            return ''
+        try:
+            import base64
+            rec = FormUpload.objects.filter(pk=upload_id).first()
+            if not rec or not rec.is_image:
+                return ''
+            with rec.file.open('rb') as fh:
+                data = fh.read()
+            mime = rec.content_type or 'image/png'
+            return f'data:{mime};base64,{base64.b64encode(data).decode()}'
+        except Exception:
+            return ''
+
     # -- one field, empty or filled ----------------------------------------
 
     def _field_html(self, f: dict, value=None, filled=False) -> str:
@@ -719,6 +977,32 @@ class _ExportBase(LoginRequiredMixin, View):
                     for o in options)
             return (f'<div style="margin:9px 0;"><span style="font-size:11.5px;font-weight:700;">'
                     f'{label}{req}</span>{helptext}<div style="margin-top:4px;">{marks}</div></div>')
+
+        if ftype in ('file', 'photo'):
+            if filled:
+                items = value if isinstance(value, list) else []
+                parts = []
+                for u in items:
+                    if not isinstance(u, dict):
+                        continue
+                    nm = esc(str(u.get('name') or 'attachment'))
+                    b64 = self._upload_img_b64(u.get('id')) if (
+                        ftype == 'photo' or u.get('is_image')) else ''
+                    if b64:
+                        parts.append(f'<div style="margin:4px 0;"><img src="{b64}" '
+                                     f'style="max-width:280px;max-height:200px;'
+                                     f'border:1px solid #ccc;"><div style="font-size:9.5px;'
+                                     f'color:#777;">{nm}</div></div>')
+                    else:
+                        parts.append(f'<div style="font-size:11px;margin:3px 0;">'
+                                     f'&#128206; {nm}</div>')
+                body = ''.join(parts) or '<div style="font-size:11px;color:#999;">—</div>'
+            else:
+                hint = 'Attach photo' if ftype == 'photo' else 'Attach file(s)'
+                body = (f'<div style="border:1px dashed #999;padding:14px;'
+                        f'text-align:center;font-size:10px;color:#888;">{hint}</div>')
+            return (f'<div style="margin:9px 0;"><div style="font-size:11.5px;font-weight:700;'
+                    f'margin-bottom:3px;">{label}{req}</div>{helptext}{body}</div>')
 
         # Text-like fields (text, textarea, number, date, time, email, phone, currency)
         lines = 3 if ftype == 'textarea' else 1

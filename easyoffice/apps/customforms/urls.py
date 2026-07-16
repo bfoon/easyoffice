@@ -19,6 +19,13 @@ urlpatterns = [
     path('submissions/<uuid:pk>/steps/<uuid:step_id>/act/',
                                                 views.SubmissionActionView.as_view(),     name='form_step_act'),
 
+    # ── External (email) approvals — public, token is the auth ──────────
+    path('external/<uuid:token>/',              views.ExternalStepView.as_view(),         name='form_external_step'),
+    path('external/<uuid:token>/act/',          views.ExternalStepActView.as_view(),      name='form_external_act'),
+
+    # ── File / photo uploads (mirrored into the File Manager app) ───────
+    path('api/upload/',                         views.FormUploadView.as_view(),           name='forms_api_upload'),
+
     # ── Template APIs (builder) ──────────────────────────────────────────
     path('api/templates/',                      views.FormTemplateListView.as_view(),     name='forms_api_list'),
     path('api/templates/<uuid:pk>/',            views.FormTemplateDetailView.as_view(),   name='forms_api_detail'),

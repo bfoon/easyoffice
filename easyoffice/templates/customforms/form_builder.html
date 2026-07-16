@@ -252,6 +252,8 @@
     { t:'checkboxes', icon:'ui-checks',          name:'Checkboxes', opts:true },
     { t:'yesno',      icon:'toggle-on',          name:'Yes / No' },
     { t:'table',      icon:'table',              name:'Table' },
+    { t:'file',       icon:'paperclip',          name:'File upload' },
+    { t:'photo',      icon:'camera',             name:'Photo' },
   ];
   const TYPE = Object.fromEntries(TYPES.map(x => [x.t, x]));
 
@@ -385,6 +387,8 @@
         return `<div style="margin-top:5px;font-size:.78rem;color:var(--eo-text-muted);">${(f.options||[]).map(o=>`${box} ${esc(o)}`).join(' &nbsp; ')}</div>`;
       }
       case 'yesno': return '<div style="margin-top:5px;font-size:.78rem;color:var(--eo-text-muted);">◯ Yes &nbsp; ◯ No</div>';
+      case 'file':  return '<div class="fb-mock" style="text-align:center;border-style:dashed;"><i class="bi bi-paperclip"></i> Attach file(s)</div>';
+      case 'photo': return '<div class="fb-mock" style="text-align:center;border-style:dashed;"><i class="bi bi-camera"></i> Take / upload photo</div>';
       default:      return `<div class="fb-mock">${esc(f.placeholder || TYPE[f.type].name + '…')}</div>`;
     }
   }
@@ -518,6 +522,9 @@
       case 'position':         return `<i class="bi bi-briefcase"></i> Anyone with position “${esc(s.assignee_value)}”`;
       case 'unit':             return `<i class="bi bi-building"></i> Anyone in unit “${esc(s.assignee_value)}”`;
       case 'submitter_choice': return `<i class="bi bi-hand-index"></i> Submitter picks the approver`;
+      case 'email':            return s.assignee_value
+        ? `<i class="bi bi-envelope"></i> External: ${esc(s.assignee_value)} (link by email)`
+        : `<i class="bi bi-envelope"></i> External — submitter enters the email`;
     }
     return '';
   }
@@ -585,6 +592,15 @@
                   onclick="event.stopPropagation()"
                   oninput="FB.patchStep('${s.id}','assignee_value',this.value)"
                   style="width:100%;padding:7px 9px;font-size:.8rem;border:1px solid var(--eo-border);border-radius:7px;background:var(--eo-bg);color:var(--eo-text);">`;
+    } else if (s.assignee_type === 'email') {
+      assigneeCtl = `
+        <input type="email" placeholder="name@example.com" value="${esc(s.assignee_value)}"
+               onclick="event.stopPropagation()"
+               oninput="FB.patchStep('${s.id}','assignee_value',this.value.trim(),true)"
+               style="width:100%;padding:7px 9px;font-size:.8rem;border:1px solid var(--eo-border);border-radius:7px;background:var(--eo-bg);color:var(--eo-text);">
+        <div style="font-size:.7rem;color:var(--eo-text-muted);margin-top:4px;">
+          They get a secure link by email to review and ${s.action === 'sign' ? 'sign' : 'approve'}.
+          Leave empty to let the submitter enter the email when submitting.</div>`;
     }
     return `
     <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px;" onclick="event.stopPropagation()">
@@ -610,6 +626,7 @@
           <option value="position"         ${s.assignee_type==='position'?'selected':''}>Anyone with a position</option>
           <option value="unit"             ${s.assignee_type==='unit'?'selected':''}>Anyone in a unit</option>
           <option value="submitter_choice" ${s.assignee_type==='submitter_choice'?'selected':''}>Let the submitter choose</option>
+          <option value="email"            ${s.assignee_type==='email'?'selected':''}>An external person (by email)</option>
         </select>
         ${assigneeCtl}
       </div>
@@ -776,6 +793,10 @@
         return `<div style="margin:9px 0;"><b style="font-size:12px;">${esc(f.label)}</b>
           <div style="font-size:12px;margin-top:3px;">${opts.map(o=>`☐ ${esc(o)}`).join(' &nbsp; ')}</div></div>`;
       }
+      case 'file': case 'photo':
+        return `<div style="margin:9px 0;"><b style="font-size:12px;">${esc(f.label)}${f.required?' *':''}</b>
+          <div style="border:1px dashed #999;padding:14px;text-align:center;font-size:10px;color:#888;">
+          ${f.type==='photo'?'Attach photo':'Attach file(s)'}</div></div>`;
       default:
         return `<div style="margin:9px 0;"><b style="font-size:12px;">${esc(f.label)}${f.required?' *':''}</b>
           <div style="border-bottom:1px solid #999;height:${f.type==='textarea'?52:20}px;"></div></div>`;

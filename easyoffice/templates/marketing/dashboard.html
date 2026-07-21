@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+{% block title %}Marketing Dashboard{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+    <div>
+      <h4 class="mb-0"><i class="bi bi-megaphone me-2"></i>Marketing Dashboard</h4>
+      <small class="text-muted">
+        Customer acquisition cost &amp; lifetime value —
+        {{ date_from|date:"j M Y" }} to {{ date_to|date:"j M Y" }}
+        ({{ currency }}, {{ basis }} basis)
+      </small>
+    </div>
+    <div class="d-flex gap-2">
+      <a href="{% url 'marketing_campaign_list' %}" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-collection me-1"></i>Campaigns
+      </a>
+      <a href="{% url 'marketing_contact_list' %}" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-people me-1"></i>Contacts
+      </a>
+      {% if can_manage %}
+      <a href="{% url 'marketing_contact_create' %}" class="btn btn-primary btn-sm">
+        <i class="bi bi-person-plus me-1"></i>New Contact
+      </a>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ── Filters ────────────────────────────────────────────────────────── -->
+  <form method="get" class="card card-body mb-3">
+    <div class="row g-2 align-items-end">
+      <div class="col-6 col-md-2">
+        <label class="form-label small mb-1">From</label>
+        <input type="date" name="from" value="{{ date_from|date:'Y-m-d' }}" class="form-control form-control-sm">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small mb-1">To</label>
+        <input type="date" name="to" value="{{ date_to|date:'Y-m-d' }}" class="form-control form-control-sm">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small mb-1">Revenue basis</label>
+        <select name="basis" class="form-select form-select-sm">
+          <option value="invoiced" {% if basis == 'invoiced' %}selected{% endif %}>Invoiced</option>
+          <option value="paid" {% if basis == 'paid' %}selected{% endif %}>Paid</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small mb-1">Currency</label>
+        <input type="text" name="currency" value="{{ currency }}" class="form-control form-control-sm" maxlength="8">
+      </div>
+      <div class="col-12 col-md-2">
+        <button class="btn btn-sm btn-primary w-100"><i class="bi bi-funnel me-1"></i>Apply</button>
+      </div>
+    </div>
+  </form>
+
+  <!-- ── KPI cards ──────────────────────────────────────────────────────── -->
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-lg">
+      <div class="card h-100 border-0 shadow-sm">
+        <div class="card-body">
+          <div class="text-muted small">Marketing Spend</div>
+          <div class="fs-4 fw-bold">{{ currency }} {{ total_spend|floatformat:2 }}</div>
+          <div class="small text-muted">{{ active_campaigns }} active campaign{{ active_campaigns|pluralize }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg">
+      <div class="card h-100 border-0 shadow-sm">
+        <div class="card-body">
+          <div class="text-muted small">Customers Acquired</div>
+          <div class="fs-4 fw-bold">{{ customers_acquired }}</div>
+          <div class="small text-muted">in selected period</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg">
+      <div class="card h-100 border-0 shadow-sm">
+        <div class="card-body">
+          <div class="text-muted small">Blended CAC</div>
+          <div class="fs-4 fw-bold">
+            {% if blended_cac is not None %}{{ currency }} {{ blended_cac|floatformat:2 }}{% else %}—{% endif %}
+          </div>
+          <div class="small text-muted">spend ÷ customers acquired</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg">
+      <div class="card h-100 border-0 shadow-sm">
+        <div class="card-body">
+          <div class="text-muted small">Average LTV</div>
+          <div class="fs-4 fw-bold">
+            {% if avg_ltv is not None %}{{ currency }} {{ avg_ltv|floatformat:2 }}{% else %}—{% endif %}
+          </div>
+          <div class="small text-muted">{{ total_customers }} customer{{ total_customers|pluralize }} · {{ basis }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-lg">
+      <div class="card h-100 border-0 shadow-sm">
+        <div class="card-body">
+          <div class="text-muted small">LTV : CAC Ratio</div>
+          <div class="fs-4 fw-bold">
+            {% if ltv_cac_ratio is not None %}
+              {{ ltv_cac_ratio }}×
+              {% if ltv_cac_ratio >= 3 %}
+                <span class="badge bg-success align-middle ms-1">Healthy</span>
+              {% elif ltv_cac_ratio >= 1 %}
+                <span class="badge bg-warning text-dark align-middle ms-1">Watch</span>
+              {% else %}
+                <span class="badge bg-danger align-middle ms-1">Losing money</span>
+              {% endif %}
+            {% else %}—{% endif %}
+          </div>
+          <div class="small text-muted">3× or more is healthy</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Charts ─────────────────────────────────────────────────────────── -->
+  <div class="row g-3 mb-3">
+    <div class="col-lg-7">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-header bg-white fw-semibold">
+          <i class="bi bi-graph-up me-1"></i>Spend vs Customers Acquired (monthly)
+        </div>
+        <div class="card-body"><canvas id="chartMonthly" height="220"></canvas></div>
+      </div>
+    </div>
+    <div class="col-lg-5">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-header bg-white fw-semibold">
+          <i class="bi bi-pie-chart me-1"></i>Pipeline Snapshot
+        </div>
+        <div class="card-body"><canvas id="chartStages" height="220"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-lg-6">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-header bg-white fw-semibold">
+          <i class="bi bi-bar-chart me-1"></i>Leads &amp; Customers by Channel
+        </div>
+        <div class="card-body"><canvas id="chartChannels" height="220"></canvas></div>
+      </div>
+    </div>
+
+    <!-- ── Funnel ── -->
+    <div class="col-lg-6">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-header bg-white fw-semibold">
+          <i class="bi bi-funnel me-1"></i>Acquisition Funnel (period)
+        </div>
+        <div class="card-body">
+          <div class="d-flex justify-content-between mb-1 small"><span>Leads captured</span><strong>{{ funnel.leads }}</strong></div>
+          <div class="progress mb-3" style="height:14px;"><div class="progress-bar bg-secondary" style="width:100%"></div></div>
+
+          <div class="d-flex justify-content-between mb-1 small"><span>Qualified</span><strong>{{ funnel.qualified }}</strong></div>
+          <div class="progress mb-3" style="height:14px;">
+            <div class="progress-bar bg-info" style="width:{% if funnel.leads %}{% widthratio funnel.qualified funnel.leads 100 %}{% else %}0{% endif %}%"></div>
+          </div>
+
+          <div class="d-flex justify-content-between mb-1 small"><span>Converted to customers</span><strong>{{ funnel.customers }}</strong></div>
+          <div class="progress mb-3" style="height:14px;">
+            <div class="progress-bar bg-success" style="width:{% if funnel.leads %}{% widthratio funnel.customers funnel.leads 100 %}{% else %}0{% endif %}%"></div>
+          </div>
+
+          <div class="d-flex justify-content-between align-items-center">
+            <span class="small text-muted">Lost: {{ funnel.lost }}</span>
+            <span class="badge bg-primary fs-6">{{ funnel.conversion_pct }}% conversion</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Campaign performance ───────────────────────────────────────────── -->
+  <div class="card border-0 shadow-sm mb-3">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+      <span class="fw-semibold"><i class="bi bi-collection me-1"></i>Campaign Performance</span>
+      {% if can_manage %}
+      <a href="{% url 'marketing_campaign_create' %}" class="btn btn-sm btn-outline-primary">
+        <i class="bi bi-plus-lg me-1"></i>New Campaign
+      </a>
+      {% endif %}
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Campaign</th><th>Channel</th><th>Status</th>
+            <th class="text-end">Spend</th>
+            <th class="text-end">Leads</th>
+            <th class="text-end">Customers</th>
+            <th class="text-end">Conv %</th>
+            <th class="text-end">CAC</th>
+            <th class="text-end">Revenue</th>
+            <th class="text-end">ROI</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in campaign_rows %}
+          <tr>
+            <td><a href="{% url 'marketing_campaign_detail' row.obj.pk %}" class="text-decoration-none fw-semibold">{{ row.obj.name }}</a></td>
+            <td class="small">{{ row.obj.get_channel_display }}</td>
+            <td>
+              <span class="badge
+                {% if row.obj.status == 'active' %}bg-success
+                {% elif row.obj.status == 'planned' %}bg-secondary
+                {% elif row.obj.status == 'paused' %}bg-warning text-dark
+                {% elif row.obj.status == 'completed' %}bg-primary
+                {% else %}bg-danger{% endif %}">{{ row.obj.get_status_display }}</span>
+            </td>
+            <td class="text-end">{{ row.obj.currency }} {{ row.spend|floatformat:2 }}</td>
+            <td class="text-end">{{ row.leads }}</td>
+            <td class="text-end">{{ row.customers }}</td>
+            <td class="text-end">{{ row.conversion_pct }}%</td>
+            <td class="text-end">{% if row.cac is not None %}{{ row.obj.currency }} {{ row.cac|floatformat:2 }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+            <td class="text-end">{{ row.obj.currency }} {{ row.revenue|floatformat:2 }}</td>
+            <td class="text-end">
+              {% if row.roi_pct is not None %}
+                <span class="{% if row.roi_pct >= 0 %}text-success{% else %}text-danger{% endif %} fw-semibold">{{ row.roi_pct }}%</span>
+              {% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="10" class="text-center text-muted py-4">No campaigns in this period yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Follow-ups due ─────────────────────────────────────────────────── -->
+  {% if follow_ups %}
+  <div class="card border-0 shadow-sm">
+    <div class="card-header bg-white fw-semibold">
+      <i class="bi bi-alarm me-1"></i>Follow-ups Due (next 7 days)
+    </div>
+    <div class="list-group list-group-flush">
+      {% for c in follow_ups %}
+      <a href="{% url 'marketing_contact_detail' c.pk %}"
+         class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+        <div>
+          <strong>{{ c.full_name }}</strong>
+          {% if c.company %}<span class="text-muted">— {{ c.company }}</span>{% endif %}
+          <div class="small text-muted">
+            {{ c.get_stage_display }}{% if c.campaign %} · {{ c.campaign.name }}{% endif %}
+            {% if c.assigned_to %} · {{ c.assigned_to.get_full_name|default:c.assigned_to.username }}{% endif %}
+          </div>
+        </div>
+        <span class="badge {% if c.follow_up_overdue %}bg-danger{% else %}bg-warning text-dark{% endif %}">
+          {{ c.next_follow_up|date:"j M" }}
+        </span>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script>
+(function () {
+  const params = new URLSearchParams(window.location.search);
+  fetch("{% url 'marketing_dashboard_data' %}?" + params.toString())
+    .then(r => r.json())
+    .then(data => {
+      // Monthly: spend bars + customers line + CAC line
+      new Chart(document.getElementById('chartMonthly'), {
+        data: {
+          labels: data.monthly.labels,
+          datasets: [
+            { type: 'bar', label: 'Spend (' + data.currency + ')',
+              data: data.monthly.spend, yAxisID: 'y',
+              backgroundColor: 'rgba(13,110,253,0.35)',
+              borderColor: 'rgba(13,110,253,0.9)', borderWidth: 1 },
+            { type: 'line', label: 'Customers acquired',
+              data: data.monthly.customers, yAxisID: 'y1',
+              borderColor: 'rgba(25,135,84,1)', tension: 0.3 },
+            { type: 'line', label: 'CAC (' + data.currency + ')',
+              data: data.monthly.cac, yAxisID: 'y',
+              borderColor: 'rgba(220,53,69,1)', borderDash: [6,4],
+              spanGaps: true, tension: 0.3 }
+          ]
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          scales: {
+            y:  { beginAtZero: true, position: 'left',
+                  title: { display: true, text: data.currency } },
+            y1: { beginAtZero: true, position: 'right',
+                  grid: { drawOnChartArea: false },
+                  ticks: { precision: 0 },
+                  title: { display: true, text: 'Customers' } }
+          }
+        }
+      });
+
+      // Pipeline doughnut
+      new Chart(document.getElementById('chartStages'), {
+        type: 'doughnut',
+        data: {
+          labels: data.stages.labels,
+          datasets: [{
+            data: data.stages.counts,
+            backgroundColor: ['#6c757d', '#0dcaf0', '#198754', '#dc3545']
+          }]
+        },
+        options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+      });
+
+      // Channel bars
+      new Chart(document.getElementById('chartChannels'), {
+        type: 'bar',
+        data: {
+          labels: data.channels.labels,
+          datasets: [
+            { label: 'Leads', data: data.channels.leads,
+              backgroundColor: 'rgba(108,117,125,0.5)' },
+            { label: 'Customers', data: data.channels.customers,
+              backgroundColor: 'rgba(25,135,84,0.7)' }
+          ]
+        },
+        options: {
+          responsive: true, indexAxis: 'y',
+          scales: { x: { beginAtZero: true, ticks: { precision: 0 } } }
+        }
+      });
+    })
+    .catch(err => console.error('Marketing dashboard charts failed:', err));
+})();
+</script>
+{% endblock %}

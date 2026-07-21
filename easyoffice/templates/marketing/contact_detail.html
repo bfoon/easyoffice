@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}{{ contact.full_name }} — Contact{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3">
+
+  <!-- Header -->
+  <div class="d-flex flex-wrap justify-content-between align-items-start mb-3 gap-2">
+    <div>
+      <h4 class="mb-1">
+        <i class="bi bi-person-badge me-2"></i>{{ contact.full_name }}
+        <span class="badge align-middle
+          {% if contact.stage == 'customer' %}bg-success
+          {% elif contact.stage == 'qualified' %}bg-info text-dark
+          {% elif contact.stage == 'lost' %}bg-danger
+          {% else %}bg-secondary{% endif %}">{{ contact.get_stage_display }}</span>
+      </h4>
+      <div class="text-muted small">
+        {% if contact.job_title %}{{ contact.job_title }}{% if contact.company %} · {% endif %}{% endif %}
+        {% if contact.company %}{{ contact.company }}{% endif %}
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <a href="{% url 'marketing_contact_list' %}" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-arrow-left me-1"></i>Contacts
+      </a>
+      {% if can_manage %}
+      <a href="{% url 'marketing_contact_update' contact.pk %}" class="btn btn-outline-primary btn-sm">
+        <i class="bi bi-pencil me-1"></i>Edit
+      </a>
+      {% endif %}
+      {% if can_delete %}
+      <form method="post" action="{% url 'marketing_contact_delete' contact.pk %}"
+            onsubmit="return confirm('Delete this contact and their activity log?');">
+        {% csrf_token %}
+        <button class="btn btn-outline-danger btn-sm"><i class="bi bi-trash me-1"></i>Delete</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <!-- Left: profile + stage + LTV -->
+    <div class="col-lg-4">
+      <div class="card border-0 shadow-sm mb-3">
+        <div class="card-header bg-white fw-semibold"><i class="bi bi-info-circle me-1"></i>Details</div>
+        <div class="card-body small">
+          <dl class="row mb-0">
+            {% if contact.email %}<dt class="col-4">Email</dt><dd class="col-8"><a href="mailto:{{ contact.email }}">{{ contact.email }}</a></dd>{% endif %}
+            {% if contact.phone %}<dt class="col-4">Phone</dt><dd class="col-8"><a href="tel:{{ contact.phone }}">{{ contact.phone }}</a></dd>{% endif %}
+            {% if contact.address %}<dt class="col-4">Address</dt><dd class="col-8">{{ contact.address }}</dd>{% endif %}
+            <dt class="col-4">Source</dt><dd class="col-8">{{ contact.get_source_display }}</dd>
+            <dt class="col-4">Campaign</dt>
+            <dd class="col-8">
+              {% if contact.campaign %}
+              <a href="{% url 'marketing_campaign_detail' contact.campaign.pk %}">{{ contact.campaign.name }}</a>
+              {% else %}—{% endif %}
+            </dd>
+            <dt class="col-4">Assigned</dt>
+            <dd class="col-8">{% if contact.assigned_to %}{{ contact.assigned_to.get_full_name|default:contact.assigned_to.username }}{% else %}—{% endif %}</dd>
+            <dt class="col-4">Added</dt><dd class="col-8">{{ contact.created_at|date:"j M Y" }} ({{ contact.days_since_created }} days ago)</dd>
+            {% if contact.converted_at %}<dt class="col-4">Customer since</dt><dd class="col-8">{{ contact.converted_at|date:"j M Y" }}</dd>{% endif %}
+            {% if contact.next_follow_up %}
+            <dt class="col-4">Follow-up</dt>
+            <dd class="col-8 {% if contact.follow_up_overdue %}text-danger fw-semibold{% endif %}">{{ contact.next_follow_up|date:"j M Y" }}</dd>
+            {% endif %}
+            {% if contact.interest %}<dt class="col-4">Interested in</dt><dd class="col-8">{{ contact.interest }}</dd>{% endif %}
+            {% if contact.lost_reason %}<dt class="col-4">Lost reason</dt><dd class="col-8 text-danger">{{ contact.lost_reason }}</dd>{% endif %}
+          </dl>
+          {% if contact.notes %}<hr><div style="white-space: pre-wrap;">{{ contact.notes }}</div>{% endif %}
+        </div>
+      </div>
+
+      <!-- Stage controls -->
+      {% if can_manage %}
+      <div class="card border-0 shadow-sm mb-3">
+        <div class="card-header bg-white fw-semibold"><i class="bi bi-signpost-split me-1"></i>Pipeline Stage</div>
+        <div class="card-body">
+          <form method="post" action="{% url 'marketing_contact_stage' contact.pk %}">
+            {% csrf_token %}
+            <div class="mb-2">
+              <select name="stage" class="form-select form-select-sm" id="stageSelect">
+                {% for key, label in stage_choices %}
+                <option value="{{ key }}" {% if contact.stage == key %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="mb-2" id="lostReasonWrap" style="display:none;">
+              <input type="text" name="lost_reason" class="form-control form-control-sm"
+                     maxlength="300" placeholder="Reason lost (price, competitor, no response…)">
+            </div>
+            <button class="btn btn-sm btn-primary w-100"><i class="bi bi-arrow-right-circle me-1"></i>Update Stage</button>
+          </form>
+          <div class="form-text mt-2">
+            Marking as <strong>Customer</strong> stamps the conversion date used for CAC.
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- LTV -->
+      <div class="card border-0 shadow-sm">
+        <div class="card-header bg-white fw-semibold"><i class="bi bi-graph-up-arrow me-1"></i>Lifetime Value</div>
+        <div class="card-body">
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small">Invoiced</span>
+            <span class="fw-bold">{{ ltv_invoiced|floatformat:2 }}</span>
+          </div>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small">Paid</span>
+            <span class="fw-bold text-success">{{ ltv_paid|floatformat:2 }}</span>
+          </div>
+          <div class="d-flex justify-content-between">
+            <span class="text-muted small">Matched invoices</span>
+            <span class="fw-bold">{{ invoice_count }}</span>
+          </div>
+          <div class="form-text mt-2">
+            Matched by email or exact billing name against finalized invoices.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: activity + invoices -->
+    <div class="col-lg-8">
+
+      <!-- Log activity -->
+      {% if can_manage %}
+      <div class="card border-0 shadow-sm mb-3">
+        <div class="card-header bg-white fw-semibold"><i class="bi bi-plus-circle me-1"></i>Log Activity</div>
+        <div class="card-body">
+          <form method="post" action="{% url 'marketing_contact_activity' contact.pk %}" class="row g-2">
+            {% csrf_token %}
+            <div class="col-md-3">
+              <select name="kind" class="form-select form-select-sm">
+                {% for key, label in activity_kinds %}
+                {% if key != 'stage' %}<option value="{{ key }}">{{ label }}</option>{% endif %}
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-6">
+              <input type="text" name="summary" required maxlength="300"
+                     class="form-control form-control-sm" placeholder="What happened? (e.g. Called — asked for quotation)">
+            </div>
+            <div class="col-md-3">
+              <input type="date" name="next_follow_up" class="form-control form-control-sm"
+                     title="Optional: set next follow-up date">
+            </div>
+            <div class="col-md-10">
+              <input type="text" name="details" class="form-control form-control-sm" placeholder="Details (optional)">
+            </div>
+            <div class="col-md-2">
+              <button class="btn btn-sm btn-primary w-100"><i class="bi bi-check-lg"></i> Log</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Activity timeline -->
+      <div class="card border-0 shadow-sm mb-3">
+        <div class="card-header bg-white fw-semibold"><i class="bi bi-clock-history me-1"></i>Activity Timeline</div>
+        <div class="list-group list-group-flush">
+          {% for a in activities %}
+          <div class="list-group-item d-flex gap-3">
+            <div class="pt-1">
+              {% if a.kind == 'call' %}<i class="bi bi-telephone text-primary"></i>
+              {% elif a.kind == 'email' %}<i class="bi bi-envelope text-primary"></i>
+              {% elif a.kind == 'meeting' %}<i class="bi bi-people text-primary"></i>
+              {% elif a.kind == 'whatsapp' %}<i class="bi bi-chat-dots text-success"></i>
+              {% elif a.kind == 'stage' %}<i class="bi bi-signpost-split text-warning"></i>
+              {% else %}<i class="bi bi-sticky text-secondary"></i>{% endif %}
+            </div>
+            <div class="flex-grow-1">
+              <div class="fw-semibold small">{{ a.summary }}</div>
+              {% if a.details %}<div class="small text-muted">{{ a.details }}</div>{% endif %}
+              <div class="small text-muted">
+                {{ a.created_at|date:"j M Y H:i" }}
+                {% if a.logged_by %} · {{ a.logged_by.get_full_name|default:a.logged_by.username }}{% endif %}
+              </div>
+            </div>
+          </div>
+          {% empty %}
+          <div class="list-group-item text-center text-muted py-3">No activity logged yet.</div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Matched invoices -->
+      <div class="card border-0 shadow-sm">
+        <div class="card-header bg-white fw-semibold"><i class="bi bi-receipt me-1"></i>Matched Invoices</div>
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle mb-0">
+            <thead class="table-light">
+              <tr><th>Number</th><th>Date</th><th>Billed to</th><th>Status</th><th class="text-end">Total</th></tr>
+            </thead>
+            <tbody>
+              {% for inv in matched_invoices %}
+              <tr>
+                <td class="fw-semibold">{{ inv.number|default:"—" }}</td>
+                <td class="small">{{ inv.invoice_date|date:"j M Y" }}</td>
+                <td class="small">{{ inv.client_name }}</td>
+                <td>
+                  {% if inv.paid_at %}<span class="badge bg-success">Paid</span>
+                  {% else %}<span class="badge bg-warning text-dark">Unpaid</span>{% endif %}
+                </td>
+                <td class="text-end">{{ inv.currency }} {{ inv.total|floatformat:2 }}</td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="5" class="text-center text-muted py-3">
+                No finalized invoices matched yet.
+                {% if not contact.email %}Add the contact's email so invoices can be matched automatically.{% endif %}
+              </td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const stageSelect = document.getElementById('stageSelect');
+  const lostWrap = document.getElementById('lostReasonWrap');
+  if (!stageSelect || !lostWrap) return;
+  const toggle = () => { lostWrap.style.display = stageSelect.value === 'lost' ? '' : 'none'; };
+  stageSelect.addEventListener('change', toggle);
+  toggle();
+})();
+</script>
+{% endblock %}

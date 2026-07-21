@@ -79,6 +79,7 @@ LOCAL_APPS = [
     'apps.poi',
     'apps.pos',
     'apps.customforms',
+    'apps.marketing',
     'apps.admin_security.apps.AdminSecurityConfig',
 ]
 

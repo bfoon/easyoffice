@@ -3,7 +3,7 @@ from apps.finance import views
 from apps.finance import views_financial_system as fs
 from apps.finance import views_invoice_followup
 from apps.finance import views_sales_targets as st
-from apps.finance import views_maintenance as vm
+from apps.finance import views_exports as ex
 
 urlpatterns = [
     # ── Existing finance URLs ────────────────────────────────────────────────
@@ -15,6 +15,7 @@ urlpatterns = [
     path('purchase/<uuid:pk>/action/', views.PurchaseApprovalView.as_view(), name='purchase_approval'),
 
     path('payments/', views.PaymentListView.as_view(), name='payment_list'),
+    path('payments/export/', ex.PaymentExportView.as_view(), name='payment_export'),
 
     path('my-finance/', views.MyFinanceDashboardView.as_view(), name='my_finance_dashboard'),
     path('my-finance/requests/', views.EmployeeFinanceRequestView.as_view(), name='employee_finance_request'),
@@ -25,6 +26,7 @@ urlpatterns = [
     path('finance-requests/<uuid:pk>/process/', views.FinanceRequestProcessView.as_view(), name='finance_request_process'),
 
     path('payment-requests/', views.PaymentRequestListView.as_view(), name='payment_request_list'),
+    path('payment-requests/export/', ex.PaymentRequestExportView.as_view(), name='payment_request_export'),
     path('payment-requests/new/', views.PaymentRequestCreateView.as_view(), name='payment_request_create'),
     path('payment-requests/<uuid:pk>/', views.PaymentRequestDetailView.as_view(), name='payment_request_detail'),
     path('payment-requests/<uuid:pk>/mark-paid/', views.PaymentRequestMarkPaidView.as_view(), name='payment_request_mark_paid'),
@@ -32,6 +34,7 @@ urlpatterns = [
     path('payment-requests/<uuid:pk>/cancel/', views.PaymentRequestCancelView.as_view(), name='payment_request_cancel'),
 
     path('invoices/', views.IncomingPaymentRequestListView.as_view(), name='incoming_payment_request_list'),
+    path('invoices/export/', ex.InvoiceExportView.as_view(), name='incoming_payment_request_export'),
     path('invoices/new/', views.IncomingPaymentRequestCreateView.as_view(), name='incoming_payment_request_create'),
     path('invoices/<uuid:pk>/', views.IncomingPaymentRequestDetailView.as_view(), name='incoming_payment_request_detail'),
     path('invoices/<uuid:pk>/send/', views.IncomingPaymentRequestSendView.as_view(), name='incoming_payment_request_send'),
@@ -150,37 +153,4 @@ urlpatterns = [
     path('sales-rewards/<uuid:pk>/action/',
          st.SalesRewardActionView.as_view(),
          name='sales_reward_action'),
-
-    # ── Maintenance roster (login) ──────────────────────────────────────────
-    path('contracts/<uuid:pk>/maintenance/new/',
-         vm.MaintenanceRosterCreateView.as_view(),
-         name='maintenance_roster_create'),
-    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/edit/',
-         vm.MaintenanceRosterUpdateView.as_view(),
-         name='maintenance_roster_update'),
-    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/delete/',
-         vm.MaintenanceRosterDeleteView.as_view(),
-         name='maintenance_roster_delete'),
-
-    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/members/add/',
-         vm.MaintenanceMemberAddView.as_view(),
-         name='maintenance_member_add'),
-    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/members/<uuid:member_pk>/remove/',
-         vm.MaintenanceMemberRemoveView.as_view(),
-         name='maintenance_member_remove'),
-
-    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/schedule-now/',
-         vm.MaintenanceVisitScheduleNowView.as_view(),
-         name='maintenance_visit_schedule_now'),
-    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/visits/<uuid:visit_pk>/resend/',
-         vm.MaintenanceVisitResendView.as_view(),
-         name='maintenance_visit_resend'),
-    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/visits/<uuid:visit_pk>/cancel/',
-         vm.MaintenanceVisitCancelView.as_view(),
-         name='maintenance_visit_cancel'),
-
-    # ── Public completion form (no login, token-based) ──────────────────────
-    path('maintenance/complete/<str:token>/',
-         vm.MaintenanceVisitCompleteView.as_view(),
-         name='maintenance_visit_complete'),
 ]

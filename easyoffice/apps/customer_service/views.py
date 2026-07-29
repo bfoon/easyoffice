@@ -33,6 +33,7 @@ from .models import (
 from .permissions import (
     CustomerServiceAccessMixin, can_close_ticket,
     is_head_of_customer_service,
+    can_assign_tickets, can_use_customer_service,
 )
 from . import services as cs_services
 from . import notifications as cs_notifications
@@ -762,6 +763,16 @@ class TicketDetailView(LoginRequiredMixin, DetailView):
             "can_manage_department": _can_manage_department_ticket(self.request.user, ticket),
             "can_route_ticket": _can_route_ticket(self.request.user, ticket),
             "can_send_feedback": _is_admin_like(self.request.user) or ticket.created_by_id == self.request.user.id,
+            # ── Claim / assign flow ──────────────────────────────────
+            # can_assign_ticket → head of CS / CS supervisor: show the
+            #   "Assign to rep" form (works for reassignment too).
+            # can_claim_ticket → any CS member, only while unassigned:
+            #   show the "Claim this ticket" button.
+            "can_assign_ticket": can_assign_tickets(self.request.user),
+            "can_claim_ticket": (
+                not ticket.current_owner_id
+                and can_use_customer_service(self.request.user)
+            ),
         })
         try:
             from .live_chat_views import get_live_chat_context
@@ -791,6 +802,8 @@ class TicketActionView(CustomerServiceAccessMixin, View):
             'resolve': self._resolve,
             'close': self._close,
             'assign': self._assign,
+            'claim': self._claim,          # any CS rep — self-assign only
+            'unassign': self._unassign,    # head/supervisor — back to queue
             'route': self._route,
             'escalate': self._escalate,
             'send_feedback': self._send_feedback,
@@ -822,6 +835,16 @@ class TicketActionView(CustomerServiceAccessMixin, View):
         ServiceTicketUpdate.objects.create(
             ticket=ticket, user=request.user, update_type='note', body=body,
         )
+        # Owner-scoped activity ping (assignee + ticket creator; whole
+        # unit if the ticket is still unassigned).
+        try:
+            cs_notifications.notify_ticket_activity(
+                ticket, actor=request.user,
+                title=f'New note on {ticket.ticket_no}',
+                body=f'{cs_notifications._user_full_name(request.user)} added a note:\n{body[:500]}',
+            )
+        except Exception:
+            pass
         messages.success(request, 'Note added.')
 
     def _resolve(self, request, ticket):
@@ -838,6 +861,15 @@ class TicketActionView(CustomerServiceAccessMixin, View):
         ServiceTicketUpdate.objects.create(
             ticket=ticket, user=request.user, update_type='resolution', body=note,
         )
+        try:
+            cs_notifications.notify_ticket_activity(
+                ticket, actor=request.user,
+                title=f'Ticket resolved — {ticket.ticket_no}',
+                body=f'{cs_notifications._user_full_name(request.user)} marked '
+                     f'{ticket.ticket_no} resolved.\nResolution: {note[:500]}',
+            )
+        except Exception:
+            pass
         messages.success(request, f'Ticket {ticket.ticket_no} marked resolved.')
 
     def _close(self, request, ticket):
@@ -853,9 +885,28 @@ class TicketActionView(CustomerServiceAccessMixin, View):
             confirmation_note='Closed from ticket actions panel.',
             force=force,
         )
+        try:
+            cs_notifications.notify_ticket_activity(
+                ticket, actor=request.user,
+                title=f'Ticket closed — {ticket.ticket_no}',
+                body=f'{cs_notifications._user_full_name(request.user)} closed '
+                     f'ticket {ticket.ticket_no} ("{ticket.subject}").',
+            )
+        except Exception:
+            pass
         messages.success(request, f'Ticket {ticket.ticket_no} closed.')
 
     def _assign(self, request, ticket):
+        # 🔒 Only the Head of CS / a CS supervisor may hand a ticket to a
+        # specific rep. Regular reps use 'claim' to take unassigned
+        # tickets for themselves.
+        if not can_assign_tickets(request.user):
+            raise ValueError(
+                'Only the Head of Customer Service or a CS supervisor can '
+                'assign tickets to other staff. You can claim an '
+                'unassigned ticket for yourself instead.'
+            )
+
         user_id = request.POST.get('assigned_to')
         if not user_id:
             raise ValueError('Pick a staff member to assign to.')
@@ -869,12 +920,81 @@ class TicketActionView(CustomerServiceAccessMixin, View):
             assigned_to=assigned_to,
             actor=request.user,
             instructions=(request.POST.get('instructions') or '').strip(),
+            make_owner=True,   # heads/supervisors can REassign — overwrite owner
         )
         messages.success(
             request,
             f'Assigned to {assigned_to.get_full_name() or assigned_to.username}. '
-            f'They have been notified by email and in-app.',
+            f'They have been notified in-app, by email, and on EO chat.',
         )
+
+    def _claim(self, request, ticket):
+        """
+        Self-assign. Any CS unit member can take an UNASSIGNED ticket.
+        First-come-first-served — a row lock stops two reps winning the
+        same claim at the same instant.
+        """
+        if not can_use_customer_service(request.user):
+            raise ValueError('Only Customer Service staff can claim tickets.')
+
+        with transaction.atomic():
+            locked = ServiceTicket.objects.select_for_update().get(pk=ticket.pk)
+
+            if locked.current_owner_id == request.user.pk:
+                raise ValueError('This ticket is already yours.')
+            if locked.current_owner_id:
+                owner = locked.current_owner
+                raise ValueError(
+                    f'Too late — this ticket is already assigned to '
+                    f'{owner.get_full_name() or owner.username}.'
+                )
+
+            locked.current_owner = request.user
+            update_fields = ['current_owner', 'updated_at']
+            if locked.status in ('new', 'open'):
+                locked.status = 'assigned'
+                update_fields.append('status')
+            locked.save(update_fields=update_fields)
+
+            me = request.user.get_full_name() or request.user.username
+            ServiceTicketUpdate.objects.create(
+                ticket=locked, user=request.user, update_type='note',
+                body=f'🙋 {me} claimed this ticket.',
+            )
+
+        # Tell the creator + Head of CS who took it (in-app/email/EO chat)
+        transaction.on_commit(
+            lambda: cs_notifications.notify_ticket_claimed(ticket, actor=request.user)
+        )
+        messages.success(request, f'Ticket {ticket.ticket_no} is now assigned to you.')
+
+    def _unassign(self, request, ticket):
+        """Head/supervisor throws the ticket back into the open queue."""
+        if not can_assign_tickets(request.user):
+            raise ValueError('Only a CS head or supervisor can unassign a ticket.')
+        if not ticket.current_owner_id:
+            raise ValueError('This ticket is already unassigned.')
+
+        prev = ticket.current_owner
+        ticket.current_owner = None
+        update_fields = ['current_owner', 'updated_at']
+        if ticket.status == 'assigned':
+            ticket.status = 'open'
+            update_fields.append('status')
+        ticket.save(update_fields=update_fields)
+
+        by = request.user.get_full_name() or request.user.username
+        ServiceTicketUpdate.objects.create(
+            ticket=ticket, user=request.user, update_type='note',
+            body=f'↩️ {by} returned this ticket to the open queue '
+                 f'(was: {prev.get_full_name() or prev.username}).',
+        )
+
+        # It's up for grabs again → broadcast to the whole unit
+        transaction.on_commit(
+            lambda: cs_notifications.notify_new_ticket(ticket, actor=request.user)
+        )
+        messages.success(request, 'Ticket returned to the queue. The team has been notified.')
 
     def _route(self, request, ticket):
         from apps.organization.models import Department
@@ -927,6 +1047,17 @@ class TicketActionView(CustomerServiceAccessMixin, View):
                 email_template='customer_service/email/ticket_overdue.html',
                 email_context={'ticket': ticket,
                                'ticket_url': cs_notifications._ticket_url(ticket)},
+            )
+        except Exception:
+            pass
+
+        # Owner + creator also hear about the escalation
+        try:
+            cs_notifications.notify_ticket_activity(
+                ticket, actor=request.user,
+                title=f'Ticket escalated — {ticket.ticket_no}',
+                body=f'{cs_notifications._user_full_name(request.user)} escalated '
+                     f'{ticket.ticket_no}.\nReason: {reason[:500]}',
             )
         except Exception:
             pass

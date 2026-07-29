@@ -231,7 +231,50 @@ def post_message(session: LiveChatSession, *, author_kind: str, body: str, agent
         body=body,
     )
     transaction.on_commit(lambda: broadcast_message(session, msg))
+
+    # Customer wrote in the live chat → ping the ticket owner (+ creator)
+    # on in-app / email / EO chat. Throttled per ticket so a fast-moving
+    # conversation doesn't fire an email for every single line — the
+    # first message notifies; further messages within the window rely on
+    # the already-open chat panel / the first ping.
+    if author_kind == 'customer':
+        transaction.on_commit(lambda: _notify_owner_of_chat_message(session, body))
+
     return msg
+
+
+_CHAT_NOTIFY_WINDOW_SECONDS = 600  # at most one owner-ping per ticket per 10 min
+
+
+def _notify_owner_of_chat_message(session: LiveChatSession, body: str) -> None:
+    """Best-effort, throttled owner notification for customer chat messages."""
+    try:
+        from django.core.cache import cache
+        key = f'cs_livechat_owner_ping_{session.ticket_id}'
+        # cache.add is atomic: returns False if the key already exists →
+        # we already pinged within the window, so stay quiet.
+        if not cache.add(key, 1, timeout=_CHAT_NOTIFY_WINDOW_SECONDS):
+            return
+    except Exception:
+        pass  # no cache backend → just notify every time
+
+    try:
+        from . import notifications as cs_notifications
+        ticket = session.ticket
+        cs_notifications.notify_ticket_activity(
+            ticket, actor=None,   # customer-authored → owner + creator always
+            title=f'Live chat message — {ticket.ticket_no}',
+            body=(
+                f'{_safe_customer_name(ticket)} wrote in the live chat on '
+                f'ticket {ticket.ticket_no}:\n{body[:300]}\n\n'
+                f'Open the ticket to reply in the chat panel.'
+            ),
+        )
+    except Exception:
+        logger.warning(
+            'LiveChat owner notification failed for session %s',
+            session.pk, exc_info=True,
+        )
 
 
 def post_system_message(session: LiveChatSession, body: str) -> LiveChatMessage:

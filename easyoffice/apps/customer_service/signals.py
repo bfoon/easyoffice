@@ -109,22 +109,49 @@ def deactivate_live_chat_on_ticket_close(sender, instance, created, **kwargs):
             instance.pk,
         )
 
-@receiver(post_save, sender=ServiceTicket)
-def deactivate_live_chat_on_ticket_close(sender, instance, created, **kwargs):
-    if created:
-        return
-    if instance.status not in {'closed', 'cancelled'}:
+# ════════════════════════════════════════════════════════════════════════
+# New-ticket broadcast — every CS rep gets in-app + email + EO chat DM.
+# ════════════════════════════════════════════════════════════════════════
+#
+# A post_save signal (instead of inline code) so EVERY creation path is
+# covered: call desk, portal sync, order flow, Django admin, future REST.
+
+from django.db import transaction
+
+
+@receiver(post_save, sender=ServiceTicket, dispatch_uid='cs_new_ticket_fanout')
+def broadcast_new_ticket(sender, instance, created, **kwargs):
+    """
+    Fires once per ticket creation, after the surrounding transaction
+    commits (so we never announce a rolled-back ticket).
+
+      * Ticket created unassigned → notify the whole CS unit so anyone
+        can claim it.
+      * Ticket created WITH an owner already set (e.g. an agent logged
+        the call and took it in the same breath) → skip the broadcast;
+        the assignment flow notifies the owner instead.
+    """
+    if not created:
         return
 
-    try:
-        from .models import LiveChatSession
-        session = LiveChatSession.objects.filter(ticket=instance, is_active=True).first()
-        if not session:
-            return
-        from . import live_chat_services as lcs
-        lcs.deactivate_session(instance, actor=None, reason='ticket_closed')
-    except Exception:
-        import logging
-        logging.getLogger(__name__).exception(
-            'deactivate_live_chat_on_ticket_close failed for ticket %s', instance.pk
-        )
+    ticket_pk = instance.pk
+
+    def _fan_out():
+        from . import notifications
+        from .models import ServiceTicket as _ST
+        try:
+            ticket = (
+                _ST.objects
+                .select_related('customer', 'created_by', 'current_owner')
+                .filter(pk=ticket_pk)
+                .first()
+            )
+            if not ticket:
+                return
+            if ticket.current_owner_id:
+                return  # born assigned — assignment notifications cover it
+            notifications.notify_new_ticket(ticket, actor=ticket.created_by)
+        except Exception:
+            logger.exception('new-ticket broadcast failed for ticket %s', ticket_pk)
+
+    transaction.on_commit(_fan_out)

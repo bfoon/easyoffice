@@ -280,6 +280,21 @@ def push_portal_status_to_staff(portal_req, *, reason: str = '', actor=None) -> 
             user=actor,
         )
 
+    # Customer-initiated status changes (cancelled / resolved / closed /
+    # reopened) are activity too — ping the owner + creator. Skip when a
+    # staff `actor` drove the change (e.g. first-staff-reply auto-open):
+    # notify_ticket_activity excludes the actor, and the staff flows
+    # already send their own notifications.
+    from django.db import transaction as _tx
+    if actor is None:
+        activity_body = _compose_activity_body(portal_req, reason)
+        ticket_no = getattr(st, 'ticket_no', st.pk)
+        _tx.on_commit(lambda: _notify_owner_of_customer_activity(
+            st,
+            title=f'Portal update — {ticket_no}',
+            body=activity_body,
+        ))
+
     return True
 
 
@@ -333,8 +348,35 @@ def _log_to_staff_activity(service_ticket, *, update_type: str, body: str, user=
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # Comment mirroring
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _notify_owner_of_customer_activity(service_ticket, *, title: str, body: str) -> None:
+    """
+    Ping the staff side about customer-authored activity, on all three
+    channels (in-app + email + EO messaging DM).
+
+    Routing lives in customer_service.notifications.notify_ticket_activity:
+      * ticket has an owner  → owner + ticket creator
+      * ticket unassigned    → whole CS unit + creator
+    actor=None because the actor is the CUSTOMER — so the owner and the
+    creator are always included (nobody is excluded as "the actor").
+
+    Best-effort and lazily imported: the portal app keeps working even if
+    customer_service isn't installed.
+    """
+    try:
+        from apps.customer_service import notifications as cs_notifications
+        cs_notifications.notify_ticket_activity(
+            service_ticket, actor=None, title=title, body=body,
+        )
+    except Exception:
+        logger.exception(
+            'customer_portal.sync: owner notification failed (ticket=%s)',
+            getattr(service_ticket, 'pk', '?'),
+        )
+
 
 def mirror_customer_comment_to_staff(comment) -> None:
     """
@@ -364,6 +406,18 @@ def mirror_customer_comment_to_staff(comment) -> None:
         _log_to_staff_activity(
             st, update_type='customer_update', body=body, user=None,
         )
+
+    # Owner-scoped fan-out: the assignee (+ ticket creator) hear that the
+    # customer replied — in-app, email, and EO chat. After commit so we
+    # never announce a rolled-back comment.
+    from django.db import transaction as _tx
+    ticket_no = getattr(st, 'ticket_no', st.pk)
+    _tx.on_commit(lambda: _notify_owner_of_customer_activity(
+        st,
+        title=f'Customer replied — {ticket_no}',
+        body=f'{name} replied on ticket {ticket_no} via the portal:\n'
+             f'{(comment.body or "")[:500]}',
+    ))
 
 
 def mirror_staff_reply_to_portal(*, portal_request, staff_user, body: str):

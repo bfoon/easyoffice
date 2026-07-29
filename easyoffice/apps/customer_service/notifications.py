@@ -49,6 +49,7 @@ def _get_notification_model():
     _NOTIFICATION_TRIED = True
 
     candidates = (
+        ('apps.core.models',          'CoreNotification'),   # ← this project
         ('apps.notifications.models', 'Notification'),
         ('apps.core.models',          'Notification'),
         ('apps.accounts.models',      'Notification'),
@@ -291,9 +292,83 @@ def _strip_html(html: str) -> str:
     return re.sub(r'\n{3,}', '\n\n', txt).strip()
 
 
+# ── EO messaging channel (DM inside apps.messaging) ───────────────────────
+
+def _get_or_create_dm(sender, recipient):
+    """Find (or create) the 1-on-1 direct ChatRoom between two users."""
+    from apps.messaging.models import ChatRoom, ChatRoomMember
+    room = (
+        ChatRoom.objects
+        .filter(room_type=ChatRoom.RoomType.DIRECT, members=sender)
+        .filter(members=recipient)
+        .first()
+    )
+    if room:
+        return room
+    room = ChatRoom.objects.create(
+        room_type=ChatRoom.RoomType.DIRECT,
+        created_by=sender,
+    )
+    ChatRoomMember.objects.bulk_create([
+        ChatRoomMember(room=room, user=sender),
+        ChatRoomMember(room=room, user=recipient),
+    ])
+    return room
+
+
+def _send_eo_chat(recipient, *, sender, body: str, url: str = '') -> None:
+    """
+    Best-effort message into the EO messaging app: a DM from `sender`
+    (the user who triggered the event) to `recipient`. Reuses the
+    messaging app's own serializer / push fan-out so an open chat updates
+    live and offline users get the normal push/email the chat sends.
+    """
+    if not recipient or not sender or getattr(sender, 'pk', None) == recipient.pk:
+        return
+    try:
+        from apps.messaging.models import ChatMessage
+        room = _get_or_create_dm(sender, recipient)
+        content = body if not url else f'{body}\n{url}'
+        msg = ChatMessage.objects.create(
+            room=room,
+            sender=sender,
+            content=content,
+            message_type='text',
+        )
+        room.updated_at = timezone.now()
+        room.save(update_fields=['updated_at'])
+
+        try:
+            from apps.messaging.views import _notify_offline_members
+            _notify_offline_members(room, sender, msg)
+        except Exception:
+            pass
+
+        try:
+            from asgiref.sync import async_to_sync
+            from channels.layers import get_channel_layer
+            from apps.messaging.views import _serialize_chat_message
+            layer = get_channel_layer()
+            if layer is not None:
+                async_to_sync(layer.group_send)(
+                    f'chat_{room.id}',
+                    {'type': 'chat.message',
+                     'payload': _serialize_chat_message(msg, viewer=recipient)},
+                )
+        except Exception:
+            pass
+    except Exception:
+        logger.exception('EO chat notification failed for user %s',
+                         getattr(recipient, 'id', '?'))
+
+
 def _notify_users(users: Iterable, *, title: str, body: str, url: str,
                   kind: str, email_subject: str, email_template: str,
-                  email_context: dict) -> int:
+                  email_context: dict, eo_sender=None) -> int:
+    """
+    Fan a notification out to `users` on in-app + email — and, when
+    `eo_sender` is given, ALSO as an EO messaging DM from that user.
+    """
     seen = set()
     sent = 0
     for u in users:
@@ -302,13 +377,142 @@ def _notify_users(users: Iterable, *, title: str, body: str, url: str,
         seen.add(u.pk)
         _send_inapp(u, title=title, body=body, url=url, kind=kind)
         _send_email(u, subject=email_subject, template=email_template, context=email_context)
+        if eo_sender is not None:
+            _send_eo_chat(u, sender=eo_sender, body=f'{title}\n{body}', url=url)
         sent += 1
     return sent
+
+
+# ── CS unit membership ─────────────────────────────────────────────────────
+
+def cs_unit_members() -> List:
+    """
+    Every active user in the Customer Service unit — matched on the same
+    dual group/position-title mechanism as permissions.py.
+    """
+    from .permissions import CS_TEAM_GROUPS, CS_MANAGER_GROUPS
+    groups = CS_TEAM_GROUPS | CS_MANAGER_GROUPS
+
+    matched = set()
+    for u in User.objects.filter(is_active=True).prefetch_related('groups'):
+        names = {g.name.lower() for g in u.groups.all()}
+        if names & groups:
+            matched.add(u)
+            continue
+        try:
+            title = (u.staffprofile.position.title or '').lower()
+        except Exception:
+            title = ''
+        if any(kw in title for kw in ('customer service', 'head of cs', 'support')):
+            matched.add(u)
+    return list(matched)
 
 
 # ════════════════════════════════════════════════════════════════════════
 # PUBLIC EVENTS
 # ════════════════════════════════════════════════════════════════════════
+
+# ── New-ticket broadcast + claim + owner-scoped activity ──────────────────
+
+def notify_new_ticket(ticket, *, actor=None) -> int:
+    """
+    A ticket was just created → EVERY active CS rep is notified on all
+    three channels (in-app + email + EO messaging DM) so anyone can claim
+    it. The creator (actor) is excluded from the fan-out.
+    """
+    url = _ticket_url(ticket)
+    title = f'New ticket — {ticket.ticket_no}'
+    body = (
+        f'New {ticket.get_ticket_type_display()} ticket {ticket.ticket_no} '
+        f'("{ticket.subject}") for {ticket.customer.display_name} is waiting '
+        f'in the queue. Open it and claim it if you can take it.'
+    )
+    ctx = {'ticket': ticket, 'ticket_url': url,
+           'actor_name': _user_full_name(actor), 'body': body}
+
+    recipients = [u for u in cs_unit_members()
+                  if not (actor and u.pk == actor.pk)]
+    return _notify_users(
+        recipients,
+        title=title, body=body, url=url,
+        kind='cs.ticket.new',
+        email_subject=f'[New Ticket] {ticket.ticket_no} — {ticket.subject}',
+        email_template='customer_service/email/ticket_new.html',
+        email_context=ctx,
+        eo_sender=actor,
+    )
+
+
+def notify_ticket_claimed(ticket, *, actor) -> None:
+    """
+    A rep claimed an unassigned ticket. Tell the ticket creator (so they
+    know who picked it up) and the Head of CS for visibility.
+    """
+    url = _ticket_url(ticket)
+    actor_name = _user_full_name(actor)
+    title = f'Ticket claimed — {ticket.ticket_no}'
+    body = f'{actor_name} claimed ticket {ticket.ticket_no} ("{ticket.subject}").'
+    ctx = {'ticket': ticket, 'ticket_url': url, 'actor_name': actor_name, 'body': body}
+
+    recipients = set()
+    if ticket.created_by and ticket.created_by.pk != actor.pk:
+        recipients.add(ticket.created_by)
+    for h in heads_of_customer_service():
+        if h.pk != actor.pk:
+            recipients.add(h)
+
+    _notify_users(
+        recipients,
+        title=title, body=body, url=url,
+        kind='cs.ticket.claimed',
+        email_subject=f'[Ticket {ticket.ticket_no}] Claimed by {actor_name}',
+        email_template='customer_service/email/ticket_new.html',
+        email_context=ctx,
+        eo_sender=actor,
+    )
+
+
+def notify_ticket_activity(ticket, *, actor=None, title: str, body: str,
+                           email_subject: str = '') -> int:
+    """
+    Generic activity ping (note added, customer replied, status change,
+    live-chat message…).
+
+    Routing rule:
+      * Ticket HAS an owner → notify ONLY the owner and the ticket
+        creator (never the actor themselves).
+      * Ticket has NO owner yet → notify the whole CS unit (plus the
+        creator), since nobody owns it and someone should react.
+
+    All three channels: in-app + email + EO messaging DM.
+    """
+    url = _ticket_url(ticket)
+    ctx = {'ticket': ticket, 'ticket_url': url,
+           'actor_name': _user_full_name(actor), 'body': body}
+
+    recipients = set()
+    if ticket.current_owner_id:
+        recipients.add(ticket.current_owner)
+        if ticket.created_by_id:
+            recipients.add(ticket.created_by)
+    else:
+        recipients.update(cs_unit_members())
+        if ticket.created_by_id:
+            recipients.add(ticket.created_by)
+
+    if actor is not None:
+        recipients = {u for u in recipients if u.pk != actor.pk}
+
+    return _notify_users(
+        recipients,
+        title=title, body=body, url=url,
+        kind='cs.ticket.activity',
+        email_subject=email_subject or f'[Ticket {ticket.ticket_no}] {title}',
+        email_template='customer_service/email/ticket_new.html',
+        email_context=ctx,
+        eo_sender=actor,
+    )
+
 
 # ── Assignment events ─────────────────────────────────────────────────────
 
@@ -344,6 +548,13 @@ def notify_assignment_created(assignment, *, actor=None) -> None:
             subject=f'[Ticket {ticket.ticket_no}] You have a new assignment',
             template='customer_service/email/assignment_created.html',
             context=ctx,
+        )
+        # EO messaging DM from the person who assigned it
+        _send_eo_chat(
+            assignment.assigned_to,
+            sender=actor,
+            body=f'{title}\n{body}',
+            url=url,
         )
 
     # Head of CS visibility

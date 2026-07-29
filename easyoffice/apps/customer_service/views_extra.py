@@ -664,6 +664,23 @@ class PortalReplyView(CustomerServiceAccessMixin, View):
             lambda: self._notify_customer(portal_req, comment, request.user)
         )
 
+        # Owner-scoped activity ping: the assignee + ticket creator hear
+        # about the reply (in-app / email / EO chat) — unless they ARE
+        # the one who replied.
+        def _ping_internal():
+            try:
+                from . import notifications as cs_notifications
+                cs_notifications.notify_ticket_activity(
+                    ticket, actor=request.user,
+                    title=f'Portal reply on {ticket.ticket_no}',
+                    body=f'{request.user.get_full_name() or request.user.username} '
+                         f'replied to the customer on ticket {ticket.ticket_no}:\n'
+                         f'{body[:500]}',
+                )
+            except Exception:
+                logger.exception('portal reply: internal activity ping failed')
+        transaction.on_commit(_ping_internal)
+
         messages.success(request, 'Reply sent to the customer portal.')
         return self._redirect_back(ticket, return_to)
 

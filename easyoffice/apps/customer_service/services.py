@@ -203,6 +203,7 @@ def assign_ticket_to_user(
     title: str = '',
     instructions: str = '',
     department=None,
+    make_owner: bool = False,
 ) -> ServiceTicketAssignment:
     """
     Assign a ticket to a single user. Notifies the assignee + head of CS
@@ -241,7 +242,14 @@ def assign_ticket_to_user(
     if ticket.status in ('new', 'open'):
         ticket.status = 'assigned'
         update_fields.append('status')
-    if not ticket.current_owner_id:
+    # make_owner=True (head/supervisor assignment) → the assignee BECOMES
+    # the owner even if someone else owned it before (reassignment).
+    # make_owner=False keeps the legacy behaviour: only fill an empty slot.
+    if make_owner:
+        if ticket.current_owner_id != assigned_to.pk:
+            ticket.current_owner = assigned_to
+            update_fields.append('current_owner')
+    elif not ticket.current_owner_id:
         ticket.current_owner = assigned_to
         update_fields.append('current_owner')
     if department and ticket.department_id != department.pk:

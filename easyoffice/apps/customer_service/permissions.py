@@ -131,6 +131,29 @@ def can_close_ticket(user, ticket) -> bool:
     return is_head_of_customer_service(user) or _user_group_names(user) & CS_MANAGER_GROUPS
 
 
+def can_assign_tickets(user) -> bool:
+    """
+    Who may assign (or reassign) a ticket to a specific rep?
+        • Head of CS
+        • CS supervisors / managers (CS_MANAGER_GROUPS)
+        • Superusers
+    Regular CS reps can only CLAIM unassigned tickets for themselves —
+    they cannot hand tickets to other people.
+    """
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if user.is_superuser:
+        return True
+    if is_head_of_customer_service(user):
+        return True
+    if _user_group_names(user) & CS_MANAGER_GROUPS:
+        return True
+    return _has_position_keyword(
+        user, 'head of customer service', 'customer service supervisor',
+        'cs supervisor', 'customer service manager',
+    )
+
+
 # ── Mixins ─────────────────────────────────────────────────────────────────
 
 class CustomerServiceAccessMixin(LoginRequiredMixin):

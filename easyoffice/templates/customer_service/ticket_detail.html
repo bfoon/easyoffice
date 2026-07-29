@@ -601,7 +601,9 @@
           </div>
           <div class="cs-info-row">
             <span class="cs-info-label">Current Owner</span>
-            <span class="cs-info-value">{{ ticket.current_owner.full_name|default:"—" }}</span>
+            <span class="cs-info-value">
+              {% if ticket.current_owner %}{{ ticket.current_owner.full_name }}{% else %}<span style="color:#d97706">— Unassigned —</span>{% endif %}
+            </span>
           </div>
         </div>
         <div class="col-md-6">
@@ -1062,11 +1064,57 @@
 
     <!-- Action tabs -->
     <div class="cs-card">
+
+      {# ── Claim / ownership banner ──────────────────────────────── #}
+      {% if can_claim_ticket %}
+      <div style="margin-bottom:14px;padding:12px 14px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <div class="small" style="color:#065f46;flex:1;min-width:180px;">
+            <i class="bi bi-inbox"></i>
+            <strong>Unassigned.</strong> First to claim it owns it — activity
+            updates will then go to the owner only.
+          </div>
+          <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}" class="m-0">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="claim">
+            <button class="eo-btn eo-btn-primary" style="background:#10b981;border-color:#10b981">
+              <i class="bi bi-hand-index-thumb"></i> Claim this ticket
+            </button>
+          </form>
+        </div>
+      </div>
+      {% elif ticket.current_owner %}
+      <div style="margin-bottom:14px;padding:10px 14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <div class="small" style="color:#1e40af;flex:1;min-width:180px;">
+            <i class="bi bi-person-check"></i>
+            Assigned to
+            <strong>
+              {% if ticket.current_owner_id == request.user.id %}you{% else %}{{ ticket.current_owner.full_name }}{% endif %}
+            </strong>
+            — they receive all activity notifications for this ticket.
+          </div>
+          {% if can_assign_ticket %}
+          <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}" class="m-0"
+                onsubmit="return confirm('Return this ticket to the unassigned queue? The whole CS team will be re-notified.')">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="unassign">
+            <button class="eo-btn eo-btn-secondary eo-btn-sm">
+              <i class="bi bi-arrow-counterclockwise"></i> Return to queue
+            </button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
       <div class="cs-action-tabs" id="csActionTabs">
         <button type="button" class="cs-action-tab active" data-tab="note"><i class="bi bi-journal-plus"></i> Note</button>
         <button type="button" class="cs-action-tab" data-tab="resolve"><i class="bi bi-check-circle"></i> Resolve</button>
-        {% if can_manage_department %}
+        {% if can_assign_ticket %}
         <button type="button" class="cs-action-tab" data-tab="assign"><i class="bi bi-person-plus"></i> Assign</button>
+        {% endif %}
+        {% if can_manage_department %}
         <button type="button" class="cs-action-tab" data-tab="route"><i class="bi bi-signpost-2"></i> Route</button>
         {% endif %}
       </div>
@@ -1126,9 +1174,16 @@
         </form>
       </div>
 
-      {% if can_manage_department %}
-      <!-- Assign -->
+      {% if can_assign_ticket %}
+      <!-- Assign (Head of CS / CS supervisor only — reassignment allowed) -->
       <div class="cs-action-panel" data-panel="assign" style="display:none">
+        {% if ticket.current_owner %}
+        <div class="alert alert-warning small py-2 mb-2">
+          <i class="bi bi-exclamation-triangle"></i>
+          Assigning will <strong>transfer ownership</strong> from
+          {{ ticket.current_owner.full_name }} to the person you pick.
+        </div>
+        {% endif %}
         <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}">
           {% csrf_token %}
           <input type="hidden" name="action" value="assign">
@@ -1150,7 +1205,9 @@
           </button>
         </form>
       </div>
+      {% endif %}
 
+      {% if can_manage_department %}
       <!-- Route / Escalate -->
       <div class="cs-action-panel" data-panel="route" style="display:none">
         <form method="post" action="{% url 'customer_service_ticket_action' ticket.pk %}" class="mb-3">

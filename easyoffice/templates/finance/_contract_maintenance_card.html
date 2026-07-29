@@ -1,0 +1,256 @@
+{% comment %}
+apps/finance/templates/finance/_contract_maintenance_card.html
+==============================================================
+Maintenance roster panel for the contract detail page.
+
+Include it inside the MAIN (left) column of contract_detail.html, right after
+the customer-portal section closes and before the column's closing </div>
+(that is, just before the line `    <div class="col-lg-4">`):
+
+    {% include "finance/_contract_maintenance_card.html" %}
+
+Requires these context keys (added in ContractDetailView.get_context_data —
+see the patch in views_maintenance_context.py):
+    maintenance_rosters   – contract.maintenance_rosters with prefetched
+                            members + recent visits
+    assignable_users      – active users for the "add staff member" dropdown
+    can_manage_contracts  – bool
+    frequency_choices     – MaintenanceRoster.Frequency.choices
+{% endcomment %}
+
+{% if contract.auto_generate_invoice or maintenance_rosters or can_manage_contracts %}
+<section class="cdetail-card" id="maintenance">
+  <div class="cdetail-card-head">
+    <div>
+      <h2 class="cdetail-card-title">
+        <i class="bi bi-tools"></i> Scheduled Maintenance
+      </h2>
+      <p class="cdetail-card-subtitle">
+        Rosters, routine visits & exercises. Responsible parties get a calendar
+        invite and a completion link; one shared task is created per visit.
+      </p>
+    </div>
+    {% if can_manage_contracts %}
+    <button class="cdetail-btn cdetail-btn-light" type="button"
+            onclick="document.getElementById('rosterCreateBox').style.display='block';this.style.display='none';">
+      <i class="bi bi-plus-lg"></i> New Roster
+    </button>
+    {% endif %}
+  </div>
+
+  <div class="cdetail-card-body">
+
+    {# ── Create-roster form (hidden until "New Roster") ────────────────── #}
+    {% if can_manage_contracts %}
+    <div id="rosterCreateBox" style="display:none;border:1px dashed var(--eo-border,#e2e8f0);border-radius:14px;padding:1rem;margin-bottom:1.2rem;background:#f8fafc">
+      <form method="post" action="{% url 'maintenance_roster_create' contract.pk %}">
+        {% csrf_token %}
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.7rem">
+          <div style="grid-column:1/-1">
+            <label class="eo-form-label">Roster Title *</label>
+            <input type="text" name="title" class="eo-form-control" required
+                   placeholder="e.g. Quarterly Generator Service">
+          </div>
+          <div style="grid-column:1/-1">
+            <label class="eo-form-label">Instructions / Checklist</label>
+            <textarea name="description" class="eo-form-control" rows="2"
+                      placeholder="Shown to responsible parties in the invite and completion form"></textarea>
+          </div>
+          <div>
+            <label class="eo-form-label">Frequency</label>
+            <select name="frequency" class="eo-form-select">
+              {% for value, label in frequency_choices %}
+              <option value="{{ value }}" {% if value == 'monthly' %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="eo-form-label">First Visit Date *</label>
+            <input type="date" name="start_date" class="eo-form-control" required>
+          </div>
+          <div>
+            <label class="eo-form-label">End Date</label>
+            <input type="date" name="end_date" class="eo-form-control">
+          </div>
+          <div>
+            <label class="eo-form-label">Visit Time</label>
+            <input type="time" name="visit_time" class="eo-form-control" value="09:00">
+          </div>
+          <div>
+            <label class="eo-form-label">Duration (min)</label>
+            <input type="number" name="duration_minutes" class="eo-form-control" value="60" min="15" step="15">
+          </div>
+          <div>
+            <label class="eo-form-label">Notice (days before)</label>
+            <input type="number" name="notice_days_before" class="eo-form-control" value="7" min="0">
+          </div>
+          <div>
+            <label class="eo-form-label">Location</label>
+            <input type="text" name="location" class="eo-form-control" placeholder="Site / address">
+          </div>
+        </div>
+        <div style="display:flex;gap:1.2rem;flex-wrap:wrap;margin:.8rem 0">
+          <label class="form-check-label" style="font-size:.84rem"><input class="form-check-input" type="checkbox" name="active" checked> Active</label>
+          <label class="form-check-label" style="font-size:.84rem"><input class="form-check-input" type="checkbox" name="send_calendar_invites" checked> Send calendar invites</label>
+          <label class="form-check-label" style="font-size:.84rem"><input class="form-check-input" type="checkbox" name="create_task" checked> Create shared task</label>
+        </div>
+        <button type="submit" class="cdetail-btn cdetail-btn-white">
+          <i class="bi bi-check-lg"></i> Create Roster
+        </button>
+      </form>
+    </div>
+    {% endif %}
+
+    {# ── Existing rosters ──────────────────────────────────────────────── #}
+    {% for roster in maintenance_rosters %}
+    <div style="border:1px solid var(--eo-border,#e2e8f0);border-radius:14px;padding:1rem 1.1rem;margin-bottom:1rem">
+      <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start">
+        <div>
+          <div style="font-weight:800;font-size:1rem">
+            {{ roster.title }}
+            {% if roster.active %}
+              <span style="font-size:.7rem;background:#ecfdf5;color:#059669;padding:.15rem .55rem;border-radius:999px;margin-left:.4rem">ACTIVE</span>
+            {% else %}
+              <span style="font-size:.7rem;background:#f1f5f9;color:#64748b;padding:.15rem .55rem;border-radius:999px;margin-left:.4rem">PAUSED</span>
+            {% endif %}
+          </div>
+          <div style="font-size:.8rem;color:var(--eo-text-muted);margin-top:.25rem">
+            {{ roster.get_frequency_display }}
+            · Next visit: <strong>{{ roster.next_visit_date|date:"M j, Y"|default:"—" }}</strong>
+            {% if roster.location %} · {{ roster.location }}{% endif %}
+          </div>
+        </div>
+        {% if can_manage_contracts %}
+        <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+          <form method="post" action="{% url 'maintenance_roster_update' contract.pk roster.pk %}">
+            {% csrf_token %}<input type="hidden" name="action" value="toggle">
+            <button class="cdetail-btn cdetail-btn-light" type="submit" style="padding:.4rem .7rem;font-size:.76rem">
+              {% if roster.active %}<i class="bi bi-pause"></i> Pause{% else %}<i class="bi bi-play"></i> Activate{% endif %}
+            </button>
+          </form>
+          <form method="post" action="{% url 'maintenance_visit_schedule_now' contract.pk roster.pk %}"
+                onsubmit="return confirm('Schedule the next visit now and send calendar invites to all responsible parties?');">
+            {% csrf_token %}
+            <button class="cdetail-btn cdetail-btn-light" type="submit" style="padding:.4rem .7rem;font-size:.76rem">
+              <i class="bi bi-send"></i> Schedule now
+            </button>
+          </form>
+          <form method="post" action="{% url 'maintenance_roster_delete' contract.pk roster.pk %}"
+                onsubmit="return confirm('Delete this roster and all its visits?');">
+            {% csrf_token %}
+            <button class="cdetail-btn cdetail-btn-light" type="submit" style="padding:.4rem .7rem;font-size:.76rem;color:#dc2626">
+              <i class="bi bi-trash"></i>
+            </button>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+
+      {% if roster.description %}
+      <div style="font-size:.82rem;color:var(--eo-text-muted);margin-top:.6rem">{{ roster.description|linebreaksbr }}</div>
+      {% endif %}
+
+      {# Responsible parties #}
+      <div style="margin-top:.8rem">
+        <div style="font-size:.74rem;text-transform:uppercase;letter-spacing:.04em;color:var(--eo-text-muted);font-weight:800;margin-bottom:.4rem">
+          Responsible Parties ({{ roster.members.count }})
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:.4rem">
+          {% for m in roster.members.all %}
+          <span style="display:inline-flex;align-items:center;gap:.35rem;background:#f8fafc;border:1px solid var(--eo-border,#e2e8f0);border-radius:999px;padding:.3rem .7rem;font-size:.78rem">
+            <i class="bi {% if m.user_id %}bi-person-badge{% else %}bi-envelope{% endif %}"></i>
+            {{ m.display_name }}{% if m.is_lead %} <strong style="color:#1d4ed8">· Lead</strong>{% endif %}
+            {% if can_manage_contracts %}
+            <form method="post" action="{% url 'maintenance_member_remove' contract.pk roster.pk m.pk %}" style="display:inline">
+              {% csrf_token %}
+              <button type="submit" style="border:0;background:none;color:#dc2626;cursor:pointer;padding:0 0 0 .2rem"
+                      onclick="return confirm('Remove {{ m.display_name|escapejs }}?');"><i class="bi bi-x"></i></button>
+            </form>
+            {% endif %}
+          </span>
+          {% empty %}
+          <span style="font-size:.8rem;color:#d97706"><i class="bi bi-exclamation-triangle"></i> No responsible parties yet — add one so invites can be sent.</span>
+          {% endfor %}
+        </div>
+
+        {% if can_manage_contracts %}
+        <details style="margin-top:.7rem">
+          <summary style="cursor:pointer;font-size:.8rem;color:#1d4ed8;font-weight:700">+ Add responsible party</summary>
+          <form method="post" action="{% url 'maintenance_member_add' contract.pk roster.pk %}"
+                style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.6rem;margin-top:.6rem">
+            {% csrf_token %}
+            <div style="grid-column:1/-1">
+              <label class="eo-form-label">Staff member</label>
+              <select name="user" class="eo-form-select">
+                <option value="">— External contact instead —</option>
+                {% for u in assignable_users %}
+                <option value="{{ u.pk }}">{{ u.get_full_name|default:u.username }}{% if u.email %} · {{ u.email }}{% endif %}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="eo-form-label">External name</label>
+              <input type="text" name="external_name" class="eo-form-control" placeholder="If not staff">
+            </div>
+            <div>
+              <label class="eo-form-label">External email</label>
+              <input type="email" name="external_email" class="eo-form-control" placeholder="name@vendor.com">
+            </div>
+            <div style="grid-column:1/-1;display:flex;justify-content:space-between;align-items:center">
+              <label class="form-check-label" style="font-size:.82rem"><input class="form-check-input" type="checkbox" name="is_lead"> Make lead (task assignee)</label>
+              <button type="submit" class="cdetail-btn cdetail-btn-white" style="padding:.45rem .9rem;font-size:.8rem"><i class="bi bi-plus"></i> Add</button>
+            </div>
+          </form>
+        </details>
+        {% endif %}
+      </div>
+
+      {# Recent / upcoming visits #}
+      {% with visits=roster.visits.all|slice:":5" %}
+      {% if visits %}
+      <div style="margin-top:.9rem">
+        <div style="font-size:.74rem;text-transform:uppercase;letter-spacing:.04em;color:var(--eo-text-muted);font-weight:800;margin-bottom:.4rem">
+          Recent Visits
+        </div>
+        {% for v in visits %}
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:.7rem;padding:.45rem 0;border-top:1px solid var(--eo-border,#eef2f7)">
+          <div style="font-size:.82rem">
+            <strong>{{ v.scheduled_date|date:"M j, Y" }}</strong>
+            {% if v.status == 'completed' %}
+              <span style="color:#059669"><i class="bi bi-check-circle"></i> Completed by {{ v.completed_by_name }}</span>
+            {% elif v.status == 'cancelled' %}
+              <span style="color:#dc2626"><i class="bi bi-x-circle"></i> Cancelled</span>
+            {% elif v.is_overdue %}
+              <span style="color:#d97706"><i class="bi bi-exclamation-triangle"></i> Overdue</span>
+            {% else %}
+              <span style="color:#1d4ed8"><i class="bi bi-clock"></i> Scheduled</span>
+            {% endif %}
+          </div>
+          {% if can_manage_contracts and v.status == 'scheduled' %}
+          <div style="display:flex;gap:.35rem">
+            <form method="post" action="{% url 'maintenance_visit_resend' contract.pk roster.pk v.pk %}" style="display:inline">
+              {% csrf_token %}
+              <button class="cdetail-btn cdetail-btn-light" type="submit" style="padding:.3rem .55rem;font-size:.72rem"><i class="bi bi-arrow-repeat"></i> Resend</button>
+            </form>
+            <form method="post" action="{% url 'maintenance_visit_cancel' contract.pk roster.pk v.pk %}" style="display:inline"
+                  onsubmit="return confirm('Cancel this visit and retract the calendar event?');">
+              {% csrf_token %}
+              <button class="cdetail-btn cdetail-btn-light" type="submit" style="padding:.3rem .55rem;font-size:.72rem;color:#dc2626"><i class="bi bi-x"></i></button>
+            </form>
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% endwith %}
+    </div>
+    {% empty %}
+    {% if not can_manage_contracts %}
+    <div class="cdetail-empty"><i class="bi bi-tools"></i> No maintenance rosters configured.</div>
+    {% endif %}
+    {% endfor %}
+
+  </div>
+</section>
+{% endif %}

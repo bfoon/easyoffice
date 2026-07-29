@@ -3,6 +3,7 @@ from apps.finance import views
 from apps.finance import views_financial_system as fs
 from apps.finance import views_invoice_followup
 from apps.finance import views_sales_targets as st
+from apps.finance import views_maintenance as vm
 
 urlpatterns = [
     # ── Existing finance URLs ────────────────────────────────────────────────
@@ -149,4 +150,37 @@ urlpatterns = [
     path('sales-rewards/<uuid:pk>/action/',
          st.SalesRewardActionView.as_view(),
          name='sales_reward_action'),
+
+    # ── Maintenance roster (login) ──────────────────────────────────────────
+    path('contracts/<uuid:pk>/maintenance/new/',
+         vm.MaintenanceRosterCreateView.as_view(),
+         name='maintenance_roster_create'),
+    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/edit/',
+         vm.MaintenanceRosterUpdateView.as_view(),
+         name='maintenance_roster_update'),
+    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/delete/',
+         vm.MaintenanceRosterDeleteView.as_view(),
+         name='maintenance_roster_delete'),
+
+    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/members/add/',
+         vm.MaintenanceMemberAddView.as_view(),
+         name='maintenance_member_add'),
+    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/members/<uuid:member_pk>/remove/',
+         vm.MaintenanceMemberRemoveView.as_view(),
+         name='maintenance_member_remove'),
+
+    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/schedule-now/',
+         vm.MaintenanceVisitScheduleNowView.as_view(),
+         name='maintenance_visit_schedule_now'),
+    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/visits/<uuid:visit_pk>/resend/',
+         vm.MaintenanceVisitResendView.as_view(),
+         name='maintenance_visit_resend'),
+    path('contracts/<uuid:pk>/maintenance/<uuid:roster_pk>/visits/<uuid:visit_pk>/cancel/',
+         vm.MaintenanceVisitCancelView.as_view(),
+         name='maintenance_visit_cancel'),
+
+    # ── Public completion form (no login, token-based) ──────────────────────
+    path('maintenance/complete/<str:token>/',
+         vm.MaintenanceVisitCompleteView.as_view(),
+         name='maintenance_visit_complete'),
 ]

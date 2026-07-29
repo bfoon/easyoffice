@@ -22,6 +22,7 @@ from apps.finance.models import (
     ContractDocument, ContractSignatureRequest, ContractSignature,
     PaymentRequest, PaymentRequestDocument,
     IncomingPaymentDocument,
+    MaintenanceRoster, MaintenanceRosterMember, MaintenanceVisit,
 )
 
 from apps.invoices.models import InvoiceTemplate
@@ -2511,6 +2512,23 @@ class ContractDetailView(LoginRequiredMixin, DetailView):
             status=ContractSignatureRequest.Status.SIGNED
         ).first()
 
+        # Maintenance rosters — members + recent visits prefetched so the
+        # template doesn't issue a query per row.
+        from django.db.models import Prefetch
+        maintenance_rosters = (
+            contract.maintenance_rosters
+            .prefetch_related(
+                'members__user',
+                Prefetch('visits'),
+            )
+            .order_by('-active', 'title')
+        )
+        assignable_users = (
+            User.objects
+            .filter(is_active=True)
+            .order_by('first_name', 'last_name')
+        )
+
         ctx.update({
             'invoice_links':       invoice_links,
             'extensions':          extensions,
@@ -2540,6 +2558,11 @@ class ContractDetailView(LoginRequiredMixin, DetailView):
                 if can_use_invoices(user) else []
             ),
             'default_template':    contract.default_invoice_template,
+            # ── Maintenance roster ──────────────────────────────────────
+            'maintenance_rosters':  maintenance_rosters,
+            'assignable_users':     assignable_users,
+            'can_manage_contracts': _can_manage_contracts(user),
+            'frequency_choices':    MaintenanceRoster.Frequency.choices,
             'is_finance':          _is_finance(user),
             'is_ceo':              _is_ceo(user),
             'is_hr':               _is_hr(user),

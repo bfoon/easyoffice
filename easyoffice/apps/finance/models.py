@@ -1,3 +1,4 @@
+import secrets
 import uuid
 from decimal import Decimal
 from datetime import timedelta
@@ -1377,5 +1378,207 @@ class FinanceAnomaly(models.Model):
             'resolved': '#10b981',
             'dismissed': '#94a3b8',
         }.get(self.status, '#94a3b8')
+
+
+def _make_visit_token():
+    return secrets.token_urlsafe(32)
+
+
+class MaintenanceRoster(models.Model):
+    """A recurring maintenance/visit/exercise schedule attached to a contract."""
+
+    class Frequency(models.TextChoices):
+        WEEKLY = 'weekly', 'Weekly'
+        BIWEEKLY = 'biweekly', 'Every 2 Weeks'
+        MONTHLY = 'monthly', 'Monthly'
+        QUARTERLY = 'quarterly', 'Quarterly'
+        SEMI_ANNUAL = 'semi_annual', 'Every 6 Months'
+        ANNUAL = 'annual', 'Annually'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    contract = models.ForeignKey(
+        'finance.Contract',
+        on_delete=models.CASCADE,
+        related_name='maintenance_rosters',
+    )
+
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True, help_text='Instructions / checklist shown to responsible parties.')
+    location = models.CharField(max_length=255, blank=True)
+    frequency = models.CharField(max_length=20, choices=Frequency.choices, default=Frequency.MONTHLY)
+
+    # Scheduling window
+    start_date = models.DateField(help_text='Date of the first visit.')
+    end_date = models.DateField(null=True, blank=True,
+                                help_text='No visits scheduled after this date. Defaults to contract end.')
+    next_visit_date = models.DateField(null=True, blank=True,
+                                       help_text='Advanced automatically after each visit is scheduled.')
+
+    # Visit timing (used in the calendar invite)
+    visit_time = models.TimeField(null=True, blank=True,
+                                  help_text='Start time for the calendar invite (defaults 09:00).')
+    duration_minutes = models.PositiveIntegerField(default=60)
+
+    # How many days before the due date the visit + invites are created
+    notice_days_before = models.PositiveIntegerField(
+        default=7,
+        help_text='Visits are created and invites sent this many days before the scheduled date.',
+    )
+
+    # Activation switches
+    active = models.BooleanField(default=True)
+    send_calendar_invites = models.BooleanField(default=True)
+    create_task = models.BooleanField(default=True,
+                                      help_text='Create one shared Task per visit with all members as collaborators.')
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='maintenance_rosters_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['contract', 'title']
+
+    def __str__(self):
+        return f'{self.title} ({self.get_frequency_display()}) — {self.contract.title}'
+
+    def save(self, *args, **kwargs):
+        if self.next_visit_date is None and self.start_date:
+            self.next_visit_date = self.start_date
+        super().save(*args, **kwargs)
+
+    @property
+    def effective_end_date(self):
+        return self.end_date or getattr(self.contract, 'end_date', None)
+
+
+class MaintenanceRosterMember(models.Model):
+    """A responsible party on a roster: an internal user OR an external contact."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    roster = models.ForeignKey(
+        MaintenanceRoster, on_delete=models.CASCADE, related_name='members',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.CASCADE, related_name='maintenance_memberships',
+        help_text='Internal staff member. Leave blank for an external party.',
+    )
+    external_name = models.CharField(max_length=200, blank=True)
+    external_email = models.EmailField(blank=True)
+    is_lead = models.BooleanField(default=False, help_text='Lead becomes the Task assignee.')
+
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-is_lead', 'added_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['roster', 'user'],
+                condition=models.Q(user__isnull=False),
+                name='uniq_roster_internal_member',
+            ),
+        ]
+
+    def __str__(self):
+        return self.display_name
+
+    @property
+    def display_name(self):
+        if self.user_id:
+            return self.user.get_full_name() or self.user.username
+        return self.external_name or self.external_email
+
+    @property
+    def email(self):
+        if self.user_id:
+            return self.user.email or ''
+        return self.external_email or ''
+
+
+class MaintenanceVisit(models.Model):
+    """One scheduled occurrence of a roster (a routine visit / exercise)."""
+
+    class Status(models.TextChoices):
+        SCHEDULED = 'scheduled', 'Scheduled'
+        COMPLETED = 'completed', 'Completed'
+        MISSED = 'missed', 'Missed'
+        CANCELLED = 'cancelled', 'Cancelled'
+
+    class Outcome(models.TextChoices):
+        OK = 'ok', 'All OK'
+        ISSUES_FOUND = 'issues_found', 'Issues Found'
+        FOLLOW_UP = 'follow_up', 'Follow-up Required'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    roster = models.ForeignKey(
+        MaintenanceRoster, on_delete=models.CASCADE, related_name='visits',
+    )
+    scheduled_date = models.DateField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED)
+
+    # Public completion link (same token pattern as ContractSignatureRequest)
+    access_token = models.CharField(max_length=64, unique=True, default=_make_visit_token, editable=False)
+
+    # Calendar invite bookkeeping — UID must stay stable so updates/cancels
+    # replace the original event in attendees' calendars.
+    ics_uid = models.CharField(max_length=120, blank=True, editable=False)
+    ics_sequence = models.PositiveIntegerField(default=0)
+    invites_sent_at = models.DateTimeField(null=True, blank=True)
+
+    # One shared task; all members are collaborators on it.
+    task = models.ForeignKey(
+        'tasks.Task', null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='maintenance_visits',
+    )
+
+    # Completion report (filled through the public link)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    completed_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='maintenance_visits_completed',
+    )
+    completed_by_name = models.CharField(max_length=200, blank=True)
+    outcome = models.CharField(max_length=20, choices=Outcome.choices, blank=True)
+    work_done = models.TextField(blank=True)
+    issues_found = models.TextField(blank=True)
+    follow_up_required = models.BooleanField(default=False)
+    follow_up_notes = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-scheduled_date']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['roster', 'scheduled_date'],
+                name='uniq_visit_per_roster_date',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.roster.title} — {self.scheduled_date}'
+
+    def save(self, *args, **kwargs):
+        if not self.ics_uid:
+            self.ics_uid = f'maintenance-visit-{self.pk or uuid.uuid4()}@finance'
+        super().save(*args, **kwargs)
+
+    def public_path(self):
+        return reverse('maintenance_visit_complete', kwargs={'token': self.access_token})
+
+    @property
+    def is_overdue(self):
+        return (
+                self.status == self.Status.SCHEDULED
+                and self.scheduled_date < timezone.localdate()
+        )
+
 
 from apps.finance.models_sales_targets import SalesTarget, SalesRewardPayout  # noqa

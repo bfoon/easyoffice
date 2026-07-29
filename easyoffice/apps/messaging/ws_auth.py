@@ -19,9 +19,10 @@ JWT authentication middleware for Django Channels WebSockets.
 
 2.  The query-string fallback is kept for backward compatibility during
     the mobile-app migration, but it is now gated behind the setting
-    ``MESSAGING_WS_ALLOW_QUERY_TOKEN`` (default True) and logs a
-    deprecation warning every time it is used. Set it to False once all
-    clients are updated, then delete the fallback.
+    ``MESSAGING_WS_ALLOW_QUERY_TOKEN``, which now DEFAULTS TO FALSE. It
+    used to default to True, which meant the leak was on unless somebody
+    thought to turn it off. Set it to True only for as long as the mobile
+    rollout needs it; every use logs a warning.
 
 3.  ``scope["user"]`` is now ALWAYS defined after this middleware runs.
     Previously, when no token was supplied, the key was left unset and
@@ -83,6 +84,43 @@ def _token_from_query(scope):
     return (qs.get("token") or [None])[0]
 
 
+def _scope_is_secure(scope):
+    """
+    True when this WebSocket arrived over TLS.
+
+    Channels sets scope["scheme"] to "wss" for a direct TLS connection. When
+    nginx terminates TLS the scheme is plain "ws", so we also honour the
+    X-Forwarded-Proto header the proxy sets. Localhost is always treated as
+    secure so development is not blocked.
+    """
+    if scope.get("scheme") in ("wss", "https"):
+        return True
+
+    for name, value in scope.get("headers", []):
+        if name == b"x-forwarded-proto":
+            try:
+                proto = value.decode("ascii").split(",")[0].strip().lower()
+            except Exception:
+                continue
+            if proto in ("https", "wss"):
+                return True
+
+    host = (scope.get("server") or ("", 0))[0] or ""
+    if host in ("127.0.0.1", "::1", "localhost"):
+        return True
+
+    for name, value in scope.get("headers", []):
+        if name == b"host":
+            try:
+                h = value.decode("ascii").split(":")[0].lower()
+            except Exception:
+                continue
+            if h in ("localhost", "127.0.0.1", "::1"):
+                return True
+
+    return False
+
+
 class JWTAuthMiddleware:
     def __init__(self, app):
         self.app = app
@@ -90,7 +128,7 @@ class JWTAuthMiddleware:
     async def __call__(self, scope, receive, send):
         token = _token_from_headers(scope)
 
-        if not token and getattr(settings, "MESSAGING_WS_ALLOW_QUERY_TOKEN", True):
+        if not token and getattr(settings, "MESSAGING_WS_ALLOW_QUERY_TOKEN", False):
             token = _token_from_query(scope)
             if token:
                 logger.warning(
@@ -99,6 +137,21 @@ class JWTAuthMiddleware:
                     "'Authorization: Bearer' header, then set "
                     "MESSAGING_WS_ALLOW_QUERY_TOKEN = False."
                 )
+
+        # 4.  Refuse to authenticate a socket that is not on TLS. A ws://
+        #     connection carries the token, every message, and every call
+        #     signal in clear text. Django itself cannot see the scheme
+        #     behind a proxy, so we trust the same forwarded header the
+        #     rest of the stack uses.
+        if token and not _scope_is_secure(scope) and not getattr(settings, "MESSAGING_WS_ALLOW_INSECURE", False):
+            logger.error(
+                "Refusing WebSocket authentication over a non-TLS connection. "
+                "Messages and tokens would travel in clear text. Serve the "
+                "socket as wss:// (see the nginx snippet in "
+                "docs/transport-security.md), or set MESSAGING_WS_ALLOW_INSECURE "
+                "= True for local development only."
+            )
+            token = None
 
         if token:
             scope["user"] = await _user_from_token(token)

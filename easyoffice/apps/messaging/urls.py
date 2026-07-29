@@ -2,6 +2,8 @@ from django.urls import path
 from apps.messaging import views
 from apps.messaging import floating_chat_views
 from apps.messaging import typing_views
+from apps.messaging import read_receipts
+from apps.messaging import turn
 
 urlpatterns = [
     # ─────────────────────────────────────────────
@@ -142,6 +144,27 @@ urlpatterns = [
     path('<uuid:room_id>/typing/',
          typing_views.TypingPingView.as_view(),
          name='chat_typing_ping'),
+
+    # ─────────────────────────────────────────────
+    # ✅ READ RECEIPTS (delivered / read ticks)
+    # Watermark-based: two timestamps per (room, user) on ChatRoomMember,
+    # NOT one row per (message × recipient). See read_receipts.py.
+    # ─────────────────────────────────────────────
+    path('<uuid:room_id>/read/',
+         read_receipts.MarkReadView.as_view(),
+         name='chat_mark_read'),
+    path('<uuid:room_id>/read-state/',
+         read_receipts.ReadStateView.as_view(),
+         name='chat_read_state'),
+
+    # ─────────────────────────────────────────────
+    # 🧊 WEBRTC ICE CONFIGURATION
+    # Hands out STUN + short-lived TURN credentials. Never hard-code
+    # TURN creds in call_window.html — they'd be permanent and public.
+    # ─────────────────────────────────────────────
+    path('webrtc/ice-servers/',
+         turn.IceServersView.as_view(),
+         name='webrtc_ice_servers'),
 
     # ─────────────────────────────────────────────
     # PRESENCE

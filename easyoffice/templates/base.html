@@ -383,102 +383,200 @@
     </div>
   </div>
 
+  {% comment %}
+  ═══════════════════════════════════════════════════════════════════════
+  RESILIENT NAV URL RESOLUTION
+  ───────────────────────────────────────────────────────────────────────
+  An inline url tag raises NoReverseMatch when the route is missing.
+  Because this is the shared base template, that takes down EVERY page in
+  the platform — one renamed route in one app and the whole intranet 500s,
+  including the two dozen apps that had nothing to do with it.
+
+  The "as var" form of the url tag sets the variable to an empty string
+  instead of raising. Each link below is then guarded, so a missing or
+  renamed route hides its own nav item and nothing else. Restore the route
+  and the link comes back with no edit needed here.
+
+  This is a blast-radius fix, not a substitute for fixing the route. A nav
+  item silently vanishing is a symptom worth chasing:
+      python manage.py show_urls | grep -i <app>
+
+  NOTE: Django's {#...#} comment syntax is SINGLE-LINE ONLY. A multi-line
+  one does not comment anything out — its contents are parsed as live tags.
+  Multi-line notes in this file must use comment/endcomment, like this one.
+  ═══════════════════════════════════════════════════════════════════════
+  {% endcomment %}
+
+  {# MAIN #}
+  {% url 'dashboard' as url_dashboard %}
+  {% url 'task_list' as url_tasks %}
+  {% url 'meeting_list' as url_meetings %}
+  {% url 'meetings:meeting_list' as url_meetings_ns %}
+  {% url 'project_list' as url_projects %}
+  {% url 'chat_list' as url_chat %}
+  {% url 'file_manager' as url_files %}
+
+  {# PEOPLE #}
+  {% url 'staff_directory' as url_staff %}
+  {% url 'organization:org_chart' as url_org %}
+  {% url 'leave_requests' as url_leave %}
+
+  {# OPERATIONS #}
+  {% url 'hr_dashboard' as url_hr %}
+  {% url 'finance_dashboard' as url_finance %}
+  {% url 'sales_target_dashboard' as url_sales_targets %}
+  {% url 'marketing_dashboard' as url_marketing %}
+  {% url 'customer_service_dashboard' as url_cs %}
+  {% url 'orders:dashboard' as url_orders %}
+  {% url 'inventory:dashboard' as url_inventory %}
+  {% url 'logistics_dashboard' as url_logistics %}
+  {% url 'it_dashboard' as url_it %}
+  {% url 'user_admin:dashboard' as url_user_admin %}
+  {% url 'poi_manage_list' as url_poi %}
+  {% url 'reports_dashboard' as url_reports %}
+
   <nav class="eo-nav">
     <div class="eo-nav-section">
       <span class="eo-nav-label">MAIN</span>
-      <a href="{% url 'dashboard' %}" class="eo-nav-link {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
+      {% if url_dashboard %}
+      <a href="{{ url_dashboard }}" class="eo-nav-link {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
         <i class="bi bi-speedometer2"></i><span>Dashboard</span>
       </a>
-      <a href="{% url 'task_list' %}" class="eo-nav-link {% if 'task' in request.resolver_match.url_name %}active{% endif %}">
+      {% endif %}
+      {% if url_tasks %}
+      <a href="{{ url_tasks }}" class="eo-nav-link {% if 'task' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-check2-square"></i><span>Tasks</span>
         <span class="eo-badge" id="task-badge"></span>
       </a>
-      <a href="{% url 'meeting_list' %}" class="eo-nav-link {% if 'meeting' in request.resolver_match.url_name %}active{% endif %}">
+      {% endif %}
+      {% comment %}
+      Meetings resolves BOTH bare and namespaced. Adding app_name to
+      apps/meetings/urls.py namespaces every name in that file at once,
+      which is the most likely cause of the NoReverseMatch this template
+      was throwing — this makes the link work either way.
+      {% endcomment %}
+      {% if url_meetings or url_meetings_ns %}
+      <a href="{{ url_meetings|default:url_meetings_ns }}" class="eo-nav-link {% if 'meeting' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-calendar-event"></i><span>Meetings</span>
         {% if pending_meeting_rsvp %}<span class="eo-badge eo-badge-warning">{{ pending_meeting_rsvp }}</span>{% endif %}
       </a>
-      <a href="{% url 'project_list' %}" class="eo-nav-link {% if 'project' in request.resolver_match.url_name %}active{% endif %}">
+      {% endif %}
+      {% if url_projects %}
+      <a href="{{ url_projects }}" class="eo-nav-link {% if 'project' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-kanban"></i><span>Projects</span>
       </a>
-      <a href="{% url 'chat_list' %}" class="eo-nav-link {% if 'chat' in request.resolver_match.url_name %}active{% endif %}">
+      {% endif %}
+      {% if url_chat %}
+      <a href="{{ url_chat }}" class="eo-nav-link {% if 'chat' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-chat-dots"></i><span>Messages</span>
         <span class="eo-badge eo-badge-danger" data-unread-badge {% if not unread_message_count %}hidden{% endif %}>{{ unread_message_count|default:"" }}</span>
       </a>
-      <a href="{% url 'file_manager' %}" class="eo-nav-link {% if 'file' in request.resolver_match.url_name %}active{% endif %}">
+      {% endif %}
+      {% if url_files %}
+      <a href="{{ url_files }}" class="eo-nav-link {% if 'file' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-folder2-open"></i><span>Files</span>
       </a>
+      {% endif %}
     </div>
 
     <div class="eo-nav-section">
       <span class="eo-nav-label">PEOPLE</span>
-      <a href="{% url 'staff_directory' %}" class="eo-nav-link {% if 'staff' in request.resolver_match.url_name %}active{% endif %}">
+      {% if url_staff %}
+      <a href="{{ url_staff }}" class="eo-nav-link {% if 'staff' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-people"></i><span>Staff Directory</span>
       </a>
-      <a href="{% url 'organization:org_chart' %}" class="eo-nav-link {% if 'org' in request.resolver_match.url_name %}active{% endif %}">
+      {% endif %}
+      {% if url_org %}
+      <a href="{{ url_org }}" class="eo-nav-link {% if 'org' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-diagram-3"></i><span>Org Structure</span>
       </a>
-      <a href="{% url 'leave_requests' %}" class="eo-nav-link {% if 'leave' in request.resolver_match.url_name %}active{% endif %}">
+      {% endif %}
+      {% if url_leave %}
+      <a href="{{ url_leave }}" class="eo-nav-link {% if 'leave' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-calendar-check"></i><span>Leave</span>
       </a>
+      {% endif %}
     </div>
 
     <div class="eo-nav-section">
       <span class="eo-nav-label">OPERATIONS</span>
 
-      <a href="{% url 'hr_dashboard' %}" class="eo-nav-link {% if 'hr' in request.resolver_match.url_name or 'appraisal' in request.resolver_match.url_name %}active{% endif %}">
+      {% if url_hr %}
+      <a href="{{ url_hr }}" class="eo-nav-link {% if 'hr' in request.resolver_match.url_name or 'appraisal' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-person-badge"></i><span>HR</span>
       </a>
+      {% endif %}
 
-      <a href="{% url 'finance_dashboard' %}" class="eo-nav-link {% if 'finance' in request.resolver_match.url_name %}active{% endif %}">
+      {% if url_finance %}
+      <a href="{{ url_finance }}" class="eo-nav-link {% if 'finance' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-cash-stack"></i><span>Finance</span>
       </a>
+      {% endif %}
 
-      <a href="{% url 'sales_target_dashboard' %}" class="eo-nav-link {% if 'sales_target' in request.resolver_match.url_name or 'sales_reward' in request.resolver_match.url_name %}active{% endif %}">
+      {% if url_sales_targets %}
+      <a href="{{ url_sales_targets }}" class="eo-nav-link {% if 'sales_target' in request.resolver_match.url_name or 'sales_reward' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-bullseye"></i><span>Sales Targets</span>
       </a>
+      {% endif %}
 
-      <a href="{% url 'marketing_dashboard' %}" class="eo-nav-link {% if 'marketing' in request.resolver_match.url_name %}active{% endif %}">
+      {% if url_marketing %}
+      <a href="{{ url_marketing }}" class="eo-nav-link {% if 'marketing' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-megaphone"></i><span>Marketing</span>
       </a>
+      {% endif %}
 
-      <a href="{% url 'customer_service_dashboard' %}" class="eo-nav-link {% if 'customer_service' in request.resolver_match.url_name %}active{% endif %}">
+      {% if url_cs %}
+      <a href="{{ url_cs }}" class="eo-nav-link {% if 'customer_service' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-headset"></i><span>Customer Service</span>
       </a>
+      {% endif %}
 
-      <a href="{% url 'orders:dashboard' %}" class="eo-nav-link {% if request.resolver_match.namespace == 'orders' %}active{% endif %}">
+      {% if url_orders %}
+      <a href="{{ url_orders }}" class="eo-nav-link {% if request.resolver_match.namespace == 'orders' %}active{% endif %}">
         <i class="bi bi-cart-check"></i><span>Orders</span>
       </a>
+      {% endif %}
 
-      <a href="{% url 'inventory:dashboard' %}" class="eo-nav-link {% if request.resolver_match.namespace == 'inventory' %}active{% endif %}">
+      {% if url_inventory %}
+      <a href="{{ url_inventory }}" class="eo-nav-link {% if request.resolver_match.namespace == 'inventory' %}active{% endif %}">
         <i class="bi bi-box-seam"></i><span>Inventory</span>
       </a>
+      {% endif %}
 
-      <a href="{% url 'logistics_dashboard' %}" class="eo-nav-link {% if 'logistics' in request.resolver_match.url_name %}active{% endif %}">
+      {% if url_logistics %}
+      <a href="{{ url_logistics }}" class="eo-nav-link {% if 'logistics' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-truck"></i><span>Logistics</span>
       </a>
+      {% endif %}
 
-      <a href="{% url 'it_dashboard' %}" class="eo-nav-link {% if 'it' in request.resolver_match.url_name or 'ticket' in request.resolver_match.url_name %}active{% endif %}">
+      {% if url_it %}
+      <a href="{{ url_it }}" class="eo-nav-link {% if 'it' in request.resolver_match.url_name or 'ticket' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-pc-display-horizontal"></i><span>IT Support</span>
         {% if unread_notification_count %}<span class="eo-badge eo-badge-warning">{{ unread_notification_count }}</span>{% endif %}
       </a>
+      {% endif %}
 
-      {% if is_user_admin %}
-        <a href="{% url 'user_admin:dashboard' %}"
+      {% if is_user_admin and url_user_admin %}
+        <a href="{{ url_user_admin }}"
            class="eo-nav-link {% if request.resolver_match.namespace == 'user_admin' %}active{% endif %}">
           <i class="bi bi-person-gear"></i><span>User Administration</span>
         </a>
       {% endif %}
 
       {% if is_user_admin or request.user.is_superuser %}
-        <a href="{% url 'poi_manage_list' %}"
+        {% if url_poi %}
+        <a href="{{ url_poi }}"
            class="eo-nav-link {% if 'poi' in request.resolver_match.url_name %}active{% endif %}">
           <i class="bi bi-person-vcard"></i><span>Persons of Interest</span>
         </a>
+        {% endif %}
       {% endif %}
 
-      <a href="{% url 'reports_dashboard' %}" class="eo-nav-link {% if 'report' in request.resolver_match.url_name %}active{% endif %}">
+      {% if url_reports %}
+      <a href="{{ url_reports }}" class="eo-nav-link {% if 'report' in request.resolver_match.url_name %}active{% endif %}">
         <i class="bi bi-bar-chart-line"></i><span>Reports</span>
       </a>
+      {% endif %}
     </div>
   </nav>
 
@@ -715,9 +813,14 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
 <script src="{% static 'js/easyoffice.js' %}"></script>
 
-{% if request.user.is_authenticated and request.resolver_match.url_name != 'call_window' %}
-{# Single {% url %} tag — all other notification URLs are derived from this in JS #}
-<span id="eo-mark-all-url" style="display:none" aria-hidden="true">{% url 'mark_notifications_read' %}</span>
+{% comment %}
+Resolved defensively — the whole notification widget is skipped if the route
+is missing, rather than taking every page down with it.
+{% endcomment %}
+{% url 'mark_notifications_read' as url_mark_notifications %}
+{% if request.user.is_authenticated and request.resolver_match.url_name != 'call_window' and url_mark_notifications %}
+{# Single URL tag — all other notification URLs are derived from this in JS #}
+<span id="eo-mark-all-url" style="display:none" aria-hidden="true">{{ url_mark_notifications }}</span>
 <script>
 (function () {
   'use strict';
@@ -1086,7 +1189,12 @@
 {# bootstrap-icons font which base.html already loads.                        #}
 {# ───────────────────────────────────────────────────────────────────────── #}
 
-{% if request.user.is_authenticated and request.resolver_match.url_name != 'call_window' %}
+{% comment %}
+Every endpoint in this widget is derived from chat_list, so if that route is
+gone the whole widget is skipped rather than 500-ing the page.
+{% endcomment %}
+{% url 'chat_list' as url_chat_list %}
+{% if request.user.is_authenticated and request.resolver_match.url_name != 'call_window' and url_chat_list %}
 
 {# Hide the launcher when we're already inside the full chat experience —    #}
 {# it would only get in the way on /messages/ and /messages/<room_id>/.      #}
@@ -1554,7 +1662,7 @@
 <div class="eo-fc-inbox" id="eo-fc-inbox" role="dialog" aria-label="Direct messages">
   <div class="eo-fc-inbox-head">
     <h6><i class="bi bi-chat-dots-fill"></i> Messages</h6>
-    <a href="{% url 'chat_list' %}" title="See all messages">All <i class="bi bi-arrow-up-right"></i></a>
+    <a href="{{ url_chat_list }}" title="See all messages">All <i class="bi bi-arrow-up-right"></i></a>
   </div>
   <div class="eo-fc-inbox-list" id="eo-fc-inbox-list"></div>
 </div>
@@ -1640,7 +1748,7 @@
 
   // ── Endpoints (built relative to chat_list so app namespacing works) ────
   // Same trick base.html already uses for notifications.
-  var CHAT_LIST_URL = "{% url 'chat_list' %}";       // e.g. /messages/
+  var CHAT_LIST_URL = "{{ url_chat_list }}";         // e.g. /messages/
   var INBOX_URL     = CHAT_LIST_URL + 'floating/inbox/';
   function messagesUrl(roomId){ return CHAT_LIST_URL + 'floating/' + roomId + '/messages/'; }
   function sendUrl(roomId){     return CHAT_LIST_URL + 'floating/' + roomId + '/send/'; }

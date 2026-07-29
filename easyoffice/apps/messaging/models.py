@@ -51,7 +51,20 @@ class ChatRoomMember(models.Model):
     room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.MEMBER)
+
+    # ✅ READ RECEIPTS — watermarks, not per-message rows.
+    #
+    # last_read      : everything created at or before this instant has been
+    #                  LOOKED AT by this member  → ✓✓ blue for the sender.
+    # last_delivered : everything created at or before this instant has
+    #                  REACHED a live client for this member (their socket
+    #                  attached to the room group) → ✓✓ grey.
+    #
+    # Both move forward only — see apps/messaging/read_receipts.py. Storing
+    # two timestamps per (room, user) instead of one row per
+    # (message x recipient) keeps this O(members) rather than O(messages).
     last_read = models.DateTimeField(null=True, blank=True)
+    last_delivered = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = [('room', 'user')]

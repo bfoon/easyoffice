@@ -53,6 +53,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_add(self.room_group, self.channel_name)
         await self.accept()
 
+        # ✅ READ RECEIPTS: the moment this socket joins the group, every
+        # message already in the room has physically reached a live client
+        # for this user — that is exactly what "delivered" (✓✓ grey) means.
+        # Fires a chat.receipt broadcast so the sender's ticks update live.
+        await self._mark_delivered()
+
     async def disconnect(self, code):
         try:
             await self.channel_layer.group_discard(self.room_group, self.channel_name)
@@ -98,6 +104,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     'sender_avatar_url': await self._avatar_url(user),
                 }
             )
+            return
+
+        # -------------------------
+        # READ RECEIPT
+        # -------------------------
+        # Client sends {"type": "read"} when the tab is visible and the
+        # newest bubble is on screen, optionally with {"up_to": "<msg id>"}
+        # to be precise about how far the user has actually scrolled.
+        # Doing this over the socket avoids an HTTP round-trip per read.
+        if msg_type == 'read':
+            if not await self.user_in_room():
+                await self.close()
+                return
+            await self._mark_read(data.get('up_to') or None)
             return
 
         # -------------------------
@@ -198,6 +218,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Broadcast pin/unpin events to every open client in the room."""
         await self.send(text_data=json.dumps(event['payload']))
 
+    # ✅ READ RECEIPTS — delivered/read watermark updates.
+    #
+    # Unlike chat_typing we DO echo this back to the originator. The
+    # sender needs their own watermark too (it drives the room's unread
+    # badge), and a user with the same room open in two tabs should see
+    # both tabs agree. The client ignores its own entry when colouring
+    # ticks, which is the correct place for that decision.
+    async def chat_receipt(self, event):
+        await self.send(text_data=json.dumps(event['payload']))
+
     # 🔒 NEW — membership revocation.
     # RemoveRoomMemberView broadcasts this when someone is removed from a
     # room. Previously, a removed member's open socket stayed in the
@@ -266,6 +296,36 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except Exception:
             pass
         return ''
+
+    @database_sync_to_async
+    def _mark_delivered(self):
+        """Advance this user's delivered watermark + broadcast (best effort)."""
+        try:
+            from apps.messaging.models import ChatRoom
+            from apps.messaging.read_receipts import mark_delivered
+            room = ChatRoom.objects.filter(id=self.room_id).first()
+            if room:
+                mark_delivered(room, self.user)
+        except Exception:
+            pass
+
+    @database_sync_to_async
+    def _mark_read(self, up_to_message_id=None):
+        """Advance this user's read watermark + broadcast (best effort)."""
+        try:
+            from apps.messaging.models import ChatRoom
+            from apps.messaging.read_receipts import (
+                mark_read, mark_read_up_to_message,
+            )
+            room = ChatRoom.objects.filter(id=self.room_id).first()
+            if not room:
+                return
+            if up_to_message_id:
+                mark_read_up_to_message(room, self.user, up_to_message_id)
+            else:
+                mark_read(room, self.user)
+        except Exception:
+            pass
 
     @database_sync_to_async
     def user_in_room(self):

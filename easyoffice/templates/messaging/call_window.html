@@ -482,10 +482,115 @@ var RING_IS_STALE   = {% if ring_is_stale %}true{% else %}false{% endif %};
 var WS_SCHEME     = window.location.protocol === 'https:' ? 'wss' : 'ws';
 var CSRF_TOKEN    = '{{ csrf_token }}';
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   🧊 ICE CONFIGURATION
+   ───────────────────────────────────────────────────────────────────────────
+   The old hard-coded `[{urls:'stun:...'}]` is why calls die behind the
+   office proxy. STUN only DISCOVERS your public address — it cannot make
+   you reachable. Behind symmetric NAT (which is what a corporate firewall
+   gives you) neither peer has an address the other can use, so ICE goes
+   checking → failed and the call drops around the 10-second mark.
+
+   ICE servers now come from GET /messages/webrtc/ice-servers/, which
+   returns STUN plus TURN with SHORT-LIVED HMAC credentials (see
+   apps/messaging/turn.py). Never hard-code TURN credentials in a template
+   — they'd be permanent, public, and your relay would become an open proxy.
+
+   The relay entry that actually beats a proxy is
+   `turns:...:443?transport=tcp` — TLS over 443 looks like HTTPS to a
+   middlebox. ICE still prefers the UDP paths when they work; 443/TCP is
+   the fallback, not the default.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 var CALL_ICE_SERVERS = [
+  // Safety net only — used if the config endpoint is unreachable. A call
+  // relying on this list WILL fail behind symmetric NAT.
   { urls: 'stun:stun.l.google.com:19302' }
-  // Paste TURN here when you have it, e.g. Metered openrelay
 ];
+
+var CALL_ICE_POLICY   = 'all';
+var CALL_ICE_HAS_TURN = false;
+var _iceFetchedAt     = 0;
+var _iceTtl           = 3600;
+var _iceInFlight      = null;
+
+/* Diagnostics — answers "did this call go direct or through the relay?" */
+var _iceRelayCandidates = 0;
+var _iceSelectedPath    = '';
+
+/* Fetch (and cache) the ICE configuration.
+
+   force=true re-fetches even if cached — used before an ICE restart,
+   because a call longer than the credential TTL would otherwise try to
+   re-authenticate against the relay with an expired username. That is the
+   classic "call drops after ~an hour" bug. */
+function iceEnsureConfig(force){
+  var ageSec = (Date.now() - _iceFetchedAt) / 1000;
+  if(!force && _iceFetchedAt && ageSec < (_iceTtl / 2)){
+    return Promise.resolve(true);
+  }
+  if(_iceInFlight && !force) return _iceInFlight;
+
+  _iceInFlight = fetch('/messages/webrtc/ice-servers/', {
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(!d || !d.ok || !d.ice_servers || !d.ice_servers.length){
+      throw new Error('empty ice config');
+    }
+    CALL_ICE_SERVERS  = d.ice_servers;
+    CALL_ICE_POLICY   = d.ice_transport_policy || 'all';
+    CALL_ICE_HAS_TURN = !!d.has_turn;
+    _iceTtl           = d.ttl || 3600;
+    _iceFetchedAt     = Date.now();
+
+    if(!CALL_ICE_HAS_TURN){
+      callLog('⚠ No TURN relay configured — calls will fail for anyone ' +
+              'behind symmetric NAT or a restrictive proxy. Set ' +
+              'WEBRTC_TURN_HOSTS + WEBRTC_TURN_SECRET in settings.py.');
+    } else {
+      callLog('ICE config loaded · relay available · policy=' + CALL_ICE_POLICY);
+    }
+    _iceInFlight = null;
+    return true;
+  })
+  .catch(function(err){
+    // Don't block the call — degrade to STUN and let ICE try its luck.
+    callLog('ICE config fetch failed, falling back to STUN only:', err);
+    _iceFetchedAt = Date.now();
+    _iceTtl       = 120;          // retry sooner than a real TTL
+    _iceInFlight  = null;
+    return false;
+  });
+
+  return _iceInFlight;
+}
+
+/* Single source of truth for the RTCPeerConnection config.
+
+   IMPORTANT: setConfiguration() may NOT change bundlePolicy or
+   rtcpMuxPolicy mid-call — it throws InvalidModificationError. Both the
+   constructor and the mid-call credential refresh go through this builder
+   so those two values are always identical. */
+function _pcConfig(){
+  return {
+    iceServers: CALL_ICE_SERVERS,
+    iceTransportPolicy: CALL_ICE_POLICY,
+
+    // max-bundle puts audio + video on ONE transport, so ICE negotiates a
+    // single port pair instead of several. Behind a restrictive firewall
+    // that is the difference between one hole to punch and three.
+    bundlePolicy: 'max-bundle',
+    rtcpMuxPolicy: 'require'
+
+    // iceCandidatePoolSize deliberately left at the default (0). Pre-warming
+    // the pool would allocate TURN relay ports before we know the call will
+    // even be answered, burning relay quota on every cancelled ring.
+  };
+}
 
 function byId(id){ return document.getElementById(id); }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -569,6 +674,7 @@ function connectWS(){
     if(_shuttingDown) return;                   // 🩹 no auto-restart after End
     socketReconnectDelay = 1000;
     callLog('WS open');
+    _flushSignalQueue();                        // 🧊 replay candidates lost to the blip
     if(INITIAL_MODE === 'outgoing' && callState === 'idle'){
       startOutgoingCall();
     } else if(INITIAL_MODE === 'incoming' && callState === 'idle'){
@@ -601,9 +707,39 @@ function connectWS(){
   socket.onerror = function(){ try { socket.close(); } catch(_){} };
 }
 
+/* Outbound queue for signalling that must survive a WebSocket blip.
+
+   The same proxy that kills the media path will happily kill the
+   signalling socket too. ICE candidates are additive and idempotent, so
+   replaying them after reconnect is always safe — and losing them is what
+   makes a reconnect attempt appear to hang. SDP offers/answers are NOT
+   queued: a stale offer replayed seconds later causes glare, and the
+   restart backoff loop already retries those. */
+var _signalQueue = [];
+var _SIGNAL_QUEUE_MAX = 60;
+var _SIGNAL_QUEUE_TTL = 15000;   // ms — older candidates are worthless
+
+function _flushSignalQueue(){
+  if(!socket || socket.readyState !== WebSocket.OPEN) return;
+  var now = Date.now();
+  var pending = _signalQueue;
+  _signalQueue = [];
+  pending.forEach(function(item){
+    if(now - item.at > _SIGNAL_QUEUE_TTL) return;
+    try { socket.send(JSON.stringify(item.obj)); } catch(_){}
+  });
+}
+
 function callSignal(obj){
   if(!socket || socket.readyState !== WebSocket.OPEN){
-    callLog('WS not open, queue/skip:', obj.type);
+    if(obj && obj.type === 'ice_candidate'){
+      if(_signalQueue.length < _SIGNAL_QUEUE_MAX){
+        _signalQueue.push({ obj: obj, at: Date.now() });
+      }
+      callLog('WS not open, queued:', obj.type);
+    } else {
+      callLog('WS not open, skipped:', obj.type);
+    }
     return false;
   }
   try { callLog('→', obj.type); } catch(_){}
@@ -717,13 +853,42 @@ function callStartNetStats(){
     try {
       callPC.getStats(null).then(function(stats){
         var rtt=0, lost=0, rcv=0;
+        var pairs={}, locals={}, remotes={};
         stats.forEach(function(r){
-          if(r.type==='candidate-pair' && r.state==='succeeded' && r.currentRoundTripTime!=null){ rtt = Math.max(rtt,r.currentRoundTripTime); }
+          if(r.type==='candidate-pair' && r.state==='succeeded'){
+            pairs[r.id]=r;
+            if(r.currentRoundTripTime!=null){ rtt = Math.max(rtt,r.currentRoundTripTime); }
+          }
+          if(r.type==='local-candidate')  locals[r.id]=r;
+          if(r.type==='remote-candidate') remotes[r.id]=r;
           if(r.type==='inbound-rtp' && !r.isRemote){
             if(r.packetsLost!=null) lost += r.packetsLost;
             if(r.packetsReceived!=null) rcv += r.packetsReceived;
           }
         });
+
+        /* 🧊 Which path is actually carrying the media? 'relay' means the
+           call is going through TURN; 'host'/'srflx' means it found a
+           direct peer-to-peer route. This is the first thing to check when
+           someone reports "calls work from home but not from the office". */
+        Object.keys(pairs).forEach(function(k){
+          var pr = pairs[k];
+          var l = locals[pr.localCandidateId] || {};
+          var rm = remotes[pr.remoteCandidateId] || {};
+          var path = (l.candidateType||'?') + '/' + (l.protocol||'?') +
+                     ' → ' + (rm.candidateType||'?') + '/' + (rm.protocol||'?');
+          if(path !== _iceSelectedPath){
+            _iceSelectedPath = path;
+            callLog('media path:', path);
+            var dotEl = byId('wNetDot');
+            if(dotEl){
+              dotEl.title = (l.candidateType === 'relay' || rm.candidateType === 'relay')
+                ? 'Relayed via TURN · ' + path
+                : 'Direct peer-to-peer · ' + path;
+            }
+          }
+        });
+
         var loss = rcv>0 ? lost/(lost+rcv) : 0;
         if(rtt>0.3 || loss>0.08) callSetNetStatus('bad','Poor connection');
         else if(rtt>0.15 || loss>0.03) callSetNetStatus('warn','Fair connection');
@@ -938,10 +1103,27 @@ function callTryIceRestart(){
   _reconnectInFlight = true;
   callSetNetStatus('warn','Reconnecting ('+_reconnectAttempt+'/'+_reconnectMaxAttempts+')…');
 
-  try { if(callPC.restartIce) callPC.restartIce(); } catch(_){}
-  callPC.createOffer({iceRestart:true})
-    .then(function(o){ return callPC.setLocalDescription(o); })
+  // 🔑 Refresh TURN credentials FIRST. They are minted with a ~1h TTL, so a
+  // long call outlives them; restarting ICE with an expired username makes
+  // the relay reject the allocation and the "reconnect" silently fails.
+  // setConfiguration() swaps them in without tearing down media.
+  iceEnsureConfig(true)
     .then(function(){
+      // Bail-outs must clear the in-flight latch or every FUTURE restart is
+      // blocked by `if(_reconnectInFlight) return` and the call can never
+      // recover — a silent one-way door.
+      if(!callPC || _shuttingDown){ _reconnectInFlight = false; return null; }
+      try { callPC.setConfiguration(_pcConfig()); }
+      catch(e){ callLog('setConfiguration unsupported/rejected:', e); }
+      try { if(callPC.restartIce) callPC.restartIce(); } catch(_){}
+      return callPC.createOffer({iceRestart:true});
+    })
+    .then(function(o){
+      if(!o || !callPC || _shuttingDown){ _reconnectInFlight = false; return null; }
+      return callPC.setLocalDescription(o).then(function(){ return true; });
+    })
+    .then(function(ok){
+      if(!ok || !callPC || _shuttingDown){ _reconnectInFlight = false; return; }
       callSignal({type:'call_upgrade_offer', sdp:callPC.localDescription, ice_restart:true});
       var backoff = Math.min(8000 * Math.pow(1.5, _reconnectAttempt-1), 30000);
       setTimeout(function(){
@@ -956,8 +1138,32 @@ function callTryIceRestart(){
 
 /* ── PeerConnection ─────────────────────────────────────────────────── */
 function buildPC(){
-  var pc = new RTCPeerConnection({iceServers: CALL_ICE_SERVERS});
-  pc.onicecandidate = function(ev){ if(ev.candidate) callSignal({type:'ice_candidate', candidate:ev.candidate}); };
+  var pc = new RTCPeerConnection(_pcConfig());
+
+  _iceRelayCandidates = 0;
+  _iceSelectedPath    = '';
+
+  pc.onicecandidate = function(ev){
+    if(!ev.candidate){
+      // Gathering finished. If we never produced a relay candidate and TURN
+      // is supposedly configured, the relay is unreachable from THIS network
+      // — the single most useful log line when triaging "works from home,
+      // fails from the compound".
+      if(CALL_ICE_HAS_TURN && _iceRelayCandidates === 0){
+        callLog('⚠ Gathering complete with 0 relay candidates — the TURN ' +
+                'server is unreachable from this network. Check that ' +
+                'turns:...:443 is open outbound.');
+      }
+      return;
+    }
+    if(ev.candidate.type === 'relay' ||
+       (ev.candidate.candidate || '').indexOf(' typ relay') !== -1){
+      _iceRelayCandidates++;
+    }
+    // Candidates queue client-side while the WS is reconnecting (see
+    // callSignal) so a socket blip mid-negotiation doesn't lose them.
+    callSignal({type:'ice_candidate', candidate:ev.candidate});
+  };
   pc.ontrack = function(ev){
     if(!ev.streams || !ev.streams[0]) return;
     var stream = ev.streams[0];
@@ -1091,11 +1297,17 @@ function startOutgoingCall(){
     if(!stream) return;
     callLocalStream = stream;
     callBaseKind = callKind;
-    callPC = buildPC();
-    addTracksFromStream(callLocalStream);
-    return callPC.createOffer({offerToReceiveAudio:true, offerToReceiveVideo: callKind==='video'})
-      .then(function(o){ return callPC.setLocalDescription(o); })
-      .then(function(){ callSignal({type:'call_offer', sdp:callPC.localDescription, call_kind:callKind}); });
+    // 🧊 The relay credentials must be in hand BEFORE the PeerConnection is
+    // constructed — iceServers cannot be added once gathering has started.
+    // The fetch was warmed at page load, so this is normally instant.
+    return iceEnsureConfig().then(function(){
+      if(_shuttingDown) return;
+      callPC = buildPC();
+      addTracksFromStream(callLocalStream);
+      return callPC.createOffer({offerToReceiveAudio:true, offerToReceiveVideo: callKind==='video'})
+        .then(function(o){ return callPC.setLocalDescription(o); })
+        .then(function(){ callSignal({type:'call_offer', sdp:callPC.localDescription, call_kind:callKind}); });
+    });
   })
   .catch(function(err){ callLog('startOutgoing:', err); flashToast('Could not start call.'); callTeardown('cancelled'); });
 }
@@ -1123,9 +1335,14 @@ function _callConsumePendingOffer(){
     if(!stream){ try{ callSignal({type:'call_decline'}); }catch(_){} callTeardown('declined'); return; }
     callLocalStream = stream;
     callBaseKind = callKind;
-    callPC = buildPC();
-    addTracksFromStream(callLocalStream);
-    return callPC.setRemoteDescription(new RTCSessionDescription(offer))
+    // 🧊 Same rule on the answering side — relay credentials first, then
+    // build the PeerConnection. Answering without TURN while the caller
+    // has it still fails: BOTH peers need a reachable path.
+    return iceEnsureConfig().then(function(){
+      if(_shuttingDown) return;
+      callPC = buildPC();
+      addTracksFromStream(callLocalStream);
+      return callPC.setRemoteDescription(new RTCSessionDescription(offer))
       .then(function(){
         var p = Promise.resolve();
         _pendingRemoteIce.forEach(function(c){ p = p.then(function(){ return callPC.addIceCandidate(new RTCIceCandidate(c)).catch(function(){}); }); });
@@ -1145,6 +1362,7 @@ function _callConsumePendingOffer(){
           body:'reason=connected&call_kind='+encodeURIComponent(callKind)
         }).catch(function(){});
       });
+    });
   })
   .catch(function(err){ callLog('accept:', err); flashToast('Could not accept the call.'); callTeardown('declined'); });
 }
@@ -1984,6 +2202,10 @@ window.addEventListener('beforeunload', _emergencyClear);
 })();
 
 // Kick things off
+// 🧊 Warm the relay credentials in parallel with the socket handshake so
+// they're already cached by the time getUserMedia() resolves — otherwise
+// every call pays an extra round-trip before it can even start gathering.
+iceEnsureConfig();
 connectWS();
 </script>
 </body>

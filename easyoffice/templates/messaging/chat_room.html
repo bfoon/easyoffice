@@ -73,6 +73,13 @@
 .chat-msg.own .chat-body{align-items:flex-end;display:flex;flex-direction:column;}
 .chat-sender{font-size:.75rem;font-weight:700;color:var(--eo-text);margin-bottom:3px;display:flex;align-items:baseline;gap:7px;}
 .chat-time-inline{font-size:.68rem;font-weight:400;color:var(--eo-text-muted);}
+/* ✅ READ RECEIPTS — delivery/read ticks on your own messages only. */
+.msg-ticks{font-size:.72rem;line-height:1;margin-left:5px;display:inline-flex;align-items:center;gap:1px;vertical-align:middle;color:var(--eo-text-muted);transition:color .15s;}
+.msg-ticks.is-sent{color:var(--eo-text-muted);opacity:.75;}
+.msg-ticks.is-delivered{color:var(--eo-text-muted);opacity:.95;}
+.msg-ticks.is-read{color:#2563eb;opacity:1;}
+.msg-ticks .tick-count{font-size:.62rem;font-weight:700;margin-left:2px;}
+.chat-msg.own .chat-sender{display:flex;align-items:center;gap:4px;}
 
 /* Bubbles */
 .bubble{display:block;padding:8px 13px;border-radius:16px;font-size:.88rem;line-height:1.55;word-break:break-word;white-space:pre-wrap;max-width:100%;}
@@ -4386,6 +4393,214 @@ window.addEventListener('beforeunload', function(){
     });
   };
 
+  /* ══════════════════════════════════════════════════════════════════════
+     ✅ READ RECEIPTS
+     ─────────────────────────────────────────────────────────────────────
+     The server keeps two WATERMARK timestamps per (room, member):
+        delivered_ts — their socket has attached, so everything up to here
+                       physically reached a live client of theirs
+        read_ts      — they have actually looked at everything up to here
+
+     Every bubble already carries data-ts (unix seconds), so colouring a
+     tick is a pure comparison — no per-message lookup, and it works for
+     history loaded by infinite scroll without any extra fetch.
+
+        ✓        sent       (bubble exists)
+        ✓✓ grey  delivered  peer.delivered_ts >= bubble ts
+        ✓✓ blue  read       peer.read_ts      >= bubble ts
+
+     In a group room the blue state needs EVERY member to have read it;
+     partial reads show "✓✓ 3" so you can see how far it has spread.
+     ══════════════════════════════════════════════════════════════════════ */
+
+  var RECEIPTS = {
+    enabled: true,
+    peers: {},          /* user_id -> {name, delivered_ts, read_ts} */
+    lastReadSent: 0,    /* newest ts we've already reported as read */
+    applyTimer: null,
+    readTimer: null
+  };
+
+  var TICK_ONE = '<i class="bi bi-check2"></i>';
+  var TICK_TWO = '<i class="bi bi-check2-all"></i>';
+
+  /* Everyone in the room except me. Ticks describe THEIR state, never mine. */
+  function receiptPeers(){
+    var out = [];
+    for(var uid in RECEIPTS.peers){
+      if(!RECEIPTS.peers.hasOwnProperty(uid)) continue;
+      if(String(uid) === String(USER_ID)) continue;
+      out.push(RECEIPTS.peers[uid]);
+    }
+    return out;
+  }
+
+  /* Pull every member's watermarks. Called on load and after each
+     reconnect — a socket that was down missed the live broadcasts. */
+  function refreshReadState(){
+    if(!RECEIPTS.enabled) return;
+    fetch('/messages/' + ROOM_ID + '/read-state/', {
+      credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if(!d || !d.ok) return;
+      if(d.enabled === false){ RECEIPTS.enabled = false; return; }
+      RECEIPTS.peers = {};
+      (d.members || []).forEach(function(m){
+        RECEIPTS.peers[String(m.user_id)] = {
+          name: m.name || '',
+          delivered_ts: parseInt(m.delivered_ts || 0, 10),
+          read_ts: parseInt(m.read_ts || 0, 10)
+        };
+      });
+      applyReceipts();
+    })
+    .catch(function(){});
+  }
+
+  /* Live watermark update pushed over the WebSocket. */
+  function applyReceiptUpdate(d){
+    var uid = String(d.user_id || '');
+    if(!uid) return;
+    var cur = RECEIPTS.peers[uid] || { name: '', delivered_ts: 0, read_ts: 0 };
+    /* Watermarks only ever move forward — guard against out-of-order frames. */
+    cur.name         = d.user_name || cur.name;
+    cur.delivered_ts = Math.max(cur.delivered_ts, parseInt(d.delivered_ts || 0, 10));
+    cur.read_ts      = Math.max(cur.read_ts,      parseInt(d.read_ts || 0, 10));
+    RECEIPTS.peers[uid] = cur;
+    scheduleApplyReceipts();
+  }
+
+  /* Coalesce bursts (a 12-person room all opening at once) into one pass. */
+  function scheduleApplyReceipts(){
+    if(RECEIPTS.applyTimer) return;
+    RECEIPTS.applyTimer = setTimeout(function(){
+      RECEIPTS.applyTimer = null;
+      applyReceipts();
+    }, 120);
+  }
+
+  /* Repaint ticks on every one of MY bubbles currently in the DOM. */
+  function applyReceipts(){
+    if(!RECEIPTS.enabled) return;
+
+    var peers = receiptPeers();
+    if(!peers.length) return;
+
+    var total = peers.length;
+    var msgs = byId('chatMessages');
+    if(!msgs) return;
+
+    var nodes = msgs.querySelectorAll('.chat-msg.own');
+    for(var i = 0; i < nodes.length; i++){
+      var node = nodes[i];
+      var ts = parseInt(node.getAttribute('data-ts') || '0', 10);
+      if(!ts) continue;
+
+      var readBy = 0, deliveredBy = 0, j;
+      for(j = 0; j < total; j++){
+        if(peers[j].read_ts >= ts) readBy++;
+        if(peers[j].delivered_ts >= ts) deliveredBy++;
+      }
+
+      var cls, html, title;
+      if(readBy >= total){
+        cls = 'is-read';  html = TICK_TWO;  title = 'Read by everyone';
+      } else if(readBy > 0){
+        cls = 'is-read';  html = TICK_TWO + '<span class="tick-count">' + readBy + '</span>';
+        title = 'Read by ' + readBy + ' of ' + total;
+      } else if(deliveredBy >= total){
+        cls = 'is-delivered'; html = TICK_TWO; title = 'Delivered';
+      } else if(deliveredBy > 0){
+        cls = 'is-delivered'; html = TICK_TWO + '<span class="tick-count">' + deliveredBy + '</span>';
+        title = 'Delivered to ' + deliveredBy + ' of ' + total;
+      } else {
+        cls = 'is-sent';  html = TICK_ONE;  title = 'Sent';
+      }
+
+      var span = node.querySelector('.msg-ticks');
+      if(!span){
+        var holder = node.querySelector('.chat-sender');
+        if(!holder) continue;
+        span = document.createElement('span');
+        span.className = 'msg-ticks';
+        holder.appendChild(span);
+      }
+      if(span.getAttribute('data-state') !== cls + ':' + readBy + ':' + deliveredBy){
+        span.setAttribute('data-state', cls + ':' + readBy + ':' + deliveredBy);
+        span.className = 'msg-ticks ' + cls;
+        span.title = title;
+        span.innerHTML = html;
+      }
+    }
+  }
+
+  /* Tell the server how far I've read.
+
+     Deliberately conservative: only when the tab is VISIBLE and I'm
+     scrolled to the bottom. Marking everything read the instant the page
+     loads (which ChatRoomView still does server-side) is a lie when the
+     tab is sitting in the background — and the person on the other end is
+     making decisions based on that blue tick. */
+  function markRead(force){
+    if(!RECEIPTS.enabled) return;
+    if(document.hidden && !force) return;
+    if(!isNearBottom() && !force) return;
+
+    var msgs = byId('chatMessages');
+    if(!msgs) return;
+    var nodes = msgs.querySelectorAll('.chat-msg');
+    if(!nodes.length) return;
+
+    var last = nodes[nodes.length - 1];
+    var ts = parseInt(last.getAttribute('data-ts') || '0', 10);
+    var mid = (last.id || '').replace('msg-', '');
+    if(!ts || !mid || ts <= RECEIPTS.lastReadSent) return;
+
+    RECEIPTS.lastReadSent = ts;
+
+    /* Prefer the socket — no HTTP round-trip, and it reuses the auth and
+       membership checks the consumer already performs. */
+    if(socket && socket.readyState === 1){
+      try {
+        socket.send(JSON.stringify({ type: 'read', up_to: mid }));
+        return;
+      } catch(_){}
+    }
+
+    var body = new FormData();
+    body.append('up_to', mid);
+    fetch('/messages/' + ROOM_ID + '/read/', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'X-CSRFToken': getCookie('csrftoken'),
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: body
+    }).catch(function(){});
+  }
+
+  function scheduleMarkRead(){
+    if(RECEIPTS.readTimer) clearTimeout(RECEIPTS.readTimer);
+    RECEIPTS.readTimer = setTimeout(function(){ markRead(false); }, 400);
+  }
+
+  /* Triggers: tab regains focus, user scrolls back down, window focused. */
+  document.addEventListener('visibilitychange', function(){
+    if(!document.hidden) scheduleMarkRead();
+  });
+  window.addEventListener('focus', scheduleMarkRead);
+  (function(){
+    var m = byId('chatMessages');
+    if(m) m.addEventListener('scroll', scheduleMarkRead, { passive: true });
+  })();
+
+  /* Initial paint + first read report. */
+  setTimeout(function(){ refreshReadState(); scheduleMarkRead(); }, 300);
+
   function connectWS(){
     if(READONLY) return;
 
@@ -4397,6 +4612,10 @@ window.addEventListener('beforeunload', function(){
 
     socket.onopen = function(){
       reconnectDelay = 1000;
+      /* ✅ A socket that was down missed every live receipt broadcast —
+         pull the authoritative watermarks back in, then report our own. */
+      refreshReadState();
+      scheduleMarkRead();
     };
 
     socket.onmessage = function(e){
@@ -4407,7 +4626,16 @@ window.addEventListener('beforeunload', function(){
         return;
       }
 
-      if(d.type === 'typing'){
+      /* ✅ READ RECEIPTS — a member's delivered/read watermark moved. */
+      if(d.type === 'read_receipt'){
+        applyReceiptUpdate(d);
+        return;
+      }
+
+      /* 🩹 The consumer emits 'chat_typing'; typing_views.py and the old
+         client agreed on 'typing'. Accept both so the indicator works no
+         matter which path fired it. */
+      if(d.type === 'typing' || d.type === 'chat_typing'){
         if(String(d.sender_id || '') !== String(USER_ID)){
           showTyping(d.sender_name || 'Someone');
         }
@@ -4451,6 +4679,13 @@ window.addEventListener('beforeunload', function(){
 
       if(d.type === 'chat_message' || d.message || d.content || d.poll){
         appendMessage(d);
+        /* Mine → it needs a fresh "sent" tick. Theirs → if I'm looking at
+           the room right now, that counts as reading it. */
+        if(String(d.sender_id || '') === String(USER_ID)){
+          scheduleApplyReceipts();
+        } else {
+          scheduleMarkRead();
+        }
       }
     };
 

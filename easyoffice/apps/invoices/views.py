@@ -39,6 +39,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views import View
+from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
 
@@ -405,6 +406,27 @@ class InvoiceLayoutSaveView(InvoiceAccessMixin, View):
 
 # ── AJAX: preview PDF ────────────────────────────────────────────────────────
 
+def _inline_pdf_response(data, filename):
+    """
+    Build an inline PDF response that is allowed to render inside a
+    same-origin <iframe> (the detail page preview pane).
+
+    Django's XFrameOptionsMiddleware stamps `X-Frame-Options: DENY` on every
+    response by default (settings.X_FRAME_OPTIONS), which makes Firefox and
+    Chrome refuse to display the PDF in the preview frame. We set the header
+    explicitly here so the middleware leaves it alone, and add the modern
+    CSP equivalent for browsers that prefer frame-ancestors.
+    """
+    resp = HttpResponse(data, content_type='application/pdf')
+    resp['Content-Disposition'] = f'inline; filename="{filename}"'
+    resp['X-Frame-Options'] = 'SAMEORIGIN'
+    resp['Content-Security-Policy'] = "frame-ancestors 'self'"
+    # Previews must never be cached — the draft changes as the user edits.
+    resp['Cache-Control'] = 'private, no-store, must-revalidate'
+    return resp
+
+
+@method_decorator(xframe_options_sameorigin, name='dispatch')
 class InvoicePreviewPDFView(InvoiceAccessMixin, View):
     def get(self, request, pk):
         invoice = get_object_or_404(InvoiceDocument, pk=pk)
@@ -415,14 +437,10 @@ class InvoicePreviewPDFView(InvoiceAccessMixin, View):
                 data = invoice.generated_pdf.file.read()
             finally:
                 invoice.generated_pdf.file.close()
-            resp = HttpResponse(data, content_type='application/pdf')
-            resp['Content-Disposition'] = f'inline; filename="{invoice.number}.pdf"'
-            return resp
+            return _inline_pdf_response(data, f'{invoice.number}.pdf')
 
         pdf = build_preview_pdf(invoice)
-        resp = HttpResponse(pdf, content_type='application/pdf')
-        resp['Content-Disposition'] = f'inline; filename="preview-{invoice.pk}.pdf"'
-        return resp
+        return _inline_pdf_response(pdf, f'preview-{invoice.pk}.pdf')
 
 
 # ── AJAX: finalize ───────────────────────────────────────────────────────────

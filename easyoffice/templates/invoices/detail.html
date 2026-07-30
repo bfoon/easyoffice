@@ -19,7 +19,19 @@
     background:#fff; border:1px solid #e2e8f0; border-radius: 12px; padding: 8px;
     height: calc(100vh - 180px); overflow: hidden;
   }
-  .pdf-frame iframe { width: 100%; height: 100%; border: 0; border-radius: 8px; }
+  .pdf-frame { display: flex; flex-direction: column; }
+  .pdf-frame iframe { width: 100%; flex: 1; min-height: 0; border: 0; border-radius: 8px; }
+  .pdf-bar {
+    display: flex; align-items: center; gap: 10px; padding: 4px 6px 8px;
+    font-size: 12.5px; color: #64748b;
+  }
+  .pdf-bar .spacer { flex: 1; }
+  .pdf-bar a { color: #0ea5e9; text-decoration: none; font-weight: 600; }
+  .pdf-bar a:hover { text-decoration: underline; }
+  .pdf-fallback {
+    display: none; margin: 0 6px 8px; padding: 10px 14px; border-radius: 8px;
+    background: #fef3c7; border: 1px solid #fde68a; color: #78350f; font-size: 12.5px;
+  }
 
   .side { background:#fff; border:1px solid #e2e8f0; border-radius: 12px; padding: 18px; }
   .side h4 { margin: 0 0 10px; font-size: 14px; color:#0f172a; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; }
@@ -230,7 +242,22 @@
 
   <div class="dt-body">
     <div class="pdf-frame">
-      <iframe src="{% url 'invoices:invoice_preview_pdf' invoice.pk %}#toolbar=1"></iframe>
+      <div class="pdf-bar">
+        <i class="bi bi-file-earmark-pdf" style="color:#ef4444;"></i>
+        <span>Document preview</span>
+        <span class="spacer"></span>
+        <a href="{% url 'invoices:invoice_preview_pdf' invoice.pk %}" target="_blank" rel="noopener">
+          <i class="bi bi-box-arrow-up-right"></i> Open in new tab
+        </a>
+      </div>
+      <div class="pdf-fallback" id="pdf-fallback">
+        <i class="bi bi-exclamation-triangle-fill"></i>
+        The preview couldn't be displayed inside this page (your browser blocked the
+        embedded frame). Use <strong>Open in new tab</strong> above, or the
+        <strong>Download PDF</strong> button, to view the document.
+      </div>
+      <iframe id="pdf-preview"
+              src="{% url 'invoices:invoice_preview_pdf' invoice.pk %}#toolbar=1"></iframe>
     </div>
 
     <div>
@@ -402,4 +429,30 @@
     </div>
   </div>
 </div>
+
+<script>
+(function () {
+  // If the browser refuses to render the PDF inside the frame (X-Frame-Options
+  // / CSP frame-ancestors), the frame shows a browser error page from a
+  // different origin — touching its document throws. Detect that and surface
+  // the "open in new tab" fallback instead of leaving a broken pane.
+  var frame = document.getElementById('pdf-preview');
+  var fallback = document.getElementById('pdf-fallback');
+  if (!frame || !fallback) return;
+
+  function check() {
+    try {
+      // Same-origin PDF viewer → readable. Blocked frame → SecurityError.
+      var doc = frame.contentDocument || frame.contentWindow.document;
+      if (!doc) throw new Error('no document');
+    } catch (e) {
+      fallback.style.display = 'block';
+      frame.style.display = 'none';
+    }
+  }
+
+  frame.addEventListener('load', function () { setTimeout(check, 200); });
+  setTimeout(check, 3000);
+})();
+</script>
 {% endblock %}

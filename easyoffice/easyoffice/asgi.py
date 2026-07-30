@@ -15,7 +15,12 @@ from apps.messaging import routing as messaging_routing
 from apps.notifications_ws import routing as notification_routing
 from apps.files import routing as files_routing
 from apps.customer_service import routing as customer_service_routing
-from apps.mobile_api.ws_auth import JWTAuthMiddlewareStack
+
+# NOTE: apps.messaging.ws_auth, NOT apps.mobile_api.ws_auth. The latter is
+# the older JWT-only middleware that leaves scope['user'] unset when no
+# token is supplied — which is what made ChatConsumer.connect() close every
+# browser socket with 403.
+from apps.messaging.ws_auth import JWTAuthMiddleware
 
 
 # ── Customer-service live chat (SESSION auth) ─────────────────────────────
@@ -30,63 +35,40 @@ cs_websockets = AuthMiddlewareStack(
     URLRouter(customer_service_routing.websocket_urlpatterns)
 )
 
-# ── Shared routes: same paths, two kinds of client ────────────────────────
-# Chat, notifications and file sockets are opened by BOTH the mobile app
-# (bearer token) and the browser (session cookie). The browser cannot send
-# an Authorization header — the WebSocket constructor accepts a URL and a
-# subprotocol list, nothing else — so a JWT-only stack leaves every browser
-# socket as AnonymousUser and the consumer closes it with 403. That is the
-# "403 0" on /ws/chat/<uuid>/ retrying once a second in the nginx log.
+# ── Shared routes: browser (session cookie) AND mobile (bearer token) ─────
+# The nesting order IS the fix, and it is not interchangeable:
 #
-# Build the same URLRouter twice, under each stack, and pick per connection.
-_shared_patterns = (
-    messaging_routing.websocket_urlpatterns +
-    notification_routing.websocket_urlpatterns +
-    files_routing.websocket_urlpatterns
+#   AuthMiddlewareStack runs first and resolves scope['user'] from the
+#   session cookie. JWTAuthMiddleware then runs and overrides it only when
+#   an `Authorization: Bearer` header is present — its `elif "user" not in
+#   scope` guard leaves an already-resolved session user untouched.
+#
+# Reversing this (JWT outermost) silently breaks mobile instead: Channels'
+# AuthMiddleware assigns scope['user'] unconditionally, so it would clobber
+# every JWT-resolved user with AnonymousUser. The sample in
+# apps/messaging/ws_auth.py's docstring has these the wrong way round; its
+# prose ("session auth first, JWT overrides") is the correct description.
+shared_websockets = AuthMiddlewareStack(
+    JWTAuthMiddleware(
+        URLRouter(
+            messaging_routing.websocket_urlpatterns +
+            notification_routing.websocket_urlpatterns +
+            files_routing.websocket_urlpatterns
+        )
+    )
 )
-
-session_websockets = AuthMiddlewareStack(URLRouter(_shared_patterns))
-jwt_websockets     = JWTAuthMiddlewareStack(URLRouter(_shared_patterns))
-
-
-def _carries_bearer_token(scope):
-    """
-    True when the client identified itself the mobile way. Checked in the
-    order the clients actually use:
-      1. ?token=<jwt> on the query string
-      2. Sec-WebSocket-Protocol carrying the token as a subprotocol
-      3. an Authorization header (native clients, not browsers)
-    Anything else is treated as a cookie-authenticated browser socket.
-    """
-    qs = (scope.get('query_string') or b'').decode('utf-8', 'ignore')
-    if 'token=' in qs or 'jwt=' in qs:
-        return True
-
-    for name, value in scope.get('headers') or []:
-        if name == b'authorization':
-            return True
-        if name == b'sec-websocket-protocol':
-            protos = value.decode('utf-8', 'ignore').lower()
-            if 'bearer' in protos or 'jwt' in protos or 'access_token' in protos:
-                return True
-    return False
 
 
 async def websocket_router(scope, receive, send):
     """
-    Dispatch by path, then by credential type:
-      * /ws/cs/live-chat/  → session auth (agent panel + anonymous customer)
-      * everything else    → JWT if the client presented a token,
-                             session cookie otherwise.
-    Done at the ASGI level because these route groups need *different* auth
-    middleware, which a single URLRouter cannot express.
+    Dispatch by path. Customer-service live chat is session-only; every
+    other route accepts either a session cookie or a bearer token, resolved
+    by the middleware nesting above rather than by inspecting the request.
     """
     path = scope.get('path', '') or ''
     if path.startswith('/ws/cs/live-chat/'):
         return await cs_websockets(scope, receive, send)
-    if _carries_bearer_token(scope):
-        return await jwt_websockets(scope, receive, send)
-    return await session_websockets(scope, receive, send)
+    return await shared_websockets(scope, receive, send)
 
 
 application = ProtocolTypeRouter({

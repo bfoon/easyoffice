@@ -1,8 +1,9 @@
 import os
 
 from django.core.asgi import get_asgi_application
+from django.conf import settings
 from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.security.websocket import AllowedHostsOriginValidator
+from channels.security.websocket import OriginValidator
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'easyoffice.settings')
 
@@ -28,19 +29,17 @@ from apps.messaging.ws_auth import JWTAuthMiddleware
 # it still blocks cross-site socket hijacking — the entire point of this
 # validator, and worth keeping.
 #
-# Native clients send no Origin at all. Channels' stock
-# AllowedHostsOriginValidator treats a missing Origin as a denial unless the
-# allowed list is literally ["*"], which is why the Flutter app sits on
-# "connecting" forever while presenting a perfectly valid bearer token. The
-# rejection happens here, upstream of any auth middleware, so no amount of
-# token work fixes it.
+# Native clients send no Origin at all, and OriginValidator.valid_origin()
+# rejects a None origin unless the allowed list literally contains "*".
+# That is why the Flutter app was refused upstream of any auth middleware.
+# A null Origin is only reachable by a non-browser client, and those
+# sockets are authenticated by their bearer token, so allowing it is safe.
 #
-# A null Origin is only reachable by a non-browser client, and those sockets
-# are authenticated by the token itself, so permitting it costs nothing.
-#
-# Subclassing AllowedHostsOriginValidator (rather than OriginValidator)
-# keeps ALLOWED_HOSTS read per-connection instead of frozen at import.
-class AppOriginValidator(AllowedHostsOriginValidator):
+# Subclass OriginValidator, NOT AllowedHostsOriginValidator: in this version
+# of Channels the latter is a factory FUNCTION that returns an
+# OriginValidator, and subclassing a function raises
+# "TypeError: function() argument 'code' must be code, not str" at import.
+class AppOriginValidator(OriginValidator):
     def valid_origin(self, parsed_origin):
         if parsed_origin is None:
             return True
@@ -64,14 +63,12 @@ cs_websockets = AuthMiddlewareStack(
 #
 #   AuthMiddlewareStack runs first and resolves scope['user'] from the
 #   session cookie. JWTAuthMiddleware then runs and overrides it only when
-#   an `Authorization: Bearer` header is present — its `elif "user" not in
-#   scope` guard leaves an already-resolved session user untouched.
+#   a token is present — its `elif "user" not in scope` guard leaves an
+#   already-resolved session user untouched.
 #
 # Reversing this (JWT outermost) silently breaks mobile instead: Channels'
 # AuthMiddleware assigns scope['user'] unconditionally, so it would clobber
-# every JWT-resolved user with AnonymousUser. The sample in
-# apps/messaging/ws_auth.py's docstring has these the wrong way round; its
-# prose ("session auth first, JWT overrides") is the correct description.
+# every JWT-resolved user with AnonymousUser.
 shared_websockets = AuthMiddlewareStack(
     JWTAuthMiddleware(
         URLRouter(
@@ -97,5 +94,5 @@ async def websocket_router(scope, receive, send):
 
 application = ProtocolTypeRouter({
     'http': django_asgi_app,
-    'websocket': AppOriginValidator(websocket_router),
+    'websocket': AppOriginValidator(websocket_router, settings.ALLOWED_HOSTS),
 })

@@ -10,6 +10,12 @@ Then confirm it took effect::
 
     python manage.py check --deploy
 
+⚠️  BECAUSE THIS IS A WILDCARD IMPORT AT THE END OF settings.py, EVERY NAME
+    SET HERE SILENTLY OVERWRITES THE SAME NAME ABOVE IT — including values
+    read from .env via config(). If a setting "won't take" from .env, look
+    here first. Anything meant to be tunable per-environment must therefore
+    read the environment *in this file*, not in settings.py.
+
 WHAT THIS COVERS AND WHAT IT DOESN'T
 ------------------------------------
 ``apps/messaging/encryption.py`` encrypts message bodies AT REST, in the
@@ -34,6 +40,19 @@ MESSAGING_NOTIFY_INCLUDE_PREVIEW below is what closes that.
 
 import os
 
+
+def _env_bool(name, default=False):
+    """
+    Read a boolean from the environment. Accepts the spellings people
+    actually put in .env files. Defined here rather than imported so this
+    module stays standalone.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. HTTPS for every request
 # ─────────────────────────────────────────────────────────────────────────────
@@ -49,6 +68,11 @@ SECURE_SSL_REDIRECT = True
 
 # Start at an hour, verify every subdomain serves HTTPS, then raise to a
 # year. Preload only once you are certain — it is hard to undo.
+#
+# NOTE: nginx also sends Strict-Transport-Security (max-age=31536000).
+# Browsers honour the FIRST header, so whichever arrives first wins and the
+# other is dead weight. Pick one owner — either raise this to 31536000 and
+# drop it from nginx, or drop these three lines and let nginx own it.
 SECURE_HSTS_SECONDS = 3600
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = False
@@ -84,15 +108,28 @@ CSRF_TRUSTED_ORIGINS = [
 # Channels validates the socket's Origin header against ALLOWED_HOSTS, so a
 # wildcard there lets any website on the internet open a chat socket using a
 # signed-in visitor's cookies. Keep ALLOWED_HOSTS explicit.
-
+#
 # Tokens in query strings end up in nginx access logs, every proxy in
 # between, and browser history. Native apps can set headers on a WebSocket;
-# browsers use the session cookie. Nothing needs this any more.
-MESSAGING_WS_ALLOW_QUERY_TOKEN = False
+# browsers use the session cookie.
+#
+# This USED to be a hard-coded False, which silently overrode the config()
+# call in settings.py and left the Flutter app — which still connects with
+# ?token=<jwt> — unable to authenticate at all, with no error beyond a bare
+# 403 on the handshake. It now reads the environment so the rollout can be
+# controlled per-deployment:
+#
+#     MESSAGING_WS_ALLOW_QUERY_TOKEN=True    # in .env, TEMPORARY
+#
+# Turn it back off the moment the mobile app ships a build that sends
+# `Authorization: Bearer`. While it is on, every mobile access token is
+# written in plaintext to the nginx and uvicorn access logs — treat those
+# files as credential material and keep retention short.
+MESSAGING_WS_ALLOW_QUERY_TOKEN = _env_bool('MESSAGING_WS_ALLOW_QUERY_TOKEN', False)
 
 # Never turn this on outside a laptop: it permits authenticating a ws://
 # socket, which carries every message in clear text.
-MESSAGING_WS_ALLOW_INSECURE = False
+MESSAGING_WS_ALLOW_INSECURE = _env_bool('MESSAGING_WS_ALLOW_INSECURE', False)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Message encryption at rest

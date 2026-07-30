@@ -23,6 +23,30 @@ from apps.customer_service import routing as customer_service_routing
 from apps.messaging.ws_auth import JWTAuthMiddleware
 
 
+# ── Origin policy ──────────────────────────────────────────────────────────
+# Browsers always send an Origin header and cannot forge it, so validating
+# it still blocks cross-site socket hijacking — the entire point of this
+# validator, and worth keeping.
+#
+# Native clients send no Origin at all. Channels' stock
+# AllowedHostsOriginValidator treats a missing Origin as a denial unless the
+# allowed list is literally ["*"], which is why the Flutter app sits on
+# "connecting" forever while presenting a perfectly valid bearer token. The
+# rejection happens here, upstream of any auth middleware, so no amount of
+# token work fixes it.
+#
+# A null Origin is only reachable by a non-browser client, and those sockets
+# are authenticated by the token itself, so permitting it costs nothing.
+#
+# Subclassing AllowedHostsOriginValidator (rather than OriginValidator)
+# keeps ALLOWED_HOSTS read per-connection instead of frozen at import.
+class AppOriginValidator(AllowedHostsOriginValidator):
+    def valid_origin(self, parsed_origin):
+        if parsed_origin is None:
+            return True
+        return super().valid_origin(parsed_origin)
+
+
 # ── Customer-service live chat (SESSION auth) ─────────────────────────────
 # Both ends are ordinary browser WebSockets:
 #   * the agent panel runs in a logged-in staff session, so it needs
@@ -73,5 +97,5 @@ async def websocket_router(scope, receive, send):
 
 application = ProtocolTypeRouter({
     'http': django_asgi_app,
-    'websocket': AllowedHostsOriginValidator(websocket_router),
+    'websocket': AppOriginValidator(websocket_router),
 })

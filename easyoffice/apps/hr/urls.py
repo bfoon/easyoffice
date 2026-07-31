@@ -1,5 +1,6 @@
 from django.urls import path
 from apps.hr import views
+from apps.hr import payroll_export
 
 urlpatterns = [
     path('', views.HRDashboardView.as_view(), name='hr_dashboard'),
@@ -44,6 +45,7 @@ urlpatterns = [
     path('payroll/generate/', views.PayrollGenerateView.as_view(), name='payroll_generate'),
     path('payroll/batch-approve/', views.PayrollBatchApproveView.as_view(), name='payroll_batch_approve'),
     path('payroll/settings/', views.PayrollSettingsView.as_view(), name='payroll_settings'),
+    path('payroll/export/', payroll_export.PayrollExportView.as_view(), name='payroll_export'),
     path('payroll/<uuid:pk>/action/', views.PayrollActionView.as_view(), name='payroll_action'),
     path('payroll/<uuid:pk>/payslip/', views.PayrollPayslipPrintView.as_view(), name='payroll_payslip_print'),
     path('payroll/payslips/email/', views.PayrollBulkPayslipEmailView.as_view(), name='payroll_payslips_email'),

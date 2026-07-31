@@ -29,7 +29,7 @@ from django.core.paginator import Paginator
 from django.db.models import Q, Sum, Count
 from django.http import JsonResponse, Http404, HttpResponseRedirect
 from django.shortcuts import redirect, render, get_object_or_404
-from django.urls import reverse
+from django.urls import reverse, NoReverseMatch
 from django.utils import timezone
 from django.views import View
 from django.views.generic import TemplateView
@@ -65,6 +65,93 @@ def _common_filters(request):
     period = analytics.period_from_request(request)
     basis = analytics.basis_from_request(request)
     return period, basis
+
+
+# ─── Invoice helpers (shared by the dashboard card and the invoice list) ─────
+
+def live_invoices_qs():
+    """
+    The single source of truth for "invoices that still need paying" in the
+    Control Center.
+
+    A finalized billable InvoiceDocument drops off this list when EITHER:
+      * the document itself is voided  (status becomes VOIDED), or
+      * its linked receivable is CANCELLED on the finance side
+        (IncomingPaymentRequestCancelView / sync_invoice_payment_state).
+
+    The second case is the one that used to leak: cancelling the invoice from
+    the finance app only flipped IncomingPaymentRequest.status, leaving the
+    InvoiceDocument FINALIZED and unpaid — so it kept showing up here.
+
+    The exclude() is written with the explicit isnull guard so invoices that
+    have no receivable at all (legacy rows finalized before the bridge
+    existed) are still included.
+    """
+    from apps.invoices.models import InvoiceDocument, DocType
+    from apps.finance.models import IncomingPaymentRequest
+
+    return (
+        InvoiceDocument.objects
+        .filter(doc_type=DocType.INVOICE,
+                status=InvoiceDocument.Status.FINALIZED)
+        .exclude(
+            linked_receivable__isnull=False,
+            linked_receivable__status=IncomingPaymentRequest.Status.CANCELLED,
+        )
+    )
+
+
+def is_receivable_cancelled(invoice) -> bool:
+    """True if this invoice's linked receivable has been cancelled."""
+    if not invoice.linked_receivable_id:
+        return False
+    from apps.finance.models import IncomingPaymentRequest
+    return (invoice.linked_receivable.status
+            == IncomingPaymentRequest.Status.CANCELLED)
+
+
+def invoice_detail_url(invoice) -> str:
+    """
+    The correct detail URL for a Control Center invoice row.
+
+    Rows in this list are InvoiceDocument objects (apps.invoices), NOT
+    IncomingPaymentRequest objects (apps.finance). Linking them to
+    'incoming_payment_request_detail' with the InvoiceDocument pk is exactly
+    what produced:
+
+        404 — No IncomingPaymentRequest matches the given query
+        /finance/invoices/<invoice-document-uuid>/
+
+    So: use the finance receivable page when a receivable exists (it carries
+    the reminders, follow-up tasks and payment history a finance user wants),
+    and fall back to the invoice document page otherwise.
+    """
+    if invoice.linked_receivable_id:
+        try:
+            return reverse('incoming_payment_request_detail',
+                           args=[invoice.linked_receivable_id])
+        except NoReverseMatch:
+            pass
+    try:
+        return reverse('invoices:invoice_detail', args=[invoice.pk])
+    except NoReverseMatch:
+        return ''
+
+
+def invoice_document_url(invoice) -> str:
+    """The invoice document page itself (PDF, line items, void/receipt actions)."""
+    try:
+        return reverse('invoices:invoice_detail', args=[invoice.pk])
+    except NoReverseMatch:
+        return ''
+
+
+def _annotate_invoice_urls(invoices):
+    """Attach detail_url / document_url to each row so templates just print them."""
+    for inv in invoices:
+        inv.detail_url = invoice_detail_url(inv)
+        inv.document_url = invoice_document_url(inv)
+    return invoices
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -158,16 +245,13 @@ class FinancialControlCenterView(LoginRequiredMixin, FinancialSystemAccessMixin,
     def _get_invoice_counts(self):
         """
         Counts of finalized billable invoices by payment state, plus
-        outstanding value. Mirrors the logic used by FinanceInvoiceListView
-        so the dashboard numbers match the invoices page exactly.
+        outstanding value. Uses the same live_invoices_qs() as
+        FinanceInvoiceListView, so cancelled invoices disappear from the
+        dashboard card and the invoices page at the same time.
         """
-        from apps.invoices.models import InvoiceDocument, DocType
         today = timezone.localdate()
 
-        base = InvoiceDocument.objects.filter(
-            doc_type=DocType.INVOICE,
-            status=InvoiceDocument.Status.FINALIZED,
-        )
+        base = live_invoices_qs()
         unpaid = base.filter(paid_at__isnull=True)
         overdue = unpaid.filter(due_date__isnull=False, due_date__lt=today)
 
@@ -456,9 +540,6 @@ class FinanceInvoiceListView(LoginRequiredMixin, FinancialSystemAccessMixin, Tem
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
 
-        # Lazy import to keep finance ↔ invoices coupling at the runtime layer.
-        from apps.invoices.models import InvoiceDocument, DocType
-
         request = self.request
         status   = (request.GET.get('status') or 'unpaid').strip().lower()
         q        = (request.GET.get('q') or '').strip()
@@ -466,12 +547,12 @@ class FinanceInvoiceListView(LoginRequiredMixin, FinancialSystemAccessMixin, Tem
         date_to   = request.GET.get('to')
         currency = (request.GET.get('currency') or '').strip().upper()
 
-        # Base set: only billable finalized invoices. Drafts have no number,
-        # voided invoices are dead, proformas/delivery notes aren't billable.
+        # Base set: only billable finalized invoices whose receivable hasn't
+        # been cancelled. Drafts have no number, voided invoices are dead,
+        # proformas/delivery notes aren't billable, and a cancelled invoice
+        # is no longer something anyone should be chasing payment for.
         qs = (
-            InvoiceDocument.objects
-            .filter(doc_type=DocType.INVOICE,
-                    status=InvoiceDocument.Status.FINALIZED)
+            live_invoices_qs()
             .select_related('linked_receivable', 'created_by',
                             'paid_by', 'linked_payment')
             .order_by('-invoice_date', '-created_at')
@@ -527,10 +608,7 @@ class FinanceInvoiceListView(LoginRequiredMixin, FinancialSystemAccessMixin, Tem
 
         # Counts for the tab pills (unfiltered base — so totals don't move
         # when the user clicks between tabs)
-        base = InvoiceDocument.objects.filter(
-            doc_type=DocType.INVOICE,
-            status=InvoiceDocument.Status.FINALIZED,
-        )
+        base = live_invoices_qs()
         tab_counts = {
             'all':     base.count(),
             'paid':    base.filter(paid_at__isnull=False).count(),
@@ -558,6 +636,13 @@ class FinanceInvoiceListView(LoginRequiredMixin, FinancialSystemAccessMixin, Tem
 
         paginator = Paginator(qs, 25)
         page = paginator.get_page(request.GET.get('page'))
+
+        # Give every row a ready-made, correct detail link. The template
+        # should use {{ inv.detail_url }} — NOT
+        # {% url 'incoming_payment_request_detail' inv.pk %}, which passes an
+        # InvoiceDocument pk to a view that looks up IncomingPaymentRequest
+        # and 404s.
+        page.object_list = _annotate_invoice_urls(list(page.object_list))
 
         ctx.update({
             'page':        page,
@@ -598,6 +683,16 @@ class FinanceInvoiceMarkPaidView(LoginRequiredMixin, FinancialSystemAccessMixin,
         from apps.invoices.services import mark_invoice_paid
 
         invoice = get_object_or_404(InvoiceDocument, pk=pk)
+
+        # A cancelled receivable means the invoice was withdrawn — don't let a
+        # stale open tab (or a bookmarked POST) resurrect it as revenue.
+        if is_receivable_cancelled(invoice):
+            messages.error(
+                request,
+                f'Invoice {invoice.number} was cancelled and can no longer be '
+                f'marked paid. Re-issue it if the customer still owes this amount.',
+            )
+            return redirect(self._next_url(request))
 
         if not invoice.can_be_marked_paid:
             messages.error(

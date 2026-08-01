@@ -65,6 +65,10 @@ urlpatterns = [
          views.MeetingFollowUpView.as_view(),
          name='meeting_follow_up'),
 
+    path('<uuid:pk>/follow-up/',
+         views.MeetingFollowUpView.as_view(),
+         name='meeting_followup'),
+
     # ─────────────────────────────────────────────
     # LIFECYCLE ACTIONS (all POST-only)
     # ─────────────────────────────────────────────

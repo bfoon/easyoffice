@@ -8,6 +8,11 @@ NOTE: no `app_name` is set on purpose. apps/meetings/views.py redirects with
 flat names — redirect('meeting_list'), redirect('meeting_detail', pk=...),
 redirect('meeting_minutes', pk=...) — and templates use {% url 'meeting_list' %}.
 Adding a namespace here would break all of those.
+
+NOTE 2: several routes are registered twice under two names. The second name in
+each pair is a legacy alias kept alive for templates that use the older
+spelling. Canonical name first, alias second, both marked below. When the
+templates are cleaned up, drop the aliases.
 """
 
 from django.urls import path
@@ -65,6 +70,7 @@ urlpatterns = [
          views.MeetingFollowUpView.as_view(),
          name='meeting_follow_up'),
 
+    # ALIAS → meeting_follow_up (meeting_detail.html line 217)
     path('<uuid:pk>/follow-up/',
          views.MeetingFollowUpView.as_view(),
          name='meeting_followup'),
@@ -125,9 +131,19 @@ urlpatterns = [
          ai_views.MinutesAutosaveView.as_view(),
          name='minutes_autosave'),
 
+    # ALIAS → minutes_autosave (meeting_minutes.html line 853)
+    path('<uuid:pk>/minutes/autosave/',
+         ai_views.MinutesAutosaveView.as_view(),
+         name='meeting_minutes_autosave'),
+
     # Drafts minutes from transcripts. Optional body field: recording_id.
     # Returns HTML for review — writes nothing to the minutes itself.
     path('<uuid:pk>/minutes/ai-draft/',
          ai_views.MinutesAIDraftView.as_view(),
          name='minutes_ai_draft'),
+
+    # ALIAS → minutes_ai_draft (meeting_minutes.html line 852)
+    path('<uuid:pk>/minutes/ai-draft/',
+         ai_views.MinutesAIDraftView.as_view(),
+         name='meeting_minutes_ai_draft'),
 ]

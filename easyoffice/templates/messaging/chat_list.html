@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% load humanize %}
+{% load chat_extras %}
 {% block title %}Messages{% endblock %}
 {% block breadcrumb %}<span>Messages</span>{% endblock %}
 
@@ -296,16 +297,22 @@
 
       {% for item in rooms_meta %}
       {% if item.room.room_type == 'direct' %}
+      {# 🟢 A DM is named after the other person — you already know you're you. #}
+      {% with other=item.room|dm_partner:request.user %}
       <a href="{% url 'chat_room' item.room.id %}" class="msg-room-item"
-         data-name="{{ item.room.name|lower }}"
-         data-dm-user-id="{% for m in item.room.members.all %}{% if m.id != request.user.id %}{{ m.id }}{% endif %}{% endfor %}">
+         data-name="{{ item.room|room_display_name:request.user|lower }}"
+         {% if other %}data-dm-user-id="{{ other.id }}"{% endif %}>
         <div class="msg-room-avatar direct">
-          {% if item.room.avatar %}<img src="{{ item.room.avatar.url }}"/>
+          {% if other.avatar %}<img src="{{ other.avatar.url }}" alt=""/>
+          {% elif other %}{{ other.initials }}
           {% else %}{{ item.room.name|slice:':2'|upper }}{% endif %}
-          <span class="msg-online-dot" style="display:none"></span>
+          {% if other %}<span class="presence-ring is-offline" data-presence-dot title="Offline"></span>{% endif %}
         </div>
         <div class="msg-room-info">
-          <div class="msg-room-name">{{ item.room.name }}</div>
+          <div class="msg-room-name dm-name-row">
+            <span class="dm-name">{{ item.room|room_display_name:request.user }}</span>
+            {% if other %}<span class="dm-status-tag" data-presence-label>Offline</span>{% endif %}
+          </div>
           <div class="msg-room-preview">
             {% if item.last_message %}
               {% if item.last_message.sender == request.user %}You: {% endif %}
@@ -320,6 +327,7 @@
           {% if item.unread %}<span class="msg-unread-badge">{{ item.unread }}</span>{% endif %}
         </div>
       </a>
+      {% endwith %}
       {% endif %}
       {% endfor %}
 
@@ -423,7 +431,7 @@
 
         <div class="eo-form-group">
           <label class="eo-form-label">Type</label>
-<!--          {# ✅ id + onchange so the project select shows/hides correctly #}-->
+          {# ✅ id + onchange so the project select shows/hides correctly #}
           <select name="room_type" id="roomTypeSelect" class="eo-form-select" onchange="toggleProjectSelect(this.value)">
             {% for val, label in room_types %}
             {% if val != 'direct' %}
@@ -438,7 +446,7 @@
           <input type="text" name="description" class="eo-form-control" placeholder="What's this room for?"/>
         </div>
 
-<!--        {# ✅ Hidden by default; shown only when room_type == 'project' #}-->
+        {# ✅ Hidden by default; shown only when room_type == 'project' #}
         <div class="eo-form-group" id="projectSelectWrapper" style="display:none">
           <label class="eo-form-label">Project <span style="color:#ef4444">*</span></label>
           <select name="project_id" id="projectSelect" class="eo-form-select">
@@ -503,17 +511,20 @@
       <div class="msg-member-list" id="dmList">
         {% for staff in all_staff %}
         <a href="{% url 'direct_message' staff.id %}" class="msg-member-row" style="text-decoration:none"
-           data-name="{{ staff.full_name|lower }}">
+           data-name="{{ staff.full_name|lower }}" data-dm-user-id="{{ staff.id }}">
           <div style="position:relative">
             {% if staff.avatar %}<img src="{{ staff.avatar.url }}" style="width:36px;height:36px;border-radius:50%;object-fit:cover"/>
             {% else %}<div style="width:36px;height:36px;border-radius:50%;background:var(--eo-accent);color:#fff;font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ staff.initials }}</div>{% endif %}
-            {% if staff.is_online %}<span class="msg-online-dot" style="display:block!important;border-color:var(--eo-surface)"></span>{% endif %}
+            {# Starts from the server-rendered guess, then goes live. #}
+            <span class="presence-ring {% if staff.is_online %}is-available{% else %}is-offline{% endif %}"
+                  data-presence-dot title="{% if staff.is_online %}Available{% else %}Offline{% endif %}"
+                  style="border-color:var(--eo-surface){% if staff.is_online %};background:#10b981{% endif %}"></span>
           </div>
           <div style="flex:1;min-width:0">
             <div style="font-size:.9rem;font-weight:600;color:var(--eo-text)">{{ staff.full_name }}</div>
             <div style="font-size:.75rem;color:var(--eo-text-muted)">
-              {% if staff.staffprofile.position %}{{ staff.staffprofile.position.title }}{% endif %}
-              {% if staff.is_online %}<span style="color:var(--eo-success);margin-left:6px">● Online</span>{% endif %}
+              {% if staff.staffprofile.position %}{{ staff.staffprofile.position.title }} ·{% endif %}
+              <span data-presence-label style="font-weight:600">{% if staff.is_online %}Available{% else %}Offline{% endif %}</span>
             </div>
           </div>
           <i class="bi bi-arrow-right" style="color:var(--eo-text-light);font-size:.8rem"></i>
@@ -529,6 +540,11 @@
 {% endblock %}
 
 {% block extra_js %}
+
+{# 🟢 Status colours + the polling that drives every [data-dm-user-id] on
+   this page: sidebar rows and the "Start a DM" picker. #}
+{% include "messaging/_presence.html" %}
+
 <script>
 // ── Modal helpers ────────────────────────────────────────────────────────────
 function openModal(id) { document.getElementById(id).classList.add('open'); }
@@ -559,7 +575,9 @@ function toggleProjectSelect(type) {
 document.getElementById('roomSearch').addEventListener('input', function() {
   var q = this.value.toLowerCase();
   document.querySelectorAll('.msg-room-item').forEach(function(el) {
-    el.style.display = el.dataset.name.includes(q) ? '' : 'none';
+    // data-name now holds the DISPLAYED name, so searching a DM by the other
+    // person's name works — which is the only name still on screen.
+    el.style.display = (el.dataset.name || '').includes(q) ? '' : 'none';
   });
 });
 
@@ -571,7 +589,11 @@ document.getElementById('dmSearch').addEventListener('input', function() {
   });
 });
 
-// ── Presence: heartbeat + sidebar dot polling ────────────────────────────────
+// ── Presence: heartbeat ──────────────────────────────────────────────────────
+// Polling and painting now live in _presence.html (window.EOPresence), which
+// handles every [data-dm-user-id] on the page — sidebar rows AND the "Start a
+// DM" picker — and understands the full status set rather than just on/off.
+// All that's left here is telling the server we're around.
 (function () {
   'use strict';
 
@@ -580,7 +602,13 @@ document.getElementById('dmSearch').addEventListener('input', function() {
     return v ? decodeURIComponent(v[2]) : null;
   }
 
-  // ── Send own heartbeat so other users see us as online ──────────────────
+  // Carry over the status picked in a chat room, so opening the list page
+  // doesn't quietly reset a "Do Not Disturb" back to auto.
+  function myStatus() {
+    try { return localStorage.getItem('eo_chat_status') || 'auto'; }
+    catch (e) { return 'auto'; }
+  }
+
   function sendHeartbeat() {
     fetch('/messages/presence/heartbeat/', {
       method: 'POST',
@@ -590,65 +618,26 @@ document.getElementById('dmSearch').addEventListener('input', function() {
         'Content-Type': 'application/x-www-form-urlencoded'
       },
       credentials: 'same-origin',
-      body: ''
+      body: 'manual_status=' + encodeURIComponent(myStatus())
     }).catch(function () {});
   }
 
-  // ── Apply online dot to a sidebar DM item ───────────────────────────────
-  function setDot(userId, isOnline) {
-    document.querySelectorAll('.msg-room-item[data-dm-user-id="' + userId + '"]')
-      .forEach(function (item) {
-        var dot = item.querySelector('.msg-online-dot');
-        if (dot) dot.style.display = isOnline ? 'block' : 'none';
-      });
-  }
-
-  // ── Poll presence for every DM in the sidebar ───────────────────────────
-  function pollAllPresence() {
-    var ids = new Set();
-    document.querySelectorAll('.msg-room-item[data-dm-user-id]').forEach(function (el) {
-      var id = el.dataset.dmUserId;
-      if (id) ids.add(id);
-    });
-
-    ids.forEach(function (userId) {
-      fetch('/messages/presence/' + userId + '/', {
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-        credentials: 'same-origin'
-      })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (d) {
-        if (!d) return;
-        var online = (d.status === 'online' || d.status === 'available');
-        setDot(userId, online);
-      })
-      .catch(function () {});
-    });
-  }
-
-  // ── Start / stop on visibility change ───────────────────────────────────
-  var presenceTimer   = null;
-  var heartbeatTimer  = null;
+  var heartbeatTimer = null;
 
   function start() {
+    stop();
     sendHeartbeat();
-    pollAllPresence();
-    heartbeatTimer = setInterval(sendHeartbeat,    20000);
-    presenceTimer  = setInterval(pollAllPresence,  15000);
+    heartbeatTimer = setInterval(sendHeartbeat, 20000);
   }
-
   function stop() {
-    clearInterval(heartbeatTimer); heartbeatTimer = null;
-    clearInterval(presenceTimer);  presenceTimer  = null;
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
   }
 
   document.addEventListener('visibilitychange', function () {
     if (document.hidden) { stop(); } else { start(); }
   });
-
   window.addEventListener('beforeunload', stop);
 
-  // Kick off immediately
   start();
 })();
 
@@ -738,9 +727,9 @@ document.getElementById('dmSearch').addEventListener('input', function() {
 })();
 </script>
 
-<!--{# ── 📅 Calendar drawer, RSVP cards and meeting reminders ─────────────────-->
-<!--   No `room` in this page's context, so the partial runs in list mode: the-->
-<!--   drawer, reminders and RSVP all work, and composing is hidden because an-->
-<!--   invite needs a room to land in. #}-->
+{# ── 📅 Calendar drawer, RSVP cards and meeting reminders ─────────────────
+   No `room` in this page's context, so the partial runs in list mode: the
+   drawer, reminders and RSVP all work, and composing is hidden because an
+   invite needs a room to land in. #}
 {% include "messaging/_chat_calendar.html" %}
 {% endblock %}

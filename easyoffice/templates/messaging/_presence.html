@@ -1,0 +1,207 @@
+{% comment %}
+────────────────────────────────────────────────────────────────────────────
+templates/messaging/_presence.html
+🟢 Shared presence: status colours, live status text, sidebar polling.
+
+Include this ONCE per page, at the TOP of the extra_js block — before any
+script that reads `window.EOPresence`:
+
+    {% block extra_js %}
+    {% include "messaging/_presence.html" %}
+    <script> ...the page's own JS... </script>
+    {% endblock %}
+
+What it does
+------------
+Any element carrying `data-dm-user-id="<uuid>"` becomes a live presence
+target. Inside it:
+
+    [data-presence-dot]    gets its background colour set
+    [data-presence-label]  gets the status word ("Available", "Busy", …)
+    [data-presence-pill]   gets full pill styling (bg + text + border)
+
+Everything is optional — an element with only a dot works fine.
+
+The single source of truth for status colours and labels is EOPresence.META.
+chat_room.html reads it too, so the picker, the header badge and the sidebar
+can't drift apart.
+────────────────────────────────────────────────────────────────────────────
+{% endcomment %}
+
+<style>
+/* Status dot sitting on the corner of an avatar */
+.presence-ring{
+  position:absolute; bottom:-1px; right:-1px;
+  width:11px; height:11px; border-radius:50%;
+  background:#94a3b8;
+  border:2px solid var(--eo-bg);
+  box-sizing:content-box;
+  transition:background .3s;
+  flex-shrink:0;
+}
+.msg-room-item.active .presence-ring{ border-color:var(--eo-surface); }
+
+/* "Do not disturb" gets a bar, so the state survives colour-blindness and
+   greyscale — red vs green alone is not an accessible signal. */
+.presence-ring.is-dnd::after{
+  content:''; position:absolute; left:2px; right:2px; top:calc(50% - 1px);
+  height:2px; border-radius:1px; background:#fff;
+}
+/* Offline reads as a hollow ring rather than another filled dot */
+.presence-ring.is-offline{ background:transparent; box-shadow:inset 0 0 0 2px #94a3b8; }
+
+/* Name line: name takes the space it can, status keeps its own */
+.dm-name-row{ display:flex; align-items:baseline; gap:6px; min-width:0; }
+.dm-name{
+  flex:1; min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.dm-status-tag{
+  flex-shrink:0;
+  font-size:.62rem; font-weight:700; letter-spacing:.01em;
+  color:#64748b; white-space:nowrap;
+}
+/* Below ~1100px the sidebar is too tight for the word as well as the name;
+   the avatar dot still carries the state. */
+@media (max-width:1100px){ .dm-status-tag{ display:none; } }
+</style>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ── The one status table ────────────────────────────────────────────────
+     `available` and `online` are the same state under two names, because the
+     heartbeat writes one and the presence endpoint has historically returned
+     the other. Same for `away`/`idle`. Keeping both spellings here means a
+     backend rename can't blank the UI. */
+  var META = {
+    available: { dot:'#10b981', label:'Available',      bg:'#d1fae5', color:'#065f46', border:'#a7f3d0' },
+    online:    { dot:'#10b981', label:'Available',      bg:'#d1fae5', color:'#065f46', border:'#a7f3d0' },
+    busy:      { dot:'#f59e0b', label:'Busy',           bg:'#fef3c7', color:'#92400e', border:'#fde68a' },
+    dnd:       { dot:'#ef4444', label:'Do Not Disturb', bg:'#fee2e2', color:'#991b1b', border:'#fecaca' },
+    away:      { dot:'#94a3b8', label:'Away',           bg:'#f1f5f9', color:'#64748b', border:'#e2e8f0' },
+    idle:      { dot:'#f59e0b', label:'Idle',           bg:'#fef3c7', color:'#92400e', border:'#fde68a' },
+    auto:      { dot:'#94a3b8', label:'Auto',           bg:'#f1f5f9', color:'#64748b', border:'#e2e8f0' },
+    offline:   { dot:'#94a3b8', label:'Offline',        bg:'#f1f5f9', color:'#64748b', border:'#e2e8f0' }
+  };
+
+  var POLL_MS = 30000;      /* sidebar cadence — the open conversation polls faster */
+  var known = {};           /* userId -> last status string */
+  var skip = {};            /* userId -> true, owned by a faster poller elsewhere */
+  var timer = null;
+
+  /* Resolve a status string to a KNOWN key. Returning the key (not just the
+     meta) matters: the dot's CSS class is derived from it, so an unrecognised
+     value like 'on_leave' must collapse to 'offline' rather than becoming a
+     class no stylesheet defines — otherwise the label reads "Offline" while
+     the dot renders as something else. */
+  function keyFor(status){
+    var k = String(status == null ? '' : status).toLowerCase().trim();
+    return Object.prototype.hasOwnProperty.call(META, k) ? k : 'offline';
+  }
+
+  function metaFor(status){
+    return META[keyFor(status)];
+  }
+
+  /* ── Paint every element on the page that tracks this user ─────────────── */
+  function set(userId, status, lastSeenText){
+    if(!userId) return;
+    userId = String(userId);
+    known[userId] = status;
+    var key = keyFor(status);
+    var m = META[key];
+
+    document.querySelectorAll('[data-dm-user-id="' + userId + '"]').forEach(function(scope){
+      var dot = scope.querySelector('[data-presence-dot]');
+      if(dot){
+        dot.style.background = key === 'offline' ? 'transparent' : m.dot;
+        dot.className = dot.className.replace(/\bis-[a-z0-9_]+/g, '').replace(/\s+/g, ' ').trim() + ' is-' + key;
+        dot.setAttribute('title', m.label);
+      }
+
+      var label = scope.querySelector('[data-presence-label]');
+      if(label){
+        label.textContent = m.label;
+        label.style.color = m.color;
+      }
+
+      var pill = scope.querySelector('[data-presence-pill]');
+      if(pill){
+        pill.style.background = m.bg;
+        pill.style.color = m.color;
+        pill.style.borderColor = m.border;
+      }
+
+      var seen = scope.querySelector('[data-presence-lastseen]');
+      if(seen){
+        seen.textContent = (lastSeenText && key !== 'available' && key !== 'online')
+          ? ('· last seen ' + lastSeenText) : '';
+      }
+    });
+  }
+
+  /* ── Every user id currently on the page ───────────────────────────────── */
+  function targets(){
+    var ids = {};
+    document.querySelectorAll('[data-dm-user-id]').forEach(function(el){
+      var id = el.getAttribute('data-dm-user-id');
+      if(id && !skip[id]) ids[id] = true;
+    });
+    return Object.keys(ids);
+  }
+
+  function pollOne(userId){
+    return fetch('/messages/presence/' + userId + '/', {
+      headers:{'X-Requested-With':'XMLHttpRequest'},
+      credentials:'same-origin'
+    })
+    .then(function(r){ if(!r.ok) throw new Error('presence ' + r.status); return r.json(); })
+    .then(function(d){ set(userId, d.status, d.last_seen_display || ''); })
+    /* A dropped request means we don't know, not that they left. Holding the
+       last known state beats flickering everyone to Offline on one bad poll. */
+    .catch(function(){});
+  }
+
+  function poll(){
+    if(document.hidden) return;
+    targets().forEach(pollOne);
+  }
+
+  function start(){
+    stop();
+    poll();
+    timer = setInterval(poll, POLL_MS);
+  }
+  function stop(){
+    if(timer){ clearInterval(timer); timer = null; }
+  }
+
+  document.addEventListener('visibilitychange', function(){
+    if(document.hidden){ stop(); } else { start(); }
+  });
+  window.addEventListener('beforeunload', stop);
+
+  window.EOPresence = {
+    META: META,
+    metaFor: metaFor,
+    /* Paint a status you already have (from a WebSocket event, say) without
+       spending a request on it. */
+    set: set,
+    get: function(userId){ return known[String(userId)] || null; },
+    /* Hand a user id to a faster poller — this module then leaves it alone
+       instead of requesting the same person twice on two schedules. */
+    claim: function(userId){ if(userId) skip[String(userId)] = true; },
+    refresh: poll,
+    start: start,
+    stop: stop
+  };
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', start);
+  } else {
+    start();
+  }
+})();
+</script>

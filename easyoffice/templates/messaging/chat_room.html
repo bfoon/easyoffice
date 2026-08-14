@@ -1,7 +1,11 @@
 {% extends "base.html" %}
 {% load humanize %}
-{% block title %}{{ room.name }}{% endblock %}
-{% block breadcrumb %}<a href="{% url 'chat_list' %}">Messages</a> / {{ room.name }}{% endblock %}
+{% load chat_extras %}
+
+{# A DM's stored name holds both people; everywhere a room is NAMED we show
+   the other person instead. room_display_name does that for every room type. #}
+{% block title %}{{ room|room_display_name:request.user }}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'chat_list' %}">Messages</a> / {{ room|room_display_name:request.user }}{% endblock %}
 
 {% block content %}
 <style>
@@ -1745,10 +1749,22 @@
       <div class="msg-section-label">Direct Messages</div>
       {% for item in rooms_meta %}
         {% if item.room.room_type == 'direct' %}
-        <a href="{% url 'chat_room' item.room.id %}" class="msg-room-item {% if item.room.id == room.id %}active{% endif %}">
-          <div class="msg-room-avatar direct">{{ item.room.name|slice:':2'|upper }}</div>
+        {# 🟢 One DM row = the other person's name, face and live status.
+           data-dm-user-id makes the row a presence target for EOPresence. #}
+        {% with other=item.room|dm_partner:request.user %}
+        <a href="{% url 'chat_room' item.room.id %}" class="msg-room-item {% if item.room.id == room.id %}active{% endif %}"
+           {% if other %}data-dm-user-id="{{ other.id }}"{% endif %}>
+          <div class="msg-room-avatar direct" style="position:relative">
+            {% if other.avatar %}<img src="{{ other.avatar.url }}" alt=""/>
+            {% elif other %}{{ other.initials }}
+            {% else %}{{ item.room.name|slice:':2'|upper }}{% endif %}
+            {% if other %}<span class="presence-ring is-offline" data-presence-dot title="Offline"></span>{% endif %}
+          </div>
           <div class="msg-room-info">
-            <div class="msg-room-name">{{ item.room.name }}</div>
+            <div class="msg-room-name dm-name-row">
+              <span class="dm-name">{{ item.room|room_display_name:request.user }}</span>
+              {% if other %}<span class="dm-status-tag" data-presence-label>Offline</span>{% endif %}
+            </div>
             <div class="msg-room-preview">
               {% if item.last_message %}
                 {% if item.last_message.message_type == 'file' %}📎 File
@@ -1761,6 +1777,7 @@
           </div>
           {% if item.unread %}<span class="msg-unread-badge">{{ item.unread }}</span>{% endif %}
         </a>
+        {% endwith %}
         {% endif %}
       {% endfor %}
 
@@ -1842,9 +1859,9 @@
             </div>
           </div>
 
-            <span id="dmPresenceBadge" style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0">
-              <span id="dmPresenceDot" style="width:7px;height:7px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
-              <span id="dmPresenceLabel">…</span>
+            <span id="dmPresenceBadge" data-presence-pill style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0">
+              <span id="dmPresenceDot" data-presence-dot style="width:7px;height:7px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
+              <span id="dmPresenceLabel" data-presence-label>…</span>
             </span>
           </div>
           <div class="chat-header-subtitle" style="font-size:.75rem;color:var(--eo-text-muted);margin-top:2px">
@@ -1989,9 +2006,9 @@
                 </div>
 
    {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'meeting_invite' %}
-<!--     {# 📅 Empty shell. EOCalendar.hydrate() fills it with live RSVP state,-->
-<!--        so an invite sent last month still shows the current tally instead-->
-<!--        of a snapshot frozen at send time. #}-->
+     {# 📅 Empty shell. EOCalendar.hydrate() fills it with live RSVP state,
+        so an invite sent last month still shows the current tally instead
+        of a snapshot frozen at send time. #}
      <div class="eo-meet-mount" data-meeting-id="{{ msg.command_payload.meeting_id }}"></div>
 
    {% elif msg.message_type == 'poll' and msg.poll %}
@@ -2137,9 +2154,9 @@
                     </div>
 
                   {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'meeting_invite' %}
-<!--                    {# 📅 Empty shell. EOCalendar.hydrate() fills it with live RSVP state,-->
-<!--                       so an invite sent last month still shows the current tally instead-->
-<!--                       of a snapshot frozen at send time. #}-->
+                    {# 📅 Empty shell. EOCalendar.hydrate() fills it with live RSVP state,
+                       so an invite sent last month still shows the current tally instead
+                       of a snapshot frozen at send time. #}
                     <div class="eo-meet-mount" data-meeting-id="{{ msg.command_payload.meeting_id }}"></div>
 
                   {% elif msg.message_type == 'poll' and msg.poll %}
@@ -2270,9 +2287,9 @@
                     </div>
 
                   {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'meeting_invite' %}
-<!--                    {# 📅 Empty shell. EOCalendar.hydrate() fills it with live RSVP state,-->
-<!--                       so an invite sent last month still shows the current tally instead-->
-<!--                       of a snapshot frozen at send time. #}-->
+                    {# 📅 Empty shell. EOCalendar.hydrate() fills it with live RSVP state,
+                       so an invite sent last month still shows the current tally instead
+                       of a snapshot frozen at send time. #}
                     <div class="eo-meet-mount" data-meeting-id="{{ msg.command_payload.meeting_id }}"></div>
 
                   {% elif msg.message_type == 'poll' and msg.poll %}
@@ -2467,7 +2484,7 @@
       </div>
     </div>
 
-    <textarea class="chat-textarea" id="chatInput" placeholder="Message {% if room.room_type == 'direct' %}{{ dm_other_user.full_name|default:room.name }}{% else %}{{ room.name }}{% endif %}… (Enter to send, Shift+Enter for new line)" rows="1"></textarea>
+    <textarea class="chat-textarea" id="chatInput" placeholder="Message {{ room|room_display_name:request.user }}… (Enter to send, Shift+Enter for new line)" rows="1"></textarea>
 
     <button type="button" class="chat-attach-btn" id="spellcheckToggleBtn" title="Text suggestions">
       <i class="bi bi-spellcheck"></i>
@@ -2877,7 +2894,7 @@
       <button type="button" onclick="closeModal('deleteRoomModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"><i class="bi bi-x-lg"></i></button>
     </div>
     <div class="msg-modal-body">
-      <p style="margin:0 0 14px;color:var(--eo-text)">Are you sure you want to delete <strong>{{ room.name }}</strong>?</p>
+      <p style="margin:0 0 14px;color:var(--eo-text)">Are you sure you want to delete <strong>{{ room|room_display_name:request.user }}</strong>?</p>
       <form method="post" action="{% url 'delete_chat_room' room.id %}">
         {% csrf_token %}
         <div style="display:flex;justify-content:flex-end;gap:8px">
@@ -2903,7 +2920,7 @@
           <option value="">Select target room</option>
           {% for item in rooms_meta %}
             {% if item.room.id != room.id %}
-              <option value="{{ item.room.id }}">{{ item.room.name }}</option>
+              <option value="{{ item.room.id }}">{{ item.room|room_display_name:request.user }}</option>
             {% endif %}
           {% endfor %}
         </select>
@@ -3343,6 +3360,10 @@
 {% endblock %}
 
 {% block extra_js %}
+
+{# 🟢 Must come first — the script below reads window.EOPresence on load. #}
+{% include "messaging/_presence.html" %}
+
 <script>
 (function () {
   'use strict';
@@ -3357,7 +3378,10 @@
 
   /* Status system */
   var MY_STATUS = localStorage.getItem('eo_chat_status') || 'auto';
-  var STATUS_META = {
+  /* Colours and labels live in _presence.html so the picker, the header badge
+     and the sidebar rows can't drift apart. The literal is a fallback for the
+     case where the partial didn't load. */
+  var STATUS_META = (window.EOPresence && window.EOPresence.META) || {
     available: { dot:'#10b981', label:'Available',       bg:'#d1fae5', color:'#065f46', border:'#a7f3d0' },
     busy:      { dot:'#f59e0b', label:'Busy',            bg:'#fef3c7', color:'#92400e', border:'#fde68a' },
     dnd:       { dot:'#ef4444', label:'Do Not Disturb',  bg:'#fee2e2', color:'#991b1b', border:'#fecaca' },
@@ -3367,6 +3391,13 @@
     offline:   { dot:'#94a3b8', label:'Offline',        bg:'#f1f5f9', color:'#64748b', border:'#e2e8f0' },
     idle:      { dot:'#f59e0b', label:'Idle',            bg:'#fef3c7', color:'#92400e', border:'#fde68a' },
   };
+
+  /* This page polls the person you're talking to every 12s — snappier than
+     the sidebar's 30s sweep. Claiming the id stops EOPresence requesting the
+     same person a second time on its own schedule. */
+  if(window.EOPresence && DM_OTHER_USER_ID){
+    window.EOPresence.claim(DM_OTHER_USER_ID);
+  }
 
   var socket = null;
   var reconnectDelay = 1000;
@@ -4696,6 +4727,12 @@ window.addEventListener('beforeunload', function(){
       }
 
       if(d.type === 'presence_update'){
+        /* Paint every sidebar row for this person, not only the open
+           conversation — a status change is free to apply everywhere it
+           shows, and beats waiting up to 30s for the next poll. */
+        if(window.EOPresence){
+          window.EOPresence.set(d.user_id, d.status, d.last_seen_display || '');
+        }
         if(IS_DIRECT && String(d.user_id) === String(DM_OTHER_USER_ID)){
           updatePresenceBadge(d.status, d.last_seen_display || '');
         }
@@ -7827,6 +7864,8 @@ if (spellcheckToggleBtn) {
     .then(function(r){ if(!r.ok) throw new Error(); return r.json(); })
     .then(function(d){
       updatePresenceBadge(d.status, d.last_seen_display || '');
+      /* Same person also has a row in the sidebar — keep the two in step. */
+      if(window.EOPresence) window.EOPresence.set(DM_OTHER_USER_ID, d.status, d.last_seen_display || '');
     })
     .catch(function(){
       /* Network error — do NOT flip to offline; keep last known state */
@@ -7895,6 +7934,8 @@ if (spellcheckToggleBtn) {
 
   window.setMyStatus = function(status){
     MY_STATUS = status;
+    /* Push the change out now rather than waiting for the next sweep. */
+    if(window.EOPresence) setTimeout(function(){ window.EOPresence.refresh(); }, 400);
     localStorage.setItem('eo_chat_status', status);
     byId('statusPickerMenu').style.display = 'none';
     _applyMyStatusDot(status);

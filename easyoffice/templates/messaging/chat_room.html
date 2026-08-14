@@ -15,6 +15,54 @@
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
 .msg-sidebar{width:240px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--eo-border);background:var(--eo-bg);}
 .msg-sidebar-head{padding:14px 14px 10px;border-bottom:1px solid var(--eo-border);display:flex;align-items:center;justify-content:space-between;gap:8px;}
+
+/* ── 🔎 Sidebar find: filters your rooms AND finds people you've never
+      messaged, who by definition have no row to filter ──────────────────── */
+.sidebar-find{position:relative;padding:8px 10px 6px;border-bottom:1px solid var(--eo-border);}
+.sidebar-find input{
+  width:100%;padding:6px 26px 6px 28px;border:1px solid var(--eo-border);border-radius:16px;
+  background:var(--eo-surface);color:var(--eo-text);font-size:.76rem;outline:none;transition:border-color .15s;
+}
+.sidebar-find input:focus{border-color:var(--eo-accent);}
+.sidebar-find > i{position:absolute;left:20px;top:50%;transform:translateY(-40%);color:var(--eo-text-light);font-size:.72rem;pointer-events:none;}
+.sidebar-find button{
+  position:absolute;right:18px;top:50%;transform:translateY(-42%);display:none;
+  background:none;border:none;padding:2px;cursor:pointer;color:var(--eo-text-muted);font-size:.65rem;line-height:1;
+}
+.sidebar-find button:hover{color:var(--eo-text);}
+.sidebar-find.has-text button{display:block;}
+
+/* A person with no room yet — same shape as a room row so the eye doesn't
+   have to re-learn the list halfway down. */
+.person-row{
+  display:flex;align-items:center;gap:9px;padding:7px 14px;cursor:pointer;width:100%;
+  background:none;border:none;text-align:left;text-decoration:none;transition:background .12s;
+}
+.person-row:hover,.person-row.kbd-active{background:var(--eo-surface);}
+.person-row .msg-room-avatar{width:32px;height:32px;font-size:.72rem;}
+.person-new-badge{
+  flex-shrink:0;font-size:.58rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--eo-accent);border:1px solid var(--eo-accent);border-radius:999px;padding:1px 6px;opacity:.85;
+}
+.person-sub{font-size:.7rem;color:var(--eo-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+/* Collapsed sidebar (narrow screens): the box would be unusable at 52px */
+@media (max-width:1100px){
+  .msg-sidebar .sidebar-find{display:none;}
+}
+
+/* ── New-message modal ── */
+.newdm-search{position:relative;margin-bottom:10px;}
+.newdm-search input{width:100%;padding:9px 12px 9px 34px;border:1px solid var(--eo-border);border-radius:10px;
+  background:var(--eo-surface);color:var(--eo-text);font-size:.88rem;outline:none;}
+.newdm-search input:focus{border-color:var(--eo-accent);}
+.newdm-search i{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--eo-text-muted);font-size:.85rem;}
+.newdm-results{max-height:340px;overflow-y:auto;border:1px solid var(--eo-border);border-radius:10px;}
+.newdm-hint{font-size:.72rem;color:var(--eo-text-muted);margin-top:8px;display:flex;gap:10px;flex-wrap:wrap;}
+.newdm-hint kbd{
+  background:var(--eo-bg);border:1px solid var(--eo-border);border-bottom-width:2px;border-radius:4px;
+  padding:0 4px;font-size:.66rem;font-family:inherit;
+}
 .msg-sidebar-title{font-size:.78rem;font-weight:700;color:var(--eo-text);display:flex;align-items:center;gap:6px;}
 .msg-rooms{flex:1;overflow-y:auto;padding:6px 0;}
 .msg-section-label{padding:8px 14px 3px;font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted);}
@@ -1740,9 +1788,24 @@
         <i class="bi bi-chat-dots-fill" style="color:var(--eo-accent)"></i>
         <span>Messages</span>
       </a>
+      {# 🔎 Find anyone and DM them — works for people you've never messaged,
+         who therefore have no row in the sidebar below. #}
+      <button class="eo-btn eo-btn-secondary eo-btn-icon" style="width:26px;height:26px;padding:0;font-size:.7rem"
+              title="New message (Ctrl/Cmd+Shift+K)" onclick="openNewDm()">
+        <i class="bi bi-pencil-square"></i>
+      </button>
       <button class="eo-btn eo-btn-primary eo-btn-icon" style="width:26px;height:26px;padding:0;font-size:.7rem" title="New room" onclick="openModal('createModal')">
         <i class="bi bi-plus-lg"></i>
       </button>
+    </div>
+
+    {# One box, two jobs: filters the rooms you have, and offers people you
+       don't. Typing a name you've never messaged still finds them. #}
+    <div class="sidebar-find">
+      <i class="bi bi-search"></i>
+      <input type="text" id="sidebarFind" autocomplete="off" spellcheck="false"
+             placeholder="Search or start a chat…" aria-label="Search conversations and people">
+      <button type="button" id="sidebarFindClear" title="Clear" aria-label="Clear search"><i class="bi bi-x-lg"></i></button>
     </div>
 
     <div class="msg-rooms">
@@ -1800,6 +1863,17 @@
         </a>
         {% endif %}
       {% endfor %}
+
+      {# Filled by the sidebar search with people who have no room yet. #}
+      <div id="sidebarPeopleSection" style="display:none">
+        <div class="msg-section-label" style="margin-top:6px">Start a new chat</div>
+        <div id="sidebarPeopleResults"></div>
+      </div>
+
+      <div id="sidebarNoMatches" style="display:none;padding:22px 14px;text-align:center;color:var(--eo-text-muted);font-size:.78rem">
+        <i class="bi bi-search" style="font-size:1.3rem;display:block;margin-bottom:6px;opacity:.5"></i>
+        <span id="sidebarNoMatchesText">No matches</span>
+      </div>
     </div>
   </aside>
 
@@ -2902,6 +2976,38 @@
           <button type="submit" class="eo-btn eo-btn-danger">Delete Channel</button>
         </div>
       </form>
+    </div>
+  </div>
+</div>
+
+{# ══ 🔎 NEW MESSAGE ═══════════════════════════════════════════════════════
+   Search every colleague — including people you've never messaged, who have
+   no sidebar row to find. Picking one goes to `direct_message`, which opens
+   the existing DM or creates it. Same path the list page uses, so there's
+   only ever one way a DM gets started. #}
+<div class="msg-modal-backdrop" id="newDmModal">
+  <div class="msg-modal" style="max-width:520px">
+    <div class="msg-modal-head">
+      <div>
+        <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">New message</div>
+        <div style="font-size:.76rem;color:var(--eo-text-muted);margin-top:2px">Search anyone in the organisation</div>
+      </div>
+      <button type="button" onclick="closeModal('newDmModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="msg-modal-body">
+      <div class="newdm-search">
+        <i class="bi bi-search"></i>
+        <input type="text" id="newDmInput" placeholder="Name, email or job title…"
+               autocomplete="off" spellcheck="false" aria-label="Search people">
+      </div>
+      <div class="newdm-results" id="newDmResults" role="listbox" aria-label="People"></div>
+      <div class="newdm-hint">
+        <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+        <span><kbd>Enter</kbd> open</span>
+        <span><kbd>Esc</kbd> close</span>
+      </div>
     </div>
   </div>
 </div>
@@ -8335,6 +8441,347 @@ if (spellcheckToggleBtn) {
   window.callToastAccept = function(){};
   window.callToastDeny = function(){};
 
+})();
+</script>
+
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════════
+   🔎 FIND PEOPLE & START A DM  (chat_room)
+   ──────────────────────────────────────────────────────────────────────────
+   The sidebar can only ever show rooms you already have. Someone you've
+   never messaged has no row, so filtering the sidebar can never surface
+   them — that's why searching here also queries the staff directory.
+
+   Two entry points, one code path:
+     • the sidebar box  — filters your rooms AND appends matching people
+     • the ✎ button     — a focused modal with keyboard navigation
+
+   Picking anyone navigates to /messages/dm/<id>/, which opens the existing
+   DM or creates it. No new "create DM" logic lives here.
+   ═════════════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+
+  var SEARCH_URL = '/messages/users/search/';
+  var DEBOUNCE_MS = 220;
+  var MIN_CHARS = 1;
+
+  function $(id){ return document.getElementById(id); }
+
+  function esc(str){
+    return String(str == null ? '' : str)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  /* Results are cached per query string. Backspacing through a word would
+     otherwise re-request every prefix we just fetched on the way in. */
+  var cache = {};
+  var inflight = null;
+
+  function search(query){
+    var key = query.toLowerCase();
+    if(cache[key]) return Promise.resolve(cache[key]);
+
+    /* Only the newest query may resolve — a slow early request must not
+       overwrite results for what the user has since typed. */
+    var token = {};
+    inflight = token;
+
+    return fetch(SEARCH_URL + '?q=' + encodeURIComponent(query), {
+      headers:{'X-Requested-With':'XMLHttpRequest'},
+      credentials:'same-origin'
+    })
+    .then(function(r){
+      if(!r.ok) throw new Error('search failed (' + r.status + ')');
+      return r.json();
+    })
+    .then(function(d){
+      var list = (d && d.results) || [];
+      cache[key] = list;
+      if(inflight !== token) return null;   /* superseded */
+      return list;
+    });
+  }
+
+  /* ── One person, rendered as a row ─────────────────────────────────────── */
+  function personRow(person, cls){
+    var avatar = person.avatar_url
+      ? '<img src="' + esc(person.avatar_url) + '" alt="" style="width:100%;height:100%;border-radius:50%;object-fit:cover">'
+      : esc(person.initials);
+
+    var badge = person.existing_room_id
+      ? ''
+      : '<span class="person-new-badge">New</span>';
+
+    return '<a href="' + esc(person.dm_url) + '" class="' + cls + '" ' +
+             'data-person-id="' + esc(person.id) + '" data-dm-user-id="' + esc(person.id) + '" role="option">' +
+             '<div class="msg-room-avatar direct" style="position:relative">' + avatar +
+               '<span class="presence-ring is-offline" data-presence-dot title="Offline"></span>' +
+             '</div>' +
+             '<div class="msg-room-info" style="flex:1;min-width:0">' +
+               '<div class="msg-room-name dm-name-row">' +
+                 '<span class="dm-name">' + esc(person.name) + '</span>' +
+                 '<span class="dm-status-tag" data-presence-label>Offline</span>' +
+               '</div>' +
+               (person.subtitle ? '<div class="person-sub">' + esc(person.subtitle) + '</div>' : '') +
+             '</div>' + badge +
+           '</a>';
+  }
+
+  /* Newly rendered rows carry data-dm-user-id, so ask the presence module to
+     fill them in now rather than leaving everyone "Offline" until its next
+     30-second sweep. */
+  function paintPresence(){
+    if(window.EOPresence) window.EOPresence.refresh();
+  }
+
+  /* ══ Sidebar: filter rooms, then offer people ═══════════════════════════ */
+  var findBox      = $('sidebarFind');
+  var findWrap     = findBox ? findBox.parentNode : null;
+  var peopleSection= $('sidebarPeopleSection');
+  var peopleResults= $('sidebarPeopleResults');
+  var noMatches    = $('sidebarNoMatches');
+  var noMatchesText= $('sidebarNoMatchesText');
+  var sidebarTimer = null;
+
+  function roomRows(){
+    return Array.prototype.slice.call(
+      document.querySelectorAll('.msg-rooms .msg-room-item'));
+  }
+
+  /* The visible name, not the stored one — a DM's stored name holds both
+     people, and the other person's name is the only one on screen. */
+  function rowText(row){
+    var el = row.querySelector('.dm-name') || row.querySelector('.msg-room-name');
+    return ((el ? el.textContent : row.textContent) || '').toLowerCase();
+  }
+
+  function filterSidebar(query){
+    var q = query.toLowerCase().trim();
+    var shown = 0;
+
+    roomRows().forEach(function(row){
+      var hit = !q || rowText(row).indexOf(q) > -1;
+      row.style.display = hit ? '' : 'none';
+      if(hit) shown++;
+    });
+
+    /* Section headings are noise when their section is empty. */
+    document.querySelectorAll('.msg-rooms .msg-section-label').forEach(function(label){
+      if(label.closest('#sidebarPeopleSection')) return;
+      var any = false;
+      var node = label.nextElementSibling;
+      while(node && !node.classList.contains('msg-section-label')){
+        if(node.classList.contains('msg-room-item') && node.style.display !== 'none'){ any = true; break; }
+        node = node.nextElementSibling;
+      }
+      label.style.display = any ? '' : 'none';
+    });
+
+    return shown;
+  }
+
+  function runSidebarSearch(){
+    if(!findBox) return;
+    var q = findBox.value.trim();
+
+    if(findWrap) findWrap.classList.toggle('has-text', q.length > 0);
+
+    var roomsShown = filterSidebar(q);
+
+    if(q.length < MIN_CHARS){
+      if(peopleSection) peopleSection.style.display = 'none';
+      if(peopleResults) peopleResults.innerHTML = '';
+      if(noMatches) noMatches.style.display = 'none';
+      return;
+    }
+
+    search(q).then(function(results){
+      if(results === null) return;             /* a newer query won */
+      if(findBox.value.trim() !== q) return;   /* input moved on */
+
+      /* Anyone already in the sidebar is a duplicate here — the room row
+         above is the better result, since it carries unread state. */
+      var visibleIds = {};
+      roomRows().forEach(function(row){
+        if(row.style.display === 'none') return;
+        var id = row.getAttribute('data-dm-user-id');
+        if(id) visibleIds[id] = true;
+      });
+
+      var fresh = results.filter(function(p){ return !visibleIds[p.id]; });
+
+      if(fresh.length && peopleResults && peopleSection){
+        peopleResults.innerHTML = fresh.map(function(p){
+          return personRow(p, 'person-row');
+        }).join('');
+        peopleSection.style.display = '';
+        paintPresence();
+      } else if(peopleSection){
+        peopleSection.style.display = 'none';
+        if(peopleResults) peopleResults.innerHTML = '';
+      }
+
+      if(noMatches){
+        var nothing = roomsShown === 0 && fresh.length === 0;
+        noMatches.style.display = nothing ? '' : 'none';
+        if(nothing && noMatchesText){
+          noMatchesText.textContent = 'Nobody found for “' + q + '”';
+        }
+      }
+    })
+    .catch(function(){
+      /* Directory unreachable — the sidebar filter above still worked, so
+         leave that result standing rather than blanking the list. */
+      if(peopleSection) peopleSection.style.display = 'none';
+    });
+  }
+
+  if(findBox){
+    findBox.addEventListener('input', function(){
+      clearTimeout(sidebarTimer);
+      sidebarTimer = setTimeout(runSidebarSearch, DEBOUNCE_MS);
+    });
+    findBox.addEventListener('keydown', function(e){
+      if(e.key === 'Escape'){
+        this.value = '';
+        runSidebarSearch();
+        this.blur();
+      }
+      if(e.key === 'Enter'){
+        /* Enter opens the first thing on screen — room row first, then a
+           person, matching top-to-bottom reading order. */
+        var first = document.querySelector('.msg-rooms .msg-room-item:not([style*="display: none"])')
+                 || document.querySelector('#sidebarPeopleResults .person-row');
+        if(first && first.href){ e.preventDefault(); window.location.href = first.href; }
+      }
+    });
+  }
+
+  var findClear = $('sidebarFindClear');
+  if(findClear){
+    findClear.addEventListener('click', function(){
+      if(!findBox) return;
+      findBox.value = '';
+      runSidebarSearch();
+      findBox.focus();
+    });
+  }
+
+  /* ══ Modal: focused search with keyboard navigation ═════════════════════ */
+  var dmInput   = $('newDmInput');
+  var dmResults = $('newDmResults');
+  var dmTimer   = null;
+  var cursor    = -1;
+
+  function renderModal(results, query){
+    if(!dmResults) return;
+
+    if(!results.length){
+      dmResults.innerHTML =
+        '<div style="padding:26px 16px;text-align:center;color:var(--eo-text-muted);font-size:.82rem">' +
+          (query
+            ? '<i class="bi bi-person-x" style="font-size:1.4rem;display:block;margin-bottom:7px;opacity:.5"></i>Nobody matches “' + esc(query) + '”'
+            : '<i class="bi bi-people" style="font-size:1.4rem;display:block;margin-bottom:7px;opacity:.5"></i>You have a conversation with everyone already.') +
+        '</div>';
+      cursor = -1;
+      return;
+    }
+
+    dmResults.innerHTML = results.map(function(p){
+      return personRow(p, 'person-row');
+    }).join('');
+    cursor = 0;
+    markCursor();
+    paintPresence();
+  }
+
+  function rows(){
+    return dmResults
+      ? Array.prototype.slice.call(dmResults.querySelectorAll('.person-row'))
+      : [];
+  }
+
+  function markCursor(){
+    rows().forEach(function(row, i){
+      var on = i === cursor;
+      row.classList.toggle('kbd-active', on);
+      row.setAttribute('aria-selected', on ? 'true' : 'false');
+      if(on && row.scrollIntoView) row.scrollIntoView({block:'nearest'});
+    });
+  }
+
+  function runModalSearch(){
+    if(!dmInput || !dmResults) return;
+    var q = dmInput.value.trim();
+
+    search(q).then(function(results){
+      if(results === null) return;
+      if(dmInput.value.trim() !== q) return;
+      renderModal(results, q);
+    })
+    .catch(function(){
+      dmResults.innerHTML =
+        '<div style="padding:22px 16px;text-align:center;color:var(--eo-text-muted);font-size:.82rem">' +
+        'Couldn’t reach the directory. Check your connection and try again.</div>';
+    });
+  }
+
+  if(dmInput){
+    dmInput.addEventListener('input', function(){
+      clearTimeout(dmTimer);
+      dmTimer = setTimeout(runModalSearch, DEBOUNCE_MS);
+    });
+
+    dmInput.addEventListener('keydown', function(e){
+      var list = rows();
+      if(e.key === 'ArrowDown'){
+        e.preventDefault();
+        if(list.length){ cursor = (cursor + 1) % list.length; markCursor(); }
+      } else if(e.key === 'ArrowUp'){
+        e.preventDefault();
+        if(list.length){ cursor = (cursor - 1 + list.length) % list.length; markCursor(); }
+      } else if(e.key === 'Enter'){
+        e.preventDefault();
+        var pick = list[cursor];
+        if(pick && pick.href) window.location.href = pick.href;
+      } else if(e.key === 'Escape'){
+        e.preventDefault();
+        window.closeModal('newDmModal');
+      }
+    });
+  }
+
+  if(dmResults){
+    /* Mouse and keyboard shouldn't fight over which row is highlighted. */
+    dmResults.addEventListener('mousemove', function(e){
+      var row = e.target.closest('.person-row');
+      if(!row) return;
+      var i = rows().indexOf(row);
+      if(i > -1 && i !== cursor){ cursor = i; markCursor(); }
+    });
+  }
+
+  window.openNewDm = function(prefill){
+    window.openModal('newDmModal');
+    if(dmInput){
+      dmInput.value = prefill || '';
+      /* Wait for the modal's opacity transition, or focus lands on a
+         still-hidden field and mobile keyboards don't appear. */
+      setTimeout(function(){ dmInput.focus(); dmInput.select(); }, 60);
+    }
+    runModalSearch();
+  };
+
+  /* Ctrl/Cmd+Shift+K — Ctrl/Cmd+K is already message search. */
+  document.addEventListener('keydown', function(e){
+    if((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'K' || e.key === 'k')){
+      e.preventDefault();
+      window.openNewDm();
+    }
+  });
 })();
 </script>
 

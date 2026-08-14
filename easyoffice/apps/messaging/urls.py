@@ -5,6 +5,7 @@ from apps.messaging import typing_views
 from apps.messaging import read_receipts
 from apps.messaging import turn
 from apps.messaging import calendar_views
+from apps.messaging import user_search_views
 
 urlpatterns = [
     # ─────────────────────────────────────────────
@@ -254,5 +255,14 @@ urlpatterns = [
     path('calendar/meeting/<uuid:meeting_id>/reminder/',
          calendar_views.ChatMeetingReminderDismissView.as_view(),
          name='chat_meeting_reminder'),
+
+    # ─────────────────────────────────────────────
+    # 🔎 PEOPLE SEARCH (start a DM with anyone)
+    # Read-only. Picking a result navigates to `direct_message`, which is
+    # what actually opens or creates the room.
+    # ─────────────────────────────────────────────
+    path('users/search/',
+         user_search_views.UserSearchView.as_view(),
+         name='chat_user_search'),
 
 ]

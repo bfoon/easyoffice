@@ -110,6 +110,11 @@ urlpatterns = [
          views.ShareMeetingMinutesView.as_view(),
          name='share_meeting_minutes'),
 
+    # ALIAS → share_meeting_minutes (meeting_detail.html line 246)
+    path('<uuid:pk>/minutes/share/',
+         views.ShareMeetingMinutesView.as_view(),
+         name='meeting_minutes_share'),
+
     # ─────────────────────────────────────────────
     # 🎙️ RECORDINGS (ai_views) — all JSON/XHR
     # GET  list · POST upload (audio, title, duration_seconds)

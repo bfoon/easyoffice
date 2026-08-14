@@ -1,0 +1,194 @@
+{% extends "inventory/inventory_base.html" %}
+{% load inv_access %}
+
+{% block title %}{% if is_create %}Add licence{% else %}Edit {{ form.instance.reference }}{% endif %}{% endblock %}
+{% block breadcrumb %}Inventory · Licences · {% if is_create %}New{% else %}Edit{% endif %}{% endblock %}
+
+{% block extra_css %}{{ block.super }}{% include "inventory/_license_styles.html" %}{% endblock %}
+
+{% block inv_content %}
+
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Licences</div>
+      <h1 class="inv-page-title">{% if is_create %}Add a licence{% else %}{{ form.instance.name }}{% endif %}</h1>
+      <div class="inv-page-subtitle">
+        {% if is_create %}Record what it covers, what it costs and when it ends — the reminders take care of themselves.
+        {% else %}{{ form.instance.reference }}{% endif %}
+      </div>
+    </div>
+    <div class="inv-page-actions">
+      <a href="{% if is_create %}{% url 'inventory:license_list' %}{% else %}{% url 'inventory:license_detail' form.instance.pk %}{% endif %}" class="inv-btn">Cancel</a>
+    </div>
+  </div>
+
+  {% if form.errors %}
+  <div class="inv-card" style="border-left:4px solid #e11d48">
+    <strong style="font-size:.9rem;color:#be123c">Fix these before saving</strong>
+    <ul style="margin:8px 0 0;padding-left:18px;font-size:.84rem;color:#334155">
+      {% for field in form %}{% for error in field.errors %}
+      <li>{{ field.label }}: {{ error }}</li>
+      {% endfor %}{% endfor %}
+      {% for error in form.non_field_errors %}<li>{{ error }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+
+    <div class="row g-3">
+      <div class="col-lg-7" style="display:flex;flex-direction:column;gap:18px">
+
+        <div class="inv-card">
+          <div class="lic-section-title">What is it</div>
+          <div class="lic-grid">
+            {% for f in form.fields_what %}
+            <div>
+              <label class="inv-form-label" for="{{ f.id_for_label }}">{{ f.label }}</label>
+              {{ f }}
+              {% if f.help_text %}<div class="lic-field-help">{{ f.help_text }}</div>{% endif %}
+              {% for e in f.errors %}<div class="lic-field-error">{{ e }}</div>{% endfor %}
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="inv-card">
+          <div class="lic-section-title">Who it is for</div>
+          <div class="lic-grid two">
+            {% for f in form.fields_holder %}
+            <div>
+              <label class="inv-form-label" for="{{ f.id_for_label }}">{{ f.label }}</label>
+              {{ f }}
+              {% if f.help_text %}<div class="lic-field-help">{{ f.help_text }}</div>{% endif %}
+              {% for e in f.errors %}<div class="lic-field-error">{{ e }}</div>{% endfor %}
+            </div>
+            {% endfor %}
+          </div>
+          <div class="lic-field-help" style="margin-top:10px">
+            Pick “Ours” for licences we run ourselves, “staff member” when it
+            belongs to one person, and “customer” when we buy and manage it on
+            a client's behalf — that's the one where the selling price matters.
+          </div>
+        </div>
+
+        <div class="inv-card">
+          <div class="lic-section-title">Cost and price</div>
+          <div class="lic-grid two">
+            {% for f in form.fields_money %}
+            <div>
+              <label class="inv-form-label" for="{{ f.id_for_label }}">{{ f.label }}</label>
+              {{ f }}
+              {% if f.help_text %}<div class="lic-field-help">{{ f.help_text }}</div>{% endif %}
+              {% for e in f.errors %}<div class="lic-field-error">{{ e }}</div>{% endfor %}
+            </div>
+            {% endfor %}
+          </div>
+          <div class="lic-field-help" style="margin-top:10px">
+            On per-user and per-device licences the cost and price are
+            <em>per seat</em> and get multiplied by the seat count. On flat and
+            site licences they are the whole thing.
+          </div>
+        </div>
+
+      </div>
+
+      <div class="col-lg-5" style="display:flex;flex-direction:column;gap:18px">
+
+        <div class="inv-card">
+          <div class="lic-section-title">Term</div>
+          <div class="lic-grid two">
+            {% for f in form.fields_term %}
+            <div>
+              <label class="inv-form-label" for="{{ f.id_for_label }}">{{ f.label }}</label>
+              {{ f }}
+              {% if f.help_text %}<div class="lic-field-help">{{ f.help_text }}</div>{% endif %}
+              {% for e in f.errors %}<div class="lic-field-error">{{ e }}</div>{% endfor %}
+            </div>
+            {% endfor %}
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+            {% for f in form.fields_term_flags %}
+            <label class="lic-check">{{ f }}<span>{{ f.label }}{% if f.help_text %} — <span style="color:#94a3b8">{{ f.help_text }}</span>{% endif %}</span></label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="inv-card">
+          <div class="lic-section-title">Expiry alerts</div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+            {% for f in form.fields_alert_flags %}
+            <label class="lic-check">{{ f }}<span>{{ f.label }}{% if f.help_text %} — <span style="color:#94a3b8">{{ f.help_text }}</span>{% endif %}</span></label>
+            {% endfor %}
+          </div>
+          {% for f in form.fields_alerts %}
+          <label class="inv-form-label" for="{{ f.id_for_label }}">{{ f.label }}</label>
+          {{ f }}
+          <div class="lic-field-help">{{ f.help_text }}</div>
+          {% for e in f.errors %}<div class="lic-field-error">{{ e }}</div>{% endfor %}
+          {% endfor %}
+        </div>
+
+        <div class="inv-card">
+          <div class="lic-section-title">Credentials and documents</div>
+          <div class="lic-grid">
+            {% for f in form.fields_credentials %}
+            <div>
+              <label class="inv-form-label" for="{{ f.id_for_label }}">{{ f.label }}</label>
+              {{ f }}
+              {% if f.help_text %}<div class="lic-field-help">{{ f.help_text }}</div>{% endif %}
+              {% for e in f.errors %}<div class="lic-field-error">{{ e }}</div>{% endfor %}
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="inv-card">
+          <div class="lic-section-title">Status and notes</div>
+          <div class="lic-grid">
+            {% for f in form.fields_meta %}
+            <div>
+              <label class="inv-form-label" for="{{ f.id_for_label }}">{{ f.label }}</label>
+              {{ f }}
+              {% for e in f.errors %}<div class="lic-field-error">{{ e }}</div>{% endfor %}
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px">
+          <button type="submit" class="inv-btn inv-btn-primary" style="flex:1">
+            <i class="bi bi-check-lg"></i> {% if is_create %}Add licence{% else %}Save changes{% endif %}
+          </button>
+        </div>
+      </div>
+    </div>
+  </form>
+
+  <script>
+  (function(){
+    // Show only the holder fields that apply to the chosen kind.
+    var kind = document.getElementById('id_holder_kind');
+    if (!kind) return;
+    var map = {
+      user:     ['id_holder_user'],
+      customer: ['id_customer_name', 'id_customer_email', 'id_customer_ref'],
+      internal: []
+    };
+    var all = ['id_holder_user','id_customer_name','id_customer_email','id_customer_ref'];
+    function apply(){
+      var show = map[kind.value] || [];
+      all.forEach(function(id){
+        var el = document.getElementById(id);
+        if (!el) return;
+        var wrap = el.closest('div');
+        if (wrap) wrap.style.display = show.indexOf(id) === -1 ? 'none' : '';
+      });
+    }
+    kind.addEventListener('change', apply);
+    apply();
+  })();
+  </script>
+
+{% endblock %}

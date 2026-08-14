@@ -147,12 +147,42 @@ class InventoryDashboardView(_InventoryContextMixin, InventoryAccessMixin, Templ
             .order_by('-created_at')[:8]
         ) if ctx['can_view_requests'] else []
 
+        # Licences — the stat tile plus the next few renewals due.
+        # Counts are suppressed entirely for users without access, same as
+        # the other tiles above.
+        ctx['can_view_licenses'] = _can_view(u, 'licenses')
+        if ctx['can_view_licenses']:
+            from .license_models import License
+            from . import license_services
+
+            lic_qs = (License.objects
+                      .filter(is_active=True)
+                      .exclude(status__in=[License.Status.CANCELLED,
+                                           License.Status.SUPERSEDED]))
+            expiring = license_services.upcoming_renewals(30, queryset=lic_qs)
+
+            ctx['license_count']       = lic_qs.count()
+            ctx['licenses_expiring']   = list(expiring[:5])
+            ctx['licenses_expiring_n'] = expiring.count()
+        else:
+            ctx['license_count']       = None
+            ctx['licenses_expiring']   = []
+            ctx['licenses_expiring_n'] = 0
+
         # Assets currently assigned to me
         if self.request.user.is_authenticated:
             ctx['my_assets'] = (
                 Asset.objects
                 .filter(assigned_to=self.request.user, is_active=True)
                 .order_by('name')[:10]
+            )
+
+            # Licence seats I'm holding. Deliberately outside the access
+            # check — you can always see the licences issued to you, even
+            # with no grant on the licences module.
+            from . import license_services
+            ctx['my_licenses'] = list(
+                license_services.licenses_for_user(self.request.user)[:5]
             )
 
         ctx['can_manage'] = can_manage_stock(self.request.user)

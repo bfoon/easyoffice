@@ -20,6 +20,10 @@ To make the migration painless, run the management command:
     ./manage.py seed_inventory_access
 
 which copies current group memberships into explicit grants.
+
+Licences follow exactly the same shape — `licenses` is just another
+module. The only extra rule is that the licence *key* is treated as a
+manage-level secret: view and operate see it masked.
 """
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -47,6 +51,18 @@ INVENTORY_TEAM_GROUPS = {
 INVENTORY_MANAGER_GROUPS = {
     'supervisor', 'manager', 'admin', 'administrator', 'ceo',
     'head of operations', 'head of inventory',
+}
+
+# Licences are usually run by ICT rather than the storeroom.
+LICENSE_TEAM_GROUPS = {
+    'ict', 'it', 'ict team', 'systems', 'sysadmin', 'inventory',
+    'admin', 'administrator', 'supervisor', 'manager', 'ceo',
+    'head of ict', 'head of operations',
+}
+
+LICENSE_MANAGER_GROUPS = {
+    'ict', 'it', 'systems', 'sysadmin', 'head of ict',
+    'supervisor', 'manager', 'admin', 'administrator', 'ceo',
 }
 
 CEO_GROUPS = {'ceo'}
@@ -155,6 +171,63 @@ def can_administer_access(user):
     return bool(_user_group_names(user) & {'admin', 'administrator', 'ceo'})
 
 
+# ── Licences ────────────────────────────────────────────────────────────────
+
+def can_view_licenses(user):
+    """See the licence register. Note: a staff member can always see the
+    licences assigned to them, via `can_view_license()` below."""
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if user.is_superuser or user.is_staff:
+        return True
+    if can_view_module(user, Module.LICENSES):
+        return True
+    if _has_any_grant(user):
+        return False
+    return bool(_user_group_names(user) & LICENSE_TEAM_GROUPS)
+
+
+def can_operate_licenses(user):
+    """Create and edit licences, assign and release seats."""
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if user.is_superuser or user.is_staff:
+        return True
+    if can_operate_module(user, Module.LICENSES):
+        return True
+    if _has_any_grant(user):
+        return False
+    if _user_group_names(user) & LICENSE_TEAM_GROUPS:
+        return True
+    return _has_position_keyword(user, 'ict', 'it ', 'systems', 'admin')
+
+
+def can_manage_licenses(user):
+    """Renew, cancel, see the raw licence key, edit cost and selling price."""
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if user.is_superuser:
+        return True
+    if can_manage_module(user, Module.LICENSES):
+        return True
+    if _has_any_grant(user):
+        return False
+    return bool(_user_group_names(user) & LICENSE_MANAGER_GROUPS)
+
+
+def can_see_license_key(user, license_obj=None):
+    """The key itself is a manage-level secret, everywhere it appears."""
+    return can_manage_licenses(user)
+
+
+def can_see_license_money(user, license_obj=None):
+    """
+    Cost and margin are commercial data. Operate and above see them; a
+    plain viewer sees the licence, its dates and its seats, not the price.
+    """
+    return can_operate_licenses(user)
+
+
 # ── Per-object checks ───────────────────────────────────────────────────────
 
 def can_view_asset(user, asset):
@@ -175,6 +248,24 @@ def can_view_stock_request(user, sr):
     if can_manage_stock(user):
         return True
     return sr.requested_by_id == user.id
+
+
+def can_view_license(user, lic):
+    """
+    Register access, or a personal stake in this one licence: you own it,
+    it was bought for you, or you're holding one of its seats.
+    """
+    if can_view_licenses(user):
+        return True
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if lic.owner_id == user.id or lic.holder_user_id == user.id:
+        return True
+    return lic.assignments.filter(user_id=user.id, released_at__isnull=True).exists()
+
+
+def can_edit_license(user, lic=None):
+    return can_operate_licenses(user)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -260,3 +351,25 @@ class ModuleAccessMixin(LoginRequiredMixin):
                 f"{self.inv_module} module."
             )
         return super().dispatch(request, *args, **kwargs)
+
+
+class LicenseAccessMixin(InventoryAccessMixin):
+    """
+    The gate every licence screen uses. Same behaviour as
+    InventoryAccessMixin, but pre-pointed at the licences module and it
+    drops the four permission flags the licence templates expect into the
+    context, so no template has to re-derive them.
+    """
+    inv_module: str = Module.LICENSES
+    inv_level: str = 'view'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        u = self.request.user
+        ctx.setdefault('can_view_licenses',    can_view_licenses(u))
+        ctx.setdefault('can_operate_licenses', can_operate_licenses(u))
+        ctx.setdefault('can_manage_licenses',  can_manage_licenses(u))
+        ctx.setdefault('can_see_key',          can_see_license_key(u))
+        ctx.setdefault('can_see_money',        can_see_license_money(u))
+        ctx.setdefault('can_manage',           can_manage_stock(u))
+        return ctx

@@ -1,0 +1,497 @@
+{% extends "inventory/inventory_base.html" %}
+{% load humanize inv_access %}
+
+{% block title %}{{ license.name }}{% endblock %}
+{% block breadcrumb %}Inventory · Licences · {{ license.reference }}{% endblock %}
+
+{% block extra_css %}{{ block.super }}{% include "inventory/_license_styles.html" %}{% endblock %}
+
+{% block inv_content %}
+
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">{{ license.reference }}</div>
+      <h1 class="inv-page-title">{{ license.name }}</h1>
+      <div class="inv-page-subtitle">
+        <span class="inv-chip {{ license.health_chip }}">{{ license.health_label }}</span>
+        <span class="inv-chip inv-chip-slate">{{ license.get_holder_kind_display }}</span>
+        {% if license.auto_renew %}<span class="inv-chip inv-chip-blue"><i class="bi bi-arrow-repeat"></i> Auto-renews</span>{% endif %}
+        {% if not license.alerts_enabled %}<span class="inv-chip inv-chip-amber"><i class="bi bi-bell-slash"></i> Alerts off</span>{% endif %}
+        {% if license.is_overallocated %}<span class="inv-chip inv-chip-rose">Over-allocated</span>{% endif %}
+      </div>
+    </div>
+    <div class="inv-page-actions">
+      <button onclick="window.print()" class="inv-btn lic-noprint"><i class="bi bi-printer"></i> Print</button>
+      {% if can_operate_licenses %}
+      <a href="{% url 'inventory:license_update' license.pk %}" class="inv-btn"><i class="bi bi-pencil"></i> Edit</a>
+      {% endif %}
+      {% if can_manage_licenses %}
+      <a href="#renew" class="inv-btn inv-btn-primary"><i class="bi bi-arrow-repeat"></i> Renew</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="row g-3">
+
+    {# ── Left: the licence itself ─────────────────────────────────────── #}
+    <div class="col-lg-7" style="display:flex;flex-direction:column;gap:18px">
+
+      {# Term #}
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:12px">Term</h3>
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Starts</span>
+          <span class="inv-detail-value">{{ license.start_date|date:"j F Y" }}</span>
+        </div>
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Ends</span>
+          <span class="inv-detail-value" style="color:{{ license.health_color }}">
+            {% if license.is_perpetual %}Never — perpetual{% else %}{{ license.end_date|date:"j F Y" }}{% endif %}
+          </span>
+        </div>
+        {% if license.grace_days %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Grace period</span>
+          <span class="inv-detail-value">{{ license.grace_days }} day{{ license.grace_days|pluralize }} — service stops {{ license.expiry_date|date:"j M Y" }}</span>
+        </div>
+        {% endif %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Renewal</span>
+          <span class="inv-detail-value">
+            {% if license.auto_renew %}Automatic{% else %}Manual{% endif %} · {{ license.renewal_term_months }} month term
+          </span>
+        </div>
+        {% if not license.is_perpetual %}
+        <div style="margin-top:14px">
+          <div class="lic-meter {% if license.health == 'critical' or license.health == 'expired' %}crit{% elif license.health == 'soon' %}warn{% else %}good{% endif %}">
+            <span style="width:{{ license.term_progress_pct }}%"></span>
+          </div>
+          <div class="lic-meter-label">
+            <span>{{ license.term_progress_pct }}% of the term used</span>
+            <span>{{ license.health_label }}</span>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+
+      {# Seats #}
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header">
+          <div>
+            <h2 class="inv-card-title">Seats</h2>
+            <div class="inv-card-subtitle">
+              {{ license.seats_assigned }} of {{ license.seats }} in use ·
+              {{ license.seats_free }} free
+              {% if can_see_money and license.cost_per_assigned_user %}
+                · {{ license.currency }} {{ license.cost_per_assigned_user|floatformat:2|intcomma }} per person actually using it
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        <div style="padding:0 18px">
+          <div class="lic-meter {% if license.seat_fill_pct < 50 %}crit{% elif license.seat_fill_pct < 80 %}warn{% else %}good{% endif %}">
+            <span style="width:{{ license.seat_fill_pct }}%"></span>
+          </div>
+        </div>
+
+        {% if active_seats %}
+        <table class="inv-table" style="margin-top:12px">
+          <thead><tr><th>Holder</th><th>Since</th>{% if can_see_money %}<th class="inv-table-num">Cost</th>{% endif %}<th class="inv-table-actions"></th></tr></thead>
+          <tbody>
+            {% for seat in active_seats %}
+            <tr>
+              <td>
+                <strong>{{ seat.holder_label }}</strong>
+                {% if seat.email %}<div style="font-size:.68rem;color:#94a3b8">{{ seat.email }}</div>{% endif %}
+                {% if seat.asset %}<div style="font-size:.68rem;color:#94a3b8" class="inv-table-mono">{{ seat.asset.tag }}</div>{% endif %}
+              </td>
+              <td><small style="color:#64748b">{{ seat.assigned_at|date:"j M Y" }}</small></td>
+              {% if can_see_money %}
+              <td class="inv-table-num lic-money">{{ seat.effective_cost|floatformat:2|intcomma }}</td>
+              {% endif %}
+              <td class="inv-table-actions">
+                {% if can_operate_licenses %}
+                <form method="post" action="{% url 'inventory:license_seat_release' seat.pk %}" style="display:inline">
+                  {% csrf_token %}
+                  <button type="submit" class="inv-btn inv-btn-sm inv-btn-danger"
+                          onclick="return confirm('Release this seat from {{ seat.holder_label|escapejs }}?')">
+                    Release
+                  </button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="inv-empty" style="padding:28px 24px">
+          <div class="inv-empty-icon"><i class="bi bi-person-plus"></i></div>
+          <div class="inv-empty-title">Nobody is using this licence</div>
+          <div class="inv-empty-msg">Assign a seat so the cost per user is real.</div>
+        </div>
+        {% endif %}
+
+        {% if can_operate_licenses %}
+        <div style="padding:14px 18px;border-top:1px solid #e2e8f0;background:#f8fafc">
+          <div class="lic-section-title">Assign a seat</div>
+          <form method="post" action="{% url 'inventory:license_seat_assign' license.pk %}">
+            {% csrf_token %}
+            <div class="lic-grid two">
+              <div>
+                <label class="inv-form-label">{{ seat_form.mode.label }}</label>
+                {{ seat_form.mode }}
+              </div>
+              <div>
+                <label class="inv-form-label">{{ seat_form.user.label }}</label>
+                {{ seat_form.user }}
+              </div>
+              <div>
+                <label class="inv-form-label">{{ seat_form.person_name.label }}</label>
+                {{ seat_form.person_name }}
+              </div>
+              <div>
+                <label class="inv-form-label">{{ seat_form.person_email.label }}</label>
+                {{ seat_form.person_email }}
+              </div>
+              <div>
+                <label class="inv-form-label">{{ seat_form.device_label.label }}</label>
+                {{ seat_form.device_label }}
+              </div>
+              <div>
+                <label class="inv-form-label">{{ seat_form.asset.label }}</label>
+                {{ seat_form.asset }}
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap">
+              <button type="submit" class="inv-btn inv-btn-primary">
+                <i class="bi bi-person-plus"></i> Assign seat
+              </button>
+              {% if license.seats_free == 0 and can_manage_licenses %}
+              <label class="lic-check" style="margin-left:4px">
+                <input type="checkbox" name="force" value="1">
+                <span>No seats left — assign anyway and fix the count later</span>
+              </label>
+              {% elif license.seats_free == 0 %}
+              <span style="font-size:.76rem;color:#be123c">
+                Every seat is taken. Increase the seat count first.
+              </span>
+              {% endif %}
+            </div>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+
+      {# History #}
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:8px">History</h3>
+        {% for e in events %}
+        <div class="lic-event">
+          <i class="bi {{ e.icon }}"></i>
+          <div class="lic-event-body">
+            <div class="lic-event-msg">{{ e.message }}</div>
+            <div class="lic-event-meta">
+              {{ e.actor.get_full_name|default:e.actor.username|default:"system" }} · {{ e.created_at|date:"j M Y H:i" }}
+            </div>
+          </div>
+        </div>
+        {% empty %}
+        <div style="font-size:.84rem;color:#94a3b8">Nothing recorded yet.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# ── Right: money, identity, actions ──────────────────────────────── #}
+    <div class="col-lg-5" style="display:flex;flex-direction:column;gap:18px">
+
+      {% if can_see_money %}
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:12px">Money</h3>
+        <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:12px">
+          <div>
+            <div class="lic-cur">{{ license.currency }} · cost this term</div>
+            <div class="lic-money lic-money-lg">{{ license.total_cost|floatformat:2|intcomma }}</div>
+          </div>
+          {% if license.total_price %}
+          <div>
+            <div class="lic-cur">{{ license.currency }} · we charge</div>
+            <div class="lic-money lic-money-lg" style="color:#047857">{{ license.total_price|floatformat:2|intcomma }}</div>
+          </div>
+          {% endif %}
+        </div>
+
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Billing</span>
+          <span class="inv-detail-value">{{ license.get_billing_model_display }} · {{ license.get_billing_cycle_display }}</span>
+        </div>
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Cost per seat</span>
+          <span class="inv-detail-value lic-money">{{ license.currency }} {{ license.cost_per_seat|floatformat:2|intcomma }}</span>
+        </div>
+        {% if license.cost_per_assigned_user %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Cost per user in use</span>
+          <span class="inv-detail-value lic-money">{{ license.currency }} {{ license.cost_per_assigned_user|floatformat:2|intcomma }}</span>
+        </div>
+        {% endif %}
+        {% if license.unit_price %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Selling price per seat</span>
+          <span class="inv-detail-value lic-money">{{ license.currency }} {{ license.price_per_seat|floatformat:2|intcomma }}</span>
+        </div>
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Margin</span>
+          <span class="inv-detail-value lic-money" style="color:{% if license.margin >= 0 %}#047857{% else %}#be123c{% endif %}">
+            {{ license.currency }} {{ license.margin|floatformat:2|intcomma }}{% if license.margin_pct %} · {{ license.margin_pct }}%{% endif %}
+          </span>
+        </div>
+        {% endif %}
+        {% if license.setup_cost %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">One-off setup</span>
+          <span class="inv-detail-value lic-money">{{ license.currency }} {{ license.setup_cost|floatformat:2|intcomma }}</span>
+        </div>
+        {% endif %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Run rate</span>
+          <span class="inv-detail-value lic-money">
+            {{ license.currency }} {{ license.monthly_cost|floatformat:2|intcomma }}/mo ·
+            {{ license.annualised_cost|floatformat:0|intcomma }}/yr
+          </span>
+        </div>
+        {% if license.wasted_cost %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Idle seats</span>
+          <span class="inv-detail-value lic-money" style="color:#be123c">
+            {{ license.currency }} {{ license.wasted_cost|floatformat:2|intcomma }}
+          </span>
+        </div>
+        {% endif %}
+        {% if license.purchase_ref %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Purchase reference</span>
+          <span class="inv-detail-value inv-table-mono">{{ license.purchase_ref }}</span>
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:12px">Details</h3>
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Held by</span>
+          <span class="inv-detail-value">{{ license.holder_label }}</span>
+        </div>
+        {% if license.customer_email %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Customer contact</span>
+          <span class="inv-detail-value">{{ license.customer_email }}{% if license.notify_customer %} <i class="bi bi-envelope-check" title="Copied on expiry warnings"></i>{% endif %}</span>
+        </div>
+        {% endif %}
+        {% if license.vendor %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Vendor</span>
+          <span class="inv-detail-value">{{ license.vendor.name }}</span>
+        </div>
+        {% endif %}
+        {% if license.license_type %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Type</span>
+          <span class="inv-detail-value">{{ license.license_type.name }}</span>
+        </div>
+        {% endif %}
+        {% if license.owner %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Renewal owner</span>
+          <span class="inv-detail-value">{{ license.owner.get_full_name|default:license.owner.username }}</span>
+        </div>
+        {% endif %}
+        {% if license.department %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Department</span>
+          <span class="inv-detail-value">{{ license.department.name }}</span>
+        </div>
+        {% endif %}
+        {% if license.account_email %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Account</span>
+          <span class="inv-detail-value">{{ license.account_email }}</span>
+        </div>
+        {% endif %}
+        {% if license.portal_url %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Portal</span>
+          <span class="inv-detail-value"><a href="{{ license.portal_url }}" target="_blank" rel="noopener">Open <i class="bi bi-box-arrow-up-right"></i></a></span>
+        </div>
+        {% endif %}
+        {% if license.attachment %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Document</span>
+          <span class="inv-detail-value"><a href="{{ license.attachment.url }}" target="_blank" rel="noopener">Download</a></span>
+        </div>
+        {% endif %}
+
+        {% if license.license_key %}
+        <div style="margin-top:14px">
+          <div class="lic-section-title">Licence key</div>
+          {% if can_see_key %}
+          <div class="lic-key">
+            <span id="licKey" data-key="{{ license.license_key }}">{{ license.masked_key }}</span>
+            <button type="button" class="inv-btn inv-btn-sm lic-noprint" id="licKeyToggle">Show</button>
+          </div>
+          {% else %}
+          <div class="lic-key">{{ license.masked_key }}</div>
+          <div class="lic-field-help">Only licence managers can reveal the full key.</div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if license.notes %}
+        <div style="margin-top:14px">
+          <div class="lic-section-title">Notes</div>
+          <div style="font-size:.84rem;color:#334155;white-space:pre-wrap">{{ license.notes }}</div>
+        </div>
+        {% endif %}
+      </div>
+
+      {# Alerts #}
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:12px">Expiry alerts</h3>
+        {% if license.is_perpetual %}
+        <div style="font-size:.84rem;color:#64748b">Perpetual licence — no reminders are sent.</div>
+        {% elif not license.alerts_enabled %}
+        <div style="font-size:.84rem;color:#b45309">
+          Alerts are switched off for this licence. Nobody will be warned before it ends.
+        </div>
+        {% else %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Warn at</span>
+          <span class="inv-detail-value">
+            {% for d in license.get_reminder_days %}{{ d }}{% if not forloop.last %} · {% endif %}{% endfor %} days out
+          </span>
+        </div>
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Already sent</span>
+          <span class="inv-detail-value">
+            {% if license.reminders_sent %}{{ license.reminders_sent|join:" · " }} days{% else %}None yet{% endif %}
+          </span>
+        </div>
+        {% if license.last_reminder_at %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Last reminder</span>
+          <span class="inv-detail-value">{{ license.last_reminder_at|naturaltime }}</span>
+        </div>
+        {% endif %}
+        <div class="lic-field-help" style="margin-top:8px">
+          Reminders go to the renewal owner and everyone with manage access to
+          licences — in the app and by email.
+        </div>
+        {% endif %}
+      </div>
+
+      {# Renew #}
+      {% if can_manage_licenses %}
+      <div class="inv-card lic-noprint" id="renew">
+        <h3 class="inv-card-title" style="margin-bottom:12px">Renew</h3>
+        <form method="post" action="{% url 'inventory:license_renew' license.pk %}">
+          {% csrf_token %}
+          <div class="lic-grid two">
+            <div>
+              <label class="inv-form-label">{{ renew_form.term_months.label }}</label>
+              {{ renew_form.term_months }}
+            </div>
+            <div>
+              <label class="inv-form-label">{{ renew_form.new_end.label }}</label>
+              {{ renew_form.new_end }}
+            </div>
+            <div>
+              <label class="inv-form-label">{{ renew_form.seats.label }}</label>
+              {{ renew_form.seats }}
+            </div>
+            <div>
+              <label class="inv-form-label">{{ renew_form.unit_cost.label }}</label>
+              {{ renew_form.unit_cost }}
+            </div>
+            <div>
+              <label class="inv-form-label">{{ renew_form.unit_price.label }}</label>
+              {{ renew_form.unit_price }}
+            </div>
+            <div>
+              <label class="inv-form-label">{{ renew_form.invoice_ref.label }}</label>
+              {{ renew_form.invoice_ref }}
+            </div>
+          </div>
+          <button type="submit" class="inv-btn inv-btn-primary" style="margin-top:12px">
+            <i class="bi bi-arrow-repeat"></i> Renew licence
+          </button>
+          <div class="lic-field-help" style="margin-top:6px">
+            The new term starts where the current one ends, so renewing early
+            keeps the days you have already paid for.
+          </div>
+        </form>
+
+        {% if renewals %}
+        <div style="margin-top:16px">
+          <div class="lic-section-title">Renewal history</div>
+          <table class="inv-table">
+            <thead><tr><th>Ran to</th><th class="inv-table-num">Seats</th><th class="inv-table-num">Cost</th></tr></thead>
+            <tbody>
+              {% for r in renewals %}
+              <tr>
+                <td>{{ r.new_end|date:"j M Y" }}<div style="font-size:.66rem;color:#94a3b8">{{ r.renewed_at|date:"j M Y" }}</div></td>
+                <td class="inv-table-num">{{ r.seats }}</td>
+                <td class="inv-table-num lic-money">{{ r.currency }} {{ r.total_cost|floatformat:0|intcomma }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+      </div>
+
+      {# Status #}
+      <div class="inv-card lic-noprint">
+        <h3 class="inv-card-title" style="margin-bottom:12px">Change status</h3>
+        <form method="post" action="{% url 'inventory:license_status' license.pk %}">
+          {% csrf_token %}
+          <label class="inv-form-label">Action</label>
+          <select name="action" class="inv-select">
+            <option value="suspend">Suspend — pause without cancelling</option>
+            <option value="reactivate">Reactivate</option>
+            <option value="cancel">Cancel — end it for good</option>
+          </select>
+          <label class="inv-form-label" style="margin-top:10px">Reason</label>
+          <textarea name="reason" rows="2" class="inv-textarea" placeholder="Recorded in the history"></textarea>
+          <label class="lic-check" style="margin-top:10px">
+            <input type="checkbox" name="release_seats" value="on" checked>
+            <span>Release every seat when cancelling</span>
+          </label>
+          <button type="submit" class="inv-btn inv-btn-danger" style="margin-top:12px"
+                  onclick="return confirm('Apply this change to {{ license.reference }}?')">
+            Apply
+          </button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if can_see_key and license.license_key %}
+  <script>
+  (function(){
+    var el = document.getElementById('licKey');
+    var btn = document.getElementById('licKeyToggle');
+    if (!el || !btn) return;
+    var masked = el.textContent, shown = false;
+    btn.addEventListener('click', function(){
+      shown = !shown;
+      el.textContent = shown ? el.dataset.key : masked;
+      btn.textContent = shown ? 'Hide' : 'Show';
+    });
+  })();
+  </script>
+  {% endif %}
+
+{% endblock %}

@@ -2,6 +2,7 @@
 from django.urls import path
 
 from . import views
+from . import license_views
 
 app_name = 'inventory'
 
@@ -46,6 +47,26 @@ urlpatterns = [
     path('assets/<uuid:pk>/return/',      views.AssetReturnView.as_view(),       name='asset_return'),
     path('assets/<uuid:pk>/maintenance/', views.AssetMaintenanceView.as_view(),  name='asset_maintenance'),
     path('assets/<uuid:pk>/scrap/',       views.AssetScrapView.as_view(),        name='asset_scrap'),
+
+    # ── Licences ────────────────────────────────────────────────────────────
+    path('licenses/',                      license_views.LicenseDashboardView.as_view(),   name='license_dashboard'),
+    path('licenses/register/',             license_views.LicenseListView.as_view(),        name='license_list'),
+    path('licenses/new/',                  license_views.LicenseCreateView.as_view(),      name='license_create'),
+    path('licenses/mine/',                 license_views.MyLicensesView.as_view(),         name='my_licenses'),
+    path('licenses/report/',               license_views.LicenseReportView.as_view(),      name='license_report'),
+    path('licenses/run-expiry-check/',     license_views.LicenseExpiryRunView.as_view(),   name='license_run_check'),
+
+    path('licenses/types/',                license_views.LicenseTypeListView.as_view(),    name='license_type_list'),
+    path('licenses/types/new/',            license_views.LicenseTypeCreateView.as_view(),  name='license_type_create'),
+    path('licenses/types/<uuid:pk>/edit/', license_views.LicenseTypeUpdateView.as_view(),  name='license_type_update'),
+
+    path('licenses/<uuid:pk>/',            license_views.LicenseDetailView.as_view(),      name='license_detail'),
+    path('licenses/<uuid:pk>/edit/',       license_views.LicenseUpdateView.as_view(),      name='license_update'),
+    path('licenses/<uuid:pk>/seats/add/',  license_views.LicenseSeatAssignView.as_view(),  name='license_seat_assign'),
+    path('licenses/<uuid:pk>/renew/',      license_views.LicenseRenewView.as_view(),       name='license_renew'),
+    path('licenses/<uuid:pk>/status/',     license_views.LicenseStatusView.as_view(),      name='license_status'),
+    path('licenses/seats/<uuid:pk>/release/',
+         license_views.LicenseSeatReleaseView.as_view(),                                  name='license_seat_release'),
 
     # Stock requests
     path('requests/',                    views.StockRequestListView.as_view(),    name='stock_request_list'),

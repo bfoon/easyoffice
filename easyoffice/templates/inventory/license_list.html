@@ -1,0 +1,147 @@
+{% extends "inventory/inventory_base.html" %}
+{% load humanize inv_access %}
+
+{% block title %}Licence register{% endblock %}
+{% block breadcrumb %}Inventory · Licences · Register{% endblock %}
+
+{% block extra_css %}{{ block.super }}{% include "inventory/_license_styles.html" %}{% endblock %}
+
+{% block inv_content %}
+
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Licences</div>
+      <h1 class="inv-page-title">Register</h1>
+      <div class="inv-page-subtitle">
+        {% if is_paginated %}{{ paginator.count }}{% else %}{{ licenses|length }}{% endif %}
+        licence{{ summary.count|pluralize }} ·
+        {{ summary.seats_assigned }} of {{ summary.seats }} seats in use
+        {% if can_see_money %} · {{ summary.currency }} {{ summary.annual_cost|floatformat:0|intcomma }} a year{% endif %}
+      </div>
+    </div>
+    <div class="inv-page-actions">
+      <a href="{% url 'inventory:license_dashboard' %}" class="inv-btn"><i class="bi bi-speedometer2"></i> Overview</a>
+      <a href="{% url 'inventory:license_type_list' %}" class="inv-btn"><i class="bi bi-collection"></i> Types</a>
+      <a href="{% url 'inventory:license_report' %}" class="inv-btn"><i class="bi bi-graph-up"></i> Report</a>
+      {% if can_operate_licenses %}
+      <a href="{% url 'inventory:license_create' %}" class="inv-btn inv-btn-primary"><i class="bi bi-plus-lg"></i> Add licence</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ── Filters ───────────────────────────────────────────────────────── #}
+  <div class="inv-card">
+    <form method="get" class="inv-filter-row">
+      <input type="search" name="q" value="{{ q }}" class="inv-input"
+             placeholder="Search name, reference, customer, vendor…">
+      <select name="expiry" class="inv-select">
+        <option value="">Any expiry</option>
+        <option value="30"  {% if expiry == "30" %}selected{% endif %}>Within 30 days</option>
+        <option value="60"  {% if expiry == "60" %}selected{% endif %}>Within 60 days</option>
+        <option value="90"  {% if expiry == "90" %}selected{% endif %}>Within 90 days</option>
+        <option value="expired"   {% if expiry == "expired" %}selected{% endif %}>Expired</option>
+        <option value="perpetual" {% if expiry == "perpetual" %}selected{% endif %}>Perpetual</option>
+      </select>
+      <select name="holder" class="inv-select">
+        <option value="">Anyone</option>
+        {% for value, label in holder_choices %}
+        <option value="{{ value }}" {% if holder == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <select name="status" class="inv-select">
+        <option value="">Any status</option>
+        {% for value, label in status_choices %}
+        <option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="inv-btn inv-btn-primary"><i class="bi bi-funnel"></i> Filter</button>
+    </form>
+  </div>
+
+  {# ── Table ─────────────────────────────────────────────────────────── #}
+  <div class="inv-card inv-card-pad-0">
+    {% if licenses %}
+    <table class="inv-table">
+      <thead>
+        <tr>
+          <th>Licence</th>
+          <th>Held by</th>
+          <th class="inv-table-num">Seats</th>
+          {% if can_see_money %}
+          <th class="inv-table-num">Per seat</th>
+          <th class="inv-table-num">Total</th>
+          {% endif %}
+          <th>Expiry</th>
+          <th class="inv-table-actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in licenses %}
+        <tr>
+          <td>
+            <a href="{% url 'inventory:license_detail' l.pk %}" style="color:#0f172a;text-decoration:none">
+              <strong>{{ l.name|truncatechars:40 }}</strong>
+            </a>
+            <div style="font-size:.68rem;color:#94a3b8">
+              <span class="inv-table-mono">{{ l.reference }}</span>
+              {% if l.vendor %} · {{ l.vendor.name|truncatechars:20 }}{% endif %}
+              {% if l.auto_renew %} · <i class="bi bi-arrow-repeat" title="Renews automatically"></i> auto{% endif %}
+            </div>
+          </td>
+          <td><small>{{ l.holder_label|truncatechars:24 }}</small></td>
+          <td class="inv-table-num">
+            {{ l.seats_assigned }}<span style="color:#94a3b8">/{{ l.seats }}</span>
+            {% if l.is_overallocated %}
+            <div style="font-size:.62rem;color:#be123c;font-weight:700">over-allocated</div>
+            {% endif %}
+          </td>
+          {% if can_see_money %}
+          <td class="inv-table-num lic-money">{{ l.cost_per_seat|floatformat:0|intcomma }}</td>
+          <td class="inv-table-num lic-money">
+            {{ l.total_cost|floatformat:0|intcomma }}
+            {% if l.total_price %}
+            <div style="font-size:.62rem;color:#047857">sells {{ l.total_price|floatformat:0|intcomma }}</div>
+            {% endif %}
+          </td>
+          {% endif %}
+          <td>
+            <span class="inv-chip {{ l.health_chip }}">{{ l.health_label }}</span>
+            {% if l.end_date %}<div style="font-size:.66rem;color:#94a3b8">{{ l.end_date|date:"j M Y" }}</div>{% endif %}
+          </td>
+          <td class="inv-table-actions">
+            <a href="{% url 'inventory:license_detail' l.pk %}" class="inv-btn inv-btn-sm inv-btn-icon" title="Open">
+              <i class="bi bi-arrow-right"></i>
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="inv-empty" style="padding:52px 24px">
+      <div class="inv-empty-icon"><i class="bi bi-key"></i></div>
+      <div class="inv-empty-title">No licences match</div>
+      <div class="inv-empty-msg">
+        {% if q or status or holder or expiry %}Clear the filters, or widen the expiry window.
+        {% else %}Add the first licence and the expiry reminders start working straight away.{% endif %}
+      </div>
+      {% if can_operate_licenses %}
+      <a href="{% url 'inventory:license_create' %}" class="inv-btn inv-btn-primary"><i class="bi bi-plus-lg"></i> Add licence</a>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  {% if is_paginated %}
+  <div style="display:flex;gap:8px;justify-content:center;align-items:center;padding:4px 0">
+    {% if page_obj.has_previous %}
+    <a class="inv-btn inv-btn-sm" href="?page={{ page_obj.previous_page_number }}&q={{ q }}&status={{ status }}&holder={{ holder }}&expiry={{ expiry }}">Previous</a>
+    {% endif %}
+    <span style="font-size:.78rem;color:#64748b">Page {{ page_obj.number }} of {{ paginator.num_pages }}</span>
+    {% if page_obj.has_next %}
+    <a class="inv-btn inv-btn-sm" href="?page={{ page_obj.next_page_number }}&q={{ q }}&status={{ status }}&holder={{ holder }}&expiry={{ expiry }}">Next</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+{% endblock %}

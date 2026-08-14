@@ -1,0 +1,295 @@
+{% extends "inventory/inventory_base.html" %}
+{% load humanize inv_access %}
+
+{% block title %}Licences{% endblock %}
+{% block breadcrumb %}Inventory · Licences{% endblock %}
+
+{% block extra_css %}{{ block.super }}{% include "inventory/_license_styles.html" %}{% endblock %}
+
+{% block inv_content %}
+
+  <div class="inv-hero">
+    <div style="flex:1;min-width:260px">
+      <div class="inv-hero-eyebrow">Licence management</div>
+      <h1 class="inv-hero-title">Renewals, seats and spend</h1>
+      <div class="inv-hero-meta">
+        Tracking <strong>{{ live_count|intcomma }}</strong> live licence{{ live_count|pluralize }}
+        covering <strong>{{ summary.seats|intcomma }}</strong> seat{{ summary.seats|pluralize }}.
+        {% if expiring_30_n %}<strong>{{ expiring_30_n }}</strong> expire{{ expiring_30_n|pluralize:"s," }} within 30 days.{% else %}Nothing expires in the next 30 days.{% endif %}
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <a href="{% url 'inventory:license_list' %}" class="inv-btn" style="background:rgba(255,255,255,.95)">
+        <i class="bi bi-list-ul"></i> Register
+      </a>
+      {% if can_operate_licenses %}
+      <a href="{% url 'inventory:license_create' %}" class="inv-btn inv-btn-success">
+        <i class="bi bi-plus-lg"></i> Add licence
+      </a>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ── KPI tiles ─────────────────────────────────────────────────────── #}
+  <div class="row g-3">
+    <div class="col-6 col-lg-3">
+      <a href="{% url 'inventory:license_list' %}" class="inv-stat">
+        <div class="inv-stat-icon blue"><i class="bi bi-key-fill"></i></div>
+        <div>
+          <div class="inv-stat-value">{{ live_count|intcomma }}</div>
+          <div class="inv-stat-label">Live licences</div>
+          <div class="inv-stat-hint">{{ summary.seats_assigned }} of {{ summary.seats }} seats in use</div>
+        </div>
+      </a>
+    </div>
+    <div class="col-6 col-lg-3">
+      <a href="{% url 'inventory:license_list' %}?expiry=30" class="inv-stat">
+        <div class="inv-stat-icon amber"><i class="bi bi-hourglass-split"></i></div>
+        <div>
+          <div class="inv-stat-value">{{ expiring_30_n }}</div>
+          <div class="inv-stat-label">Expiring in 30 days</div>
+          <div class="inv-stat-hint">{{ expiring_90_n }} within 90 days</div>
+        </div>
+      </a>
+    </div>
+    <div class="col-6 col-lg-3">
+      <a href="{% url 'inventory:license_list' %}?expiry=expired" class="inv-stat">
+        <div class="inv-stat-icon rose"><i class="bi bi-exclamation-octagon-fill"></i></div>
+        <div>
+          <div class="inv-stat-value">{{ expired_n }}</div>
+          <div class="inv-stat-label">Expired</div>
+          <div class="inv-stat-hint">{% if expired_n %}Renew or release the seats{% else %}Nothing overdue{% endif %}</div>
+        </div>
+      </a>
+    </div>
+    {% if can_see_money %}
+    <div class="col-6 col-lg-3">
+      <a href="{% url 'inventory:license_report' %}" class="inv-stat">
+        <div class="inv-stat-icon green"><i class="bi bi-cash-stack"></i></div>
+        <div>
+          <div class="inv-stat-value lic-money" style="font-size:1.2rem">{{ summary.annual_cost|floatformat:0|intcomma }}</div>
+          <div class="inv-stat-label">{{ summary.currency }} a year</div>
+          <div class="inv-stat-hint">{{ summary.monthly_cost|floatformat:0|intcomma }} a month</div>
+        </div>
+      </a>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="row g-3">
+
+    {# ── Left column ─────────────────────────────────────────────────── #}
+    <div class="col-lg-7" style="display:flex;flex-direction:column;gap:18px">
+
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header">
+          <div>
+            <h2 class="inv-card-title">
+              <i class="bi bi-hourglass-split" style="color:#b45309"></i> Coming up for renewal
+            </h2>
+            <div class="inv-card-subtitle">
+              {% if expiring_30 %}Next 30 days — act before service stops{% else %}Nothing due in the next 30 days{% endif %}
+            </div>
+          </div>
+          <a href="{% url 'inventory:license_list' %}?expiry=90" class="inv-btn inv-btn-sm">Next 90 days</a>
+        </div>
+
+        {% if expiring_30 %}
+        <table class="inv-table">
+          <thead>
+            <tr>
+              <th>Licence</th><th>Held by</th>
+              <th class="inv-table-num">Left</th>
+              {% if can_see_money %}<th class="inv-table-num">Renewal</th>{% endif %}
+              <th class="inv-table-actions">Ends</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for l in expiring_30 %}
+            <tr style="cursor:pointer" onclick="window.location='{% url 'inventory:license_detail' l.pk %}'">
+              <td>
+                <strong>{{ l.name|truncatechars:34 }}</strong>
+                <div style="font-size:.68rem;color:#94a3b8" class="inv-table-mono">{{ l.reference }}</div>
+              </td>
+              <td><small>{{ l.holder_label|truncatechars:22 }}</small></td>
+              <td class="inv-table-num">
+                <span class="lic-days" style="color:{{ l.health_color }}">
+                  {{ l.days_remaining }}<small>days</small>
+                </span>
+              </td>
+              {% if can_see_money %}
+              <td class="inv-table-num lic-money">{{ l.currency }} {{ l.renewal_estimate|floatformat:0|intcomma }}</td>
+              {% endif %}
+              <td class="inv-table-actions"><small style="color:#64748b">{{ l.end_date|date:"j M Y" }}</small></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% if can_see_money %}
+        <div style="padding:10px 18px;border-top:1px solid #e2e8f0;font-size:.78rem;color:#475569">
+          Renewal value in the next 90 days:
+          <strong class="lic-money">{{ summary.currency }} {{ renewal_value_90|floatformat:0|intcomma }}</strong>
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="inv-empty" style="padding:36px 24px">
+          <div class="inv-empty-icon" style="background:linear-gradient(135deg,#d1fae5,#a7f3d0);color:#047857"><i class="bi bi-check2-circle"></i></div>
+          <div class="inv-empty-title">No renewals due</div>
+          <div class="inv-empty-msg">Every licence has more than 30 days to run.</div>
+        </div>
+        {% endif %}
+      </div>
+
+      {% if expired %}
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header">
+          <div>
+            <h2 class="inv-card-title"><i class="bi bi-exclamation-octagon-fill" style="color:#be123c"></i> Expired</h2>
+            <div class="inv-card-subtitle">Past the end date — {{ expired_n }} in total</div>
+          </div>
+        </div>
+        <table class="inv-table">
+          <thead><tr><th>Licence</th><th>Held by</th><th class="inv-table-num">Seats</th><th class="inv-table-actions">Ended</th></tr></thead>
+          <tbody>
+            {% for l in expired %}
+            <tr style="cursor:pointer" onclick="window.location='{% url 'inventory:license_detail' l.pk %}'">
+              <td><strong>{{ l.name|truncatechars:34 }}</strong></td>
+              <td><small>{{ l.holder_label|truncatechars:22 }}</small></td>
+              <td class="inv-table-num">{{ l.seats_assigned }}</td>
+              <td class="inv-table-actions">
+                <span class="inv-chip inv-chip-rose">{{ l.end_date|date:"j M Y" }}</span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      {% if can_see_money and underused %}
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header">
+          <div>
+            <h2 class="inv-card-title">Seats you are paying for and not using</h2>
+            <div class="inv-card-subtitle">Least used first — the fastest saving in the module</div>
+          </div>
+        </div>
+        <div style="padding:8px 18px 16px">
+          {% for row in underused %}
+          <div style="padding:10px 0;border-bottom:1px dashed #e2e8f0">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline">
+              <a href="{% url 'inventory:license_detail' row.license.pk %}" style="font-size:.86rem;font-weight:700;color:#0f172a;text-decoration:none">
+                {{ row.license.name|truncatechars:38 }}
+              </a>
+              <span class="lic-money" style="font-size:.8rem;color:#be123c;font-weight:700">
+                {{ row.license.currency }} {{ row.wasted|floatformat:0|intcomma }} idle
+              </span>
+            </div>
+            <div class="lic-meter {% if row.pct < 50 %}crit{% elif row.pct < 80 %}warn{% else %}good{% endif %}" style="margin-top:6px">
+              <span style="width:{{ row.pct }}%"></span>
+            </div>
+            <div class="lic-meter-label">
+              <span>{{ row.assigned }} of {{ row.seats }} seats in use</span>
+              <span>{{ row.pct }}%</span>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    {# ── Right column ────────────────────────────────────────────────── #}
+    <div class="col-lg-5" style="display:flex;flex-direction:column;gap:18px">
+
+      {% if can_manage_licenses %}
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:6px">Expiry alerts</h3>
+        <div class="inv-card-subtitle" style="margin-bottom:12px">
+          Reminders go out automatically each morning at every threshold on the
+          licence — in-app and by email. Run it now if you have just changed a date.
+        </div>
+        <form method="post" action="{% url 'inventory:license_run_check' %}" style="display:flex;gap:8px;flex-wrap:wrap">
+          {% csrf_token %}
+          <button type="submit" name="dry_run" value="1" class="inv-btn inv-btn-sm">
+            <i class="bi bi-eye"></i> Preview
+          </button>
+          <button type="submit" class="inv-btn inv-btn-sm inv-btn-primary">
+            <i class="bi bi-send"></i> Send due reminders
+          </button>
+        </form>
+      </div>
+      {% endif %}
+
+      {% if can_see_money and by_vendor %}
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:14px">Annual spend by vendor</h3>
+        {% for row in by_vendor %}
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px dashed #e2e8f0">
+          <div style="min-width:0">
+            <div style="font-size:.84rem;color:#0f172a;font-weight:600">{{ row.vendor|truncatechars:26 }}</div>
+            <div style="font-size:.68rem;color:#94a3b8">{{ row.count }} licence{{ row.count|pluralize }} · {{ row.seats }} seats</div>
+          </div>
+          <strong class="lic-money" style="font-size:.9rem">{{ row.annual_cost|floatformat:0|intcomma }}</strong>
+        </div>
+        {% endfor %}
+        <div style="margin-top:12px;font-size:.72rem;color:#94a3b8">
+          Figures are annualised, so monthly and multi-year contracts compare fairly.
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:14px">Who the licences are for</h3>
+        {% for row in by_holder %}
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0">
+          <span style="font-size:.84rem;color:#475569">{{ row.kind }}</span>
+          <span>
+            <strong style="font-size:.95rem;color:#0f172a">{{ row.count }}</strong>
+            {% if can_see_money %}<span class="lic-cur">· {{ summary.currency }} {{ row.annual|floatformat:0|intcomma }}/yr</span>{% endif %}
+          </span>
+        </div>
+        {% endfor %}
+      </div>
+
+      {% if my_seats %}
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header">
+          <h2 class="inv-card-title">My licences</h2>
+          <a href="{% url 'inventory:my_licenses' %}" class="inv-btn inv-btn-sm">All</a>
+        </div>
+        <div style="padding:6px 8px">
+          {% for seat in my_seats %}
+          <a href="{% url 'inventory:license_detail' seat.license.pk %}"
+             style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:8px;text-decoration:none;color:inherit">
+            <div style="min-width:0;flex:1">
+              <div style="font-size:.86rem;font-weight:700;color:#0f172a">{{ seat.license.name|truncatechars:28 }}</div>
+              <div style="font-size:.72rem;color:#64748b">{{ seat.license.holder_label }}</div>
+            </div>
+            <span class="inv-chip {{ seat.license.health_chip }}">{{ seat.license.health_label }}</span>
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if recent_events %}
+      <div class="inv-card">
+        <h3 class="inv-card-title" style="margin-bottom:8px">Recent activity</h3>
+        {% for e in recent_events %}
+        <div class="lic-event">
+          <i class="bi {{ e.icon }}"></i>
+          <div class="lic-event-body">
+            <div class="lic-event-msg">{{ e.message|truncatechars:70 }}</div>
+            <div class="lic-event-meta">
+              {{ e.license.reference }} · {{ e.actor.get_full_name|default:e.actor.username|default:"system" }} · {{ e.created_at|naturaltime }}
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+{% endblock %}

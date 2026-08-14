@@ -13,6 +13,12 @@
       <div class="inv-hero-meta">
         {% if can_view_products %}Tracking <strong>{{ stats.product_count|intcomma }}</strong> products{% endif %}{% if can_view_products and can_view_assets %},
         {% endif %}{% if can_view_assets %}<strong>{{ stats.asset_count|intcomma }}</strong> assets{% endif %}{% if can_view_locations %}{% if can_view_products or can_view_assets %} across {% endif %}<strong>{{ stats.location_count|intcomma }}</strong> locations{% endif %}.
+        {% if licenses_expiring_n %}
+        <span style="color:#fcd34d">
+          <i class="bi bi-hourglass-split"></i>
+          {{ licenses_expiring_n }} licence{{ licenses_expiring_n|pluralize }} expiring in the next 30 days.
+        </span>
+        {% endif %}
       </div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -24,6 +30,11 @@
       {% if can_operate_movements %}
       <a href="{% url 'inventory:stock_receive' %}" class="inv-btn inv-btn-success">
         <i class="bi bi-box-arrow-in-down"></i> Receive stock
+      </a>
+      {% endif %}
+      {% if can_view_licenses and licenses_expiring_n %}
+      <a href="{% url 'inventory:license_list' %}?expiry=30" class="inv-btn" style="background:rgba(255,255,255,.95)">
+        <i class="bi bi-key"></i> Renewals due
       </a>
       {% endif %}
     </div>
@@ -81,6 +92,24 @@
           <div class="inv-stat-value">{{ stats.supplier_count|intcomma }}</div>
           <div class="inv-stat-label">Suppliers</div>
           <div class="inv-stat-hint">Active vendors</div>
+        </div>
+      </a>
+    </div>
+    {% endif %}
+    {% if can_view_licenses %}
+    <div class="col-6 col-lg-3">
+      <a href="{% url 'inventory:license_dashboard' %}" class="inv-stat">
+        <div class="inv-stat-icon slate"><i class="bi bi-key-fill"></i></div>
+        <div>
+          <div class="inv-stat-value">{{ license_count|intcomma }}</div>
+          <div class="inv-stat-label">Licences</div>
+          {% if licenses_expiring_n %}
+          <div class="inv-stat-hint" style="color:#b45309">
+            <i class="bi bi-hourglass-split"></i> {{ licenses_expiring_n }} expiring
+          </div>
+          {% else %}
+          <div class="inv-stat-hint">None expiring soon</div>
+          {% endif %}
         </div>
       </a>
     </div>
@@ -180,6 +209,42 @@
     {# Right column #}
     <div class="col-lg-5" style="display:flex;flex-direction:column;gap:18px">
 
+      {% if can_view_licenses and licenses_expiring %}
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header">
+          <div>
+            <h2 class="inv-card-title">
+              <i class="bi bi-hourglass-split" style="color:#b45309"></i>
+              Licences expiring
+            </h2>
+            <div class="inv-card-subtitle">
+              {{ licenses_expiring_n }} due in the next 30 days
+            </div>
+          </div>
+          <a href="{% url 'inventory:license_list' %}?expiry=30" class="inv-btn inv-btn-sm">View all</a>
+        </div>
+        <div style="padding:4px 8px">
+          {% for l in licenses_expiring %}
+          <a href="{% url 'inventory:license_detail' l.pk %}"
+             style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;text-decoration:none;color:inherit">
+            <div style="width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:{{ l.health_color }}18;color:{{ l.health_color }}">
+              <i class="bi bi-key-fill"></i>
+            </div>
+            <div style="min-width:0;flex:1">
+              <div style="font-size:.84rem;font-weight:700;color:#0f172a">{{ l.name|truncatechars:30 }}</div>
+              <div style="font-size:.7rem;color:#64748b">
+                {{ l.holder_label|truncatechars:24 }} · ends {{ l.end_date|date:"j M Y" }}
+              </div>
+            </div>
+            <span class="inv-chip" style="background:{{ l.health_color }}18;color:{{ l.health_color }}">
+              {% if l.days_remaining >= 0 %}{{ l.days_remaining }}d{% else %}overdue{% endif %}
+            </span>
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
       {% if can_view_assets and asset_status_breakdown %}
       <div class="inv-card">
         <h3 class="inv-card-title" style="margin-bottom:14px">Asset fleet</h3>
@@ -206,6 +271,31 @@
               <div style="font-size:.72rem;color:#64748b" class="inv-table-mono">{{ a.tag }}</div>
             </div>
             <span class="inv-chip" style="background:{{ a.status_color }}18;color:{{ a.status_color }}">{{ a.get_status_display }}</span>
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if my_licenses %}
+      <div class="inv-card inv-card-pad-0">
+        <div class="inv-card-header">
+          <h2 class="inv-card-title">My licences</h2>
+          <a href="{% url 'inventory:my_licenses' %}" class="inv-btn inv-btn-sm">All</a>
+        </div>
+        <div style="padding:6px 8px">
+          {% for seat in my_licenses %}
+          <a href="{% url 'inventory:license_detail' seat.license.pk %}"
+             style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:8px;text-decoration:none;color:inherit">
+            <div style="min-width:0;flex:1">
+              <div style="font-size:.86rem;font-weight:700;color:#0f172a">{{ seat.license.name|truncatechars:30 }}</div>
+              <div style="font-size:.72rem;color:#64748b">
+                {% if seat.license.end_date %}Ends {{ seat.license.end_date|date:"j M Y" }}{% else %}Perpetual{% endif %}
+              </div>
+            </div>
+            <span class="inv-chip" style="background:{{ seat.license.health_color }}18;color:{{ seat.license.health_color }}">
+              {{ seat.license.health_label }}
+            </span>
           </a>
           {% endfor %}
         </div>

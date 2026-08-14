@@ -1,0 +1,157 @@
+{% extends "inventory/inventory_base.html" %}
+{% load humanize inv_access %}
+
+{% block title %}Licence report{% endblock %}
+{% block breadcrumb %}Inventory · Licences · Report{% endblock %}
+
+{% block extra_css %}{{ block.super }}{% include "inventory/_license_styles.html" %}{% endblock %}
+
+{% block inv_content %}
+
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Licences</div>
+      <h1 class="inv-page-title">Cost and renewal report</h1>
+      <div class="inv-page-subtitle">
+        {{ summary.count }} licence{{ summary.count|pluralize }} ·
+        generated {{ generated|date:"j F Y, H:i" }}
+      </div>
+    </div>
+    <div class="inv-page-actions lic-noprint">
+      <form method="get" style="display:flex;gap:8px">
+        <select name="holder" class="inv-select" onchange="this.form.submit()">
+          <option value="">Everyone</option>
+          {% for value, label in holder_choices %}
+          <option value="{{ value }}" {% if holder == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      {% if can_see_money %}
+      <a href="?format=csv{% if holder %}&holder={{ holder }}{% endif %}" class="inv-btn"><i class="bi bi-filetype-csv"></i> CSV</a>
+      {% endif %}
+      <button onclick="window.print()" class="inv-btn inv-btn-primary"><i class="bi bi-printer"></i> Print</button>
+    </div>
+  </div>
+
+  {% if can_see_money %}
+  <div class="row g-3">
+    <div class="col-6 col-lg-3">
+      <div class="inv-card">
+        <div class="lic-cur">{{ summary.currency }} · this term</div>
+        <div class="lic-money lic-money-lg">{{ summary.total_cost|floatformat:0|intcomma }}</div>
+        <div class="inv-stat-hint">Total cost across every licence</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="inv-card">
+        <div class="lic-cur">{{ summary.currency }} · annualised</div>
+        <div class="lic-money lic-money-lg">{{ summary.annual_cost|floatformat:0|intcomma }}</div>
+        <div class="inv-stat-hint">{{ summary.monthly_cost|floatformat:0|intcomma }} a month</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="inv-card">
+        <div class="lic-cur">{{ summary.currency }} · margin</div>
+        <div class="lic-money lic-money-lg" style="color:{% if summary.margin >= 0 %}#047857{% else %}#be123c{% endif %}">
+          {{ summary.margin|floatformat:0|intcomma }}
+        </div>
+        <div class="inv-stat-hint">On {{ summary.total_price|floatformat:0|intcomma }} invoiced</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="inv-card">
+        <div class="lic-cur">Seat use</div>
+        <div class="lic-money lic-money-lg">{{ summary.utilisation }}%</div>
+        <div class="inv-stat-hint">
+          {{ summary.seats_free }} idle seat{{ summary.seats_free|pluralize }}
+          {% if summary.wasted_cost %}· {{ summary.currency }} {{ summary.wasted_cost|floatformat:0|intcomma }}{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="inv-card inv-card-pad-0">
+    <div class="inv-card-header">
+      <div>
+        <h2 class="inv-card-title">Every licence</h2>
+        <div class="inv-card-subtitle">Soonest expiry first</div>
+      </div>
+    </div>
+    <table class="inv-table">
+      <thead>
+        <tr>
+          <th>Licence</th><th>Held by</th><th>Vendor</th>
+          <th class="inv-table-num">Seats</th>
+          {% if can_see_money %}
+          <th class="inv-table-num">Per seat</th>
+          <th class="inv-table-num">Term cost</th>
+          <th class="inv-table-num">Per year</th>
+          <th class="inv-table-num">Sells for</th>
+          {% endif %}
+          <th>Ends</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in rows %}
+        <tr>
+          <td>
+            <strong>{{ l.name|truncatechars:36 }}</strong>
+            <div style="font-size:.66rem;color:#94a3b8" class="inv-table-mono">{{ l.reference }}</div>
+          </td>
+          <td><small>{{ l.holder_label|truncatechars:22 }}</small></td>
+          <td><small>{{ l.vendor.name|default:"—"|truncatechars:18 }}</small></td>
+          <td class="inv-table-num">{{ l.seats_assigned }}/{{ l.seats }}</td>
+          {% if can_see_money %}
+          <td class="inv-table-num lic-money">{{ l.cost_per_seat|floatformat:2|intcomma }}</td>
+          <td class="inv-table-num lic-money">{{ l.total_cost|floatformat:2|intcomma }}</td>
+          <td class="inv-table-num lic-money">{{ l.annualised_cost|floatformat:0|intcomma }}</td>
+          <td class="inv-table-num lic-money">{% if l.total_price %}{{ l.total_price|floatformat:0|intcomma }}{% else %}—{% endif %}</td>
+          {% endif %}
+          <td>
+            {% if l.is_perpetual %}<span class="inv-chip inv-chip-blue">Perpetual</span>
+            {% else %}<span class="inv-chip {{ l.health_chip }}">{{ l.end_date|date:"j M Y" }}</span>{% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:28px">No licences to report.</td></tr>
+        {% endfor %}
+      </tbody>
+      {% if can_see_money and rows %}
+      <tfoot>
+        <tr style="background:#f8fafc;font-weight:800">
+          <td colspan="3">Total</td>
+          <td class="inv-table-num">{{ summary.seats_assigned }}/{{ summary.seats }}</td>
+          <td class="inv-table-num">—</td>
+          <td class="inv-table-num lic-money">{{ summary.total_cost|floatformat:2|intcomma }}</td>
+          <td class="inv-table-num lic-money">{{ summary.annual_cost|floatformat:0|intcomma }}</td>
+          <td class="inv-table-num lic-money">{{ summary.total_price|floatformat:0|intcomma }}</td>
+          <td></td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+  </div>
+
+  {% if can_see_money and by_vendor %}
+  <div class="inv-card inv-card-pad-0">
+    <div class="inv-card-header">
+      <h2 class="inv-card-title">Annual spend by vendor</h2>
+    </div>
+    <table class="inv-table">
+      <thead><tr><th>Vendor</th><th class="inv-table-num">Licences</th><th class="inv-table-num">Seats</th><th class="inv-table-num">Per year</th></tr></thead>
+      <tbody>
+        {% for row in by_vendor %}
+        <tr>
+          <td>{{ row.vendor }}</td>
+          <td class="inv-table-num">{{ row.count }}</td>
+          <td class="inv-table-num">{{ row.seats }}</td>
+          <td class="inv-table-num lic-money">{{ summary.currency }} {{ row.annual_cost|floatformat:0|intcomma }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+{% endblock %}

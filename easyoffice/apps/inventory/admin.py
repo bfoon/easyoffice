@@ -142,3 +142,121 @@ class InventoryAccessGrantAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'user__email', 'department__name', 'notes')
     readonly_fields = ('granted_at', 'updated_at')
     autocomplete_fields = ('user',)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Licences
+# ════════════════════════════════════════════════════════════════════════════
+
+from .license_models import (
+    License, LicenseEvent, LicenseRenewal, LicenseSeat, LicenseType,
+)
+
+
+@admin.register(LicenseType)
+class LicenseTypeAdmin(admin.ModelAdmin):
+    list_display  = ('code', 'name', 'vendor', 'billing_model',
+                     'default_term_months', 'default_unit_cost',
+                     'default_unit_price', 'is_active')
+    list_filter   = ('billing_model', 'billing_cycle', 'is_active', 'vendor')
+    search_fields = ('code', 'name', 'vendor__name')
+
+
+class LicenseSeatInline(admin.TabularInline):
+    model = LicenseSeat
+    extra = 0
+    fields = ('user', 'person_name', 'person_email', 'device_label',
+              'assigned_at', 'released_at', 'release_reason')
+    readonly_fields = ('assigned_at',)
+    autocomplete_fields = ('user',)
+
+
+class LicenseRenewalInline(admin.TabularInline):
+    model = LicenseRenewal
+    extra = 0
+    readonly_fields = ('renewed_at',)
+
+
+@admin.register(License)
+class LicenseAdmin(admin.ModelAdmin):
+    list_display  = ('reference', 'name', 'holder_label', 'vendor', 'seats',
+                     'seats_assigned', 'end_date', 'health_label', 'status')
+    list_filter   = ('status', 'holder_kind', 'billing_model', 'auto_renew',
+                     'alerts_enabled', 'is_perpetual', 'vendor')
+    search_fields = ('reference', 'name', 'customer_name', 'account_email',
+                     'license_key', 'notes')
+    date_hierarchy = 'end_date'
+    readonly_fields = ('reference', 'reminders_sent', 'last_reminder_at',
+                       'expired_notified_at', 'created_at', 'updated_at')
+    autocomplete_fields = ('holder_user', 'owner')
+    inlines = [LicenseSeatInline, LicenseRenewalInline]
+    fieldsets = (
+        ('What', {
+            'fields': ('reference', 'name', 'license_type', 'vendor', 'status',
+                       'is_active'),
+        }),
+        ('Who for', {
+            'fields': ('holder_kind', 'holder_user', 'customer_name',
+                       'customer_email', 'customer_ref', 'department', 'owner'),
+        }),
+        ('Credentials', {
+            'classes': ('collapse',),
+            'fields': ('license_key', 'account_email', 'portal_url', 'attachment'),
+        }),
+        ('Commercials', {
+            'fields': ('billing_model', 'billing_cycle', 'seats', 'unit_cost',
+                       'unit_price', 'setup_cost', 'setup_price', 'currency',
+                       'purchase_ref'),
+        }),
+        ('Term', {
+            'fields': ('start_date', 'end_date', 'is_perpetual', 'auto_renew',
+                       'renewal_term_months', 'grace_days'),
+        }),
+        ('Alerts', {
+            'fields': ('alerts_enabled', 'reminder_days', 'notify_customer',
+                       'reminders_sent', 'last_reminder_at', 'expired_notified_at'),
+        }),
+        ('Meta', {'fields': ('notes', 'created_by', 'created_at', 'updated_at')}),
+    )
+
+    @admin.display(description='Held by')
+    def holder_label(self, obj):
+        return obj.holder_label
+
+    @admin.display(description='In use')
+    def seats_assigned(self, obj):
+        return obj.seats_assigned
+
+    @admin.display(description='Expiry')
+    def health_label(self, obj):
+        return obj.health_label
+
+
+@admin.register(LicenseSeat)
+class LicenseSeatAdmin(admin.ModelAdmin):
+    list_display  = ('license', 'holder_label', 'assigned_at', 'released_at')
+    list_filter   = ('license',)
+    search_fields = ('license__reference', 'license__name', 'person_name',
+                     'person_email', 'device_label', 'user__username')
+    autocomplete_fields = ('user', 'asset')
+
+    @admin.display(description='Held by')
+    def holder_label(self, obj):
+        return obj.holder_label
+
+
+@admin.register(LicenseEvent)
+class LicenseEventAdmin(admin.ModelAdmin):
+    list_display  = ('created_at', 'license', 'kind', 'actor', 'message')
+    list_filter   = ('kind',)
+    search_fields = ('license__reference', 'license__name', 'message')
+    readonly_fields = ('created_at',)
+    date_hierarchy = 'created_at'
+
+
+@admin.register(LicenseRenewal)
+class LicenseRenewalAdmin(admin.ModelAdmin):
+    list_display  = ('license', 'previous_end', 'new_end', 'term_months',
+                     'seats', 'total_cost', 'renewed_by', 'renewed_at')
+    search_fields = ('license__reference', 'license__name', 'invoice_ref')
+    date_hierarchy = 'renewed_at'

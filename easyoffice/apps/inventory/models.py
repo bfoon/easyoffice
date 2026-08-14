@@ -976,3 +976,9 @@ class InventoryAccessGrant(models.Model):
         if self.department_id:
             return f'Department: {self.department.name}'
         return 'Unknown scope'
+
+
+from .license_models import (  # noqa: E402,F401
+    BillingCycle, BillingModel, License, LicenseEvent, LicenseRenewal,
+    LicenseSeat, LicenseType,
+)

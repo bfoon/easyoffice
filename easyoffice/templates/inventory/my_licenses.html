@@ -1,0 +1,103 @@
+{% extends "inventory/inventory_base.html" %}
+{% load humanize inv_access %}
+
+{% block title %}My licences{% endblock %}
+{% block breadcrumb %}Inventory · My licences{% endblock %}
+
+{% block extra_css %}{{ block.super }}{% include "inventory/_license_styles.html" %}{% endblock %}
+
+{% block inv_content %}
+
+  <div class="inv-page-header">
+    <div class="inv-page-title-block">
+      <div class="inv-page-eyebrow">Licences</div>
+      <h1 class="inv-page-title">My licences</h1>
+      <div class="inv-page-subtitle">
+        {% if seats %}You hold {{ seats|length }} seat{{ seats|length|pluralize }}.
+        {% if expiring %} <span style="color:#b45309">{{ expiring|length }} expire{{ expiring|length|pluralize:"s," }} soon.</span>{% endif %}
+        {% else %}Nothing is assigned to you right now.{% endif %}
+      </div>
+    </div>
+    {% if can_view_licenses %}
+    <div class="inv-page-actions">
+      <a href="{% url 'inventory:license_dashboard' %}" class="inv-btn"><i class="bi bi-speedometer2"></i> Licence overview</a>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if seats %}
+  <div class="row g-3">
+    {% for seat in seats %}
+    <div class="col-12 col-lg-6">
+      <a href="{% url 'inventory:license_detail' seat.license.pk %}" class="inv-card" style="display:block;text-decoration:none;color:inherit">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+          <div style="min-width:0">
+            <div style="font-size:1rem;font-weight:800;color:#0f172a">{{ seat.license.name }}</div>
+            <div style="font-size:.72rem;color:#94a3b8" class="inv-table-mono">{{ seat.license.reference }}</div>
+          </div>
+          <span class="inv-chip {{ seat.license.health_chip }}">{{ seat.license.health_label }}</span>
+        </div>
+        <div class="inv-detail-row" style="margin-top:10px">
+          <span class="inv-detail-label">Assigned</span>
+          <span class="inv-detail-value">{{ seat.assigned_at|date:"j M Y" }}</span>
+        </div>
+        {% if seat.license.end_date %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Valid until</span>
+          <span class="inv-detail-value">{{ seat.license.end_date|date:"j M Y" }}</span>
+        </div>
+        {% endif %}
+        {% if seat.license.account_email %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Account</span>
+          <span class="inv-detail-value">{{ seat.license.account_email }}</span>
+        </div>
+        {% endif %}
+        {% if seat.device_label %}
+        <div class="inv-detail-row">
+          <span class="inv-detail-label">Device</span>
+          <span class="inv-detail-value">{{ seat.device_label }}</span>
+        </div>
+        {% endif %}
+      </a>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="inv-card">
+    <div class="inv-empty" style="padding:44px 24px">
+      <div class="inv-empty-icon"><i class="bi bi-key"></i></div>
+      <div class="inv-empty-title">No licences assigned to you</div>
+      <div class="inv-empty-msg">
+        When ICT gives you a seat on a software licence, it shows up here with
+        its expiry date.
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if owned %}
+  <div class="inv-card inv-card-pad-0">
+    <div class="inv-card-header">
+      <div>
+        <h2 class="inv-card-title">Licences you are responsible for renewing</h2>
+        <div class="inv-card-subtitle">You are the named owner — reminders come to you first</div>
+      </div>
+    </div>
+    <table class="inv-table">
+      <thead><tr><th>Licence</th><th>Held by</th><th class="inv-table-num">Seats</th><th>Expiry</th></tr></thead>
+      <tbody>
+        {% for l in owned %}
+        <tr style="cursor:pointer" onclick="window.location='{% url 'inventory:license_detail' l.pk %}'">
+          <td><strong>{{ l.name|truncatechars:36 }}</strong></td>
+          <td><small>{{ l.holder_label|truncatechars:20 }}</small></td>
+          <td class="inv-table-num">{{ l.seats_assigned }}/{{ l.seats }}</td>
+          <td><span class="inv-chip {{ l.health_chip }}">{{ l.health_label }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+{% endblock %}

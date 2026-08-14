@@ -25,6 +25,10 @@ Two scopes of grant:
 `effective_access(user, module)` returns the highest level that applies,
 or None if the user has no access to that module. Uses a small per-request
 cache to avoid a DB hit on every template tag call.
+
+`users_with_module_access(module, level)` walks the same table backwards —
+"who should be told about this?" — and is what the licence expiry alerts
+use to find their recipients.
 """
 from __future__ import annotations
 
@@ -39,6 +43,7 @@ class Module:
     DASHBOARD  = 'dashboard'
     PRODUCTS   = 'products'
     ASSETS     = 'assets'
+    LICENSES   = 'licenses'
     LOCATIONS  = 'locations'
     SUPPLIERS  = 'suppliers'
     CATEGORIES = 'categories'
@@ -53,6 +58,7 @@ class Module:
         (DASHBOARD,  'Dashboard'),
         (PRODUCTS,   'Products'),
         (ASSETS,     'Assets'),
+        (LICENSES,   'Licences'),
         (LOCATIONS,  'Locations'),
         (SUPPLIERS,  'Suppliers'),
         (CATEGORIES, 'Categories'),
@@ -226,3 +232,68 @@ def invalidate_cache(user):
             delattr(user, _CACHE_ATTR)
     except Exception:
         pass
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Reverse lookup — "who holds this access?"
+# ════════════════════════════════════════════════════════════════════════════
+
+def users_with_module_access(module: str, min_level='view', *,
+                             include_superusers: bool = False):
+    """
+    Every active user who holds at least `min_level` on `module`, whether
+    the grant is theirs directly or comes from their department.
+
+    Used by the notification layer so alerts follow the same access rules
+    as the screens: if you can't see licences, you don't get licence mail.
+
+    Returns a queryset (possibly empty). Superusers are excluded by default
+    — they can see everything, but that's no reason to fill their inbox.
+    """
+    from django.contrib.auth import get_user_model
+    from django.db.models import Q
+    from .models import InventoryAccessGrant
+
+    UserModel = get_user_model()
+    now = timezone.now()
+
+    wanted = Level.to_int(min_level)
+    level_names = [n for n, _ in Level.CHOICES if Level.to_int(n) >= wanted]
+
+    grants = (
+        InventoryAccessGrant.objects
+        .filter(is_active=True, module=module, level__in=level_names)
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+        .values_list('user_id', 'department_id')
+    )
+
+    user_ids, dept_ids = set(), set()
+    for uid, did in grants:
+        if uid:
+            user_ids.add(uid)
+        if did:
+            dept_ids.add(did)
+
+    # Department grants → members. The profile relation differs between
+    # deployments, so each lookup is attempted independently.
+    if dept_ids:
+        for lookup in ('staffprofile__department_id__in',
+                       'staffprofile__position__department_id__in',
+                       'departments__id__in'):
+            try:
+                user_ids.update(
+                    UserModel.objects
+                    .filter(is_active=True, **{lookup: list(dept_ids)})
+                    .values_list('id', flat=True)
+                )
+            except Exception:
+                continue
+
+    q = Q(id__in=user_ids)
+    if include_superusers:
+        q |= Q(is_superuser=True)
+
+    if not user_ids and not include_superusers:
+        return UserModel.objects.none()
+
+    return UserModel.objects.filter(is_active=True).filter(q).distinct()

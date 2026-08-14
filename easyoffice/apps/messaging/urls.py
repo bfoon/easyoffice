@@ -4,6 +4,7 @@ from apps.messaging import floating_chat_views
 from apps.messaging import typing_views
 from apps.messaging import read_receipts
 from apps.messaging import turn
+from apps.messaging import calendar_views
 
 urlpatterns = [
     # ─────────────────────────────────────────────
@@ -214,5 +215,44 @@ urlpatterns = [
         floating_chat_views.FloatingChatSendView.as_view(),
         name='floating_chat_send',
     ),
+
+# ─────────────────────────────────────────────
+    # 📅 CALENDAR & MEETING INVITES
+    # Invites are ChatMessages with command_payload.command_type =
+    # 'meeting_invite'; the RSVP itself lives on MeetingAttendee, so the
+    # chat card and the /meetings/ pages read the same rows.
+    # ─────────────────────────────────────────────
+    path('<uuid:room_id>/calendar/invite/',
+         calendar_views.ChatMeetingCreateView.as_view(),
+         name='chat_meeting_create'),
+
+    path('calendar/feed/',
+         calendar_views.ChatCalendarFeedView.as_view(),
+         name='chat_calendar_feed'),
+
+    path('calendar/meetings/state/',
+         calendar_views.ChatMeetingStateView.as_view(),
+         name='chat_meeting_state'),
+
+    path('calendar/reminders/',
+         calendar_views.ChatMeetingRemindersView.as_view(),
+         name='chat_meeting_reminders'),
+
+    path('calendar/availability/',
+         calendar_views.ChatMeetingAvailabilityView.as_view(),
+         name='chat_meeting_availability'),
+
+    path('calendar/meeting/<uuid:meeting_id>/',
+         calendar_views.ChatMeetingDetailView.as_view(),
+         name='chat_meeting_detail'),
+    path('calendar/meeting/<uuid:meeting_id>/rsvp/',
+         calendar_views.ChatMeetingRSVPView.as_view(),
+         name='chat_meeting_rsvp'),
+    path('calendar/meeting/<uuid:meeting_id>/cancel/',
+         calendar_views.ChatMeetingCancelView.as_view(),
+         name='chat_meeting_cancel'),
+    path('calendar/meeting/<uuid:meeting_id>/reminder/',
+         calendar_views.ChatMeetingReminderDismissView.as_view(),
+         name='chat_meeting_reminder'),
 
 ]

@@ -222,6 +222,53 @@
   }
   .msg-member-row:hover { background: var(--eo-bg); }
   .msg-member-row input[type="checkbox"] { flex-shrink: 0; }
+
+  /* ── 📅 Up next panel (main area) ── */
+  .cal-panel {
+    width: 100%;
+    max-width: 460px;
+    border: 1px solid var(--eo-border);
+    border-radius: var(--eo-radius);
+    background: var(--eo-surface);
+    overflow: hidden;
+    text-align: left;
+  }
+  .cal-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--eo-border);
+    background: var(--eo-bg);
+  }
+  .cal-panel-title {
+    flex: 1;
+    font-size: .82rem;
+    font-weight: 700;
+    color: var(--eo-text);
+  }
+  .cal-panel-body { max-height: 300px; overflow-y: auto; padding: 6px; }
+  .cal-panel-empty {
+    padding: 22px 14px;
+    text-align: center;
+    color: var(--eo-text-muted);
+    font-size: .8rem;
+  }
+  /* Count of invites still waiting on you — the one thing worth interrupting for */
+  .cal-needs-reply {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    margin: 0 6px 6px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    font-size: .76rem;
+    font-weight: 600;
+    background: #fef3c7;
+    border: 1px solid #fde68a;
+    color: #92400e;
+  }
+  .cal-needs-reply.show { display: flex; }
 </style>
 
 <div class="msg-layout">
@@ -232,6 +279,10 @@
         <i class="bi bi-search"></i>
         <input type="text" id="roomSearch" placeholder="Search rooms..." autocomplete="off"/>
       </div>
+      <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" title="Calendar and meetings"
+              onclick="window.EOCalendar && window.EOCalendar.toggle()">
+        <i class="bi bi-calendar3"></i>
+      </button>
       <button class="eo-btn eo-btn-primary eo-btn-icon eo-btn-sm" title="New conversation"
               onclick="openModal('createModal')">
         <i class="bi bi-pencil-square"></i>
@@ -329,6 +380,22 @@
       <button class="eo-btn eo-btn-secondary" onclick="openModal('createModal')">
         <i class="bi bi-hash"></i> New Channel
       </button>
+    </div>
+
+    <!-- 📅 UP NEXT — meetings from every room, soonest first.
+         Filled by EOCalendar.upcoming(); hidden entirely when empty so the
+         page doesn't grow a dead box. -->
+    <div class="cal-panel" id="calPanel" style="display:none;margin-top:20px">
+      <div class="cal-panel-head">
+        <i class="bi bi-calendar3" style="color:var(--eo-accent)"></i>
+        <span class="cal-panel-title">Up next</span>
+        <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm"
+                onclick="window.EOCalendar && window.EOCalendar.open()">
+          Open calendar
+        </button>
+      </div>
+      <div class="cal-needs-reply" id="calNeedsReply"></div>
+      <div class="cal-panel-body" id="calPanelBody"></div>
     </div>
   </main>
 </div>
@@ -584,5 +651,96 @@ document.getElementById('dmSearch').addEventListener('input', function() {
   // Kick off immediately
   start();
 })();
+
+/* ══════════════════════════════════════════════════════════════════════════
+   📅 UP NEXT
+   Meetings across every room, soonest first. Same data and the same RSVP
+   buttons as the invite cards in a room — accepting here is the same action,
+   so the two can't disagree.
+   ═════════════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+
+  var REFRESH_MS = 120000;
+
+  function el(id){ return document.getElementById(id); }
+
+  function render(events){
+    var panel = el('calPanel');
+    var body  = el('calPanelBody');
+    var flag  = el('calNeedsReply');
+    if(!panel || !body) return;
+
+    if(!events.length){
+      panel.style.display = 'none';
+      return;
+    }
+    panel.style.display = '';
+
+    var esc = window.EOCalendar.esc;
+    var waiting = events.filter(function(ev){
+      return ev.can_rsvp && (!ev.my_rsvp || ev.my_rsvp === 'invited');
+    }).length;
+
+    if(flag){
+      flag.classList.toggle('show', waiting > 0);
+      if(waiting){
+        flag.innerHTML = '<i class="bi bi-hourglass-split"></i>' +
+          '<span>' + waiting + (waiting === 1 ? ' invite is' : ' invites are') +
+          ' waiting on your reply.</span>';
+      }
+    }
+
+    body.innerHTML = events.slice(0, 8).map(function(ev){
+      var cls = 'eo-cal-item';
+      if(ev.my_rsvp === 'declined' || ev.is_cancelled) cls += ' declined';
+      if(ev.is_live) cls += ' live';
+
+      var sub = ev.location || (ev.virtual_link ? 'Online meeting' : ev.meeting_type_display);
+      if(ev.is_cancelled) sub = 'Cancelled';
+      else if(ev.my_rsvp === 'tentative') sub = 'Tentative · ' + sub;
+      else if(ev.can_rsvp && (!ev.my_rsvp || ev.my_rsvp === 'invited')) sub = 'Needs a reply · ' + sub;
+
+      return '<button type="button" class="' + cls + '" data-cal-open="' + esc(ev.id) + '">' +
+               '<div class="eo-cal-stripe" style="background:' + esc(ev.type_color || '#3b82f6') + '"></div>' +
+               '<div class="eo-cal-item-main">' +
+                 '<div class="eo-cal-item-time">' + esc(ev.day_label) + ' · ' + esc(ev.time_display) + '</div>' +
+                 '<div class="eo-cal-item-title">' + esc(ev.title) + '</div>' +
+                 '<div class="eo-cal-item-sub">' + esc(sub) + '</div>' +
+               '</div>' +
+             '</button>';
+    }).join('');
+  }
+
+  function load(){
+    if(!window.EOCalendar) return;
+    window.EOCalendar.upcoming(14)
+      .then(render)
+      .catch(function(){ /* offline — leave whatever is on screen */ });
+  }
+
+  /* Clicking a row opens the same detail sheet the room cards use, so the
+     Accept / Tentative / Decline buttons are right there. */
+  document.addEventListener('click', function(e){
+    var row = e.target.closest('#calPanelBody [data-cal-open]');
+    if(row && window.EOCalendar) window.EOCalendar.detail(row.getAttribute('data-cal-open'));
+  });
+
+  /* An RSVP anywhere on the page repaints this list. */
+  document.addEventListener('eo:meeting-changed', load);
+
+  function boot(){
+    if(!window.EOCalendar){ setTimeout(boot, 120); return; }
+    load();
+    setInterval(load, REFRESH_MS);
+  }
+  boot();
+})();
 </script>
+
+{# ── 📅 Calendar drawer, RSVP cards and meeting reminders ─────────────────
+   No `room` in this page's context, so the partial runs in list mode: the
+   drawer, reminders and RSVP all work, and composing is hidden because an
+   invite needs a room to land in. #}
+{% include "messaging/_chat_calendar.html" %}
 {% endblock %}

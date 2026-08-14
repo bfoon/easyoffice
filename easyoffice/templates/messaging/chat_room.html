@@ -1914,6 +1914,13 @@
         <i class="bi bi-search"></i>
       </button>
 
+      <!-- 📅 Calendar & meetings -->
+      <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" id="openCalendarBtn"
+              title="Calendar and meetings"
+              onclick="window.EOCalendar && window.EOCalendar.toggle()">
+        <i class="bi bi-calendar3"></i>
+      </button>
+
       <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" id="toggleMembers" title="Toggle members">
         <i class="bi bi-people"></i>
       </button>
@@ -1980,6 +1987,12 @@
                   </div>
                   {% if msg.content %}<div class="bubble-file-caption">{{ msg.content }}</div>{% endif %}
                 </div>
+
+   {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'meeting_invite' %}
+     {# 📅 Empty shell. EOCalendar.hydrate() fills it with live RSVP state,
+        so an invite sent last month still shows the current tally instead
+        of a snapshot frozen at send time. #}
+     <div class="eo-meet-mount" data-meeting-id="{{ msg.command_payload.meeting_id }}"></div>
 
    {% elif msg.message_type == 'poll' and msg.poll %}
   <div class="bubble {% if msg.sender == request.user %}bubble-out{% else %}bubble-in{% endif %}">
@@ -2123,6 +2136,12 @@
                       {% if msg.content %}<div class="bubble-file-caption">{{ msg.content }}</div>{% endif %}
                     </div>
 
+                  {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'meeting_invite' %}
+                    {# 📅 Empty shell. EOCalendar.hydrate() fills it with live RSVP state,
+                       so an invite sent last month still shows the current tally instead
+                       of a snapshot frozen at send time. #}
+                    <div class="eo-meet-mount" data-meeting-id="{{ msg.command_payload.meeting_id }}"></div>
+
                   {% elif msg.message_type == 'poll' and msg.poll %}
                     <div class="bubble {% if msg.sender == request.user %}bubble-out{% else %}bubble-in{% endif %}">
                       <div class="poll-box" id="poll-{{ msg.poll.id }}" data-allow-multiple="{{ msg.poll.allow_multiple|yesno:'1,0' }}" data-is-closed="{{ msg.poll.is_closed|yesno:'1,0' }}">
@@ -2249,6 +2268,12 @@
                       </div>
                       {% if msg.content %}<div class="bubble-file-caption">{{ msg.content }}</div>{% endif %}
                     </div>
+
+                  {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'meeting_invite' %}
+                    {# 📅 Empty shell. EOCalendar.hydrate() fills it with live RSVP state,
+                       so an invite sent last month still shows the current tally instead
+                       of a snapshot frozen at send time. #}
+                    <div class="eo-meet-mount" data-meeting-id="{{ msg.command_payload.meeting_id }}"></div>
 
                   {% elif msg.message_type == 'poll' and msg.poll %}
                     <div class="bubble {% if msg.sender == request.user %}bubble-out{% else %}bubble-in{% endif %}">
@@ -2394,6 +2419,10 @@
             onclick="openModal('pollModal'); closeMobileTray()">
       <i class="bi bi-bar-chart"></i><span>Poll</span>
     </button>
+    <button type="button" class="tray-btn" title="New meeting"
+            onclick="window.EOCalendar && window.EOCalendar.compose(); closeMobileTray()">
+      <i class="bi bi-calendar-plus"></i><span>Meet</span>
+    </button>
     <button type="button" class="tray-btn" id="trayEmojiBtn" title="Emoji">
       <span style="font-size:1.05rem;line-height:1">😊</span><span>Emoji</span>
     </button>
@@ -2401,6 +2430,9 @@
       <i class="bi bi-spellcheck"></i><span>Spell</span>
     </button>
   </div>
+
+  <!-- 📅 Fills in when a meeting you've accepted is minutes away -->
+  <div class="eo-soon-strip" id="eoSoonStrip"></div>
 
   <div class="input-row">
     <!-- 📱 MOBILE: + toggle — expands/collapses #mobileAttachTray -->
@@ -2421,6 +2453,11 @@
 
     <button type="button" class="chat-attach-btn" title="Create poll" onclick="openModal('pollModal')">
       <i class="bi bi-bar-chart"></i>
+    </button>
+
+    <button type="button" class="chat-attach-btn" title="New meeting"
+            onclick="window.EOCalendar && window.EOCalendar.compose()">
+      <i class="bi bi-calendar-plus"></i>
     </button>
 
     <div class="emoji-wrap" style="position:relative">
@@ -4647,6 +4684,12 @@ window.addEventListener('beforeunload', function(){
         return;
       }
 
+      /* 📅 Somebody answered an invite — repaint every card showing it. */
+      if(d.type === 'meeting_update'){
+        if(window.EOCalendar) window.EOCalendar.onSocketEvent(d);
+        return;
+      }
+
       if(d.type === 'poll_update'){
         updatePollUI(d);
         return;
@@ -6822,6 +6865,15 @@ function stopPollStatePolling(){
       }
       body.appendChild(fw);
 
+    } else if(mtype === 'command' && data.command_payload &&
+              data.command_payload.command_type === 'meeting_invite'){
+      /* 📅 Same empty mount the server renders — the hydrator fills it. */
+      var mm = document.createElement('div');
+      mm.className = 'eo-meet-mount';
+      mm.setAttribute('data-meeting-id', data.command_payload.meeting_id || '');
+      body.appendChild(mm);
+      if(window.EOCalendar) window.EOCalendar.hydrate(body);
+
     } else if(mtype === 'poll' && data.poll){
       var pw = document.createElement('div');
       pw.className = 'bubble ' + (isOwn ? 'bubble-out' : 'bubble-in');
@@ -8244,4 +8296,7 @@ if (spellcheckToggleBtn) {
 
 })();
 </script>
+
+{# ── 📅 Calendar, meeting invites, RSVP cards and reminders ──────────────── #}
+{% include "messaging/_chat_calendar.html" %}
 {% endblock %}

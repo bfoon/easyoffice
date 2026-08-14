@@ -1,0 +1,1824 @@
+{% comment %}
+────────────────────────────────────────────────────────────────────────────
+templates/messaging/_chat_calendar.html
+📅 Calendar + meeting invites, inside chat.
+
+Include this ONCE per page, inside the extra_js block:
+
+    {% include "messaging/_chat_calendar.html" %}
+
+Works in two modes, decided by whether `room` is in the template context:
+
+  * IN A ROOM (chat_room.html) — everything: drawer, compose, invite cards,
+    reminders.
+  * NO ROOM (chat_list.html)  — drawer, reminders and RSVP still work; the
+    compose form is hidden, because an invite has to be posted into some
+    room and there isn't one here. The list page sends people into a room
+    to start one.
+
+Everything here is self-contained: its own styles, its own markup, its own
+IIFE. It talks to the rest of the page through exactly one global,
+`window.EOCalendar`, and needs three small hooks in chat_room.html
+(see INTEGRATION.md).
+────────────────────────────────────────────────────────────────────────────
+{% endcomment %}
+
+<style>
+/* ═══ Calendar drawer ══════════════════════════════════════════════════════ */
+.eo-cal-drawer{
+  position:fixed; top:0; right:0; bottom:0; width:380px; max-width:92vw;
+  background:var(--eo-surface); border-left:1px solid var(--eo-border);
+  box-shadow:-8px 0 32px rgba(15,23,42,.12);
+  z-index:1040; display:flex; flex-direction:column;
+  transform:translateX(102%); transition:transform .22s cubic-bezier(.4,0,.2,1);
+}
+.eo-cal-drawer.open{ transform:translateX(0); }
+@media (prefers-reduced-motion:reduce){ .eo-cal-drawer{ transition:none; } }
+@media (max-width:520px){ .eo-cal-drawer{ width:100%; max-width:100%; } }
+
+.eo-cal-head{
+  padding:14px 16px; border-bottom:1px solid var(--eo-border);
+  display:flex; align-items:center; gap:10px; flex-shrink:0;
+}
+.eo-cal-title{ font-weight:700; font-size:.95rem; color:var(--eo-text); flex:1; }
+.eo-cal-body{ flex:1; overflow-y:auto; padding:14px 16px 60px; }
+
+.eo-cal-monthbar{ display:flex; align-items:center; gap:6px; margin-bottom:10px; }
+.eo-cal-monthlabel{
+  flex:1; font-weight:700; font-size:.85rem; color:var(--eo-text);
+  text-align:center; font-variant-numeric:tabular-nums;
+}
+.eo-cal-navbtn{
+  background:var(--eo-bg); border:1px solid var(--eo-border); color:var(--eo-text-muted);
+  width:28px; height:28px; border-radius:8px; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center; font-size:.75rem;
+}
+.eo-cal-navbtn:hover{ background:var(--eo-border); color:var(--eo-text); }
+
+.eo-cal-grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
+.eo-cal-dow{
+  text-align:center; font-size:.6rem; font-weight:700; letter-spacing:.06em;
+  text-transform:uppercase; color:var(--eo-text-muted); padding:4px 0;
+}
+.eo-cal-day{
+  position:relative; aspect-ratio:1; border:none; background:transparent;
+  border-radius:8px; cursor:pointer; font-size:.75rem; color:var(--eo-text);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:2px; padding:0; font-variant-numeric:tabular-nums;
+}
+.eo-cal-day:hover{ background:var(--eo-bg); }
+.eo-cal-day.muted{ color:var(--eo-text-muted); opacity:.45; }
+.eo-cal-day.today{ font-weight:800; color:var(--eo-accent); }
+.eo-cal-day.today::after{
+  content:''; position:absolute; inset:2px; border:1.5px solid var(--eo-accent);
+  border-radius:8px; pointer-events:none;
+}
+.eo-cal-day.selected{ background:var(--eo-accent); color:#fff; }
+.eo-cal-day.selected.today{ color:#fff; }
+.eo-cal-day.selected.today::after{ border-color:#fff; }
+.eo-cal-dots{ display:flex; gap:2px; height:4px; align-items:center; }
+.eo-cal-dot{ width:4px; height:4px; border-radius:50%; background:var(--eo-accent); }
+.eo-cal-day.selected .eo-cal-dot{ background:#fff; }
+
+.eo-cal-agenda{ margin-top:16px; }
+.eo-cal-daygroup{ margin-bottom:14px; }
+.eo-cal-daylabel{
+  font-size:.66rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--eo-text-muted); padding:4px 0 6px; position:sticky; top:-14px;
+  background:var(--eo-surface); z-index:1;
+}
+.eo-cal-item{
+  display:flex; gap:10px; padding:9px 10px; border-radius:10px; cursor:pointer;
+  border:1px solid transparent; text-align:left; width:100%; background:transparent;
+}
+.eo-cal-item:hover{ background:var(--eo-bg); border-color:var(--eo-border); }
+.eo-cal-stripe{ width:3px; border-radius:2px; flex-shrink:0; background:var(--eo-accent); }
+.eo-cal-item-main{ flex:1; min-width:0; }
+.eo-cal-item-time{ font-size:.68rem; color:var(--eo-text-muted); font-variant-numeric:tabular-nums; }
+.eo-cal-item-title{
+  font-size:.82rem; font-weight:600; color:var(--eo-text);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.eo-cal-item-sub{
+  font-size:.68rem; color:var(--eo-text-muted);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.eo-cal-item.declined .eo-cal-item-title{ text-decoration:line-through; opacity:.6; }
+.eo-cal-item.live{ background:rgba(16,185,129,.08); border-color:rgba(16,185,129,.3); }
+
+.eo-cal-empty{
+  padding:28px 16px; text-align:center; color:var(--eo-text-muted); font-size:.8rem;
+}
+
+/* ═══ Invite card in the message stream ════════════════════════════════════ */
+.eo-meet-card{
+  border:1px solid var(--eo-border); border-radius:12px; overflow:hidden;
+  background:var(--eo-surface); min-width:min(340px,72vw); max-width:420px;
+}
+.chat-msg.own .eo-meet-card{ border-color:rgba(255,255,255,.22); }
+
+.eo-meet-top{ display:flex; gap:11px; padding:12px 13px 10px; }
+.eo-meet-datechip{
+  width:46px; flex-shrink:0; border-radius:9px; overflow:hidden; text-align:center;
+  border:1px solid var(--eo-border); background:var(--eo-bg);
+}
+.eo-meet-datechip-m{
+  font-size:.55rem; font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+  padding:2px 0; color:#fff; background:var(--eo-accent);
+}
+.eo-meet-datechip-d{
+  font-size:1.15rem; font-weight:800; line-height:1.5; color:var(--eo-text);
+  font-variant-numeric:tabular-nums;
+}
+.eo-meet-headmain{ flex:1; min-width:0; }
+.eo-meet-title{
+  font-size:.9rem; font-weight:700; color:var(--eo-text); line-height:1.3;
+  word-break:break-word;
+}
+.eo-meet-when{
+  font-size:.74rem; color:var(--eo-text-muted); margin-top:3px;
+  font-variant-numeric:tabular-nums;
+}
+.eo-meet-where{
+  font-size:.72rem; color:var(--eo-text-muted); margin-top:2px;
+  display:flex; align-items:center; gap:5px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.eo-meet-cancelled-title{ text-decoration:line-through; opacity:.65; }
+
+.eo-meet-badges{ display:flex; flex-wrap:wrap; gap:5px; padding:0 13px 10px; }
+.eo-meet-badge{
+  font-size:.63rem; font-weight:700; padding:2px 7px; border-radius:999px;
+  display:inline-flex; align-items:center; gap:4px;
+  background:var(--eo-bg); color:var(--eo-text-muted); border:1px solid var(--eo-border);
+}
+.eo-meet-badge.ok{ background:#d1fae5; color:#065f46; border-color:#a7f3d0; }
+.eo-meet-badge.maybe{ background:#fef3c7; color:#92400e; border-color:#fde68a; }
+.eo-meet-badge.no{ background:#fee2e2; color:#991b1b; border-color:#fecaca; }
+.eo-meet-badge.live{ background:#dcfce7; color:#166534; border-color:#86efac; }
+.eo-meet-badge.dead{ background:#fee2e2; color:#991b1b; border-color:#fecaca; }
+
+.eo-meet-rsvp{
+  display:flex; gap:6px; padding:10px 13px; border-top:1px solid var(--eo-border);
+  background:var(--eo-bg);
+}
+.eo-meet-rsvp-btn{
+  flex:1; border:1px solid var(--eo-border); background:var(--eo-surface);
+  color:var(--eo-text); border-radius:8px; padding:7px 4px; cursor:pointer;
+  font-size:.73rem; font-weight:700;
+  display:inline-flex; align-items:center; justify-content:center; gap:5px;
+  transition:background .12s, border-color .12s, color .12s;
+}
+.eo-meet-rsvp-btn:hover{ background:var(--eo-border); }
+.eo-meet-rsvp-btn:disabled{ opacity:.55; cursor:default; }
+.eo-meet-rsvp-btn.on-yes{ background:#10b981; border-color:#10b981; color:#fff; }
+.eo-meet-rsvp-btn.on-maybe{ background:#f59e0b; border-color:#f59e0b; color:#fff; }
+.eo-meet-rsvp-btn.on-no{ background:#ef4444; border-color:#ef4444; color:#fff; }
+
+.eo-meet-foot{
+  display:flex; gap:8px; align-items:center; padding:8px 13px;
+  border-top:1px solid var(--eo-border);
+}
+.eo-meet-link{
+  font-size:.71rem; font-weight:600; color:var(--eo-accent);
+  text-decoration:none; display:inline-flex; align-items:center; gap:4px;
+}
+.eo-meet-link:hover{ text-decoration:underline; }
+.eo-meet-foot-spacer{ flex:1; }
+.eo-meet-skeleton{ padding:16px 13px; color:var(--eo-text-muted); font-size:.78rem; }
+
+/* ═══ Compose modal ════════════════════════════════════════════════════════ */
+.eo-meet-form-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+@media (max-width:640px){ .eo-meet-form-grid{ grid-template-columns:1fr; } }
+.eo-meet-form-full{ grid-column:1 / -1; }
+
+.eo-chip-field{
+  border:1px solid var(--eo-border); border-radius:8px; padding:6px;
+  display:flex; flex-wrap:wrap; gap:5px; align-items:center;
+  min-height:40px; background:var(--eo-surface);
+}
+.eo-chip{
+  display:inline-flex; align-items:center; gap:5px; padding:3px 6px 3px 3px;
+  border-radius:999px; background:var(--eo-bg); border:1px solid var(--eo-border);
+  font-size:.73rem; color:var(--eo-text);
+}
+.eo-chip-av{
+  width:19px; height:19px; border-radius:50%; background:#6366f1; color:#fff;
+  font-size:.55rem; font-weight:700;
+  display:inline-flex; align-items:center; justify-content:center; overflow:hidden;
+}
+.eo-chip-av img{ width:100%; height:100%; object-fit:cover; }
+.eo-chip-x{ background:none; border:none; cursor:pointer; color:var(--eo-text-muted); padding:0 2px; font-size:.7rem; }
+.eo-chip-x:hover{ color:#ef4444; }
+.eo-chip-input{ border:none; outline:none; flex:1; min-width:110px; background:transparent; font-size:.8rem; color:var(--eo-text); padding:4px; }
+
+.eo-people-menu{
+  position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:30;
+  background:var(--eo-surface); border:1px solid var(--eo-border); border-radius:10px;
+  box-shadow:0 10px 28px rgba(15,23,42,.16); max-height:210px; overflow-y:auto; display:none;
+}
+.eo-people-menu.open{ display:block; }
+.eo-people-row{
+  display:flex; align-items:center; gap:8px; padding:7px 10px; cursor:pointer;
+  border:none; background:none; width:100%; text-align:left; font-size:.8rem; color:var(--eo-text);
+}
+.eo-people-row:hover, .eo-people-row.active{ background:var(--eo-bg); }
+
+.eo-quick-row{ display:flex; flex-wrap:wrap; gap:6px; }
+.eo-quick-btn{
+  border:1px solid var(--eo-border); background:var(--eo-surface); border-radius:999px;
+  padding:4px 11px; font-size:.72rem; font-weight:600; color:var(--eo-text-muted); cursor:pointer;
+}
+.eo-quick-btn:hover{ background:var(--eo-bg); color:var(--eo-text); }
+.eo-quick-btn.on{ background:var(--eo-accent); border-color:var(--eo-accent); color:#fff; }
+
+/* Scheduling assistant */
+.eo-sa{ border:1px solid var(--eo-border); border-radius:10px; overflow:hidden; }
+.eo-sa-head{
+  display:flex; align-items:center; gap:8px; padding:9px 11px; cursor:pointer;
+  background:var(--eo-bg); border:none; width:100%; text-align:left;
+  font-size:.78rem; font-weight:700; color:var(--eo-text);
+}
+.eo-sa-body{ padding:11px; display:none; }
+.eo-sa.open .eo-sa-body{ display:block; }
+.eo-sa-person{ display:flex; align-items:center; gap:8px; margin-bottom:7px; }
+.eo-sa-name{
+  width:98px; flex-shrink:0; font-size:.71rem; color:var(--eo-text);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.eo-sa-track{
+  flex:1; height:17px; background:var(--eo-bg); border:1px solid var(--eo-border);
+  border-radius:5px; position:relative; overflow:hidden;
+}
+.eo-sa-busy{ position:absolute; top:0; bottom:0; background:#f87171; opacity:.75; }
+.eo-sa-proposed{ position:absolute; top:0; bottom:0; background:var(--eo-accent); opacity:.85; border-radius:3px; }
+.eo-sa-scale{
+  display:flex; justify-content:space-between; margin-left:106px;
+  font-size:.6rem; color:var(--eo-text-muted); font-variant-numeric:tabular-nums;
+}
+
+/* ═══ Reminders ════════════════════════════════════════════════════════════ */
+.eo-remind-stack{
+  position:fixed; right:18px; bottom:18px; z-index:1090;
+  display:flex; flex-direction:column; gap:10px; width:330px; max-width:calc(100vw - 36px);
+}
+.eo-remind{
+  background:var(--eo-surface); border:1px solid var(--eo-border);
+  border-left:4px solid #f59e0b; border-radius:12px; padding:12px 13px;
+  box-shadow:0 12px 34px rgba(15,23,42,.18);
+  animation:eoRemindIn .22s cubic-bezier(.4,0,.2,1);
+}
+.eo-remind.now{ border-left-color:#10b981; }
+@keyframes eoRemindIn{ from{ opacity:0; transform:translateY(10px); } to{ opacity:1; transform:none; } }
+@media (prefers-reduced-motion:reduce){ .eo-remind{ animation:none; } }
+.eo-remind-lead{
+  font-size:.64rem; font-weight:800; letter-spacing:.07em; text-transform:uppercase;
+  color:#b45309; margin-bottom:3px;
+}
+.eo-remind.now .eo-remind-lead{ color:#047857; }
+.eo-remind-title{ font-size:.87rem; font-weight:700; color:var(--eo-text); line-height:1.3; }
+.eo-remind-sub{ font-size:.72rem; color:var(--eo-text-muted); margin-top:3px; }
+.eo-remind-actions{ display:flex; gap:6px; margin-top:10px; align-items:center; }
+.eo-remind-btn{
+  border:1px solid var(--eo-border); background:var(--eo-surface); color:var(--eo-text);
+  border-radius:7px; padding:5px 10px; font-size:.72rem; font-weight:600; cursor:pointer;
+}
+.eo-remind-btn:hover{ background:var(--eo-bg); }
+.eo-remind-btn.primary{ background:var(--eo-accent); border-color:var(--eo-accent); color:#fff; }
+.eo-remind-btn.primary:hover{ filter:brightness(1.07); }
+.eo-remind-snooze{ position:relative; margin-left:auto; }
+.eo-remind-snooze-menu{
+  position:absolute; right:0; bottom:calc(100% + 5px); background:var(--eo-surface);
+  border:1px solid var(--eo-border); border-radius:9px; box-shadow:0 8px 22px rgba(15,23,42,.16);
+  display:none; min-width:132px; overflow:hidden; z-index:5;
+}
+.eo-remind-snooze-menu.open{ display:block; }
+.eo-remind-snooze-menu button{
+  display:block; width:100%; text-align:left; border:none; background:none;
+  padding:7px 12px; font-size:.74rem; color:var(--eo-text); cursor:pointer;
+}
+.eo-remind-snooze-menu button:hover{ background:var(--eo-bg); }
+
+/* ═══ Toast ════════════════════════════════════════════════════════════════ */
+.eo-toast-stack{
+  position:fixed; left:50%; transform:translateX(-50%); bottom:22px; z-index:1095;
+  display:flex; flex-direction:column; gap:8px; align-items:center; pointer-events:none;
+}
+.eo-toast{
+  background:#0f172a; color:#f8fafc; border-radius:999px; padding:9px 17px;
+  font-size:.79rem; font-weight:600; box-shadow:0 8px 26px rgba(15,23,42,.3);
+  animation:eoToastIn .18s ease-out;
+}
+.eo-toast.bad{ background:#b91c1c; }
+@keyframes eoToastIn{ from{ opacity:0; transform:translateY(8px); } to{ opacity:1; transform:none; } }
+@media (prefers-reduced-motion:reduce){ .eo-toast{ animation:none; } }
+
+/* Starting-soon strip above the composer */
+.eo-soon-strip{
+  display:none; align-items:center; gap:9px; margin:0 0 8px;
+  padding:8px 12px; border-radius:10px;
+  background:rgba(16,185,129,.1); border:1px solid rgba(16,185,129,.32);
+  font-size:.78rem; color:var(--eo-text);
+}
+.eo-soon-strip.show{ display:flex; }
+</style>
+
+
+{# ══ Calendar drawer ═══════════════════════════════════════════════════════ #}
+<aside class="eo-cal-drawer" id="eoCalDrawer" aria-label="Calendar" aria-hidden="true">
+  <div class="eo-cal-head">
+    <i class="bi bi-calendar3" style="color:var(--eo-accent)"></i>
+    <span class="eo-cal-title">Calendar</span>
+    {% if room and not room.is_readonly %}
+    <button type="button" class="eo-btn eo-btn-primary eo-btn-sm" id="eoCalNewBtn"
+            style="gap:5px;display:inline-flex;align-items:center">
+      <i class="bi bi-plus-lg"></i><span>New meeting</span>
+    </button>
+    {% endif %}
+    <button type="button" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"
+            id="eoCalCloseBtn" title="Close calendar">
+      <i class="bi bi-x-lg"></i>
+    </button>
+  </div>
+
+  <div class="eo-cal-body">
+    {% if room %}
+    <div class="eo-quick-row" style="margin-bottom:12px">
+      <button type="button" class="eo-quick-btn on" data-cal-scope="mine">My calendar</button>
+      <button type="button" class="eo-quick-btn" data-cal-scope="room">This room</button>
+    </div>
+    {% endif %}
+
+    <div class="eo-cal-monthbar">
+      <button type="button" class="eo-cal-navbtn" id="eoCalPrev" title="Previous month">
+        <i class="bi bi-chevron-left"></i>
+      </button>
+      <div class="eo-cal-monthlabel" id="eoCalMonthLabel">—</div>
+      <button type="button" class="eo-cal-navbtn" id="eoCalNext" title="Next month">
+        <i class="bi bi-chevron-right"></i>
+      </button>
+      <button type="button" class="eo-cal-navbtn" id="eoCalToday" title="Jump to today"
+              style="width:auto;padding:0 9px;font-size:.68rem;font-weight:700">Today</button>
+    </div>
+
+    <div class="eo-cal-grid" id="eoCalGrid"></div>
+    <div class="eo-cal-agenda" id="eoCalAgenda"></div>
+  </div>
+</aside>
+
+
+{# ══ Compose modal ═════════════════════════════════════════════════════════ #}
+{# Needs a room to post the invite into, so it only renders inside one. #}
+{% if room and not room.is_readonly %}
+<div class="msg-modal-backdrop" id="eoMeetingModal">
+  <div class="msg-modal" style="max-width:660px;width:94vw">
+    <div class="msg-modal-head">
+      <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">
+        <i class="bi bi-calendar-plus" style="color:var(--eo-accent);margin-right:6px"></i>New meeting
+      </div>
+      <button type="button" id="eoMeetCloseX" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+
+    <div class="msg-modal-body">
+      <div class="eo-meet-form-grid">
+
+        <div class="eo-form-group eo-meet-form-full">
+          <label class="eo-form-label" for="eoMeetTitle">Title</label>
+          <input type="text" id="eoMeetTitle" class="eo-form-control"
+                 placeholder="What is this meeting about?" maxlength="300">
+        </div>
+
+        <div class="eo-form-group eo-meet-form-full" style="position:relative">
+          <label class="eo-form-label" for="eoMeetPeopleInput">Invite</label>
+          <div class="eo-chip-field" id="eoMeetChips">
+            <input type="text" id="eoMeetPeopleInput" class="eo-chip-input"
+                   placeholder="Type a name…" autocomplete="off">
+          </div>
+          <div class="eo-people-menu" id="eoMeetPeopleMenu" role="listbox"></div>
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+            <button type="button" class="eo-quick-btn" id="eoMeetAddAll">Everyone in this room</button>
+            <button type="button" class="eo-quick-btn" id="eoMeetClearPeople">Clear</button>
+          </div>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label" for="eoMeetDate">Date</label>
+          <input type="date" id="eoMeetDate" class="eo-form-control">
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label">Time</label>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="time" id="eoMeetStart" class="eo-form-control" style="flex:1">
+            <span style="color:var(--eo-text-muted);font-size:.8rem">to</span>
+            <input type="time" id="eoMeetEnd" class="eo-form-control" style="flex:1">
+          </div>
+          <div class="eo-quick-row" style="margin-top:7px">
+            <button type="button" class="eo-quick-btn" data-dur="15">15m</button>
+            <button type="button" class="eo-quick-btn on" data-dur="30">30m</button>
+            <button type="button" class="eo-quick-btn" data-dur="60">1h</button>
+            <button type="button" class="eo-quick-btn" data-dur="90">1.5h</button>
+            <label class="eo-quick-btn" style="display:inline-flex;gap:5px;align-items:center">
+              <input type="checkbox" id="eoMeetAllDay" style="margin:0"> All day
+            </label>
+          </div>
+        </div>
+
+        <div class="eo-form-group eo-meet-form-full">
+          <div class="eo-sa" id="eoMeetSA">
+            <button type="button" class="eo-sa-head" id="eoMeetSAToggle">
+              <i class="bi bi-people"></i>
+              <span style="flex:1">Check everyone’s availability</span>
+              <i class="bi bi-chevron-down" style="font-size:.7rem"></i>
+            </button>
+            <div class="eo-sa-body" id="eoMeetSABody">
+              <div style="color:var(--eo-text-muted);font-size:.75rem">Pick people and a date first.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label" for="eoMeetLocation">Location</label>
+          <input type="text" id="eoMeetLocation" class="eo-form-control"
+                 placeholder="Room, address, or leave blank" maxlength="300">
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label" for="eoMeetLink">Meeting link</label>
+          <input type="url" id="eoMeetLink" class="eo-form-control" placeholder="https://…">
+          <label style="display:inline-flex;gap:6px;align-items:center;margin-top:6px;font-size:.74rem;color:var(--eo-text-muted);cursor:pointer">
+            <input type="checkbox" id="eoMeetOnline" style="margin:0">
+            Use this room’s call link
+          </label>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label" for="eoMeetType">Type</label>
+          <select id="eoMeetType" class="eo-form-control">
+            <option value="team">Team meeting</option>
+            <option value="one_on_one">One-on-one</option>
+            <option value="unit">Unit meeting</option>
+            <option value="department">Department meeting</option>
+            <option value="all_hands">All-hands</option>
+            <option value="external">External</option>
+          </select>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label" for="eoMeetRemind">Remind everyone</label>
+          <select id="eoMeetRemind" class="eo-form-control">
+            <option value="0">At start time</option>
+            <option value="5">5 minutes before</option>
+            <option value="10">10 minutes before</option>
+            <option value="15" selected>15 minutes before</option>
+            <option value="30">30 minutes before</option>
+            <option value="60">1 hour before</option>
+            <option value="120">2 hours before</option>
+            <option value="1440">1 day before</option>
+          </select>
+        </div>
+
+        <div class="eo-form-group">
+          <label class="eo-form-label" for="eoMeetRepeat">Repeat</label>
+          <select id="eoMeetRepeat" class="eo-form-control">
+            <option value="none">Doesn’t repeat</option>
+            <option value="daily">Every day</option>
+            <option value="weekly">Every week</option>
+            <option value="biweekly">Every 2 weeks</option>
+            <option value="monthly">Every month</option>
+          </select>
+        </div>
+
+        <div class="eo-form-group" id="eoMeetRepeatCountWrap" style="display:none">
+          <label class="eo-form-label" for="eoMeetRepeatCount">How many times</label>
+          <input type="number" id="eoMeetRepeatCount" class="eo-form-control"
+                 min="1" max="52" value="4">
+        </div>
+
+        <div class="eo-form-group eo-meet-form-full">
+          <label class="eo-form-label" for="eoMeetAgenda">Agenda</label>
+          <textarea id="eoMeetAgenda" class="eo-form-control" rows="3"
+                    placeholder="What you’ll cover. Optional."></textarea>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">
+        <button type="button" class="eo-btn eo-btn-secondary" id="eoMeetCancelBtn">Cancel</button>
+        <button type="button" class="eo-btn eo-btn-primary" id="eoMeetSendBtn">
+          <i class="bi bi-send"></i> Send invite
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+
+{# ══ Meeting detail modal ══════════════════════════════════════════════════ #}
+<div class="msg-modal-backdrop" id="eoMeetDetailModal">
+  <div class="msg-modal" style="max-width:520px;width:94vw">
+    <div class="msg-modal-head">
+      <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">Meeting</div>
+      <button type="button" id="eoMeetDetailX" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="msg-modal-body" id="eoMeetDetailBody"></div>
+  </div>
+</div>
+
+
+<div class="eo-remind-stack" id="eoRemindStack" aria-live="polite"></div>
+<div class="eo-toast-stack" id="eoToastStack" aria-live="polite"></div>
+
+
+<script>
+(function () {
+  'use strict';
+
+  var ROOM_ID   = '{% if room %}{{ room.id }}{% endif %}';
+  var ME_ID     = '{{ request.user.id|escapejs }}';
+  var READONLY  = {% if room %}{{ room.is_readonly|yesno:"true,false" }}{% else %}true{% endif %};
+  var IS_DIRECT = {% if room.room_type == 'direct' %}true{% else %}false{% endif %};
+  var BASE      = '/messages/calendar';
+
+  /* No room in context (the message list page) → the drawer, reminders and
+     RSVP buttons all still work; only composing is off, since an invite has
+     to land in a room and there isn't one here. */
+  var HAS_ROOM  = !!ROOM_ID;
+
+  var REMINDER_POLL_MS = 30000;
+  var MONTHS = ['January','February','March','April','May','June',
+                'July','August','September','October','November','December'];
+  var DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+  /* ── tiny helpers ──────────────────────────────────────────────────────── */
+  function $(id){ return document.getElementById(id); }
+  function esc(s){
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  function csrf(){
+    var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]*)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+  function post(url, body){
+    return fetch(url, {
+      method:'POST',
+      headers:{
+        'X-CSRFToken': csrf(),
+        'X-Requested-With':'XMLHttpRequest',
+        'Content-Type':'application/x-www-form-urlencoded'
+      },
+      credentials:'same-origin',
+      body: body || ''
+    }).then(readJSON);
+  }
+  function postJSON(url, obj){
+    return fetch(url, {
+      method:'POST',
+      headers:{
+        'X-CSRFToken': csrf(),
+        'X-Requested-With':'XMLHttpRequest',
+        'Content-Type':'application/json'
+      },
+      credentials:'same-origin',
+      body: JSON.stringify(obj || {})
+    }).then(readJSON);
+  }
+  function get(url){
+    return fetch(url, {
+      credentials:'same-origin',
+      headers:{'X-Requested-With':'XMLHttpRequest'}
+    }).then(readJSON);
+  }
+  function readJSON(r){
+    return r.json().catch(function(){ return {ok:false, error:'Server sent something unreadable.'}; })
+      .then(function(d){
+        if(!r.ok && !d.error) d.error = 'Request failed (' + r.status + ').';
+        return d;
+      });
+  }
+  function pad(n){ return (n < 10 ? '0' : '') + n; }
+  function ymd(d){ return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()); }
+  function hm(d){ return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+  function dayKey(iso){ return String(iso || '').slice(0,10); }
+
+  function toast(text, bad){
+    var stack = $('eoToastStack');
+    if(!stack) return;
+    var el = document.createElement('div');
+    el.className = 'eo-toast' + (bad ? ' bad' : '');
+    el.textContent = text;
+    stack.appendChild(el);
+    setTimeout(function(){ el.remove(); }, 3600);
+  }
+
+  /* Meetings we've seen, by id. Cards, calendar and reminders all read here
+     so a single RSVP updates every surface at once. */
+  var CACHE = {};
+  function remember(m){ if(m && m.id){ CACHE[m.id] = m; } return m; }
+  /* `null` is a real answer here: "asked the server, the meeting is gone."
+     Distinguishing that from "never asked" is what stops a deleted meeting's
+     card from re-requesting itself forever. */
+  function known(id){ return Object.prototype.hasOwnProperty.call(CACHE, id); }
+
+
+  /* ══════════════════════════════════════════════════════════════════════
+     INVITE CARD
+     Rendered from live data, never from the frozen command_payload, so the
+     RSVP tally is always current no matter when the message was sent.
+     ═════════════════════════════════════════════════════════════════════ */
+
+  function cardHTML(m){
+    if(!m) return '<div class="eo-meet-skeleton">This meeting is no longer available.</div>';
+
+    var start = new Date(m.start);
+    var mon = MONTHS[start.getMonth()].slice(0,3);
+    var titleCls = m.is_cancelled ? ' eo-meet-cancelled-title' : '';
+
+    var h = '<div class="eo-meet-card" data-meeting-card="' + esc(m.id) + '">';
+
+    h += '<div class="eo-meet-top">';
+    h +=   '<div class="eo-meet-datechip">';
+    h +=     '<div class="eo-meet-datechip-m" style="background:' + esc(m.type_color || '#3b82f6') + '">' + esc(mon) + '</div>';
+    h +=     '<div class="eo-meet-datechip-d">' + start.getDate() + '</div>';
+    h +=   '</div>';
+    h +=   '<div class="eo-meet-headmain">';
+    h +=     '<div class="eo-meet-title' + titleCls + '">' + esc(m.title) + '</div>';
+    h +=     '<div class="eo-meet-when">' + esc(m.day_label) + ' · ' + esc(m.time_display) +
+             ' <span style="opacity:.7">(' + esc(m.duration_display) + ')</span></div>';
+    if(m.location){
+      h +=   '<div class="eo-meet-where"><i class="bi bi-geo-alt"></i>' + esc(m.location) + '</div>';
+    }
+    if(m.virtual_link){
+      h +=   '<div class="eo-meet-where"><i class="bi bi-camera-video"></i>Online meeting</div>';
+    }
+    if(m.recurrence && m.recurrence !== 'none'){
+      h +=   '<div class="eo-meet-where"><i class="bi bi-arrow-repeat"></i>' + esc(m.recurrence_display) + '</div>';
+    }
+    h +=   '</div>';
+    h += '</div>';
+
+    /* Status + tally */
+    h += '<div class="eo-meet-badges">';
+    if(m.is_cancelled){
+      h += '<span class="eo-meet-badge dead"><i class="bi bi-x-circle"></i> Cancelled</span>';
+    } else if(m.is_live){
+      h += '<span class="eo-meet-badge live"><i class="bi bi-broadcast"></i> Happening now</span>';
+    } else if(m.is_past){
+      h += '<span class="eo-meet-badge"><i class="bi bi-clock-history"></i> Finished</span>';
+    }
+    var c = m.counts || {};
+    if(c.accepted)  h += '<span class="eo-meet-badge ok"><i class="bi bi-check-lg"></i> ' + c.accepted + ' going</span>';
+    if(c.tentative) h += '<span class="eo-meet-badge maybe"><i class="bi bi-question-lg"></i> ' + c.tentative + ' maybe</span>';
+    if(c.declined)  h += '<span class="eo-meet-badge no"><i class="bi bi-x-lg"></i> ' + c.declined + ' can’t</span>';
+    if(c.pending)   h += '<span class="eo-meet-badge"><i class="bi bi-hourglass"></i> ' + c.pending + ' no reply</span>';
+    h += '</div>';
+
+    /* RSVP row */
+    if(m.can_rsvp){
+      h += '<div class="eo-meet-rsvp">';
+      h +=   rsvpBtn(m, 'accepted',  'on-yes',   'bi-check-lg',    'Accept');
+      h +=   rsvpBtn(m, 'tentative', 'on-maybe', 'bi-question-lg', 'Tentative');
+      h +=   rsvpBtn(m, 'declined',  'on-no',    'bi-x-lg',        'Decline');
+      h += '</div>';
+    } else if(m.am_invited && m.my_rsvp){
+      h += '<div class="eo-meet-rsvp"><div style="font-size:.74rem;color:var(--eo-text-muted);padding:4px 2px">' +
+           'You ' + esc(rsvpVerb(m.my_rsvp)) + '.</div></div>';
+    }
+
+    /* Footer */
+    h += '<div class="eo-meet-foot">';
+    if(m.virtual_link && !m.is_cancelled && !m.is_past){
+      h += '<a class="eo-meet-link" href="' + esc(m.virtual_link) + '" target="_blank" rel="noopener">' +
+           '<i class="bi bi-camera-video-fill"></i>Join</a>';
+    }
+    h += '<button type="button" class="eo-meet-link" data-meet-details="' + esc(m.id) + '" ' +
+         'style="background:none;border:none;padding:0;cursor:pointer">' +
+         '<i class="bi bi-info-circle"></i>Details</button>';
+    h += '<div class="eo-meet-foot-spacer"></div>';
+    if(m.can_manage && !m.is_cancelled && !m.is_past){
+      h += '<button type="button" class="eo-meet-link" data-meet-cancel="' + esc(m.id) + '" ' +
+           'style="background:none;border:none;padding:0;cursor:pointer;color:#ef4444">' +
+           '<i class="bi bi-x-circle"></i>Cancel meeting</button>';
+    }
+    h += '</div>';
+
+    h += '</div>';
+    return h;
+  }
+
+  function rsvpBtn(m, value, onClass, icon, label){
+    var on = m.my_rsvp === value ? ' ' + onClass : '';
+    return '<button type="button" class="eo-meet-rsvp-btn' + on + '" ' +
+           'data-meet-rsvp="' + esc(m.id) + '" data-rsvp-value="' + value + '">' +
+           '<i class="bi ' + icon + '"></i>' + label + '</button>';
+  }
+
+  function rsvpVerb(v){
+    return { accepted:'accepted', tentative:'marked this tentative',
+             declined:'declined', invited:'haven’t replied yet' }[v] || 'replied';
+  }
+
+  /* Fingerprint of everything the card actually displays. Rewriting a mount
+     mutates the message stream, which wakes the MutationObserver in boot(),
+     which calls hydrate() again — so a repaint has to be a no-op unless
+     something really changed, or the two bounce off each other forever. */
+  function signature(m){
+    if(!m) return 'gone';
+    var c = m.counts || {};
+    return [m.id, m.title, m.start, m.end, m.status, m.my_rsvp, m.can_rsvp,
+            m.is_live, m.is_past, m.location, m.virtual_link,
+            c.accepted, c.tentative, c.declined, c.pending].join('|');
+  }
+
+  /* Paint every mount that shows this meeting. */
+  function paint(meetingId){
+    var m = CACHE[meetingId];
+    var sig = signature(m);
+    document.querySelectorAll('.eo-meet-mount[data-meeting-id="' + meetingId + '"]')
+      .forEach(function(mount){
+        if(mount.dataset.eoSig === sig) return;
+        mount.dataset.eoSig = sig;
+        mount.innerHTML = cardHTML(m);
+      });
+  }
+
+  /* Anything on the page that shows meetings — the list page's "Up next"
+     panel, for instance — listens for this instead of polling. */
+  function announce(meetingId){
+    try {
+      document.dispatchEvent(new CustomEvent('eo:meeting-changed', {
+        detail: { id: meetingId, meeting: CACHE[meetingId] || null }
+      }));
+    } catch(_){}
+  }
+
+  /* Fill in any card shells that don't have data yet. Batched: one request
+     covers every invite in the visible history. */
+  function hydrate(root){
+    var scope = root || document;
+    var pending = [];
+
+    scope.querySelectorAll('.eo-meet-mount[data-meeting-id]').forEach(function(mount){
+      var id = mount.getAttribute('data-meeting-id');
+      if(!id) return;
+      if(known(id)){
+        var sig = signature(CACHE[id]);
+        if(mount.dataset.eoSig !== sig){
+          mount.dataset.eoSig = sig;
+          mount.innerHTML = cardHTML(CACHE[id]);
+        }
+        return;
+      }
+      /* A failed fetch leaves a Retry button. Without this flag the
+         MutationObserver would see the rewritten mount, call hydrate again,
+         and stomp the button with a fresh spinner on a loop. */
+      if(mount.dataset.eoFailed === '1') return;
+      if(mount.dataset.eoLoading === '1') return;
+      mount.dataset.eoLoading = '1';
+      mount.innerHTML = '<div class="eo-meet-skeleton"><i class="bi bi-hourglass-split"></i> Loading meeting…</div>';
+      pending.push(id);
+    });
+
+    if(!pending.length) return Promise.resolve();
+
+    return postJSON(BASE + '/meetings/state/', { meeting_ids: pending })
+      .then(function(d){
+        /* A failed request is not the same as "the meeting is gone" — one
+           deserves a Retry, the other a final answer. Throwing here routes
+           server errors to the catch below instead of silently tombstoning
+           a meeting that still exists. */
+        if(!d.ok) throw new Error(d.error || 'Couldn’t load these meetings.');
+        (d.meetings || []).forEach(remember);
+        pending.forEach(function(id){
+          /* Asked and not answered → the meeting was deleted. Record that as
+             a fact so the card settles instead of asking again. */
+          if(!known(id)) CACHE[id] = null;
+          document.querySelectorAll('.eo-meet-mount[data-meeting-id="' + id + '"]')
+            .forEach(function(mo){ mo.dataset.eoLoading = ''; });
+          paint(id);
+        });
+      })
+      .catch(function(){
+        pending.forEach(function(id){
+          document.querySelectorAll('.eo-meet-mount[data-meeting-id="' + id + '"]')
+            .forEach(function(mo){
+              mo.dataset.eoLoading = '';
+              mo.dataset.eoFailed = '1';
+              mo.innerHTML = '<div class="eo-meet-skeleton">Couldn’t load this meeting. ' +
+                '<button type="button" class="eo-meet-link" data-meet-retry="' + esc(id) + '" ' +
+                'style="background:none;border:none;padding:0;cursor:pointer">Retry</button></div>';
+            });
+        });
+      });
+  }
+
+  /* ── card interactions (delegated, so live messages work too) ──────────── */
+  document.addEventListener('click', function(e){
+    var rsvpEl = e.target.closest('[data-meet-rsvp]');
+    if(rsvpEl){
+      doRSVP(rsvpEl.getAttribute('data-meet-rsvp'),
+             rsvpEl.getAttribute('data-rsvp-value'), rsvpEl);
+      return;
+    }
+    var detailEl = e.target.closest('[data-meet-details]');
+    if(detailEl){ openDetail(detailEl.getAttribute('data-meet-details')); return; }
+
+    var cancelEl = e.target.closest('[data-meet-cancel]');
+    if(cancelEl){ doCancel(cancelEl.getAttribute('data-meet-cancel')); return; }
+
+    var retryEl = e.target.closest('[data-meet-retry]');
+    if(retryEl){
+      var mo = retryEl.closest('.eo-meet-mount');
+      if(mo){
+        mo.dataset.eoLoading = '';
+        mo.dataset.eoFailed = '';
+        hydrate(mo.parentNode || document);
+      }
+      return;
+    }
+  });
+
+  function doRSVP(meetingId, value, btn){
+    if(!meetingId || !value) return;
+    var row = btn ? btn.parentNode : null;
+    if(row) row.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
+
+    post(BASE + '/meeting/' + meetingId + '/rsvp/', 'rsvp=' + encodeURIComponent(value))
+      .then(function(d){
+        if(!d.ok) throw new Error(d.error || 'Couldn’t save your reply.');
+        remember(d.meeting);
+        paint(meetingId);
+        toast(value === 'accepted'  ? 'Accepted — it’s on your calendar' :
+              value === 'tentative' ? 'Marked tentative' :
+                                      'Declined — removed from your calendar');
+        if(calendarOpen) loadCalendar();
+        /* Accepting keeps the reminder — you still want to be told. Declining
+           takes the meeting off your calendar, so the reminder goes with it. */
+        if(value === 'declined') dropReminder(meetingId, true);
+        announce(meetingId);
+      })
+      .catch(function(err){
+        toast(err.message, true);
+        paint(meetingId);
+      });
+  }
+
+  function doCancel(meetingId){
+    var m = CACHE[meetingId];
+    var name = m ? m.title : 'this meeting';
+    if(!window.confirm('Cancel “' + name + '”? Everyone invited will be told.')) return;
+
+    post(BASE + '/meeting/' + meetingId + '/cancel/', '')
+      .then(function(d){
+        if(!d.ok) throw new Error(d.error || 'Couldn’t cancel the meeting.');
+        remember(d.meeting);
+        paint(meetingId);
+        toast('Meeting cancelled');
+        if(calendarOpen) loadCalendar();
+        announce(meetingId);
+      })
+      .catch(function(err){ toast(err.message, true); });
+  }
+
+
+  /* ══════════════════════════════════════════════════════════════════════
+     DETAIL MODAL
+     ═════════════════════════════════════════════════════════════════════ */
+
+  function openDetail(meetingId){
+    var body = $('eoMeetDetailBody');
+    if(!body) return;
+    body.innerHTML = '<div class="eo-meet-skeleton">Loading…</div>';
+    showModal('eoMeetDetailModal');
+
+    get(BASE + '/meeting/' + meetingId + '/')
+      .then(function(d){
+        if(!d.ok) throw new Error(d.error || 'Couldn’t open this meeting.');
+        remember(d.meeting);
+        body.innerHTML = detailHTML(d.meeting);
+      })
+      .catch(function(err){
+        body.innerHTML = '<div class="eo-meet-skeleton">' + esc(err.message) + '</div>';
+      });
+  }
+
+  function detailHTML(m){
+    var h = cardHTML(m);
+
+    if(m.agenda || m.description){
+      h += '<div style="margin-top:14px">';
+      if(m.description){
+        h += '<div class="eo-form-label">Description</div>';
+        h += '<div style="font-size:.82rem;color:var(--eo-text);white-space:pre-wrap;margin-bottom:10px">' +
+             esc(m.description) + '</div>';
+      }
+      if(m.agenda){
+        h += '<div class="eo-form-label">Agenda</div>';
+        h += '<div style="font-size:.82rem;color:var(--eo-text);white-space:pre-wrap">' + esc(m.agenda) + '</div>';
+      }
+      h += '</div>';
+    }
+
+    var people = m.attendees || [];
+    if(people.length){
+      h += '<div style="margin-top:14px"><div class="eo-form-label">Who’s invited (' + people.length + ')</div>';
+      h += '<div style="display:flex;flex-direction:column;gap:5px;max-height:210px;overflow-y:auto">';
+      people.forEach(function(p){
+        var meta = { accepted:['#10b981','Accepted'], tentative:['#f59e0b','Tentative'],
+                     declined:['#ef4444','Declined'] }[p.bucket] || ['#94a3b8','No reply'];
+        h += '<div style="display:flex;align-items:center;gap:8px;font-size:.79rem">';
+        h +=   '<span class="eo-chip-av">' + (p.avatar_url
+                 ? '<img src="' + esc(p.avatar_url) + '" alt="">'
+                 : esc(p.initials)) + '</span>';
+        h +=   '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+                 esc(p.name) + (p.role ? ' <span style="color:var(--eo-text-muted)">· ' + esc(p.role) + '</span>' : '') +
+               '</span>';
+        h +=   '<span style="font-size:.68rem;font-weight:700;color:' + meta[0] + '">' + meta[1] + '</span>';
+        h += '</div>';
+      });
+      h += '</div></div>';
+    }
+
+    h += '<div style="margin-top:16px;display:flex;justify-content:flex-end">' +
+         '<a class="eo-btn eo-btn-secondary eo-btn-sm" href="' + esc(m.detail_url) + '">' +
+         'Open full meeting page</a></div>';
+    return h;
+  }
+
+
+  /* ══════════════════════════════════════════════════════════════════════
+     CALENDAR DRAWER
+     ═════════════════════════════════════════════════════════════════════ */
+
+  var calendarOpen = false;
+  var viewMonth = new Date();
+  var selectedDay = ymd(new Date());
+  var calScope = 'mine';
+  var eventsByDay = {};
+
+  function openCalendar(){
+    var d = $('eoCalDrawer');
+    if(!d) return;
+    d.classList.add('open');
+    d.setAttribute('aria-hidden','false');
+    calendarOpen = true;
+    loadCalendar();
+  }
+  function closeCalendar(){
+    var d = $('eoCalDrawer');
+    if(!d) return;
+    d.classList.remove('open');
+    d.setAttribute('aria-hidden','true');
+    calendarOpen = false;
+  }
+  function toggleCalendar(){ calendarOpen ? closeCalendar() : openCalendar(); }
+
+  function loadCalendar(){
+    var first = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
+    var last  = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 0);
+    /* Pad to whole weeks so the grid's leading/trailing days show dots too. */
+    var from = new Date(first); from.setDate(from.getDate() - 7);
+    var to   = new Date(last);  to.setDate(to.getDate() + 7);
+
+    var url = BASE + '/feed/?start=' + ymd(from) + '&end=' + ymd(to);
+    if(calScope === 'room') url += '&room_id=' + encodeURIComponent(ROOM_ID);
+
+    get(url)
+      .then(function(d){
+        if(!d.ok) throw new Error(d.error || 'Couldn’t load the calendar.');
+        eventsByDay = {};
+        (d.events || []).forEach(function(ev){
+          remember(ev);
+          var k = dayKey(ev.start);
+          (eventsByDay[k] = eventsByDay[k] || []).push(ev);
+        });
+        renderGrid();
+        renderAgenda();
+      })
+      .catch(function(err){
+        var a = $('eoCalAgenda');
+        if(a) a.innerHTML = '<div class="eo-cal-empty">' + esc(err.message) + '</div>';
+      });
+  }
+
+  function renderGrid(){
+    var grid = $('eoCalGrid');
+    var label = $('eoCalMonthLabel');
+    if(!grid) return;
+
+    if(label) label.textContent = MONTHS[viewMonth.getMonth()] + ' ' + viewMonth.getFullYear();
+
+    var html = DOW.map(function(d){ return '<div class="eo-cal-dow">' + d + '</div>'; }).join('');
+
+    var first = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
+    var lead = (first.getDay() + 6) % 7;           /* Monday-first */
+    var cursor = new Date(first);
+    cursor.setDate(cursor.getDate() - lead);
+
+    var todayKey = ymd(new Date());
+
+    for(var i = 0; i < 42; i++){
+      var key = ymd(cursor);
+      var evs = eventsByDay[key] || [];
+      var cls = 'eo-cal-day';
+      if(cursor.getMonth() !== viewMonth.getMonth()) cls += ' muted';
+      if(key === todayKey) cls += ' today';
+      if(key === selectedDay) cls += ' selected';
+
+      var dots = '';
+      evs.slice(0,3).forEach(function(ev){
+        dots += '<span class="eo-cal-dot" style="background:' + esc(ev.type_color || '#3b82f6') + '"></span>';
+      });
+
+      html += '<button type="button" class="' + cls + '" data-cal-day="' + key + '">' +
+                '<span>' + cursor.getDate() + '</span>' +
+                '<span class="eo-cal-dots">' + dots + '</span>' +
+              '</button>';
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    grid.innerHTML = html;
+  }
+
+  function renderAgenda(){
+    var wrap = $('eoCalAgenda');
+    if(!wrap) return;
+
+    var days = Object.keys(eventsByDay).sort();
+    var fromDay = selectedDay;
+    var upcoming = days.filter(function(k){ return k >= fromDay; }).slice(0, 14);
+
+    if(!upcoming.length){
+      wrap.innerHTML = '<div class="eo-cal-empty">' +
+        '<i class="bi bi-calendar-check" style="font-size:1.5rem;display:block;margin-bottom:7px;opacity:.5"></i>' +
+        'Nothing scheduled from here on.' +
+        (READONLY ? '' : '<br><span style="font-size:.74rem">Use <b>New meeting</b> to set something up.</span>') +
+        '</div>';
+      return;
+    }
+
+    var html = '';
+    upcoming.forEach(function(k){
+      var list = (eventsByDay[k] || []).slice().sort(function(a,b){
+        return new Date(a.start) - new Date(b.start);
+      });
+      if(!list.length) return;
+
+      html += '<div class="eo-cal-daygroup">';
+      html +=   '<div class="eo-cal-daylabel">' + esc(list[0].day_label) + ' · ' + esc(list[0].date_display) + '</div>';
+      list.forEach(function(ev){
+        var cls = 'eo-cal-item';
+        if(ev.my_rsvp === 'declined' || ev.is_cancelled) cls += ' declined';
+        if(ev.is_live) cls += ' live';
+
+        var sub = ev.location || (ev.virtual_link ? 'Online meeting' : ev.meeting_type_display);
+        if(ev.my_rsvp === 'tentative') sub = 'Tentative · ' + sub;
+        if(ev.is_cancelled) sub = 'Cancelled';
+
+        html += '<button type="button" class="' + cls + '" data-cal-open="' + esc(ev.id) + '">';
+        html +=   '<div class="eo-cal-stripe" style="background:' + esc(ev.type_color || '#3b82f6') + '"></div>';
+        html +=   '<div class="eo-cal-item-main">';
+        html +=     '<div class="eo-cal-item-time">' + esc(ev.time_display) + '</div>';
+        html +=     '<div class="eo-cal-item-title">' + esc(ev.title) + '</div>';
+        html +=     '<div class="eo-cal-item-sub">' + esc(sub) + '</div>';
+        html +=   '</div>';
+        html += '</button>';
+      });
+      html += '</div>';
+    });
+    wrap.innerHTML = html;
+  }
+
+  document.addEventListener('click', function(e){
+    var dayEl = e.target.closest('[data-cal-day]');
+    if(dayEl){
+      selectedDay = dayEl.getAttribute('data-cal-day');
+      renderGrid();
+      renderAgenda();
+      return;
+    }
+    var openEl = e.target.closest('[data-cal-open]');
+    if(openEl){ openDetail(openEl.getAttribute('data-cal-open')); return; }
+
+    var scopeEl = e.target.closest('[data-cal-scope]');
+    if(scopeEl){
+      calScope = scopeEl.getAttribute('data-cal-scope');
+      document.querySelectorAll('[data-cal-scope]').forEach(function(b){
+        b.classList.toggle('on', b === scopeEl);
+      });
+      loadCalendar();
+      return;
+    }
+  });
+
+  bind('eoCalCloseBtn', closeCalendar);
+  bind('eoCalPrev', function(){ viewMonth.setMonth(viewMonth.getMonth() - 1); loadCalendar(); });
+  bind('eoCalNext', function(){ viewMonth.setMonth(viewMonth.getMonth() + 1); loadCalendar(); });
+  bind('eoCalToday', function(){
+    viewMonth = new Date();
+    selectedDay = ymd(new Date());
+    loadCalendar();
+  });
+  bind('eoCalNewBtn', function(){ openCompose(); });
+
+  function bind(id, fn){ var el = $(id); if(el) el.addEventListener('click', fn); }
+
+
+  /* ══════════════════════════════════════════════════════════════════════
+     COMPOSE
+     ═════════════════════════════════════════════════════════════════════ */
+
+  var ROSTER = [];
+  var picked = [];          /* [{id,name,initials,avatar}] */
+  var pickedDuration = 30;
+
+  try {
+    var raw = document.getElementById('roomMembersData');
+    if(raw) ROSTER = JSON.parse(raw.textContent || '[]');
+  } catch(_){ ROSTER = []; }
+
+  function showModal(id){
+    var el = $(id);
+    if(el) el.classList.add('open');
+  }
+  function hideModal(id){
+    var el = $(id);
+    if(el) el.classList.remove('open');
+  }
+
+  function openCompose(prefill){
+    if(!HAS_ROOM || READONLY) return;
+    if(!$('eoMeetingModal')) return;
+
+    var now = new Date();
+    var start = new Date(now.getTime() + (30 - now.getMinutes() % 30) * 60000);
+    start.setSeconds(0, 0);
+    var end = new Date(start.getTime() + 30 * 60000);
+
+    setVal('eoMeetTitle', (prefill && prefill.title) || '');
+    setVal('eoMeetDate', ymd(start));
+    setVal('eoMeetStart', hm(start));
+    setVal('eoMeetEnd', hm(end));
+    setVal('eoMeetLocation', '');
+    setVal('eoMeetLink', '');
+    setVal('eoMeetAgenda', '');
+    setVal('eoMeetRepeat', 'none');
+    setVal('eoMeetRemind', '15');
+    setVal('eoMeetType', IS_DIRECT ? 'one_on_one' : 'team');
+    setChecked('eoMeetAllDay', false);
+    setChecked('eoMeetOnline', false);
+    var rcw = $('eoMeetRepeatCountWrap'); if(rcw) rcw.style.display = 'none';
+
+    pickedDuration = 30;
+    markDuration(30);
+
+    /* Default to the room. That's the request 90% of the time, and it's one
+       click to take someone off. */
+    picked = ROSTER.filter(function(u){ return !u.is_self; })
+                   .map(function(u){ return {id:u.id, name:u.full_name, initials:u.initials || '', avatar:u.avatar || ''}; });
+    renderChips();
+
+    var sa = $('eoMeetSA'); if(sa) sa.classList.remove('open');
+
+    showModal('eoMeetingModal');
+    setTimeout(function(){ var t = $('eoMeetTitle'); if(t) t.focus(); }, 60);
+  }
+
+  function setVal(id, v){ var el = $(id); if(el) el.value = v; }
+  function setChecked(id, v){ var el = $(id); if(el) el.checked = !!v; }
+  function getVal(id){ var el = $(id); return el ? el.value : ''; }
+  function isChecked(id){ var el = $(id); return !!(el && el.checked); }
+
+  function renderChips(){
+    var field = $('eoMeetChips');
+    var input = $('eoMeetPeopleInput');
+    if(!field || !input) return;
+
+    field.querySelectorAll('.eo-chip').forEach(function(c){ c.remove(); });
+
+    picked.forEach(function(p){
+      var chip = document.createElement('span');
+      chip.className = 'eo-chip';
+      chip.innerHTML =
+        '<span class="eo-chip-av">' +
+          (p.avatar ? '<img src="' + esc(p.avatar) + '" alt="">' : esc(p.initials || p.name.slice(0,1))) +
+        '</span>' + esc(p.name) +
+        '<button type="button" class="eo-chip-x" data-drop-person="' + esc(p.id) + '" ' +
+        'aria-label="Remove ' + esc(p.name) + '"><i class="bi bi-x-lg"></i></button>';
+      field.insertBefore(chip, input);
+    });
+
+    input.placeholder = picked.length ? 'Add someone else…' : 'Type a name…';
+    refreshAssistant();
+  }
+
+  document.addEventListener('click', function(e){
+    var drop = e.target.closest('[data-drop-person]');
+    if(!drop) return;
+    var id = drop.getAttribute('data-drop-person');
+    picked = picked.filter(function(p){ return p.id !== id; });
+    renderChips();
+  });
+
+  var peopleInput = $('eoMeetPeopleInput');
+  if(peopleInput){
+    peopleInput.addEventListener('input', function(){ showPeopleMenu(this.value); });
+    peopleInput.addEventListener('focus', function(){ showPeopleMenu(this.value); });
+    peopleInput.addEventListener('keydown', function(e){
+      if(e.key === 'Backspace' && !this.value && picked.length){
+        picked.pop(); renderChips();
+      }
+      if(e.key === 'Escape'){ hidePeopleMenu(); }
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        var first = document.querySelector('#eoMeetPeopleMenu .eo-people-row');
+        if(first) first.click();
+      }
+    });
+  }
+
+  function showPeopleMenu(q){
+    var menu = $('eoMeetPeopleMenu');
+    if(!menu) return;
+    q = (q || '').trim().toLowerCase();
+
+    var taken = {};
+    picked.forEach(function(p){ taken[p.id] = true; });
+
+    var hits = ROSTER.filter(function(u){
+      if(u.is_self || taken[u.id]) return false;
+      if(!q) return true;
+      return (u.full_name || '').toLowerCase().indexOf(q) > -1 ||
+             (u.username  || '').toLowerCase().indexOf(q) > -1;
+    }).slice(0, 8);
+
+    if(!hits.length){ hidePeopleMenu(); return; }
+
+    menu.innerHTML = hits.map(function(u){
+      return '<button type="button" class="eo-people-row" data-add-person="' + esc(u.id) + '">' +
+               '<span class="eo-chip-av">' +
+                 (u.avatar ? '<img src="' + esc(u.avatar) + '" alt="">' : esc(u.initials || (u.full_name || '?').slice(0,1))) +
+               '</span>' + esc(u.full_name) +
+             '</button>';
+    }).join('');
+    menu.classList.add('open');
+  }
+  function hidePeopleMenu(){
+    var menu = $('eoMeetPeopleMenu');
+    if(menu) menu.classList.remove('open');
+  }
+
+  document.addEventListener('click', function(e){
+    var add = e.target.closest('[data-add-person]');
+    if(add){
+      var id = add.getAttribute('data-add-person');
+      var u = ROSTER.filter(function(x){ return x.id === id; })[0];
+      if(u){
+        picked.push({id:u.id, name:u.full_name, initials:u.initials || '', avatar:u.avatar || ''});
+        renderChips();
+      }
+      var inp = $('eoMeetPeopleInput');
+      if(inp){ inp.value = ''; inp.focus(); }
+      hidePeopleMenu();
+      return;
+    }
+    if(!e.target.closest('#eoMeetPeopleMenu') && !e.target.closest('#eoMeetChips')){
+      hidePeopleMenu();
+    }
+  });
+
+  bind('eoMeetAddAll', function(){
+    var taken = {};
+    picked.forEach(function(p){ taken[p.id] = true; });
+    ROSTER.forEach(function(u){
+      if(u.is_self || taken[u.id]) return;
+      picked.push({id:u.id, name:u.full_name, initials:u.initials || '', avatar:u.avatar || ''});
+    });
+    renderChips();
+  });
+  bind('eoMeetClearPeople', function(){ picked = []; renderChips(); });
+
+  /* Duration shortcuts keep start fixed and move end. */
+  document.querySelectorAll('[data-dur]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      pickedDuration = parseInt(btn.getAttribute('data-dur'), 10) || 30;
+      markDuration(pickedDuration);
+      var s = getVal('eoMeetStart');
+      if(s){
+        var parts = s.split(':');
+        var d = new Date();
+        d.setHours(parseInt(parts[0],10), parseInt(parts[1],10), 0, 0);
+        d = new Date(d.getTime() + pickedDuration * 60000);
+        setVal('eoMeetEnd', hm(d));
+      }
+      refreshAssistant();
+    });
+  });
+  function markDuration(mins){
+    document.querySelectorAll('[data-dur]').forEach(function(b){
+      b.classList.toggle('on', parseInt(b.getAttribute('data-dur'),10) === mins);
+    });
+  }
+
+  ['eoMeetStart','eoMeetEnd','eoMeetDate'].forEach(function(id){
+    var el = $(id);
+    if(el) el.addEventListener('change', refreshAssistant);
+  });
+
+  var allDayEl = $('eoMeetAllDay');
+  if(allDayEl){
+    allDayEl.addEventListener('change', function(){
+      var off = this.checked;
+      ['eoMeetStart','eoMeetEnd'].forEach(function(id){
+        var el = $(id); if(el) el.disabled = off;
+      });
+      document.querySelectorAll('[data-dur]').forEach(function(b){ b.disabled = off; });
+    });
+  }
+
+  var onlineEl = $('eoMeetOnline');
+  if(onlineEl){
+    onlineEl.addEventListener('change', function(){
+      var link = $('eoMeetLink');
+      if(link) link.disabled = this.checked;
+    });
+  }
+
+  var repeatEl = $('eoMeetRepeat');
+  if(repeatEl){
+    repeatEl.addEventListener('change', function(){
+      var wrap = $('eoMeetRepeatCountWrap');
+      if(wrap) wrap.style.display = this.value === 'none' ? 'none' : '';
+    });
+  }
+
+  bind('eoMeetSAToggle', function(){
+    var sa = $('eoMeetSA');
+    if(!sa) return;
+    sa.classList.toggle('open');
+    if(sa.classList.contains('open')) refreshAssistant(true);
+  });
+
+  bind('eoMeetCloseX', function(){ hideModal('eoMeetingModal'); });
+  bind('eoMeetCancelBtn', function(){ hideModal('eoMeetingModal'); });
+  bind('eoMeetDetailX', function(){ hideModal('eoMeetDetailModal'); });
+  bind('eoMeetSendBtn', submitMeeting);
+
+
+  /* ── Scheduling assistant ──────────────────────────────────────────────── */
+
+  var saTimer = null;
+  function refreshAssistant(force){
+    var sa = $('eoMeetSA');
+    if(!sa || (!sa.classList.contains('open') && !force)) return;
+    clearTimeout(saTimer);
+    saTimer = setTimeout(runAssistant, 260);
+  }
+
+  function runAssistant(){
+    var body = $('eoMeetSABody');
+    if(!body) return;
+
+    var date = getVal('eoMeetDate');
+    if(!date || !picked.length){
+      body.innerHTML = '<div style="color:var(--eo-text-muted);font-size:.75rem">Pick people and a date first.</div>';
+      return;
+    }
+
+    body.innerHTML = '<div style="color:var(--eo-text-muted);font-size:.75rem">Checking calendars…</div>';
+
+    var params = new URLSearchParams();
+    picked.forEach(function(p){ params.append('user_ids[]', p.id); });
+    params.append('date', date);
+    params.append('duration_minutes', String(currentDuration()));
+
+    post(BASE + '/availability/', params.toString())
+      .then(function(d){
+        if(!d.ok) throw new Error(d.error || 'Couldn’t read availability.');
+        body.innerHTML = assistantHTML(d);
+      })
+      .catch(function(err){
+        body.innerHTML = '<div style="color:var(--eo-text-muted);font-size:.75rem">' + esc(err.message) + '</div>';
+      });
+  }
+
+  function currentDuration(){
+    var s = getVal('eoMeetStart'), e = getVal('eoMeetEnd');
+    if(!s || !e) return pickedDuration;
+    var sm = toMinutes(s), em = toMinutes(e);
+    return em > sm ? em - sm : pickedDuration;
+  }
+  function toMinutes(v){
+    var p = String(v).split(':');
+    return (parseInt(p[0],10) || 0) * 60 + (parseInt(p[1],10) || 0);
+  }
+
+  function assistantHTML(d){
+    var dayStart = d.workday_start_minutes;
+    var dayEnd = d.workday_end_minutes;
+    var span = Math.max(dayEnd - dayStart, 1);
+
+    function pct(mins){ return ((Math.min(Math.max(mins, dayStart), dayEnd) - dayStart) / span) * 100; }
+
+    var proposedStart = toMinutes(getVal('eoMeetStart'));
+    var proposedEnd = toMinutes(getVal('eoMeetEnd'));
+
+    var h = '';
+    (d.people || []).forEach(function(p){
+      h += '<div class="eo-sa-person">';
+      h +=   '<div class="eo-sa-name" title="' + esc(p.name) + '">' + esc(p.name) + '</div>';
+      h +=   '<div class="eo-sa-track">';
+      (p.busy || []).forEach(function(b){
+        var left = pct(b.start_minutes);
+        var right = pct(b.end_minutes);
+        if(right <= left) return;
+        h += '<div class="eo-sa-busy" title="' + esc(b.title) + '" style="left:' + left +
+             '%;width:' + (right - left) + '%"></div>';
+      });
+      if(proposedEnd > proposedStart){
+        h += '<div class="eo-sa-proposed" style="left:' + pct(proposedStart) +
+             '%;width:' + (pct(proposedEnd) - pct(proposedStart)) + '%"></div>';
+      }
+      h +=   '</div>';
+      h += '</div>';
+    });
+
+    h += '<div class="eo-sa-scale"><span>' + fmtMin(dayStart) + '</span>' +
+         '<span>' + fmtMin(Math.round((dayStart + dayEnd) / 2)) + '</span>' +
+         '<span>' + fmtMin(dayEnd) + '</span></div>';
+
+    var sug = d.suggestions || [];
+    h += '<div style="margin-top:11px">';
+    if(sug.length){
+      h += '<div style="font-size:.7rem;font-weight:700;color:var(--eo-text-muted);margin-bottom:6px">' +
+           'Everyone is free at</div><div class="eo-quick-row">';
+      sug.forEach(function(s){
+        h += '<button type="button" class="eo-quick-btn" data-slot-start="' + esc(s.start) +
+             '" data-slot-end="' + esc(s.end) + '">' + esc(s.label) + '</button>';
+      });
+      h += '</div>';
+    } else {
+      h += '<div style="font-size:.72rem;color:var(--eo-text-muted)">' +
+           'No slot works for everyone that day. Try another date, or send it anyway ' +
+           'and let people mark themselves tentative.</div>';
+    }
+    h += '</div>';
+    return h;
+  }
+
+  function fmtMin(m){ return pad(Math.floor(m / 60)) + ':' + pad(m % 60); }
+
+  document.addEventListener('click', function(e){
+    var slot = e.target.closest('[data-slot-start]');
+    if(!slot) return;
+    var s = new Date(slot.getAttribute('data-slot-start'));
+    var en = new Date(slot.getAttribute('data-slot-end'));
+    setVal('eoMeetDate', ymd(s));
+    setVal('eoMeetStart', hm(s));
+    setVal('eoMeetEnd', hm(en));
+    refreshAssistant(true);
+    toast('Moved to ' + hm(s));
+  });
+
+
+  /* ── Submit ────────────────────────────────────────────────────────────── */
+
+  function submitMeeting(){
+    var btn = $('eoMeetSendBtn');
+    var title = getVal('eoMeetTitle').trim();
+    var date = getVal('eoMeetDate');
+    var allDay = isChecked('eoMeetAllDay');
+
+    if(!title){ toast('Give the meeting a title.', true); var t = $('eoMeetTitle'); if(t) t.focus(); return; }
+    if(!date){ toast('Pick a date.', true); return; }
+    if(!picked.length){ toast('Invite at least one person.', true); return; }
+    if(!allDay && (!getVal('eoMeetStart') || !getVal('eoMeetEnd'))){
+      toast('Set a start and end time.', true); return;
+    }
+    if(!allDay && toMinutes(getVal('eoMeetEnd')) <= toMinutes(getVal('eoMeetStart'))){
+      toast('The end time has to come after the start.', true); return;
+    }
+
+    var body = new URLSearchParams();
+    body.append('title', title);
+    body.append('start', date + 'T' + (allDay ? '00:00' : getVal('eoMeetStart')));
+    if(allDay){
+      body.append('all_day', '1');
+    } else {
+      body.append('end', date + 'T' + getVal('eoMeetEnd'));
+    }
+    picked.forEach(function(p){ body.append('attendees[]', p.id); });
+    body.append('location', getVal('eoMeetLocation').trim());
+    body.append('virtual_link', getVal('eoMeetLink').trim());
+    body.append('online_meeting', isChecked('eoMeetOnline') ? '1' : '0');
+    body.append('meeting_type', getVal('eoMeetType'));
+    body.append('reminder_minutes', getVal('eoMeetRemind'));
+    body.append('recurrence', getVal('eoMeetRepeat'));
+    body.append('recurrence_count', getVal('eoMeetRepeatCount') || '0');
+    body.append('agenda', getVal('eoMeetAgenda').trim());
+
+    if(btn){ btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Sending…'; }
+
+    post('/messages/' + ROOM_ID + '/calendar/invite/', body.toString())
+      .then(function(d){
+        if(!d.ok) throw new Error(d.error || 'Couldn’t send the invite.');
+        remember(d.meeting);
+        hideModal('eoMeetingModal');
+        toast('Invite sent to ' + picked.length + ' ' + (picked.length === 1 ? 'person' : 'people'));
+
+        /* Let the normal message pipeline render it: the WS echo arrives for
+           everyone including us. If the socket is down, appendMessage on the
+           returned payload keeps the sender's view honest. */
+        if(d.payload && typeof window.appendMessage === 'function'){
+          window.appendMessage(d.payload);
+        }
+        setTimeout(function(){ hydrate(document); }, 120);
+        if(calendarOpen) loadCalendar();
+        pollReminders();
+        announce(d.meeting && d.meeting.id);
+      })
+      .catch(function(err){ toast(err.message, true); })
+      .finally(function(){
+        if(btn){ btn.disabled = false; btn.innerHTML = '<i class="bi bi-send"></i> Send invite'; }
+      });
+  }
+
+
+  /* ══════════════════════════════════════════════════════════════════════
+     REMINDERS
+     The server decides what's due; this just shows it and keeps showing it
+     until the person dismisses or snoozes. Polled, so no worker needed.
+     ═════════════════════════════════════════════════════════════════════ */
+
+  var shownReminders = {};   /* meetingId -> element */
+  var alerted = {};          /* meetingId -> true, so we chime only once */
+
+  function pollReminders(){
+    get(BASE + '/reminders/')
+      .then(function(d){
+        if(!d.ok) return;
+        var live = {};
+        (d.reminders || []).forEach(function(m){
+          live[m.id] = true;
+          remember(m);
+          upsertReminder(m);
+        });
+        Object.keys(shownReminders).forEach(function(id){
+          if(!live[id]) dropReminder(id, true);
+        });
+      })
+      .catch(function(){ /* offline: try again next tick */ });
+  }
+
+  function upsertReminder(m){
+    var stack = $('eoRemindStack');
+    if(!stack) return;
+
+    var lead;
+    if(m.has_started)          lead = 'Started ' + Math.abs(m.minutes_until) + ' min ago';
+    else if(m.is_starting_now) lead = 'Starting now';
+    else                       lead = 'In ' + Math.max(m.minutes_until, 0) + ' min';
+
+    var sub = m.time_display + (m.location ? ' · ' + m.location : (m.virtual_link ? ' · Online' : ''));
+
+    var html = '';
+    html += '<div class="eo-remind-lead"><i class="bi bi-bell-fill"></i> ' + esc(lead) + '</div>';
+    html += '<div class="eo-remind-title">' + esc(m.title) + '</div>';
+    html += '<div class="eo-remind-sub">' + esc(sub) + '</div>';
+    html += '<div class="eo-remind-actions">';
+    if(m.virtual_link){
+      html += '<a class="eo-remind-btn primary" href="' + esc(m.virtual_link) + '" target="_blank" rel="noopener">Join</a>';
+    }
+    html +=   '<button type="button" class="eo-remind-btn" data-remind-open="' + esc(m.id) + '">Details</button>';
+    html +=   '<div class="eo-remind-snooze">';
+    html +=     '<button type="button" class="eo-remind-btn" data-remind-snoozetoggle="' + esc(m.id) + '">Snooze</button>';
+    html +=     '<div class="eo-remind-snooze-menu" data-snooze-menu="' + esc(m.id) + '">';
+    [1, 5, 10, 15, 30].forEach(function(n){
+      html +=     '<button type="button" data-remind-snooze="' + esc(m.id) + '" data-minutes="' + n + '">' +
+                    n + ' min' + '</button>';
+    });
+    html +=     '</div>';
+    html +=   '</div>';
+    html +=   '<button type="button" class="eo-remind-btn" data-remind-dismiss="' + esc(m.id) + '" ' +
+              'title="Dismiss"><i class="bi bi-x-lg"></i></button>';
+    html += '</div>';
+
+    var el = shownReminders[m.id];
+    if(!el){
+      el = document.createElement('div');
+      el.setAttribute('data-remind-card', m.id);
+      stack.appendChild(el);
+      shownReminders[m.id] = el;
+    }
+    el.className = 'eo-remind' + ((m.is_starting_now || m.has_started) ? ' now' : '');
+    el.innerHTML = html;
+
+    if(!alerted[m.id]){
+      alerted[m.id] = true;
+      chime(m);
+    }
+    showSoonStrip(m);
+  }
+
+  function dropReminder(meetingId, silent){
+    var el = shownReminders[meetingId];
+    if(el){ el.remove(); delete shownReminders[meetingId]; }
+    if(!silent) delete alerted[meetingId];
+    hideSoonStripIf(meetingId);
+  }
+
+  function chime(m){
+    /* Desktop notification when the tab isn't the one being looked at.
+       No permission prompt on load — only after the user has already opted
+       in somewhere, which keeps the page from nagging on first visit. */
+    try {
+      if(document.hidden && window.Notification && Notification.permission === 'granted'){
+        var n = new Notification(m.title, {
+          body: (m.minutes_until > 0 ? 'Starts in ' + m.minutes_until + ' min' : 'Starting now') +
+                ' · ' + m.time_display,
+          tag: 'eo-meeting-' + m.id
+        });
+        n.onclick = function(){ window.focus(); n.close(); };
+      }
+    } catch(_){}
+
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.09, ctx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+      osc.start(); osc.stop(ctx.currentTime + 0.5);
+      setTimeout(function(){ try { ctx.close(); } catch(_){} }, 800);
+    } catch(_){}
+  }
+
+  /* Strip above the composer, for the meeting that belongs to this room. */
+  var soonFor = null;
+  function showSoonStrip(m){
+    var strip = $('eoSoonStrip');
+    if(!strip) return;
+    if(soonFor && soonFor !== m.id) return;
+    soonFor = m.id;
+    strip.innerHTML =
+      '<i class="bi bi-broadcast" style="color:#10b981"></i>' +
+      '<span style="flex:1"><b>' + esc(m.title) + '</b> · ' +
+      esc(m.minutes_until > 0 ? 'starts in ' + m.minutes_until + ' min' : 'starting now') + '</span>' +
+      (m.virtual_link
+        ? '<a class="eo-remind-btn primary" href="' + esc(m.virtual_link) + '" target="_blank" rel="noopener">Join</a>'
+        : '') +
+      '<button type="button" class="eo-remind-btn" data-remind-open="' + esc(m.id) + '">Details</button>';
+    strip.classList.add('show');
+  }
+  function hideSoonStripIf(meetingId){
+    if(soonFor !== meetingId) return;
+    soonFor = null;
+    var strip = $('eoSoonStrip');
+    if(strip){ strip.classList.remove('show'); strip.innerHTML = ''; }
+  }
+
+  document.addEventListener('click', function(e){
+    var openEl = e.target.closest('[data-remind-open]');
+    if(openEl){ openDetail(openEl.getAttribute('data-remind-open')); return; }
+
+    var togEl = e.target.closest('[data-remind-snoozetoggle]');
+    if(togEl){
+      var id = togEl.getAttribute('data-remind-snoozetoggle');
+      var menu = document.querySelector('[data-snooze-menu="' + id + '"]');
+      document.querySelectorAll('.eo-remind-snooze-menu.open').forEach(function(x){
+        if(x !== menu) x.classList.remove('open');
+      });
+      if(menu) menu.classList.toggle('open');
+      return;
+    }
+
+    var snEl = e.target.closest('[data-remind-snooze]');
+    if(snEl){
+      var mid = snEl.getAttribute('data-remind-snooze');
+      var mins = snEl.getAttribute('data-minutes');
+      post(BASE + '/meeting/' + mid + '/reminder/', 'action=snooze&minutes=' + encodeURIComponent(mins))
+        .then(function(){ dropReminder(mid, true); toast('Reminding you again in ' + mins + ' min'); })
+        .catch(function(){ toast('Couldn’t snooze that.', true); });
+      return;
+    }
+
+    var disEl = e.target.closest('[data-remind-dismiss]');
+    if(disEl){
+      var did = disEl.getAttribute('data-remind-dismiss');
+      post(BASE + '/meeting/' + did + '/reminder/', 'action=dismiss')
+        .catch(function(){});
+      dropReminder(did, true);
+      return;
+    }
+
+    if(!e.target.closest('.eo-remind-snooze')){
+      document.querySelectorAll('.eo-remind-snooze-menu.open')
+        .forEach(function(x){ x.classList.remove('open'); });
+    }
+  });
+
+
+  /* ══════════════════════════════════════════════════════════════════════
+     WIRING
+     ═════════════════════════════════════════════════════════════════════ */
+
+  function onSocketEvent(d){
+    if(!d || d.type !== 'meeting_update') return false;
+    var id = d.meeting_id;
+    if(!id) return true;
+
+    var incoming = d.meeting || {};
+    var mine = CACHE[id] || {};
+    /* The broadcast carries shared facts. Keep my own answer — the server's
+       per-viewer copy arrives on the next hydrate anyway. */
+    CACHE[id] = Object.assign({}, incoming, {
+      my_rsvp: mine.my_rsvp || incoming.my_rsvp || '',
+      am_invited: mine.am_invited !== undefined ? mine.am_invited : incoming.am_invited,
+      can_rsvp: mine.can_rsvp !== undefined ? mine.can_rsvp : incoming.can_rsvp,
+      is_organizer: mine.is_organizer !== undefined ? mine.is_organizer : incoming.is_organizer,
+      can_manage: mine.can_manage !== undefined ? mine.can_manage : incoming.can_manage
+    });
+    paint(id);
+    if(calendarOpen) loadCalendar();
+    announce(id);
+    return true;
+  }
+
+  /* Escape closes whatever is topmost. */
+  document.addEventListener('keydown', function(e){
+    if(e.key !== 'Escape') return;
+    if(document.querySelector('#eoMeetDetailModal.open')){ hideModal('eoMeetDetailModal'); return; }
+    if(document.querySelector('#eoMeetingModal.open')){ hideModal('eoMeetingModal'); return; }
+    if(calendarOpen) closeCalendar();
+  });
+
+  /* Backdrop click closes. */
+  ['eoMeetingModal','eoMeetDetailModal'].forEach(function(id){
+    var el = $(id);
+    if(el) el.addEventListener('click', function(e){ if(e.target === el) hideModal(id); });
+  });
+
+  window.EOCalendar = {
+    hydrate: hydrate,
+    cardHTML: cardHTML,
+    mountHTML: function(meetingId){
+      return '<div class="eo-meet-mount" data-meeting-id="' + esc(meetingId) + '"></div>';
+    },
+    onSocketEvent: onSocketEvent,
+    open: openCalendar,
+    close: closeCalendar,
+    toggle: toggleCalendar,
+    compose: openCompose,
+    hasRoom: HAS_ROOM,
+    detail: openDetail,
+    esc: esc,
+    /* Next `days` days of meetings, soonest first. The list page uses this
+       for its "Up next" panel; anything else that wants a plain agenda can
+       too, without knowing the feed's query shape. */
+    upcoming: function(days){
+      var from = new Date();
+      var to = new Date();
+      to.setDate(to.getDate() + (days || 14));
+      return get(BASE + '/feed/?start=' + ymd(from) + '&end=' + ymd(to))
+        .then(function(d){
+          if(!d.ok) throw new Error(d.error || 'Couldn’t load your meetings.');
+          var now = Date.now();
+          return (d.events || [])
+            .map(remember)
+            .filter(function(ev){ return new Date(ev.end).getTime() >= now; })
+            .sort(function(a, b){ return new Date(a.start) - new Date(b.start); });
+        });
+    },
+    refresh: function(){ if(calendarOpen) loadCalendar(); pollReminders(); }
+  };
+
+  function boot(){
+    hydrate(document);
+    pollReminders();
+    setInterval(pollReminders, REMINDER_POLL_MS);
+
+    /* Late-arriving history (infinite scroll-up) brings more mounts. */
+    var stream = document.getElementById('chatMessages');
+    if(stream && window.MutationObserver){
+      var queued = null;
+      new MutationObserver(function(){
+        clearTimeout(queued);
+        queued = setTimeout(function(){ hydrate(stream); }, 120);
+      }).observe(stream, { childList:true, subtree:true });
+    }
+  }
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+</script>

@@ -7,6 +7,8 @@ from django.contrib import messages as django_messages
 from django.db.models import Q
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse, FileResponse, Http404
 from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.conf import settings
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -3449,10 +3451,18 @@ _INLINE_SAFE_CONTENT_TYPES = {
 }
 
 
+@method_decorator(xframe_options_sameorigin, name='dispatch')
 class ChatMessageFileView(LoginRequiredMixin, View):
     """
     GET /messages/<room_id>/message/<message_id>/file/
     Streams a chat attachment to ROOM MEMBERS ONLY.
+
+    NOTE ON X-Frame-Options: the site-wide default is DENY, which blocks
+    framing even from our OWN origin — that breaks the in-chat preview
+    modal, which renders PDFs in an <iframe> (Firefox shows "Firefox Can't
+    Open This Page"). The decorator above relaxes this to SAMEORIGIN for
+    this endpoint and this endpoint only. Do NOT change the global
+    X_FRAME_OPTIONS setting to achieve the same thing.
     """
 
     def get(self, request, room_id, message_id):

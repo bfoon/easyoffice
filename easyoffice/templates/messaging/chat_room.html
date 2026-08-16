@@ -177,6 +177,10 @@
 .file-preview-content img{max-width:100%;max-height:100%;object-fit:contain;display:block;}
 .file-preview-content video,.file-preview-content audio{max-width:100%;max-height:100%;}
 .file-preview-content iframe{width:100%;height:100%;border:0;background:#fff;}
+.file-preview-modal .msg-modal-body{flex-direction:column;}
+.file-preview-note{flex-shrink:0;width:100%;padding:8px 14px;text-align:center;font-size:.78rem;color:#94a3b8;background:#0b1220;border-top:1px solid rgba(255,255,255,.06);}
+.file-preview-note a{color:#93c5fd;text-decoration:underline;}
+.file-preview-content .fp-text-view{width:100%;height:100%;margin:0;padding:18px 20px;overflow:auto;background:#fff;color:#111827;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.82rem;line-height:1.55;white-space:pre-wrap;word-break:break-word;text-align:left;align-self:stretch;}
 .file-preview-fallback{padding:36px 28px;text-align:center;color:#e5e7eb;background:#0f172a;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;}
 .file-preview-fallback .fp-fallback-icon{font-size:3rem;opacity:.7;}
 .file-preview-fallback .fp-fallback-name{font-size:1rem;font-weight:600;color:#f1f5f9;word-break:break-all;}
@@ -2829,6 +2833,10 @@
     </div>
     <div class="msg-modal-body">
       <div class="file-preview-content" id="filePreviewContent"></div>
+      <div class="file-preview-note" id="filePreviewNote" hidden>
+        Trouble viewing this file?
+        <a href="#" id="filePreviewNoteLink" target="_blank" rel="noopener">Open it in a new tab</a>.
+      </div>
     </div>
   </div>
 </div>
@@ -5069,6 +5077,14 @@ function stopPollStatePolling(){
   // Opens an in-page preview for files shared in chat. Falls back to a
   // friendly "open in new tab / download" panel for types browsers can't
   // render natively (Office docs, archives, unknown binaries).
+  // Max bytes we'll pull into memory for an inline text preview.
+  var FP_TEXT_MAX_BYTES = 2 * 1024 * 1024;
+
+  // Bumped every time a preview opens or closes, so an in-flight fetch for
+  // a file the user has already navigated away from gets discarded instead
+  // of painting itself over whatever is on screen now.
+  var _fpToken = 0;
+
   function _filePreviewKind(name, url){
     var ext = '';
     var src = (name || url || '').toLowerCase().split('?')[0].split('#')[0];
@@ -5082,6 +5098,88 @@ function stopPollStatePolling(){
     return 'other';
   }
 
+  // Built with DOM APIs rather than innerHTML string concatenation so a
+  // filename containing quotes or angle brackets can't break out into markup.
+  function _fpFallbackNode(url, fname, hint){
+    var wrap = document.createElement('div');
+    wrap.className = 'file-preview-fallback';
+
+    var icon = document.createElement('div');
+    icon.className = 'fp-fallback-icon';
+    icon.innerHTML = '<i class="bi bi-file-earmark-text"></i>';
+
+    var nameEl = document.createElement('div');
+    nameEl.className = 'fp-fallback-name';
+    nameEl.textContent = fname;
+
+    var hintEl = document.createElement('div');
+    hintEl.className = 'fp-fallback-hint';
+    hintEl.textContent = hint ||
+      "This file type can't be previewed in the browser. " +
+      'Open it in a new tab or download it to view.';
+
+    var btns = document.createElement('div');
+    btns.className = 'fp-fallback-buttons';
+
+    var openA = document.createElement('a');
+    openA.href = url;
+    openA.target = '_blank';
+    openA.rel = 'noopener';
+    openA.className = 'eo-btn eo-btn-primary eo-btn-sm';
+    openA.style.textDecoration = 'none';
+    openA.innerHTML = '<i class="bi bi-box-arrow-up-right me-1"></i>Open in new tab';
+
+    var dlA = document.createElement('a');
+    dlA.href = url;
+    dlA.setAttribute('download', fname);
+    dlA.className = 'eo-btn eo-btn-secondary eo-btn-sm';
+    dlA.style.textDecoration = 'none';
+    dlA.innerHTML = '<i class="bi bi-download me-1"></i>Download';
+
+    btns.appendChild(openA);
+    btns.appendChild(dlA);
+
+    wrap.appendChild(icon);
+    wrap.appendChild(nameEl);
+    wrap.appendChild(hintEl);
+    wrap.appendChild(btns);
+    return wrap;
+  }
+
+  // Text files are served with Content-Disposition: attachment (so an
+  // uploaded .html can never render on our origin), which means an <iframe>
+  // would just trigger a download. Fetch the bytes and set them as
+  // textContent instead — inert, and the stored-XSS guard stays intact.
+  function _fpLoadText(url, fname, contentEl, token){
+    var pre = document.createElement('pre');
+    pre.className = 'fp-text-view';
+    pre.textContent = 'Loading preview…';
+    contentEl.appendChild(pre);
+
+    fetch(url, { credentials: 'same-origin' })
+      .then(function(r){
+        if(!r.ok) throw new Error('http-' + r.status);
+        var len = parseInt(r.headers.get('Content-Length') || '0', 10);
+        if(len && len > FP_TEXT_MAX_BYTES) throw new Error('too-big');
+        return r.text();
+      })
+      .then(function(txt){
+        if(token !== _fpToken) return;
+        if(txt.length > FP_TEXT_MAX_BYTES) throw new Error('too-big');
+        pre.textContent = txt;
+      })
+      .catch(function(err){
+        if(token !== _fpToken) return;
+        contentEl.innerHTML = '';
+        contentEl.appendChild(_fpFallbackNode(
+          url, fname,
+          (err && err.message === 'too-big')
+            ? 'This file is too large to preview here. Download it to read the full contents.'
+            : "Couldn't load a preview for this file. Open it in a new tab or download it to view."
+        ));
+      });
+  }
+
   window.openFilePreview = function(url, name, sizeText){
     if(!url) return;
     var modal = byId('filePreviewModal');
@@ -5090,9 +5188,13 @@ function stopPollStatePolling(){
     var contentEl = byId('filePreviewContent');
     var openBtn = byId('filePreviewOpenBtn');
     var dlBtn = byId('filePreviewDownloadBtn');
+    var noteEl = byId('filePreviewNote');
+    var noteLink = byId('filePreviewNoteLink');
     if(!modal || !contentEl) return;
 
+    var token = ++_fpToken;
     var fname = name || 'Attachment';
+
     if(titleEl) titleEl.textContent = fname;
     if(subEl) subEl.textContent = sizeText || '';
     if(openBtn) openBtn.setAttribute('href', url);
@@ -5100,50 +5202,51 @@ function stopPollStatePolling(){
       dlBtn.setAttribute('href', url);
       dlBtn.setAttribute('download', fname);
     }
+    if(noteLink) noteLink.setAttribute('href', url);
 
     var kind = _filePreviewKind(fname, url);
     contentEl.innerHTML = '';
+    if(noteEl) noteEl.hidden = true;
 
-    var node;
     if(kind === 'image'){
-      node = document.createElement('img');
-      node.src = url;
-      node.alt = fname;
+      var img = document.createElement('img');
+      img.src = url;
+      img.alt = fname;
+      contentEl.appendChild(img);
+
     } else if(kind === 'video'){
-      node = document.createElement('video');
-      node.src = url;
-      node.controls = true;
-      node.preload = 'metadata';
+      var vid = document.createElement('video');
+      vid.src = url;
+      vid.controls = true;
+      vid.preload = 'metadata';
+      contentEl.appendChild(vid);
+
     } else if(kind === 'audio'){
-      node = document.createElement('audio');
-      node.src = url;
-      node.controls = true;
-      node.preload = 'metadata';
-      node.style.width = '80%';
-    } else if(kind === 'pdf' || kind === 'text'){
-      node = document.createElement('iframe');
-      node.src = url;
-      node.title = fname;
-      node.setAttribute('loading', 'lazy');
+      var aud = document.createElement('audio');
+      aud.src = url;
+      aud.controls = true;
+      aud.preload = 'metadata';
+      aud.style.width = '80%';
+      contentEl.appendChild(aud);
+
+    } else if(kind === 'pdf'){
+      // Requires X-Frame-Options: SAMEORIGIN on the file endpoint — see
+      // ChatMessageFileView in views.py. Under the site-wide DENY default
+      // this frame renders blank, and the note below is the way out.
+      var frame = document.createElement('iframe');
+      frame.src = url;
+      frame.title = fname;
+      frame.setAttribute('loading', 'lazy');
+      contentEl.appendChild(frame);
+      if(noteEl) noteEl.hidden = false;
+
+    } else if(kind === 'text'){
+      _fpLoadText(url, fname, contentEl, token);
+
     } else {
-      // Unknown / Office docs etc — show fallback panel.
-      node = document.createElement('div');
-      node.className = 'file-preview-fallback';
-      node.innerHTML =
-        '<div class="fp-fallback-icon"><i class="bi bi-file-earmark-text"></i></div>' +
-        '<div class="fp-fallback-name"></div>' +
-        '<div class="fp-fallback-hint">This file type can\'t be previewed in the browser. ' +
-          'Open it in a new tab or download it to view.</div>' +
-        '<div class="fp-fallback-buttons">' +
-          '<a href="' + url.replace(/"/g, '&quot;') + '" target="_blank" rel="noopener" class="eo-btn eo-btn-primary eo-btn-sm" style="text-decoration:none">' +
-            '<i class="bi bi-box-arrow-up-right me-1"></i>Open in new tab</a>' +
-          '<a href="' + url.replace(/"/g, '&quot;') + '" download="' + fname.replace(/"/g, '&quot;') + '" class="eo-btn eo-btn-secondary eo-btn-sm" style="text-decoration:none">' +
-            '<i class="bi bi-download me-1"></i>Download</a>' +
-        '</div>';
-      var nameSlot = node.querySelector('.fp-fallback-name');
-      if(nameSlot) nameSlot.textContent = fname;
+      // Office docs, archives, unknown binaries.
+      contentEl.appendChild(_fpFallbackNode(url, fname));
     }
-    contentEl.appendChild(node);
 
     modal.classList.add('open');
     modal.setAttribute('aria-hidden', 'false');
@@ -5152,10 +5255,13 @@ function stopPollStatePolling(){
   window.closeFilePreview = function(){
     var modal = byId('filePreviewModal');
     var contentEl = byId('filePreviewContent');
+    var noteEl = byId('filePreviewNote');
+    _fpToken++;                       // abandon any in-flight text fetch
     if(modal){
       modal.classList.remove('open');
       modal.setAttribute('aria-hidden', 'true');
     }
+    if(noteEl) noteEl.hidden = true;
     // Stop any playing media + free memory.
     if(contentEl) contentEl.innerHTML = '';
   };

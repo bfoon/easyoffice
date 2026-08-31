@@ -67,6 +67,8 @@ urlpatterns = [
          reminders.ReminderOpenListView.as_view(), name='reminder_open'),
     path('reminders/upcoming/',
          reminders.ReminderUpcomingView.as_view(), name='reminder_upcoming'),
+    path('reminders/feed/',
+         reminders.ReminderCalendarFeedView.as_view(), name='reminder_calendar_feed'),
     path('reminders/<uuid:receipt_id>/snooze/',
          reminders.ReminderSnoozeView.as_view(),   name='reminder_snooze'),
     path('reminders/<uuid:receipt_id>/resolve/',

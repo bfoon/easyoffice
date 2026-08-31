@@ -1181,7 +1181,10 @@ class MeetingCancelView(LoginRequiredMixin, View):
         if not _can_edit_meeting(request.user, meeting):
             return HttpResponseForbidden('Only the organiser can cancel this meeting.')
         meeting.status = 'cancelled'
-        meeting.save(update_fields=['status'])
+        # A cancelled meeting frees its slot from this instant — it should
+        # not keep anyone marked busy for a meeting that will not happen.
+        meeting.ended_at = timezone.now()
+        meeting.save(update_fields=['status', 'ended_at'])
         _notify_attendees(meeting, request.user,
                           f'Meeting cancelled: {meeting.title}',
                           f'{request.user.full_name} has cancelled "{meeting.title}".')
@@ -1202,7 +1205,13 @@ class MeetingEndView(LoginRequiredMixin, View):
             return redirect('meeting_detail', pk=pk)
 
         meeting.status = 'completed'
-        meeting.save(update_fields=['status'])
+        # 🕒 Stamp the ACTUAL end. Without this the meeting kept its booked
+        # slot: a two-hour meeting ended after twenty minutes went on
+        # blocking the calendar and showing everyone as busy for the
+        # remaining hour and forty. `end_datetime` is left alone — that is
+        # what was booked, and the minutes/reports still refer to it.
+        meeting.ended_at = timezone.now()
+        meeting.save(update_fields=['status', 'ended_at'])
 
         _notify_attendees(meeting, request.user,
                           f'Meeting ended: {meeting.title}',

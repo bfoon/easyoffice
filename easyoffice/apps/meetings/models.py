@@ -91,6 +91,22 @@ class Meeting(models.Model):
     created_at     = models.DateTimeField(auto_now_add=True)
     updated_at     = models.DateTimeField(auto_now=True)
 
+    # ── When it ACTUALLY finished ─────────────────────────────────────────────
+    # `end_datetime` is when the meeting was BOOKED to end. That is what the
+    # organiser reserved and what invitees planned around, so it must not be
+    # overwritten. `ended_at` is when somebody pressed End (or Cancel).
+    #
+    # Keeping both is the fix for a specific class of bug: end a two-hour
+    # meeting after twenty minutes and, with only `end_datetime` to go on,
+    # every "is this happening now?" test — the calendar slot, the busy
+    # badge, is_past — kept saying yes for the remaining hour and forty.
+    # Everything that asks about REALITY should read `effective_end`;
+    # anything that asks what was BOOKED still reads `end_datetime`.
+    ended_at       = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When the meeting was actually ended or cancelled. '
+                  'Blank while it is still scheduled or running.')
+
     class Meta:
         ordering = ['-start_datetime']
 
@@ -99,15 +115,74 @@ class Meeting(models.Model):
 
     @property
     def duration_minutes(self):
+        """How long it was BOOKED for."""
         if self.start_datetime and self.end_datetime:
             delta = self.end_datetime - self.start_datetime
             return int(delta.total_seconds() / 60)
         return 0
 
     @property
-    def is_past(self):
+    def actual_duration_minutes(self):
+        """How long it actually RAN, once ended."""
+        if self.start_datetime and self.ended_at:
+            delta = self.ended_at - self.start_datetime
+            return max(0, int(delta.total_seconds() / 60))
+        return self.duration_minutes
+
+    @property
+    def effective_end(self):
+        """
+        The moment this meeting stopped occupying time.
+
+        Read this — not `end_datetime` — anywhere the question is "is this
+        happening right now", "does this block the calendar", or "is this
+        person busy".
+        """
+        if self.ended_at:
+            return self.ended_at
+        return self.end_datetime
+
+    @property
+    def is_over(self):
+        """Finished, one way or another."""
+        if self.status in ('completed', 'cancelled'):
+            return True
         from django.utils import timezone
-        return self.end_datetime < timezone.now()
+        return bool(self.effective_end and self.effective_end < timezone.now())
+
+    @property
+    def is_past(self):
+        # Was: end_datetime < now — which ignored an early end entirely.
+        return self.is_over
+
+    @property
+    def is_live(self):
+        """Happening right now, and therefore genuinely blocking time."""
+        from django.utils import timezone
+        if self.status in ('completed', 'cancelled'):
+            return False
+        now = timezone.now()
+        return bool(self.start_datetime
+                    and self.start_datetime <= now
+                    and self.effective_end
+                    and now < self.effective_end)
+
+    @property
+    def blocks_calendar(self):
+        """
+        Should this still take up a slot on a forward-looking calendar?
+
+        A cancelled meeting never should. A completed one stops the moment
+        it ended. Everything else does until its effective end passes.
+        """
+        if self.status == 'cancelled':
+            return False
+        return not self.is_over
+
+    @property
+    def ended_early(self):
+        return bool(self.ended_at and self.end_datetime
+                    and self.ended_at < self.end_datetime)
 
     @property
     def is_recurring_parent(self):

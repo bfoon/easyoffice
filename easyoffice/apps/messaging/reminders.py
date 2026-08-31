@@ -624,6 +624,97 @@ class ReminderResolveView(LoginRequiredMixin, View):
         })
 
 
+class ReminderCalendarFeedView(LoginRequiredMixin, View):
+    """
+    GET /messages/reminders/feed/?start=YYYY-MM-DD&end=YYYY-MM-DD
+
+    Reminders shaped as calendar events, in the same envelope the meetings
+    feed uses, so a calendar can take it as a SECOND event source rather
+    than needing the two merged server-side:
+
+        calendar.addEventSource('/meetings/calendar/feed/');
+        calendar.addEventSource('/messages/reminders/feed/');
+
+    Reminders were missing from the calendar for the plain reason that
+    nothing ever put them there — the meetings feed only knows about
+    meetings. They are points in time, not spans, so each one is emitted
+    as an all-day=false zero-length event at ``remind_at``.
+
+    Returns reminders this user will actually receive: ones they created,
+    plus ones addressed to them as an attendee.
+    """
+
+    def get(self, request):
+        start = _parse_feed_date(request.GET.get('start'))
+        end = _parse_feed_date(request.GET.get('end'))
+        if start is None or end is None:
+            now = timezone.now()
+            start = start or (now - timedelta(days=31))
+            end = end or (now + timedelta(days=93))
+
+        rows = (ChatReminder.objects
+                .filter(Q(owner=request.user) | Q(receipts__user=request.user))
+                .filter(remind_at__gte=start, remind_at__lt=end)
+                .exclude(status=ChatReminder.Status.CANCELLED)
+                .select_related('room', 'owner')
+                .distinct()
+                .order_by('remind_at')[:500])
+
+        # One query for this user's own receipt state, so a reminder they
+        # have already resolved renders differently instead of sitting on
+        # the calendar looking outstanding forever.
+        states = dict(
+            ChatReminderReceipt.objects
+            .filter(user=request.user, reminder__in=[r.pk for r in rows])
+            .values_list('reminder_id', 'state')
+        )
+
+        events = []
+        for r in rows:
+            state = states.get(r.pk, '')
+            done = state in (ChatReminderReceipt.State.RESOLVED,
+                             ChatReminderReceipt.State.DISMISSED)
+            events.append({
+                'id':        f'reminder-{r.pk}',
+                'title':     ('✓ ' if done else '⏰ ') + r.title,
+                'start':     timezone.localtime(r.remind_at).isoformat(),
+                'allDay':    False,
+                'url':       f'/messages/{r.room_id}/' if r.room_id else '',
+                'color':     '#94a3b8' if done else '#f59e0b',
+                'textColor': '#ffffff',
+                'extendedProps': {
+                    'kind':       'reminder',
+                    'reminder_id': str(r.pk),
+                    'note':       r.note,
+                    'state':      state or r.status,
+                    'resolved':   done,
+                    'audience':   r.audience,
+                    'source':     r.source,
+                    'room_name':  r.room.name if r.room_id and r.room else '',
+                    'meeting_id': str(r.meeting_id) if r.meeting_id else '',
+                    'is_owner':   r.owner_id == request.user.id,
+                },
+            })
+
+        return JsonResponse(events, safe=False)
+
+
+def _parse_feed_date(value):
+    """Accept the YYYY-MM-DD (or full ISO) that calendar widgets send."""
+    if not value:
+        return None
+    parsed = parse_datetime(str(value))
+    if parsed is None:
+        try:
+            from datetime import datetime
+            parsed = datetime.strptime(str(value)[:10], '%Y-%m-%d')
+        except (ValueError, TypeError):
+            return None
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed
+
+
 class ReminderCancelView(LoginRequiredMixin, View):
     """
     POST /messages/reminders/<reminder_id>/cancel/

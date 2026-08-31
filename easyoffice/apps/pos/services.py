@@ -186,22 +186,41 @@ def complete_sale(sale: POSSale, *, payment_method: str, amount_tendered=None,
 
     # ── Stock deduction — each line becomes a SALE movement in the
     #    inventory ledger (source_kind='pos_sale', source_ref=receipt no).
-    #    The availability guard runs under lock, so two tills can't both
-    #    sell the last unit. Any failure rolls back the whole sale,
-    #    movements and receipt number included.
+    #
+    #    Under the default policy ('sell') short stock NEVER blocks the
+    #    till: we take off whatever is on the shelf, record how much that
+    #    was, and hand the shortfall back as a warning. Set
+    #    POS_OUT_OF_STOCK_POLICY = 'block' to restore the old hard guard.
+    stock_warnings = []
     for line in lines:
         if not line.inventory_id:
             continue  # ad-hoc/manual line — no stock behind it
-        if not inventory.deduct_stock(line.inventory_id, line.quantity,
-                                      actor=sale.cashier,
-                                      source_ref=sale.sale_no):
+
+        res = inventory.sell_stock(line.inventory_id, line.quantity,
+                                   actor=sale.cashier,
+                                   source_ref=sale.sale_no)
+        if not res['ok']:
+            # Only reachable under the 'block' policy.
             raise POSError(
                 f'Not enough stock for "{line.name}" '
                 f'(requested {line.quantity}, available '
-                f'{inventory.current_stock(line.inventory_id) or 0}).'
+                f'{res.get("available") or 0}).'
             )
-        line.stock_deducted = True
-        line.save(update_fields=['stock_deducted', 'updated_at'])
+
+        line.quantity_deducted = res['deducted'] if res['tracked'] else 0
+        line.stock_deducted = bool(res['tracked'] and res['deducted'])
+        line.save(update_fields=['quantity_deducted', 'stock_deducted',
+                                 'updated_at'])
+
+        if res['tracked'] and res['short']:
+            stock_warnings.append(
+                f'{line.name}: sold {line.quantity}, only {res["deducted"]} '
+                f'were in stock ({res["short"]} sold short).'
+            )
+
+    if stock_warnings:
+        logger.warning('POS: sale %s completed on short stock — %s',
+                       sale.sale_no, ' | '.join(stock_warnings))
 
     sale.status = POSSale.Status.COMPLETED
     sale.completed_at = timezone.now()
@@ -230,6 +249,9 @@ def complete_sale(sale: POSSale, *, payment_method: str, amount_tendered=None,
     if sale.customer_email:
         transaction.on_commit(lambda: email_receipt(sale))
 
+    # Transient (not a DB field) — the view surfaces these to the cashier.
+    # The durable record lives on each line's quantity_deducted.
+    sale.stock_warnings = stock_warnings
     return sale
 
 
@@ -241,10 +263,16 @@ def void_sale(sale: POSSale, *, actor, reason: str = '') -> POSSale:
         raise POSError('Only completed sales can be voided.')
 
     for line in sale.items.filter(stock_deducted=True):
-        inventory.restore_stock(line.inventory_id, line.quantity,
+        # Put back exactly what came off — a line sold on short stock must
+        # not conjure units that were never deducted. (Sales completed
+        # before quantity_deducted existed default to the full quantity.)
+        qty_back = line.quantity_deducted or line.quantity
+        inventory.restore_stock(line.inventory_id, qty_back,
                                 actor=actor, source_ref=sale.sale_no or '')
         line.stock_deducted = False
-        line.save(update_fields=['stock_deducted', 'updated_at'])
+        line.quantity_deducted = 0
+        line.save(update_fields=['stock_deducted', 'quantity_deducted',
+                                 'updated_at'])
 
     sale.status = POSSale.Status.VOIDED
     sale.voided_at = timezone.now()

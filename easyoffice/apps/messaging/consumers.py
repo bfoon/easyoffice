@@ -1,7 +1,48 @@
+"""
+apps/messaging/consumers.py
+───────────────────────────
+WHAT CHANGED IN THIS VERSION (three reported bugs)
+--------------------------------------------------
+
+1. "Messages to a group just disappear."
+   Every failure in the save path used to `return None`, and the client
+   had already cleared the composer. The message evaporated with no error
+   anywhere the user could see. The socket now ALWAYS answers a
+   chat_message frame — either with the broadcast, or with an explicit
+   {"type": "send_error", "reason": "...", "client_id": "..."} frame that
+   the composer uses to put the text back and show why. Unexpected
+   exceptions are caught and reported the same way instead of tearing
+   down the socket mid-send.
+
+2. "Someone is typing" with nobody typing.
+   views.py::_broadcast_presence_update reuses the 'chat.typing' event to
+   carry a presence heartbeat, and views.py::_broadcast_typing nests its
+   fields under 'payload'. chat_typing only read TOP-LEVEL keys, so both
+   arrived as a typing event with an EMPTY sender_id. The client's
+   self-filter (`'' !== my_id`) passed, and every heartbeat from a DM
+   partner painted "Someone is typing…". chat_typing now normalises both
+   shapes, forwards a presence payload as presence_update (its real
+   type), and DROPS any typing event with no sender_id.
+
+3. "Calls stop on the caller's side and the callee never rings."
+   The caller's popup emits call_offer / ice_candidate immediately, but
+   the callee's popup does not exist until they accept the ring — the
+   chat page ignores those signals, so the SDP offer was thrown away and
+   the callee's popup came up to silence. The offer and the caller's
+   early ICE candidates are now stashed for 90s and REPLAYED to the room
+   the moment a peer announces call_callee_ready.
+"""
+
 import json
+import logging
+
+from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
+from django.core.cache import cache
 from django.utils import timezone
+
+log = logging.getLogger(__name__)
 
 
 # 🔒 SECURITY: per-signal-type whitelist of client-supplied keys we will
@@ -31,6 +72,24 @@ _SIGNAL_ALLOWED_KEYS = {
     'present_page':         {'page'},
     'present_request_page': {'page'},
 }
+
+# ── Call handshake replay ────────────────────────────────────────────────
+# How long a stashed offer stays replayable, and how many early ICE
+# candidates we keep. 90s comfortably covers "phone rings, user picks up".
+_CALL_STASH_TTL = 90
+_CALL_STASH_MAX_CANDIDATES = 60
+
+# Signals that mean the call is over — drop the stash so a NEW call in the
+# same room never replays a dead offer.
+_CALL_TEARDOWN = {'call_hangup', 'call_decline', 'call_cancel'}
+
+
+def _offer_key(room_id):
+    return f'call:offer:{room_id}'
+
+
+def _ice_key(room_id):
+    return f'call:ice:{room_id}'
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -70,6 +129,27 @@ class ChatConsumer(AsyncWebsocketConsumer):
     # --------------------------------------------------
 
     async def receive(self, text_data=None, bytes_data=None):
+        """
+        Thin wrapper so an unexpected exception NEVER kills the socket
+        silently. A dead socket used to look, from the composer, exactly
+        like a message that "just disappeared".
+        """
+        try:
+            await self._receive(text_data, bytes_data)
+        except Exception:
+            log.exception(
+                'ChatConsumer.receive failed (room=%s user=%s)',
+                getattr(self, 'room_id', '?'), getattr(self.user, 'pk', '?'),
+            )
+            await self._send_error(
+                'Something went wrong on the server. Your message was not sent.',
+                code='server_error',
+                client_id=self._last_client_id,
+            )
+
+    _last_client_id = ''
+
+    async def _receive(self, text_data=None, bytes_data=None):
         if not text_data:
             return
 
@@ -83,6 +163,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         msg_type = data.get('type', 'chat_message')
+
+        # Optimistic-UI correlation id. The composer sends one with every
+        # message so it can match an error frame back to the exact bubble.
+        client_id = str(data.get('client_id') or '')
+        self._last_client_id = client_id
 
         # -------------------------
         # TYPING
@@ -151,11 +236,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.channel_layer.group_send(
                 self.room_group,
                 {
-                    'type': 'chat.signal',   # dedicated handler below
+                    'type': 'chat.signal',
                     'payload': payload,
                     'sender_channel': self.channel_name,
                 }
             )
+
+            # 🩹 CALL FIX — see module docstring. The caller emits its offer
+            # (and starts trickling ICE) while the callee is still looking
+            # at a ring; the callee's popup does not exist yet, so those
+            # frames used to land nowhere and the call died on the caller's
+            # side. Stash them, replay them when the callee announces
+            # itself.
+            await self._handle_call_stash(msg_type, payload)
             return
 
         # -------------------------
@@ -167,6 +260,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         message = (data.get('message') or data.get('content') or '').strip()
         if not message:
+            await self._send_error('Empty message.', code='empty', client_id=client_id)
             return
 
         # Soft cap, mirroring the REST send path.
@@ -175,14 +269,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         reply_to_id = data.get('reply_to') or None
 
-        payload = await self.save_and_build_payload(
-            user,
-            message,
-            reply_to_id
-        )
+        result = await self.save_and_build_payload(user, message, reply_to_id)
 
-        if not payload:
+        # 🩹 MESSAGE FIX — every failure now comes back to the sender with a
+        # reason instead of vanishing.
+        if not result.get('ok'):
+            await self._send_error(
+                result.get('error') or 'Your message could not be sent.',
+                code=result.get('code') or 'save_failed',
+                client_id=client_id,
+            )
             return
+
+        payload = result['payload']
+        if client_id:
+            payload = dict(payload, client_id=client_id)
 
         await self.channel_layer.group_send(
             self.room_group,
@@ -191,6 +292,90 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'payload': payload,
             }
         )
+
+    # --------------------------------------------------
+    # ERROR CHANNEL (sender-only)
+    # --------------------------------------------------
+
+    async def _send_error(self, message, code='error', client_id=''):
+        """
+        Tell THIS socket (only) that something it asked for failed.
+        The composer listens for 'send_error' and restores the text.
+        """
+        try:
+            await self.send(text_data=json.dumps({
+                'type': 'send_error',
+                'code': code,
+                'error': message,
+                'room_id': str(getattr(self, 'room_id', '')),
+                'client_id': client_id or '',
+            }))
+        except Exception:
+            pass
+
+    # --------------------------------------------------
+    # CALL HANDSHAKE STASH / REPLAY
+    # --------------------------------------------------
+
+    async def _handle_call_stash(self, msg_type, payload):
+        try:
+            if msg_type == 'call_offer':
+                await sync_to_async(cache.set)(
+                    _offer_key(self.room_id),
+                    {'payload': payload, 'sender_channel': self.channel_name},
+                    _CALL_STASH_TTL,
+                )
+                await sync_to_async(cache.delete)(_ice_key(self.room_id))
+                return
+
+            if msg_type == 'ice_candidate':
+                stash = await sync_to_async(cache.get)(_offer_key(self.room_id))
+                # Only the offerer's early candidates are worth replaying;
+                # the answerer's peer is already listening by then.
+                if not stash or stash.get('sender_channel') != self.channel_name:
+                    return
+                pending = await sync_to_async(cache.get)(_ice_key(self.room_id)) or []
+                if len(pending) < _CALL_STASH_MAX_CANDIDATES:
+                    pending.append(payload)
+                    await sync_to_async(cache.set)(
+                        _ice_key(self.room_id), pending, _CALL_STASH_TTL,
+                    )
+                return
+
+            if msg_type in _CALL_TEARDOWN or msg_type == 'call_answer':
+                # Answered or over — the replay window is closed either way.
+                await sync_to_async(cache.delete)(_offer_key(self.room_id))
+                await sync_to_async(cache.delete)(_ice_key(self.room_id))
+                return
+
+            if msg_type == 'call_callee_ready':
+                stash = await sync_to_async(cache.get)(_offer_key(self.room_id))
+                if not stash:
+                    return
+                # Replay to the group, attributed to the ORIGINAL caller's
+                # channel so the caller does not receive its own offer back.
+                origin = stash.get('sender_channel')
+                await self.channel_layer.group_send(
+                    self.room_group,
+                    {
+                        'type': 'chat.signal',
+                        'payload': stash['payload'],
+                        'sender_channel': origin,
+                    },
+                )
+                for cand in (await sync_to_async(cache.get)(_ice_key(self.room_id)) or []):
+                    await self.channel_layer.group_send(
+                        self.room_group,
+                        {
+                            'type': 'chat.signal',
+                            'payload': cand,
+                            'sender_channel': origin,
+                        },
+                    )
+                log.info('call: replayed stashed offer to room %s', self.room_id)
+        except Exception:
+            # A broken cache must never break signalling itself.
+            log.exception('call stash/replay failed for room %s', self.room_id)
 
     # --------------------------------------------------
     # SEND EVENTS
@@ -253,28 +438,68 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 pass
             await self.close()
 
+    # Presence has its own event type now. Kept as a real handler so
+    # nothing has to be smuggled through chat.typing ever again.
+    async def chat_presence(self, event):
+        payload = event.get('payload') or {}
+        payload.setdefault('type', 'presence_update')
+        await self.send(text_data=json.dumps(payload))
+
     async def chat_typing(self, event):
         """
         Forward a 'typing' signal from the channel-layer group out to this
         WebSocket client.
 
+        🩹 PHANTOM-TYPING FIX. Three different producers push 'chat.typing'
+        onto this group and they do NOT agree on a shape:
+
+            consumers.py / typing_views.py  → fields at the TOP level
+            views.py::_broadcast_typing     → fields nested under 'payload'
+            views.py::_broadcast_presence_update
+                                            → a PRESENCE event nested under
+                                              'payload' (not typing at all)
+
+        This handler only ever read the top level, so the last two arrived
+        as a typing event whose sender_id was '' — the client compared ''
+        against its own id, found them different, and rendered "Someone is
+        typing…" on every presence heartbeat. Hence dots appearing when
+        nobody was typing.
+
+        We now: read either shape, hand a presence payload back as the
+        presence_update it actually is, and refuse to emit a typing event
+        that has no sender.
+
         🔒 SERVER-SIDE SELF-FILTER: never echo the typing event back to the
-        person who is typing. Previously this relied entirely on the client
-        comparing sender_id against its own user id — an inverted or
-        type-mismatched comparison in the JS (e.g. `===` vs `!==`, or a
-        string UUID compared strictly against a numeric id) made the TYPER
-        see their own dots while the recipient saw nothing. Filtering here
-        makes the direction correct regardless of what the client does.
+        person who is typing, regardless of what the client does with it.
         """
-        if str(event.get('sender_id') or '') == str(self.user.id):
+        payload = event.get('payload')
+        inner = payload if isinstance(payload, dict) else event
+
+        inner_type = str(inner.get('type') or '')
+
+        # Presence smuggled down the typing channel — forward it correctly
+        # instead of mangling it into a typing event.
+        if inner_type and inner_type != 'typing' and inner_type != 'chat_typing':
+            if inner_type == 'presence_update':
+                await self.send(text_data=json.dumps(inner))
             return
+
+        sender_id = str(inner.get('sender_id') or '')
+
+        # No sender → not a real typing event. Drop it.
+        if not sender_id:
+            return
+
+        if sender_id == str(self.user.id):
+            return
+
         await self.send(text_data=json.dumps({
             'type': 'chat_typing',
-            'room_id': event.get('room_id', ''),
-            'sender_id': event.get('sender_id', ''),
-            'sender_name': event.get('sender_name', ''),
-            'sender_initials': event.get('sender_initials', ''),
-            'sender_avatar_url': event.get('sender_avatar_url', ''),
+            'room_id': str(inner.get('room_id') or self.room_id),
+            'sender_id': sender_id,
+            'sender_name': inner.get('sender_name', ''),
+            'sender_initials': inner.get('sender_initials', ''),
+            'sender_avatar_url': inner.get('sender_avatar_url', ''),
         }))
 
     # --------------------------------------------------
@@ -307,7 +532,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if room:
                 mark_delivered(room, self.user)
         except Exception:
-            pass
+            log.exception('mark_delivered failed for room %s', self.room_id)
 
     @database_sync_to_async
     def _mark_read(self, up_to_message_id=None):
@@ -325,7 +550,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             else:
                 mark_read(room, self.user)
         except Exception:
-            pass
+            log.exception('mark_read failed for room %s', self.room_id)
 
     @database_sync_to_async
     def user_in_room(self):
@@ -347,7 +572,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
     def save_and_build_payload(self, user, content, reply_to_id=None):
         """
         FULL CORRECT MESSAGE SAVE
-        Uses central serializer for consistency
+        Uses central serializer for consistency.
+
+        Returns a dict, NOT a bare payload-or-None:
+
+            {'ok': True,  'payload': {...}}
+            {'ok': False, 'code': '...', 'error': 'human readable reason'}
+
+        Every early return used to be a silent None, which is precisely
+        why a group message could vanish without a trace. The caller now
+        has something to tell the user.
         """
         from apps.messaging.models import ChatRoom, ChatMessage, ChatRoomMember
         from apps.messaging.views import (
@@ -356,15 +590,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         room = ChatRoom.objects.filter(id=self.room_id).first()
         if not room:
-            return None
-
-        # 🔒 Use the same posting-permission check as the HTTP path
-        # (covers is_readonly AND per-member readonly roles).
-        if not _can_post_in_room(user, room):
-            return None
+            log.warning('send rejected: room %s does not exist', self.room_id)
+            return {'ok': False, 'code': 'no_room',
+                    'error': 'This conversation no longer exists.'}
 
         if not room.members.filter(id=user.id).exists():
-            return None
+            log.warning('send rejected: user %s is not a member of room %s',
+                        user.pk, self.room_id)
+            return {'ok': False, 'code': 'not_member',
+                    'error': 'You are no longer a member of this conversation.'}
+
+        # 🔒 Use the same posting-permission check as the HTTP path.
+        if not _can_post_in_room(user, room):
+            log.warning('send rejected: user %s cannot post in room %s '
+                        '(is_readonly=%s)', user.pk, self.room_id, room.is_readonly)
+            return {'ok': False, 'code': 'readonly',
+                    'error': 'You do not have permission to post in this room.'}
 
         reply_obj = None
         if reply_to_id:
@@ -374,43 +615,64 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     room=room,
                     is_deleted=False
                 )
-            except ChatMessage.DoesNotExist:
+            except (ChatMessage.DoesNotExist, ValueError, TypeError):
                 reply_obj = None
 
-        msg = ChatMessage.objects.create(
-            room=room,
-            sender=user,
-            content=content,
-            message_type='text',
-            reply_to=reply_obj,
-        )
+        # The write itself. This is the one step that must NOT be silently
+        # swallowed: MESSAGING_ENCRYPTION_KEY being unset or wrong makes
+        # encrypt_content() fail closed and raise, and the old code turned
+        # that into a disappearing message.
+        try:
+            msg = ChatMessage.objects.create(
+                room=room,
+                sender=user,
+                content=content,
+                message_type='text',
+                reply_to=reply_obj,
+            )
+        except Exception:
+            log.exception('ChatMessage.create failed (room=%s user=%s)',
+                          self.room_id, user.pk)
+            return {'ok': False, 'code': 'write_failed',
+                    'error': 'The server could not store your message. '
+                             'It has not been sent.'}
 
         try:
             _save_mentions(msg)
         except Exception:
-            pass
+            log.exception('_save_mentions failed for message %s', msg.pk)
 
-        room.updated_at = timezone.now()
-        room.save(update_fields=['updated_at'])
+        try:
+            room.updated_at = timezone.now()
+            room.save(update_fields=['updated_at'])
+        except Exception:
+            log.exception('room.updated_at bump failed for room %s', self.room_id)
 
-        ChatRoomMember.objects.filter(
-            room=room,
-            user=user
-        ).update(last_read=timezone.now())
+        try:
+            ChatRoomMember.objects.filter(
+                room=room,
+                user=user
+            ).update(last_read=timezone.now())
+        except Exception:
+            log.exception('last_read bump failed for room %s', self.room_id)
 
-        # Email + push fan-out to other members. NOTE: _notify_offline_members
-        # already sends Firebase push to every other member. The old code ALSO
-        # had its own push loop right below, which double-notified every
-        # recipient of every socket-sent message. The duplicate loop has been
-        # removed — _notify_offline_members is the single fan-out point for
-        # web, REST, and socket paths alike.
+        # Email + push fan-out to other members. _notify_offline_members is
+        # the single fan-out point for web, REST, and socket paths alike.
         try:
             from apps.messaging.views import _notify_offline_members
             _notify_offline_members(room, user, msg)
         except Exception:
-            pass
+            log.exception('_notify_offline_members failed for message %s', msg.pk)
 
-        return _serialize_chat_message(msg, viewer=user)
+        # Serialisation failing must not lose a message that IS saved —
+        # report it so the client can fall back to its 3s poll.
+        try:
+            return {'ok': True, 'payload': _serialize_chat_message(msg, viewer=user)}
+        except Exception:
+            log.exception('_serialize_chat_message failed for message %s', msg.pk)
+            return {'ok': False, 'code': 'serialize_failed',
+                    'error': 'Message saved, but could not be displayed live. '
+                             'Refresh to see it.'}
 
     # --------------------------------------------------
     # SAFE DISPLAY HELPERS

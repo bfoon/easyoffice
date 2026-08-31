@@ -100,26 +100,39 @@ def _json_body(request) -> dict:
         return {}
 
 
+def _line_payload(i) -> dict:
+    """One basket line + its (advisory) stock state."""
+    stock = inventory.current_stock(i.inventory_id) if i.inventory_id else None
+    short = 0 if stock is None else max(0, i.quantity - stock)
+    return {
+        'item_id': str(i.pk),
+        'inventory_id': i.inventory_id,
+        'name': i.name,
+        'sku': i.sku,
+        'barcode': i.barcode,
+        'unit_price': str(i.unit_price),
+        'quantity': i.quantity,
+        'line_total': str(i.line_total),
+        'stock': stock,
+        # Advisory only — the sale still completes. Colour the row, don't
+        # disable the pay button.
+        'short': short,
+        'out_of_stock': stock is not None and stock <= 0,
+        'stock_warning': (
+            f'Out of stock — selling {i.quantity} with none on hand.'
+            if stock is not None and stock <= 0 else
+            f'Only {stock} in stock — {short} will be sold short.'
+            if short else ''
+        ),
+    }
+
+
 def _basket_payload(sale: POSSale) -> dict:
     return {
         'sale_id': str(sale.pk),
         'status': sale.status,
         'currency': sale.currency,
-        'items': [
-            {
-                'item_id': str(i.pk),
-                'inventory_id': i.inventory_id,
-                'name': i.name,
-                'sku': i.sku,
-                'barcode': i.barcode,
-                'unit_price': str(i.unit_price),
-                'quantity': i.quantity,
-                'line_total': str(i.line_total),
-                'stock': inventory.current_stock(i.inventory_id)
-                         if i.inventory_id else None,
-            }
-            for i in sale.items.all()
-        ],
+        'items': [_line_payload(i) for i in sale.items.all()],
         'subtotal': str(sale.subtotal),
         'discount': str(sale.discount),
         'total': str(sale.total),
@@ -210,16 +223,25 @@ class BasketAddView(POSAccessMixin, View):
         else:
             return JsonResponse({'ok': False, 'error': 'nothing_to_add'}, status=400)
 
-        # Soft stock warning at scan time (hard guard happens at completion)
+        # Stock warning at scan time. ADVISORY ONLY — an out-of-stock item
+        # still goes in the basket and still gets paid for; the cashier is
+        # simply told what the shelf says.
         warning = ''
+        out_of_stock = False
         if product.get('inventory_id') and product.get('stock') is not None:
-            in_basket = 0
-            existing = sale.items.filter(inventory_id=product['inventory_id']).first()
-            if existing:
-                in_basket = existing.quantity
-            if product['stock'] < in_basket + int(qty):
-                warning = (f'Low stock: only {product["stock"]} of '
-                           f'"{product["name"]}" on hand.')
+            existing = sale.items.filter(
+                inventory_id=product['inventory_id']).first()
+            in_basket = existing.quantity if existing else 0
+            wanted = in_basket + int(qty)
+            on_hand = product['stock']
+            out_of_stock = on_hand <= 0
+            if on_hand < wanted:
+                warning = (
+                    f'"{product["name"]}" is out of stock — selling anyway.'
+                    if out_of_stock else
+                    f'Low stock: only {on_hand} of "{product["name"]}" on hand '
+                    f'({wanted} in the basket) — selling anyway.'
+                )
 
         try:
             services.add_item(sale, product, qty=int(qty))
@@ -227,6 +249,8 @@ class BasketAddView(POSAccessMixin, View):
             return JsonResponse({'ok': False, 'error': str(e)}, status=400)
 
         return JsonResponse({'ok': True, 'warning': warning,
+                             'out_of_stock': out_of_stock,
+                             'blocking': False,
                              'basket': _basket_payload(sale)})
 
 
@@ -310,9 +334,13 @@ class CompleteSaleView(POSAccessMixin, View):
                                  'error': 'Something went wrong completing the sale.'},
                                 status=500)
 
+        # Sold-short lines: the sale went through, the cashier is told.
+        warnings = list(getattr(sale, 'stock_warnings', []) or [])
+
         from django.urls import reverse
         return JsonResponse({
             'ok': True,
+            'warnings': warnings,
             'sale_no': sale.sale_no,
             'total': str(sale.total),
             'change_due': str(sale.change_due) if sale.change_due is not None else None,

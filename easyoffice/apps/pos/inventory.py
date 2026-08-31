@@ -38,7 +38,16 @@ What changed from v1 (the settings-driven generic adapter):
 Settings (all optional):
 
     POS_LOCATION_CODE  = 'MAIN-SHOP'  # which Location the till sells from
-    POS_ALLOW_OVERSELL = False        # True lets available stock go negative
+
+    POS_OUT_OF_STOCK_POLICY = 'sell'  # 'sell' (default) | 'oversell' | 'block'
+        'sell'     Never block a sale. Deduct whatever is on hand (the
+                   shelf lands on 0, never negative), record the shortfall
+                   on the sale line, warn the cashier, take the money.
+        'oversell' Deduct the full quantity even if that drives available
+                   stock negative.
+        'block'    Refuse to complete a sale that exceeds availability.
+
+    POS_ALLOW_OVERSELL = False        # legacy alias: True ⇒ 'oversell'
 """
 from __future__ import annotations
 
@@ -60,6 +69,26 @@ _QR_URL_RE = re.compile(r'/q/(?P<token>[A-Za-z0-9_\-]{6,40})/?\s*$')
 
 def allow_oversell() -> bool:
     return bool(getattr(settings, 'POS_ALLOW_OVERSELL', False))
+
+
+# What the till does when a line has more units than the location holds.
+#
+#   'sell'     (default) — TAKE THE MONEY. Deduct whatever is on hand
+#                          (stock lands on 0, never negative), record the
+#                          shortfall on the sale line, warn, complete.
+#   'oversell'           — deduct the full quantity; stock may go negative.
+#   'block'              — the old behaviour: refuse to complete the sale.
+_POLICIES = {'sell', 'oversell', 'block'}
+
+
+def out_of_stock_policy() -> str:
+    """Resolve POS_OUT_OF_STOCK_POLICY (POS_ALLOW_OVERSELL still honoured)."""
+    policy = (getattr(settings, 'POS_OUT_OF_STOCK_POLICY', '') or '').strip().lower()
+    if policy in _POLICIES:
+        return policy
+    if allow_oversell():
+        return 'oversell'
+    return 'sell'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -235,14 +264,21 @@ def _call_service(fn, **kwargs):
 
 def _ledger_write(product, location, *, kind: str, qty, actor=None,
                   source_ref: str = '', notes: str = '',
-                  require_available: bool = False) -> bool:
+                  require_available: bool = False,
+                  clamp: bool = False) -> Decimal:
     """
     Fallback path: atomic StockMovement + StockItem update, equivalent to
     what the inventory service layer does. `require_available` enforces
-    (quantity − reserved) ≥ qty under select_for_update.
+    (quantity − reserved) ≥ qty under select_for_update; `clamp` softens
+    that guard into "write as much as is actually there" instead of
+    refusing outright.
+
+    Returns the quantity actually written (Decimal('0') = nothing).
     """
     Product, StockItem, StockMovement, Location = _models()
     qty = Decimal(str(qty))
+    if qty <= 0:
+        return Decimal('0')
 
     with transaction.atomic():
         item, _ = (StockItem.objects
@@ -254,7 +290,13 @@ def _ledger_write(product, location, *, kind: str, qty, actor=None,
             avail = ((item.quantity or Decimal('0'))
                      - (item.reserved_quantity or Decimal('0')))
             if avail < qty:
-                return False
+                if not clamp:
+                    return Decimal('0')
+                # Sell what's physically there; the rest is a recorded
+                # shortfall on the sale line, not a blocked sale.
+                qty = avail if avail > 0 else Decimal('0')
+                if qty <= 0:
+                    return Decimal('0')
 
         item.quantity = F('quantity') + (qty * sign)
         item.last_movement_at = timezone.now()
@@ -270,33 +312,30 @@ def _ledger_write(product, location, *, kind: str, qty, actor=None,
             actor=actor if (actor and getattr(actor, 'is_authenticated', False)) else None,
             notes=(notes or '')[:300],
         )
-    return True
+    return qty
 
 
-def deduct_stock(inventory_id: str, qty: int, *, actor=None,
-                 source_ref: str = '') -> bool:
+def _stock_shaped(exc) -> bool:
+    """Does this service exception mean 'not enough stock' (vs a bug)?"""
+    msg = str(exc).lower()
+    return ('stock' in msg or 'quantity' in msg or 'available' in msg
+            or 'insufficient' in msg)
+
+
+def _issue(product, location, qty: int, *, actor=None, source_ref: str = '',
+           require_available: bool = True, clamp: bool = False) -> int:
     """
-    Sell `qty` of a product from the till's location as a SALE movement.
-    Returns False when available stock is insufficient and oversell is off.
-    Service products (no stock) always succeed without a movement.
+    Write a SALE movement for `qty` units. Returns how many units actually
+    came off the ledger (0 = the availability guard refused).
+
+    Prefers the inventory app's own service layer so ALL of its semantics
+    are kept — batch handling, low-stock alerts, etc. Signature-filtered
+    so optional params it doesn't accept are simply dropped.
     """
-    product = get_item(inventory_id)
-    if product is None:
-        # Product went inactive between scan and completion — treat as
-        # "nothing to deduct" rather than blocking the sale of a snapshot.
-        logger.warning('POS: deduct for unknown/inactive product %s', inventory_id)
-        return True
-    if getattr(product, 'kind', 'stocked') == 'service':
-        return True
+    qty = int(qty)
+    if qty <= 0:
+        return 0
 
-    location = pos_location()
-    if location is None:
-        logger.error('POS: no Location available — configure POS_LOCATION_CODE')
-        return False
-
-    # Preferred: the inventory app's own service layer (keeps ALL of its
-    # semantics — batch handling, low-stock alerts, etc.). Signature-
-    # filtered so optional params it doesn't accept are simply dropped.
     svc = _inv_services()
     if svc is not None and hasattr(svc, 'issue_stock'):
         try:
@@ -304,29 +343,122 @@ def deduct_stock(inventory_id: str, qty: int, *, actor=None,
                 svc.issue_stock,
                 product=product,
                 location=location,
-                quantity=Decimal(int(qty)),
+                quantity=Decimal(qty),
                 kind='sale',
                 actor=actor,
                 notes=f'POS sale {source_ref}'.strip(),
                 source_kind='pos_sale',
                 source_ref=source_ref,
-                allow_oversell=allow_oversell(),
+                allow_oversell=(not require_available) or allow_oversell(),
             )
-            return True
+            return qty
         except Exception as exc:
-            # Insufficient stock raised by the service → report as such;
-            # anything import/signature-shaped falls through to the ledger.
-            msg = str(exc).lower()
-            if ('stock' in msg or 'quantity' in msg or 'available' in msg
-                    or 'insufficient' in msg):
-                return False
-            logger.warning('POS: issue_stock failed (%s) — using ledger fallback', exc)
+            if _stock_shaped(exc):
+                # The service refused for lack of stock; it wrote nothing.
+                # A strict caller stops here. A clamping caller (and the
+                # oversell path, which shouldn't be guarded at all) drops
+                # to the ledger write below.
+                if require_available and not clamp:
+                    return 0
+            else:
+                logger.warning(
+                    'POS: issue_stock failed (%s) — using ledger fallback', exc)
 
-    return _ledger_write(
+    written = _ledger_write(
         product, location, kind='sale', qty=qty, actor=actor,
         source_ref=source_ref, notes='POS terminal sale',
-        require_available=True,
+        require_available=require_available, clamp=clamp,
     )
+    return int(written)
+
+
+def sell_stock(inventory_id: str, qty: int, *, actor=None, source_ref: str = '',
+               policy: str | None = None) -> dict:
+    """
+    Take `qty` units off the till's location for a sale, according to the
+    configured out-of-stock policy (see out_of_stock_policy()).
+
+    Returns:
+        {
+          'ok':        False only when the sale must be BLOCKED,
+          'deducted':  units actually taken off the ledger,
+          'short':     units sold that had no stock behind them,
+          'available': what was on hand before the sale (None if untracked),
+          'tracked':   False for services / unknown products,
+          'name':      product name (for messages),
+        }
+
+    'sell' (the default) never returns ok=False for a stock reason — the
+    money is taken, the shelf goes to zero, and the shortfall is reported
+    back to the caller so it can be recorded and shown as a warning.
+    """
+    qty = int(qty)
+    policy = policy if policy in _POLICIES else out_of_stock_policy()
+    res = {'ok': True, 'deducted': 0, 'short': 0, 'available': None,
+           'tracked': False, 'name': ''}
+
+    product = get_item(inventory_id)
+    if product is None:
+        # Product went inactive between scan and completion — treat as
+        # "nothing to deduct" rather than blocking the sale of a snapshot.
+        logger.warning('POS: deduct for unknown/inactive product %s', inventory_id)
+        return res
+
+    res['name'] = getattr(product, 'name', '') or ''
+    if getattr(product, 'kind', 'stocked') == 'service':
+        return res            # services carry no stock — nothing to do
+
+    location = pos_location()
+    if location is None:
+        logger.error('POS: no Location available — configure POS_LOCATION_CODE')
+        res['ok'] = (policy != 'block')
+        res['short'] = qty if res['ok'] else 0
+        return res
+
+    res['tracked'] = True
+    avail = _available_at(product, location)
+    avail_int = int(avail) if avail is not None else 0
+    res['available'] = avail_int
+
+    if policy == 'oversell':
+        # Deduct everything; the shelf is allowed to go negative.
+        res['deducted'] = _issue(product, location, qty, actor=actor,
+                                 source_ref=source_ref, require_available=False)
+        res['short'] = max(0, qty - res['deducted'])
+        return res
+
+    if policy == 'block':
+        deducted = _issue(product, location, qty, actor=actor,
+                          source_ref=source_ref, require_available=True)
+        if deducted < qty:
+            res['ok'] = False
+            res['short'] = qty - deducted
+        res['deducted'] = deducted
+        return res
+
+    # policy == 'sell' — the money always goes through.
+    take = min(qty, max(0, avail_int))
+    if take:
+        # clamp=True so a race that ate the last units shrinks the write
+        # instead of failing it.
+        res['deducted'] = _issue(product, location, take, actor=actor,
+                                 source_ref=source_ref,
+                                 require_available=True, clamp=True)
+    res['short'] = max(0, qty - res['deducted'])
+    return res
+
+
+def deduct_stock(inventory_id: str, qty: int, *, actor=None,
+                 source_ref: str = '') -> bool:
+    """
+    Back-compat wrapper: strict deduction. Returns False when available
+    stock is insufficient and oversell is off. New code should call
+    sell_stock(), which reports the shortfall instead of just failing.
+    """
+    strict = 'oversell' if out_of_stock_policy() == 'oversell' else 'block'
+    res = sell_stock(inventory_id, qty, actor=actor,
+                     source_ref=source_ref, policy=strict)
+    return bool(res['ok']) and res['short'] == 0
 
 
 def restore_stock(inventory_id: str, qty: int, *, actor=None,

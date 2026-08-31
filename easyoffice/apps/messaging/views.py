@@ -459,6 +459,23 @@ def _broadcast_presence_update(user_id):
     """
     Push the user's current effective status to all their DM rooms via WS.
     This means the other person's badge updates instantly on heartbeat.
+
+    🩹 PHANTOM-TYPING FIX
+    ---------------------
+    This used to be sent as 'chat.typing' to "reuse the existing event
+    channel". ChatConsumer.chat_typing reads its fields from the TOP level
+    of the event, so the nested presence payload was flattened away and
+    what reached every client was a typing event with sender_id = ''.
+    The browser compared '' against its own user id, found them different,
+    and drew "Someone is typing…" — on EVERY presence heartbeat, for every
+    DM room the user is in. That is the "someone is typing when nobody is"
+    report.
+
+    It also meant the real presence_update frame never arrived, so the
+    online/offline badges were only ever updated by the 30s poll.
+
+    Presence now travels on its own event type, handled by
+    ChatConsumer.chat_presence.
     """
     try:
         channel_layer = get_channel_layer()
@@ -481,9 +498,10 @@ def _broadcast_presence_update(user_id):
                 async_to_sync(channel_layer.group_send)(
                     _room_group_name(room_id),
                     {
-                        'type': 'chat.typing',   # reuse existing event channel
+                        'type': 'chat.presence',   # → ChatConsumer.chat_presence
                         'payload': {
                             'type': 'presence_update',
+                            'room_id': str(room_id),
                             'user_id': str(user_id),
                             'status': status,
                             'last_seen_display': last_seen_display,
@@ -524,6 +542,13 @@ def _broadcast_reaction(room_id, message_id, summary):
 def _broadcast_typing(room_id, sender):
     """
     Broadcast typing state.
+
+    🩹 PHANTOM-TYPING FIX: the fields used to be nested under 'payload'.
+    ChatConsumer.chat_typing reads them from the TOP level, so this
+    arrived with sender_id = '' and the client — including the person
+    actually typing — drew the dots for a sender it could not identify.
+    Flat keys now, matching typing_views.TypingPingView and the
+    consumer's own 'typing' branch.
     """
     try:
         channel_layer = get_channel_layer()
@@ -534,12 +559,11 @@ def _broadcast_typing(room_id, sender):
             _room_group_name(room_id),
             {
                 'type': 'chat.typing',
-                'payload': {
-                    'type': 'typing',
-                    'room_id': str(room_id),
-                    'sender_id': str(sender.id),
-                    'sender_name': _safe_full_name(sender),
-                },
+                'room_id': str(room_id),
+                'sender_id': str(sender.id),
+                'sender_name': _safe_full_name(sender),
+                'sender_initials': _safe_initials(sender),
+                'sender_avatar_url': '',
             }
         )
     except Exception:
@@ -2702,6 +2726,11 @@ class CallRingView(LoginRequiredMixin, View):
                         'type': 'chat.signal',
                         'payload': {
                             'type': 'call_ring',
+                            # 🩹 The chat page's handleCallSignal() self-filters
+                            # on sender_id. Without it the CALLER receives their
+                            # own ring back and — if the call popup was blocked —
+                            # shows themselves an incoming-call modal.
+                            'sender_id': str(request.user.id),
                             **ring,
                         },
                     },

@@ -167,12 +167,28 @@ class POSSaleItem(TimeStampedModel):
 
     # Set at completion so voids know what to put back
     stock_deducted = models.BooleanField(default=False)
+    # How many units actually came off the inventory ledger. Less than
+    # `quantity` when the till sold on short stock (POS_OUT_OF_STOCK_POLICY
+    # = 'sell'); the difference is the shortfall. Voids restore exactly
+    # this many units, never phantom stock.
+    quantity_deducted = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = ['created_at']
 
     def __str__(self):
         return f'{self.quantity} × {self.name}'
+
+    @property
+    def stock_shortfall(self) -> int:
+        """Units sold with no stock behind them (0 when fully covered)."""
+        if not self.stock_deducted and not self.quantity_deducted:
+            return 0
+        return max(0, self.quantity - (self.quantity_deducted or 0))
+
+    @property
+    def sold_short(self) -> bool:
+        return self.stock_shortfall > 0
 
     def save(self, *args, **kwargs):
         self.line_total = (self.unit_price * self.quantity).quantize(Decimal('0.01'))

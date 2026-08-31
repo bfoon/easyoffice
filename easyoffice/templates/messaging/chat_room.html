@@ -1776,11 +1776,297 @@
 
 /* Hide the mobile-only UI on desktop */
 @media(min-width:641px){
-  #mobileAttachToggle,
   #callMenuBtnMobile,
   #callMenuDropdown,
   .call-menu-wrap{ display:none !important; }
+}
+/* 🩹 The composer's + tray is NOT phone-only any more. Between 641px and
+   1000px the input row still had eight buttons competing with the
+   textarea, which pushed the send button out of the rounded container.
+   The tray now covers that range too, so it is only hidden from 1001px up
+   where there is genuinely room for the full tool strip. */
+@media(min-width:1001px){
+  #mobileAttachToggle{ display:none !important; }
   #mobileAttachTray{ display:none !important; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   🩹 CHAT HEADER — overlapping-button fix (laptop + phone)
+   ───────────────────────────────────────────────────────────────────────
+   The header was one flat flex row in which nothing declared how it
+   should give up space, and the DM call buttons lived INSIDE the name
+   element. A long name, or a laptop-width window with the sidebar and
+   members panel open, pushed the action buttons on top of each other.
+
+   The header is now three zones with explicit flex behaviour:
+
+     zone 1  avatar + back      flex:0 0 auto   — never shrinks
+     zone 2  .chat-header-main  flex:1 1 auto   — the ONLY zone that
+                                                  absorbs and loses space;
+                                                  the name ellipsises
+     zone 3  .chat-header-actions
+                                flex:0 0 auto   — never shrinks, never wraps
+
+   Then things are shed in order as the window narrows:
+     ≤1400  pinned-message strip
+     ≤1250  "Call" / "Video" / "Status" text labels (icons stay)
+     ≤1024  the presence word (the coloured dot stays)
+     ≤640   search / calendar / members / status collapse into one ⋮ menu
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.chat-header{
+  position:relative;          /* anchor for the status + ⋮ dropdowns */
+  flex-wrap:nowrap;
+  gap:8px;
+  padding:10px 14px;
+  min-height:62px;
+}
+
+/* Zone 1 ─ avatar and back button hold their size */
+.chat-header > .chat-header-avatar,
+.chat-header > #chatMobileBack{ flex:0 0 auto; }
+
+/* Zone 2 ─ the flexible middle. min-width:0 is what actually lets a long
+   name shrink instead of shoving the buttons off the end. */
+.chat-header-main{ flex:1 1 auto; min-width:0; overflow:hidden; }
+.chat-header-title{
+  font-weight:700;
+  font-size:.95rem;
+  color:var(--eo-text);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.chat-header-subtitle{
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+/* Zone 3 ─ actions. Right-aligned, fixed size, single line. */
+.chat-header-actions{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex:0 0 auto;
+  margin-left:auto;
+  white-space:nowrap;
+}
+.chat-header-actions > *,
+.chat-header-actions .eo-btn{ flex:0 0 auto; }
+
+/* Pinned strip is optional furniture — allowed to shrink, first to go */
+.chat-header-pinned{ flex:0 1 240px; min-width:0; }
+
+/* The status menu now hangs off the HEADER, not off its trigger button, so
+   it still lands in the right place when the trigger is hidden inside the
+   ⋮ overflow menu on phones. */
+#statusPickerMenu{
+  position:absolute;
+  top:calc(100% - 2px);
+  right:12px;
+  left:auto;
+}
+
+/* Presence pill must not stretch the actions zone */
+#dmPresenceBadge{ max-width:160px; }
+#dmPresenceLabel{ overflow:hidden; text-overflow:ellipsis; }
+
+/* ── ⋮ overflow menu (phones) ──────────────────────────────────────── */
+.hdr-more-wrap{ position:relative; display:none; }
+#chatHeaderMoreMenu{
+  display:none;
+  position:absolute;
+  top:calc(100% + 6px);
+  right:0;
+  min-width:196px;
+  background:var(--eo-surface);
+  border:1px solid var(--eo-border);
+  border-radius:10px;
+  box-shadow:0 8px 24px rgba(0,0,0,.14);
+  padding:4px 0;
+  z-index:210;
+}
+#chatHeaderMoreMenu button{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  width:100%;
+  padding:9px 14px;
+  background:none;
+  border:0;
+  text-align:left;
+  font-size:.82rem;
+  color:var(--eo-text);
+  cursor:pointer;
+}
+#chatHeaderMoreMenu button:hover{ background:var(--eo-bg); }
+#chatHeaderMoreMenu button i{
+  font-size:.9rem;
+  width:18px;
+  text-align:center;
+  color:var(--eo-text-muted);
+}
+
+/* ── Progressive shedding ──────────────────────────────────────────── */
+
+/* Laptops with the sidebar + members panel open lose the pinned strip. */
+@media(max-width:1400px){
+  .chat-header-pinned{ display:none !important; }
+}
+
+/* Narrow laptops: icons only for Call / Video / Status. */
+@media(max-width:1250px){
+  .chat-header{ gap:6px; padding:10px 12px; }
+  .chat-header .btn-label{ display:none !important; }
+  .chat-header .eo-btn-sm{ padding:0 9px; }
+}
+
+/* Tablets: keep the presence dot, drop the word. */
+@media(max-width:1024px){
+  #dmPresenceLabel{ display:none; }
+  #dmPresenceBadge{ padding:5px; gap:0; }
+}
+
+/* Phones: one ⋮ button instead of four separate icons. */
+@media(max-width:640px){
+  .chat-header{ padding:8px 10px; gap:6px; min-height:56px; }
+  .chat-header #openSearchBtn,
+  .chat-header #openCalendarBtn,
+  .chat-header #toggleMembers,
+  .chat-header #myStatusBtn{ display:none !important; }
+  .hdr-more-wrap{ display:inline-flex !important; }
+  #statusPickerMenu{ right:8px; min-width:200px; }
+  .chat-header-title{ font-size:.9rem; }
+}
+
+/* Very small phones: the room name still needs room to breathe. */
+@media(max-width:360px){
+  .chat-header{ gap:4px; padding:8px 8px; }
+  .chat-header .eo-btn-icon,
+  .chat-header .eo-btn-sm{ min-width:34px; min-height:34px; padding:0 6px; }
+  .chat-header-avatar{ width:32px; height:32px; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   🩹 MESSAGE COMPOSER — overflow fix
+   ───────────────────────────────────────────────────────────────────────
+   Same root cause as the header: a flex item's automatic minimum size.
+   `.chat-textarea` was `flex:1` with no `min-width`, so it refused to
+   shrink below its intrinsic content width (a textarea defaults to about
+   20 characters). Once the tool buttons + textarea + send button no
+   longer fitted, the row grew wider than its container instead of
+   squeezing, and the send button spilled out past the rounded border.
+
+   Two changes:
+     1. min-width:0 everywhere a flex child must be allowed to shrink.
+     2. Below 1001px the six secondary tool buttons collapse into the +
+        tray that previously only existed on phones — so the textarea
+        always keeps usable width, and every tool stays reachable.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.chat-input-area{ min-width:0; }
+
+.input-row{
+  min-width:0;
+  max-width:100%;
+  flex-wrap:nowrap;
+}
+
+/* THE fix: without this the textarea will not shrink and the row overflows. */
+.chat-textarea{
+  min-width:0;
+  flex:1 1 0%;
+}
+
+/* Same class of bug in the inline message editor. */
+.msg-edit-wrap{ min-width:0; }
+.msg-edit-input{ min-width:0; }
+
+/* Long reply-preview text must ellipsise, not stretch the composer. */
+.reply-preview{ min-width:0; }
+.reply-preview > span{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+#replyText{ overflow:hidden; text-overflow:ellipsis; }
+
+/* The emoji picker is absolutely positioned and 260px wide — clamp it so
+   it cannot hang off the right edge of a narrow window. */
+#emojiPicker{ max-width:min(300px, calc(100vw - 32px)); }
+
+/* ── 641–1000px: fold the tool strip into the + tray ─────────────────── */
+@media(max-width:1000px){
+  .input-row{
+    gap:5px;
+    padding:5px 7px;
+    align-items:center;
+  }
+
+  /* Every individual tool button leaves the row… */
+  .input-row > .chat-attach-btn,
+  .input-row > label.chat-attach-btn,
+  .input-row > .emoji-wrap{ display:none; }
+
+  /* …except the + toggle, which opens the tray holding all of them. */
+  .input-row > #mobileAttachToggle{ display:inline-flex !important; }
+
+  .input-row .chat-textarea{ flex:1 1 auto; min-width:0; }
+
+  #mobileAttachToggle,
+  .chat-send-btn{ flex-shrink:0; }
+
+  /* Tray styling. The phone block below 640px already declares these; the
+     values are identical, so the two simply agree. */
+  .mobile-attach-tray{
+    display:flex;
+    flex-wrap:nowrap;
+    overflow-x:auto;
+    gap:6px;
+    padding:6px 8px;
+    margin-bottom:6px;
+    background:var(--eo-bg);
+    border:1px solid var(--eo-border);
+    border-radius:12px;
+    max-height:0;
+    opacity:0;
+    transform:translateY(6px);
+    pointer-events:none;
+    transition:max-height .2s ease, opacity .15s, transform .15s, padding .15s, margin-bottom .15s;
+    scrollbar-width:none;
+  }
+  .mobile-attach-tray::-webkit-scrollbar{ display:none; }
+  .mobile-attach-tray.open{
+    max-height:72px;
+    opacity:1;
+    transform:translateY(0);
+    pointer-events:auto;
+    padding:8px;
+    margin-bottom:8px;
+  }
+  .mobile-attach-tray .tray-btn{
+    flex:0 0 auto;
+    display:inline-flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:2px;
+    min-width:58px;
+    padding:6px 4px;
+    background:var(--eo-surface);
+    border:1px solid var(--eo-border);
+    border-radius:10px;
+    color:var(--eo-text);
+    font-size:.62rem;
+    font-weight:600;
+    cursor:pointer;
+  }
+  .mobile-attach-tray .tray-btn i{ font-size:1.05rem; }
+  .mobile-attach-tray .tray-btn:hover,
+  .mobile-attach-tray .tray-btn:active{ background:var(--eo-border); }
+  .mobile-attach-tray.open ~ .input-row #emojiPicker{ bottom:auto; top:42px; }
 }
 </style>
 
@@ -1889,7 +2175,22 @@
       <span id="scrollUnreadBadge"></span>
     </button>
 
+    <!-- ═══════════════════════════════════════════════════════════════
+         CHAT HEADER — three zones: [avatar] [flexible title] [actions]
+         Nothing but the middle zone is allowed to change width, which is
+         what stops the buttons riding over each other on narrow screens.
+         ═══════════════════════════════════════════════════════════════ -->
     <div class="chat-header">
+
+      <!-- Back to the rooms list (phones only — the sidebar is hidden there).
+           NOTE: this used to carry an inline style="display:none", which no
+           media query could ever override, so it never appeared. -->
+      <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm chat-mobile-only"
+              id="chatMobileBack" title="Back to chats"
+              onclick="window.location.href='{% url 'chat_list' %}'">
+        <i class="bi bi-chevron-left"></i>
+      </button>
+
       <div class="chat-header-avatar {{ room.room_type }}">
         {% if room.room_type == 'announcement' %}<i class="bi bi-megaphone-fill"></i>
         {% elif room.room_type == 'project' %}<i class="bi bi-kanban-fill"></i>
@@ -1903,23 +2204,61 @@
         {% else %}<i class="bi bi-hash"></i>{% endif %}
       </div>
 
-      <div style="flex:1;min-width:0">
+      <!-- ── Zone 2: title + subtitle. The ONLY part that gives up width. ── -->
+      <div class="chat-header-main">
         {% if room.room_type == 'direct' %}
           {% for m in members %}{% if m.id != request.user.id %}
-          <div style="font-weight:700;font-size:.95rem;color:var(--eo-text);display:flex;align-items:center;gap:8px">
-            {{ m.full_name }}
-               <button id="btnStartVoiceCall" onclick="callStart('voice')" title="Voice call"
-           class="eo-btn eo-btn-secondary eo-btn-sm"
-           style="gap:5px;display:inline-flex;align-items:center">
-           <i class="bi bi-telephone-fill"></i>
-           <span class="hide-on-mobile" style="font-size:.75rem">Call</span>
-         </button>
-               <button id="btnStartVideoCall" onclick="callStart('video')" title="Video call"
-           class="eo-btn eo-btn-secondary eo-btn-sm"
-           style="gap:5px;display:inline-flex;align-items:center">
-           <i class="bi bi-camera-video-fill"></i>
-           <span class="hide-on-mobile" style="font-size:.75rem">Video</span>
-         </button>
+            <div class="chat-header-title" id="chatHeaderTitle">{{ m.full_name }}</div>
+            <div class="chat-header-subtitle" style="font-size:.75rem;color:var(--eo-text-muted);margin-top:2px">
+              {% if m.staffprofile.position %}{{ m.staffprofile.position.title }} &nbsp;·&nbsp; {% endif %}Direct Message
+              <span id="dmLastSeenText" style="margin-left:4px"></span>
+            </div>
+          {% endif %}{% endfor %}
+        {% else %}
+          <div class="chat-header-title" id="chatHeaderTitle">{{ room.name }}</div>
+          <div class="chat-header-subtitle" style="font-size:.75rem;color:var(--eo-text-muted)">
+            {{ members.count }} member{{ members.count|pluralize }}
+            &nbsp;·&nbsp; {{ room.get_room_type_display }}
+            {% if room.project_id %}&nbsp;·&nbsp; Project: {{ room.project }}{% endif %}
+            {% if room.description %}&nbsp;·&nbsp; {{ room.description|truncatechars:40 }}{% endif %}
+          </div>
+        {% endif %}
+      </div>
+
+      {% if room.pinned_message %}
+      <div class="chat-header-pinned" style="padding:6px 12px;background:var(--eo-bg);border-radius:8px;border-left:3px solid var(--eo-accent);font-size:.76rem;cursor:pointer">
+        <div style="font-size:.65rem;color:var(--eo-text-muted);font-weight:600;margin-bottom:2px">
+          <i class="bi bi-pin-angle-fill me-1"></i>Pinned
+        </div>
+        <div style="color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ room.pinned_message.content|truncatechars:45 }}</div>
+      </div>
+      {% endif %}
+
+      <!-- ── Zone 3: actions. Fixed width, single line, right-aligned. ──
+           The DM call buttons and the presence pill used to live INSIDE the
+           name element, so a long name pushed them straight through the
+           icons on the right. They belong out here. -->
+      <div class="chat-header-actions">
+
+        {% if room.room_type == 'direct' %}
+          <span id="dmPresenceBadge" data-presence-pill style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0">
+            <span id="dmPresenceDot" data-presence-dot style="width:7px;height:7px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
+            <span id="dmPresenceLabel" data-presence-label>…</span>
+          </span>
+
+          <button id="btnStartVoiceCall" onclick="callStart('voice')" title="Voice call"
+                  class="eo-btn eo-btn-secondary eo-btn-sm"
+                  style="gap:5px;display:inline-flex;align-items:center">
+            <i class="bi bi-telephone-fill"></i>
+            <span class="btn-label hide-on-mobile" style="font-size:.75rem">Call</span>
+          </button>
+
+          <button id="btnStartVideoCall" onclick="callStart('video')" title="Video call"
+                  class="eo-btn eo-btn-secondary eo-btn-sm"
+                  style="gap:5px;display:inline-flex;align-items:center">
+            <i class="bi bi-camera-video-fill"></i>
+            <span class="btn-label hide-on-mobile" style="font-size:.75rem">Video</span>
+          </button>
 
           <!-- Mobile-only combined call menu (voice + video) — toggled by CSS -->
           <div class="call-menu-wrap" id="callMenuWrap" style="position:relative">
@@ -1936,89 +2275,72 @@
               </button>
             </div>
           </div>
-
-            <span id="dmPresenceBadge" data-presence-pill style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0">
-              <span id="dmPresenceDot" data-presence-dot style="width:7px;height:7px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
-              <span id="dmPresenceLabel" data-presence-label>…</span>
-            </span>
-          </div>
-          <div class="chat-header-subtitle" style="font-size:.75rem;color:var(--eo-text-muted);margin-top:2px">
-            {% if m.staffprofile.position %}{{ m.staffprofile.position.title }} &nbsp;·&nbsp; {% endif %}Direct Message
-            <span id="dmLastSeenText" style="margin-left:4px"></span>
-          </div>
-          {% endif %}{% endfor %}
-        {% else %}
-          <div style="font-weight:700;font-size:.95rem;color:var(--eo-text)">{{ room.name }}</div>
-          <div class="chat-header-subtitle" style="font-size:.75rem;color:var(--eo-text-muted)">
-            {{ members.count }} member{{ members.count|pluralize }}
-            &nbsp;·&nbsp; {{ room.get_room_type_display }}
-            {% if room.project_id %}&nbsp;·&nbsp; Project: {{ room.project }}{% endif %}
-            {% if room.description %}&nbsp;·&nbsp; {{ room.description|truncatechars:40 }}{% endif %}
-          </div>
         {% endif %}
-      </div>
 
-      {% if room.pinned_message %}
-      <div class="chat-header-pinned" style="flex:1;max-width:300px;padding:6px 12px;background:var(--eo-bg);border-radius:8px;border-left:3px solid var(--eo-accent);font-size:.76rem;cursor:pointer">
-        <div style="font-size:.65rem;color:var(--eo-text-muted);font-weight:600;margin-bottom:2px">
-          <i class="bi bi-pin-angle-fill me-1"></i>Pinned
-        </div>
-        <div style="color:var(--eo-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ room.pinned_message.content|truncatechars:45 }}</div>
-      </div>
-      {% endif %}
-
-      <!-- Your own status picker -->
-      <div style="position:relative">
         <button class="eo-btn eo-btn-secondary eo-btn-sm" id="myStatusBtn" title="Set your status"
                 onclick="toggleStatusPicker()" style="gap:5px;display:inline-flex;align-items:center">
           <span id="myStatusDot" style="width:8px;height:8px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
-          <span id="myStatusLabel" class="hide-on-mobile" style="font-size:.75rem">Status</span>
-          <i class="bi bi-chevron-down hide-on-mobile" style="font-size:.6rem;opacity:.6"></i>
+          <span id="myStatusLabel" class="btn-label hide-on-mobile" style="font-size:.75rem">Status</span>
+          <i class="bi bi-chevron-down btn-label hide-on-mobile" style="font-size:.6rem;opacity:.6"></i>
         </button>
-        <div id="statusPickerMenu" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:190px;z-index:200;padding:4px 0">
-          <div style="padding:6px 12px 4px;font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted)">Your status</div>
-          <button onclick="setMyStatus('available')" class="status-opt" data-status="available">
-            <span style="width:8px;height:8px;border-radius:50%;background:#10b981;flex-shrink:0"></span>
-            Available
+
+        <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" id="openSearchBtn" title="Search messages (Ctrl/Cmd+K)">
+          <i class="bi bi-search"></i>
+        </button>
+
+        <!-- 📅 Calendar & meetings -->
+        <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" id="openCalendarBtn"
+                title="Calendar and meetings"
+                onclick="window.EOCalendar && window.EOCalendar.toggle()">
+          <i class="bi bi-calendar3"></i>
+        </button>
+
+        <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" id="toggleMembers" title="Toggle members">
+          <i class="bi bi-people"></i>
+        </button>
+
+        <!-- Phone-only overflow: holds search / calendar / members / status
+             so the header never has to fit seven buttons on a 360px screen. -->
+        <div class="hdr-more-wrap" id="hdrMoreWrap">
+          <button type="button" id="chatHeaderMore" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"
+                  title="More" aria-haspopup="true" aria-expanded="false" onclick="toggleHeaderMore(event)">
+            <i class="bi bi-three-dots-vertical"></i>
           </button>
-          <button onclick="setMyStatus('busy')" class="status-opt" data-status="busy">
-            <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0"></span>
-            Busy
-          </button>
-          <button onclick="setMyStatus('dnd')" class="status-opt" data-status="dnd">
-            <span style="width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0"></span>
-            Do Not Disturb
-          </button>
-          <button onclick="setMyStatus('away')" class="status-opt" data-status="away">
-            <span style="width:8px;height:8px;border-radius:50%;background:#94a3b8;flex-shrink:0"></span>
-            Away
-          </button>
-          <div style="border-top:1px solid var(--eo-border);margin:4px 0"></div>
-          <button onclick="setMyStatus('auto')" class="status-opt" data-status="auto">
-            <span style="width:8px;height:8px;border-radius:50%;background:#e2e8f0;border:1px solid #94a3b8;flex-shrink:0"></span>
-            Auto (based on activity)
-          </button>
+          <div id="chatHeaderMoreMenu">
+            <button type="button" onclick="hdrMoreAction('search')"><i class="bi bi-search"></i><span>Search messages</span></button>
+            <button type="button" onclick="hdrMoreAction('calendar')"><i class="bi bi-calendar3"></i><span>Calendar &amp; meetings</span></button>
+            <button type="button" onclick="hdrMoreAction('members')"><i class="bi bi-people"></i><span>Members</span></button>
+            <button type="button" onclick="hdrMoreAction('status')"><i class="bi bi-circle-half"></i><span>Set your status</span></button>
+          </div>
         </div>
       </div>
 
-      <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm chat-mobile-only" id="chatMobileBack" title="Back to chats" style="display:none" onclick="window.location.href='{% url 'chat_list' %}'">
-        <i class="bi bi-chevron-left"></i>
-      </button>
-
-      <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" id="openSearchBtn" title="Search messages (Ctrl/Cmd+K)">
-        <i class="bi bi-search"></i>
-      </button>
-
-      <!-- 📅 Calendar & meetings -->
-      <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" id="openCalendarBtn"
-              title="Calendar and meetings"
-              onclick="window.EOCalendar && window.EOCalendar.toggle()">
-        <i class="bi bi-calendar3"></i>
-      </button>
-
-      <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" id="toggleMembers" title="Toggle members">
-        <i class="bi bi-people"></i>
-      </button>
+      <!-- Status menu is a direct child of the header (not of its button) so
+           it positions correctly even when the trigger is inside ⋮. -->
+      <div id="statusPickerMenu" style="display:none;background:var(--eo-surface);border:1px solid var(--eo-border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:190px;z-index:210;padding:4px 0">
+        <div style="padding:6px 12px 4px;font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--eo-text-muted)">Your status</div>
+        <button onclick="setMyStatus('available')" class="status-opt" data-status="available">
+          <span style="width:8px;height:8px;border-radius:50%;background:#10b981;flex-shrink:0"></span>
+          Available
+        </button>
+        <button onclick="setMyStatus('busy')" class="status-opt" data-status="busy">
+          <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0"></span>
+          Busy
+        </button>
+        <button onclick="setMyStatus('dnd')" class="status-opt" data-status="dnd">
+          <span style="width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0"></span>
+          Do Not Disturb
+        </button>
+        <button onclick="setMyStatus('away')" class="status-opt" data-status="away">
+          <span style="width:8px;height:8px;border-radius:50%;background:#94a3b8;flex-shrink:0"></span>
+          Away
+        </button>
+        <div style="border-top:1px solid var(--eo-border);margin:4px 0"></div>
+        <button onclick="setMyStatus('auto')" class="status-opt" data-status="auto">
+          <span style="width:8px;height:8px;border-radius:50%;background:#e2e8f0;border:1px solid #94a3b8;flex-shrink:0"></span>
+          Auto (based on activity)
+        </button>
+      </div>
     </div>
 
     <div class="chat-messages" id="chatMessages" data-has-older="{% if has_older_messages %}1{% else %}0{% endif %}">
@@ -5808,6 +6130,83 @@ function stopPollStatePolling(){
   }
   window.closeCallMenu = closeCallMenu;
 
+  /* ═══════════════════════════════════════════════════════════════════
+     📱 HEADER OVERFLOW MENU (⋮)
+     On phones the header cannot fit back + avatar + name + presence +
+     call + status + search + calendar + members. CSS hides the last four
+     below 640px and shows this menu instead; these handlers just drive
+     the real buttons so there is only ever one implementation of each
+     action.
+     ═══════════════════════════════════════════════════════════════════ */
+  function toggleHeaderMore(e){
+    if(e){ try{ e.stopPropagation(); }catch(_){} }
+    var dd  = byId('chatHeaderMoreMenu');
+    var btn = byId('chatHeaderMore');
+    if(!dd) return;
+    var open = dd.style.display !== 'block';
+    dd.style.display = open ? 'block' : 'none';
+    if(btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  window.toggleHeaderMore = toggleHeaderMore;
+
+  function closeHeaderMore(){
+    var dd  = byId('chatHeaderMoreMenu');
+    var btn = byId('chatHeaderMore');
+    if(dd) dd.style.display = 'none';
+    if(btn) btn.setAttribute('aria-expanded', 'false');
+  }
+  window.closeHeaderMore = closeHeaderMore;
+
+  function hdrMoreAction(what){
+    closeHeaderMore();
+    if(what === 'status'){
+      /* The picker hangs off the header itself, so it opens correctly even
+         though its trigger button is hidden at this width. */
+      if(typeof toggleStatusPicker === 'function') toggleStatusPicker();
+      return;
+    }
+    var map = { search: 'openSearchBtn', calendar: 'openCalendarBtn', members: 'toggleMembers' };
+    var el = byId(map[what]);
+    if(el) el.click();
+  }
+  window.hdrMoreAction = hdrMoreAction;
+
+  /* The full placeholder ("Message X… (Enter to send, Shift+Enter for new
+     line)") is longer than the composer is wide once the window narrows,
+     so it just reads as clipped noise. Swap in the short form there. */
+  (function(){
+    var input = byId('chatInput');
+    if(!input) return;
+    var full  = input.getAttribute('placeholder') || '';
+    var short = full.split('…')[0].trim() || 'Message';
+    if(short && short.slice(-1) !== '…') short += '…';
+    function apply(){
+      var want = window.innerWidth <= 1000 ? short : full;
+      if(input.getAttribute('placeholder') !== want){
+        input.setAttribute('placeholder', want);
+      }
+    }
+    apply();
+    var t = null;
+    window.addEventListener('resize', function(){
+      clearTimeout(t);
+      t = setTimeout(apply, 150);
+    });
+  })();
+
+  document.addEventListener('click', function(e){
+    var dd  = byId('chatHeaderMoreMenu');
+    var btn = byId('chatHeaderMore');
+    if(dd && dd.style.display === 'block'){
+      if(!dd.contains(e.target) && e.target !== btn && !(btn && btn.contains(e.target))){
+        closeHeaderMore();
+      }
+    }
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape') closeHeaderMore();
+  });
+
   // Outside-click closers for tray and call menu
   document.addEventListener('click', function(e){
     // Close attach tray when clicking outside the tray or its toggle
@@ -5841,9 +6240,10 @@ function stopPollStatePolling(){
         e.stopPropagation();
         var picker = byId('emojiPicker');
         if(!picker) return;
-        // On mobile the normal .emoji-wrap parent is hidden, so position the
-        // picker relative to the viewport instead and anchor it above the input.
-        if (window.innerWidth <= 640){
+        // The .emoji-wrap parent is hidden wherever the + tray is in use
+        // (now up to 1000px, not just phones), so position the picker
+        // relative to the viewport and anchor it above the input.
+        if (window.innerWidth <= 1000){
           picker.style.position = 'fixed';
           picker.style.left = '50%';
           picker.style.transform = 'translateX(-50%)';
@@ -8346,7 +8746,7 @@ if (spellcheckToggleBtn) {
       var n = byId('callBarName'); if(n) n.textContent = 'Call in progress';
       var a = byId('callBarAvatar');
       // Pull peer name from header
-      try { var peerEl = document.querySelector('.chat-header > div > div'); var peerName = (peerEl ? peerEl.textContent : '').trim().split('\n')[0] || 'Peer'; if(a) a.textContent = (peerName.charAt(0)||'?').toUpperCase(); } catch(_){}
+      try { var peerEl = document.getElementById('chatHeaderTitle'); var peerName = (peerEl ? peerEl.textContent : '').trim().split('\n')[0] || 'Peer'; if(a) a.textContent = (peerName.charAt(0)||'?').toUpperCase(); } catch(_){}
     } else {
       b.style.display = 'none';
     }

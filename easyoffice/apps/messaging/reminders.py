@@ -242,6 +242,51 @@ def wake_snoozed(receipt):
     return bool(updated)
 
 
+def fire_due_for(user):
+    """
+    Fire this user's due reminders, right now, in the request that asked
+    for them.
+
+    The beat sweep is not the only thing allowed to deliver a reminder,
+    and it must not be. If beat is not running — not configured, worker
+    down, the schedule entry never added — then with the sweep as the
+    only trigger a reminder simply never fires and the user sees nothing
+    at all, with no error anywhere to explain it. That failure is silent,
+    which is the worst kind.
+
+    So the poll endpoint fires its own. It is one indexed query against a
+    handful of rows, it runs while the person is demonstrably at their
+    desk, and ``fire()`` is idempotent, so it cannot double-deliver
+    something the sweep already handled. Beat then does what it is
+    actually good at: reaching people whose browser is CLOSED, for the
+    email and push copies.
+    """
+    now = timezone.now()
+    due = (ChatReminder.objects
+           .filter(status=ChatReminder.Status.PENDING, remind_at__lte=now)
+           .filter(Q(owner=user) | Q(audience=ChatReminder.Audience.ATTENDEES,
+                                     room__members=user))
+           .select_related('owner', 'room')
+           .distinct()[:50])
+    for reminder in due:
+        try:
+            fire(reminder)
+        except Exception:
+            log.exception('reminders: on-demand fire of %s failed', reminder.pk)
+
+    # Snoozes that have expired while this person was away.
+    waking = (ChatReminderReceipt.objects
+              .filter(user=user,
+                      state=ChatReminderReceipt.State.SNOOZED,
+                      snoozed_until__lte=now)
+              .select_related('reminder')[:50])
+    for receipt in waking:
+        try:
+            wake_snoozed(receipt)
+        except Exception:
+            log.exception('reminders: on-demand wake of %s failed', receipt.pk)
+
+
 def sweep_due_reminders():
     """
     The beat task. Returns a small dict so a manual run says what it did.
@@ -550,10 +595,29 @@ class ReminderOpenListView(LoginRequiredMixin, View):
     """
 
     def get(self, request):
+        # Deliver anything already due before answering. See fire_due_for()
+        # — this is what makes reminders work whether or not beat is alive.
+        try:
+            fire_due_for(request.user)
+        except Exception:
+            log.exception('reminders: on-demand firing failed')
+
         rows = open_for(request.user)
+
+        # How many of this person's reminders are sitting past their time
+        # without having fired. Should always be 0 — a non-zero number in
+        # the response is a visible symptom of a broken scheduler rather
+        # than a silent one.
+        overdue = (ChatReminder.objects
+                   .filter(owner=request.user,
+                           status=ChatReminder.Status.PENDING,
+                           remind_at__lt=timezone.now() - timedelta(minutes=5))
+                   .count())
+
         return JsonResponse({
             'ok': True,
             'now': timezone.localtime(timezone.now()).isoformat(),
+            'stuck': overdue,
             'reminders': [serialize(r, viewer=request.user) for r in rows],
         })
 
@@ -662,16 +726,20 @@ class ReminderCalendarFeedView(LoginRequiredMixin, View):
 
         # One query for this user's own receipt state, so a reminder they
         # have already resolved renders differently instead of sitting on
-        # the calendar looking outstanding forever.
-        states = dict(
+        # the calendar looking outstanding forever. The receipt id comes
+        # along too — Done and Snooze act on the receipt, not the
+        # reminder, so without it a calendar entry would be read-only.
+        receipts = {
+            r['reminder_id']: r for r in
             ChatReminderReceipt.objects
             .filter(user=request.user, reminder__in=[r.pk for r in rows])
-            .values_list('reminder_id', 'state')
-        )
+            .values('reminder_id', 'id', 'state')
+        }
 
         events = []
         for r in rows:
-            state = states.get(r.pk, '')
+            mine = receipts.get(r.pk) or {}
+            state = mine.get('state', '')
             done = state in (ChatReminderReceipt.State.RESOLVED,
                              ChatReminderReceipt.State.DISMISSED)
             events.append({
@@ -683,16 +751,20 @@ class ReminderCalendarFeedView(LoginRequiredMixin, View):
                 'color':     '#94a3b8' if done else '#f59e0b',
                 'textColor': '#ffffff',
                 'extendedProps': {
-                    'kind':       'reminder',
+                    'kind':        'reminder',
                     'reminder_id': str(r.pk),
-                    'note':       r.note,
-                    'state':      state or r.status,
-                    'resolved':   done,
-                    'audience':   r.audience,
-                    'source':     r.source,
-                    'room_name':  r.room.name if r.room_id and r.room else '',
-                    'meeting_id': str(r.meeting_id) if r.meeting_id else '',
-                    'is_owner':   r.owner_id == request.user.id,
+                    'receipt_id':  str(mine['id']) if mine.get('id') else '',
+                    'plain_title': r.title,
+                    'note':        r.note,
+                    'state':       state or r.status,
+                    'resolved':    done,
+                    'audience':    r.audience,
+                    'source':      r.source,
+                    'room_id':     str(r.room_id) if r.room_id else '',
+                    'room_name':   r.room.name if r.room_id and r.room else '',
+                    'meeting_id':  str(r.meeting_id) if r.meeting_id else '',
+                    'owner_name':  _name(r.owner),
+                    'is_owner':    r.owner_id == request.user.id,
                 },
             })
 

@@ -321,6 +321,23 @@ IIFE. It talks to the rest of the page through exactly one global,
   font-size:.78rem; color:var(--eo-text);
 }
 .eo-soon-strip.show{ display:flex; }
+
+/* ⏰ Reminders share the agenda list with meetings but should not be
+   mistaken for them — an amber left edge and a tinted row. */
+.eo-cal-item.eo-cal-reminder{
+  background:linear-gradient(90deg, rgba(245,158,11,.07), transparent 60%);
+}
+.eo-cal-item.eo-cal-reminder .eo-cal-item-title{ font-weight:650; }
+.eo-cal-item.eo-cal-reminder.declined{
+  background:none;
+  opacity:.55;
+}
+.eo-cal-item.eo-cal-reminder.declined .eo-cal-item-title{
+  text-decoration:line-through;
+}
+@media (max-width:420px){
+  .eo-cal-btn-label{ display:none; }
+}
 </style>
 
 
@@ -329,10 +346,14 @@ IIFE. It talks to the rest of the page through exactly one global,
   <div class="eo-cal-head">
     <i class="bi bi-calendar3" style="color:var(--eo-accent)"></i>
     <span class="eo-cal-title">Calendar</span>
+    <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" id="eoCalRemindBtn"
+            style="gap:5px;display:inline-flex;align-items:center" title="Set a reminder">
+      <i class="bi bi-alarm"></i><span class="eo-cal-btn-label">Reminder</span>
+    </button>
     {% if room and not room.is_readonly %}
     <button type="button" class="eo-btn eo-btn-primary eo-btn-sm" id="eoCalNewBtn"
             style="gap:5px;display:inline-flex;align-items:center">
-      <i class="bi bi-plus-lg"></i><span>New meeting</span>
+      <i class="bi bi-plus-lg"></i><span class="eo-cal-btn-label">New meeting</span>
     </button>
     {% endif %}
     <button type="button" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"
@@ -553,6 +574,11 @@ IIFE. It talks to the rest of the page through exactly one global,
   var MONTHS = ['January','February','March','April','May','June',
                 'July','August','September','October','November','December'];
   var DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  /* Long form for reminder agenda headings, which the meetings feed sends
+     ready-made but a reminder has to build client-side. */
+  var DOW_FULL = ['Monday','Tuesday','Wednesday','Thursday','Friday',
+                  'Saturday','Sunday'];
+  var reminderCache = {};       /* reminder_id -> mapped event */
 
   /* ── tiny helpers ──────────────────────────────────────────────────────── */
   function $(id){ return document.getElementById(id); }
@@ -891,13 +917,26 @@ IIFE. It talks to the rest of the page through exactly one global,
      DETAIL MODAL
      ═════════════════════════════════════════════════════════════════════ */
 
-  function openDetail(meetingId){
+  function openDetail(eventId){
     var body = $('eoMeetDetailBody');
     if(!body) return;
+
+    /* ⏰ Reminder ids are prefixed by the feed so the two kinds of event
+       can share one agenda list and one detail modal without the
+       calendar having to track which is which. */
+    if(String(eventId).indexOf('reminder-') === 0){
+      var rid = String(eventId).slice('reminder-'.length);
+      var ev = reminderCache[rid];
+      showModal('eoMeetDetailModal');
+      body.innerHTML = ev ? reminderDetailHTML(ev)
+                          : '<div class="eo-meet-skeleton">That reminder is no longer available.</div>';
+      return;
+    }
+
     body.innerHTML = '<div class="eo-meet-skeleton">Loading…</div>';
     showModal('eoMeetDetailModal');
 
-    get(BASE + '/meeting/' + meetingId + '/')
+    get(BASE + '/meeting/' + eventId + '/')
       .then(function(d){
         if(!d.ok) throw new Error(d.error || 'Couldn’t open this meeting.');
         remember(d.meeting);
@@ -907,6 +946,102 @@ IIFE. It talks to the rest of the page through exactly one global,
         body.innerHTML = '<div class="eo-meet-skeleton">' + esc(err.message) + '</div>';
       });
   }
+
+  function reminderDetailHTML(ev){
+    var when = new Date(ev.start);
+    var h = '';
+    h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">';
+    h +=   '<span style="display:inline-flex;align-items:center;gap:5px;font-size:.62rem;' +
+             'font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#b45309">' +
+             '<i class="bi bi-alarm-fill"></i>Reminder</span>';
+    if(ev.resolved){
+      h += '<span style="font-size:.62rem;font-weight:800;text-transform:uppercase;' +
+             'letter-spacing:.06em;padding:2px 7px;border-radius:999px;' +
+             'background:#f1f5f9;color:#64748b">Done</span>';
+    }
+    h += '</div>';
+
+    h += '<div style="font-size:1.02rem;font-weight:700;line-height:1.35;color:var(--eo-text);' +
+           'word-break:break-word">' + esc(ev.title) + '</div>';
+
+    h += '<div style="margin-top:6px;font-size:.8rem;color:var(--eo-text-muted)">' +
+           '<i class="bi bi-clock"></i> ' + esc(ev.day_label) + ', ' +
+           esc(ev.date_display) + ' at ' + esc(ev.time_display) + '</div>';
+
+    if(ev.audience === 'attendees'){
+      h += '<div style="margin-top:4px;font-size:.8rem;color:var(--eo-text-muted)">' +
+             '<i class="bi bi-people"></i> Everyone in ' +
+             esc(ev.room_name || 'the conversation') + '</div>';
+    }
+    if(!ev.is_owner && ev.owner_name){
+      h += '<div style="margin-top:4px;font-size:.8rem;color:var(--eo-text-muted)">' +
+             '<i class="bi bi-person"></i> Set by ' + esc(ev.owner_name) + '</div>';
+    }
+    if(ev.note){
+      h += '<div class="eo-form-label" style="margin-top:14px">Note</div>';
+      h += '<div style="font-size:.82rem;color:var(--eo-text);white-space:pre-wrap;' +
+             'word-break:break-word">' + esc(ev.note) + '</div>';
+    }
+
+    h += '<div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:16px">';
+    if(!ev.resolved){
+      /* Done and Snooze act on the RECEIPT, which only exists once the
+         reminder has fired. Before that there is nothing to resolve —
+         offer to cancel it instead. */
+      if(ev.receipt_id){
+        h += '<button type="button" class="eo-btn eo-btn-primary eo-btn-sm" ' +
+               'data-rem-act="resolve" data-rem-receipt="' + esc(ev.receipt_id) + '">' +
+               '<i class="bi bi-check2"></i> Mark done</button>';
+        h += '<button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" ' +
+               'data-rem-act="snooze" data-rem-receipt="' + esc(ev.receipt_id) + '">' +
+               '<i class="bi bi-clock-history"></i> Snooze 1 hour</button>';
+      }else{
+        h += '<span style="font-size:.78rem;color:var(--eo-text-muted);' +
+               'align-self:center">Hasn’t fired yet.</span>';
+      }
+      if(ev.is_owner){
+        h += '<button type="button" class="eo-btn eo-btn-danger eo-btn-sm" ' +
+               'data-rem-act="cancel" data-rem-id="' + esc(ev.reminder_id) + '">' +
+               '<i class="bi bi-x-lg"></i> Cancel reminder</button>';
+      }
+    }
+    if(ev.room_id){
+      h += '<a class="eo-btn eo-btn-secondary eo-btn-sm" href="/messages/' +
+             esc(ev.room_id) + '/"><i class="bi bi-chat-dots"></i> Open conversation</a>';
+    }
+    h += '</div>';
+    return h;
+  }
+
+  /* Reminder actions inside the detail modal. */
+  document.addEventListener('click', function(e){
+    var btn = e.target.closest && e.target.closest('[data-rem-act]');
+    if(!btn) return;
+    var act = btn.getAttribute('data-rem-act');
+    var receipt = btn.getAttribute('data-rem-receipt');
+    var rid = btn.getAttribute('data-rem-id');
+    btn.disabled = true;
+
+    var url, body;
+    if(act === 'resolve'){ url = '/messages/reminders/' + receipt + '/resolve/'; body = ''; }
+    else if(act === 'snooze'){ url = '/messages/reminders/' + receipt + '/snooze/'; body = 'choice=60'; }
+    else if(act === 'cancel'){ url = '/messages/reminders/' + rid + '/cancel/'; body = ''; }
+    else return;
+
+    post(url, body)
+      .then(function(d){
+        if(!d || d.ok === false){
+          btn.disabled = false;
+          if(d && d.error) alert(d.error);
+          return;
+        }
+        hideModal('eoMeetDetailModal');
+        loadCalendar();
+        // Take the popup down too if this reminder is currently on screen.
+        if(window.EOReminders) window.EOReminders.refresh();
+      })
+      .catch(function(){ btn.disabled = false; });
+  });
 
   function detailHTML(m){
     var h = cardHTML(m);
@@ -979,6 +1114,46 @@ IIFE. It talks to the rest of the page through exactly one global,
   }
   function toggleCalendar(){ calendarOpen ? closeCalendar() : openCalendar(); }
 
+  /* ⏰ Reminders live in a different app and a different feed. Rather than
+     have the meetings feed know about them, fetch both and merge here —
+     the calendar is the only thing that cares about the union. Mapped
+     into this widget's event shape so the grid, the agenda and the day
+     dots all treat a reminder like anything else. */
+  function loadReminders(from, to){
+    return get('/messages/reminders/feed/?start=' + ymd(from) + '&end=' + ymd(to))
+      .then(function(list){
+        if(!Array.isArray(list)) return [];
+        return list.map(function(ev){
+          var p = ev.extendedProps || {};
+          var d = new Date(ev.start);
+          return {
+            id:            ev.id,
+            kind:          'reminder',
+            reminder_id:   p.reminder_id,
+            receipt_id:    p.receipt_id || '',
+            title:         p.plain_title || ev.title,
+            note:          p.note || '',
+            start:         ev.start,
+            time_display:  d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
+            day_label:     DOW_FULL[(d.getDay() + 6) % 7],
+            date_display:  d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear(),
+            type_color:    ev.color || '#f59e0b',
+            resolved:      !!p.resolved,
+            state:         p.state || '',
+            room_id:       p.room_id || '',
+            room_name:     p.room_name || '',
+            owner_name:    p.owner_name || '',
+            is_owner:      !!p.is_owner,
+            audience:      p.audience || 'me',
+            meeting_id:    p.meeting_id || ''
+          };
+        });
+      })
+      /* A reminder feed that fails must not take the meetings down with
+         it — show the meetings and lose the reminders, not both. */
+      .catch(function(){ return []; });
+  }
+
   function loadCalendar(){
     var first = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
     var last  = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 0);
@@ -989,12 +1164,22 @@ IIFE. It talks to the rest of the page through exactly one global,
     var url = BASE + '/feed/?start=' + ymd(from) + '&end=' + ymd(to);
     if(calScope === 'room') url += '&room_id=' + encodeURIComponent(ROOM_ID);
 
-    get(url)
-      .then(function(d){
+    Promise.all([
+      get(url).then(function(d){
         if(!d.ok) throw new Error(d.error || 'Couldn’t load the calendar.');
+        return d.events || [];
+      }),
+      loadReminders(from, to)
+    ])
+      .then(function(results){
         eventsByDay = {};
-        (d.events || []).forEach(function(ev){
+        results[0].forEach(function(ev){
           remember(ev);
+          var k = dayKey(ev.start);
+          (eventsByDay[k] = eventsByDay[k] || []).push(ev);
+        });
+        results[1].forEach(function(ev){
+          reminderCache[ev.reminder_id] = ev;
           var k = dayKey(ev.start);
           (eventsByDay[k] = eventsByDay[k] || []).push(ev);
         });
@@ -1072,6 +1257,29 @@ IIFE. It talks to the rest of the page through exactly one global,
       html += '<div class="eo-cal-daygroup">';
       html +=   '<div class="eo-cal-daylabel">' + esc(list[0].day_label) + ' · ' + esc(list[0].date_display) + '</div>';
       list.forEach(function(ev){
+        if(ev.kind === 'reminder'){
+          var rcls = 'eo-cal-item eo-cal-reminder' + (ev.resolved ? ' declined' : '');
+          var rsub = ev.resolved ? 'Done'
+                   : (ev.audience === 'attendees' ? 'Reminder · everyone'
+                                                  : 'Reminder');
+          if(!ev.is_owner && ev.owner_name) rsub += ' · from ' + ev.owner_name;
+          else if(ev.room_name) rsub += ' · ' + ev.room_name;
+
+          html += '<button type="button" class="' + rcls +
+                  '" data-cal-open="' + esc(ev.id) + '">';
+          html +=   '<div class="eo-cal-stripe" style="background:' +
+                      esc(ev.type_color) + '"></div>';
+          html +=   '<div class="eo-cal-item-main">';
+          html +=     '<div class="eo-cal-item-time">' + esc(ev.time_display) + '</div>';
+          html +=     '<div class="eo-cal-item-title">' +
+                        '<i class="bi bi-alarm" style="margin-right:4px;opacity:.75"></i>' +
+                        esc(ev.title) + '</div>';
+          html +=     '<div class="eo-cal-item-sub">' + esc(rsub) + '</div>';
+          html +=   '</div>';
+          html += '</button>';
+          return;
+        }
+
         var cls = 'eo-cal-item';
         if(ev.my_rsvp === 'declined' || ev.is_cancelled) cls += ' declined';
         if(ev.is_live) cls += ' live';
@@ -1125,6 +1333,27 @@ IIFE. It talks to the rest of the page through exactly one global,
     loadCalendar();
   });
   bind('eoCalNewBtn', function(){ openCompose(); });
+  bind('eoCalRemindBtn', function(){
+    if(!window.EOReminders){
+      alert('Reminders are not loaded on this page.');
+      return;
+    }
+    /* Open on the day the user has selected in the grid rather than
+       today — picking a date and then being handed "now" is the kind of
+       small betrayal that makes people stop using a feature. */
+    var when = null;
+    if(selectedDay){
+      var d = new Date(selectedDay + 'T09:00');
+      if(!isNaN(d.getTime())) when = d;
+    }
+    window.EOReminders.compose({ roomId: ROOM_ID, when: when, source: 'manual' });
+  });
+
+  /* A reminder created anywhere on the page should appear here without a
+     manual refresh. */
+  document.addEventListener('reminder:created', function(){
+    if(calendarOpen) loadCalendar();
+  });
 
   function bind(id, fn){ var el = $(id); if(el) el.addEventListener('click', fn); }
 

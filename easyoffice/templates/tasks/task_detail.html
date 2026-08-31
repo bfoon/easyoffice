@@ -712,6 +712,35 @@
     </div>
     {% endif %}
 
+    {# ── ⏰ Reminders ──────────────────────────────────────────────────
+       Deliberately OUTSIDE the can_full_edit_task guard above. A reminder
+       is a note to yourself; anyone who can see the task should be able
+       to set one, including someone with no edit rights who just needs to
+       chase it. #}
+    <div class="eo-card">
+      <h2 class="eo-card-title mb-3 d-flex align-items-center gap-2">
+        <i class="bi bi-alarm" style="color:#f59e0b"></i> Reminders
+      </h2>
+
+      <div id="taskReminderList" class="mb-2">
+        <div class="small text-muted">Loading…</div>
+      </div>
+
+      <div class="d-flex flex-wrap gap-2">
+        <button type="button" class="eo-btn eo-btn-primary eo-btn-sm"
+                id="taskRemindBtn">
+          <i class="bi bi-alarm"></i> Set reminder
+        </button>
+        {% if task.due_date %}
+        <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm"
+                id="taskRemindBeforeDueBtn"
+                title="Remind me an hour before this task is due">
+          <i class="bi bi-hourglass-split"></i> Before due
+        </button>
+        {% endif %}
+      </div>
+    </div>
+
     {# ── Task details ── #}
     <div class="eo-card">
       <div class="d-flex align-items-center justify-content-between mb-3">
@@ -973,6 +1002,147 @@
 {#  Page-scoped JS                                                              #}
 {# ─────────────────────────────────────────────────────────────────────────── #}
 {% block extra_js %}
+{# The popup, poller and composer. The include guards against running
+   twice, so leaving it in base.html as well is fine — and if it ISN'T in
+   base.html yet, this keeps task reminders working today. #}
+{% include "messaging/_reminders.html" %}
+
+{{ task.title|json_script:"taskTitleData" }}
+<script>
+/* ⏰ Task reminders — the Actions panel card. */
+(function(){
+  'use strict';
+
+  var TASK_ID = '{{ task.pk }}';
+  var listEl  = document.getElementById('taskReminderList');
+  var btn     = document.getElementById('taskRemindBtn');
+  var dueBtn  = document.getElementById('taskRemindBeforeDueBtn');
+  if(!listEl) return;
+
+  function esc(s){
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  function csrf(){
+    var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? m[1] : '';
+  }
+  function title(){
+    try{
+      return JSON.parse(document.getElementById('taskTitleData').textContent);
+    }catch(_){ return 'this task'; }
+  }
+
+  function fmt(iso){
+    try{
+      var d = new Date(iso), now = new Date();
+      var time = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+      if(d.toDateString() === now.toDateString()) return 'Today ' + time;
+      var t = new Date(now); t.setDate(t.getDate() + 1);
+      if(d.toDateString() === t.toDateString()) return 'Tomorrow ' + time;
+      return d.toLocaleDateString([], {day:'numeric', month:'short'}) + ' ' + time;
+    }catch(_){ return iso; }
+  }
+
+  function load(){
+    fetch('/messages/reminders/for-task/' + TASK_ID + '/', {
+      headers: {'X-Requested-With':'XMLHttpRequest'},
+      credentials: 'same-origin'
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d || !d.ok){ listEl.innerHTML = ''; return; }
+      var rows = d.reminders || [];
+      if(!rows.length){
+        listEl.innerHTML = '<div class="small text-muted">' +
+          'No reminders on this task.</div>';
+        return;
+      }
+      listEl.innerHTML = rows.map(function(r){
+        var meta = fmt(r.remind_at);
+        if(r.fired) meta += ' · fired';
+        if(r.audience === 'attendees') meta += ' · everyone';
+        if(!r.is_owner) meta += ' · from ' + esc(r.owner_name);
+        return '<div class="d-flex align-items-start gap-2 mb-2" ' +
+                 'style="padding:7px 9px;border:1px solid var(--eo-border);' +
+                 'border-left:3px solid #f59e0b;border-radius:8px">' +
+                 '<div style="flex:1;min-width:0">' +
+                   '<div class="small fw-semibold" style="word-break:break-word">' +
+                     esc(r.title) + '</div>' +
+                   '<div class="small text-muted">' + meta + '</div>' +
+                 '</div>' +
+                 (r.receipt_id
+                   ? '<button type="button" class="eo-btn eo-btn-sm" ' +
+                       'data-task-rem-done="' + esc(r.receipt_id) + '" ' +
+                       'title="Mark done"><i class="bi bi-check2"></i></button>'
+                   : (r.is_owner
+                       ? '<button type="button" class="eo-btn eo-btn-sm" ' +
+                           'data-task-rem-cancel="' + esc(r.id) + '" ' +
+                           'title="Cancel reminder"><i class="bi bi-x-lg"></i></button>'
+                       : '')) +
+               '</div>';
+      }).join('');
+    })
+    .catch(function(){ listEl.innerHTML = ''; });
+  }
+
+  function compose(when){
+    if(!window.EOReminders){
+      alert('Reminders are unavailable on this page.');
+      return;
+    }
+    window.EOReminders.compose({
+      title: 'Follow up: ' + title(),
+      taskId: TASK_ID,
+      source: 'task',
+      when: when || null
+    });
+  }
+
+  if(btn) btn.addEventListener('click', function(){ compose(null); });
+
+  if(dueBtn){
+    dueBtn.addEventListener('click', function(){
+      /* An hour before the deadline, not at it — a reminder that arrives
+         the moment something is already due is just an obituary. */
+      var due = new Date('{{ task.due_date|date:"c" }}');
+      if(isNaN(due.getTime())){ compose(null); return; }
+      var when = new Date(due.getTime() - 60 * 60 * 1000);
+      if(when <= new Date()) when = new Date(Date.now() + 5 * 60 * 1000);
+      compose(when);
+    });
+  }
+
+  document.addEventListener('click', function(e){
+    var done = e.target.closest && e.target.closest('[data-task-rem-done]');
+    var cancel = e.target.closest && e.target.closest('[data-task-rem-cancel]');
+    var target = done || cancel;
+    if(!target) return;
+
+    var url = done
+      ? '/messages/reminders/' + done.getAttribute('data-task-rem-done') + '/resolve/'
+      : '/messages/reminders/' + cancel.getAttribute('data-task-rem-cancel') + '/cancel/';
+
+    target.disabled = true;
+    var fd = new FormData();
+    fd.append('csrfmiddlewaretoken', csrf());
+    fetch(url, {
+      method: 'POST',
+      headers: {'X-Requested-With':'XMLHttpRequest'},
+      credentials: 'same-origin',
+      body: fd
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(){ load(); if(window.EOReminders) window.EOReminders.refresh(); })
+    .catch(function(){ target.disabled = false; });
+  });
+
+  document.addEventListener('reminder:created', load);
+  load();
+})();
+</script>
+
 <script>
 (function(){
   'use strict';

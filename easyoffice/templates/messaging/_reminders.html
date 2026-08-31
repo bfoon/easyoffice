@@ -295,7 +295,7 @@ wait for the next tick.
         <label class="rem-label">Who gets it</label>
         <select id="remAudience" class="rem-input">
           <option value="me">Only me</option>
-          <option value="attendees">Everyone in this conversation</option>
+          <option value="attendees" id="remAudienceShared">Everyone in this conversation</option>
         </select>
       </div>
 
@@ -540,6 +540,7 @@ wait for the next tick.
       room_id:    opts.roomId || '',
       message_id: opts.messageId || '',
       meeting_id: opts.meetingId || '',
+      task_id:    opts.taskId || '',
       source:     opts.source || 'manual'
     };
 
@@ -551,9 +552,17 @@ wait for the next tick.
     var when = opts.when ? new Date(opts.when) : new Date(Date.now() + 30*60000);
     byId('remWhen').value = toLocalInput(when);
 
-    // "Everyone in this conversation" only means something with a room.
+    // "Everyone" needs somebody to mean. A room has members; a task has
+    // an assignee, a creator and a supervisor. With neither, the choice
+    // is meaningless and the field is hidden rather than shown greyed.
     var audField = byId('remAudienceField');
-    audField.style.display = context.room_id ? '' : 'none';
+    var shared = byId('remAudienceShared');
+    audField.style.display = (context.room_id || context.task_id) ? '' : 'none';
+    if(shared){
+      shared.textContent = context.task_id
+        ? 'Assignee, creator and supervisor'
+        : 'Everyone in this conversation';
+    }
     byId('remAudience').value = opts.audience || 'me';
 
     byId('remModal').classList.add('open');
@@ -589,10 +598,12 @@ wait for the next tick.
       title:      title,
       remind_at:  when,
       note:       byId('remNote').value || '',
-      audience:   context.room_id ? byId('remAudience').value : 'me',
+      audience:   (context.room_id || context.task_id)
+                    ? byId('remAudience').value : 'me',
       room_id:    context.room_id,
       message_id: context.message_id,
       meeting_id: context.meeting_id,
+      task_id:    context.task_id,
       source:     context.source,
       email:      byId('remEmail').checked ? '1' : ''
     })

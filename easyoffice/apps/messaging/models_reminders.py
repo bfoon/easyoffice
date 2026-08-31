@@ -20,12 +20,18 @@ A personal reminder is simply the same shape with exactly one receipt.
 
 SOFT LINKS
 ──────────
-``meeting_id`` is a plain UUID, not a ForeignKey. The calendar lives in
-its own module and its model is not imported here, so a hard FK would
-make this file depend on it and force a migration in both apps whenever
-either changed. A reminder that outlives its meeting is also perfectly
-sensible ("you never wrote up Tuesday's minutes"), which an FK with
-CASCADE would delete and an FK with PROTECT would block.
+``meeting_id`` and ``task_id`` are plain UUIDs, not ForeignKeys. Those
+models live in their own apps and are not imported here, so a hard FK
+would make this file depend on both and force a migration in three apps
+whenever any one of them changed. A reminder that outlives the thing it
+was about is also perfectly sensible ("you never wrote up Tuesday's
+minutes"), which an FK with CASCADE would delete and an FK with PROTECT
+would block.
+
+If a third app needs one of these, replace both columns with a
+``target_kind`` / ``target_id`` pair rather than adding ``invoice_id``,
+``ticket_id`` and so on. Two per-app columns are still cheaper than the
+indirection; three are not.
 
 Import into apps/messaging/models.py so migrations pick it up:
 
@@ -59,6 +65,7 @@ class ChatReminder(models.Model):
         MEETING = 'meeting', _('From a calendar invite')
         MEMO    = 'memo',    _('From a memo')
         MESSAGE = 'message', _('From a message')
+        TASK    = 'task',    _('From a task')
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
@@ -81,6 +88,10 @@ class ChatReminder(models.Model):
     meeting_id = models.UUIDField(
         null=True, blank=True, db_index=True,
         help_text='Soft link to a calendar meeting — see module docstring.')
+    task_id = models.UUIDField(
+        null=True, blank=True, db_index=True,
+        help_text='Soft link to a tasks.Task, for reminders raised from a '
+                  'task page.')
     source = models.CharField(max_length=12, choices=Source.choices,
                               default=Source.MANUAL)
 

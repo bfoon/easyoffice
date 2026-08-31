@@ -128,8 +128,8 @@ def _parse_when(value):
 
 
 def create_reminder(owner, *, title, remind_at, note='', room=None,
-                    message=None, meeting_id=None, audience='me',
-                    source='manual', notify_email=False):
+                    message=None, meeting_id=None, task_id=None,
+                    audience='me', source='manual', notify_email=False):
     """Create a reminder. Returns the ChatReminder."""
     title = ' '.join((title or '').split())
     if not title:
@@ -142,10 +142,11 @@ def create_reminder(owner, *, title, remind_at, note='', room=None,
 
     if audience not in dict(ChatReminder.Audience.choices):
         audience = ChatReminder.Audience.ME
-    # "Everyone invited" needs somebody to invite. Without a room there is
-    # no attendee list, so quietly fall back rather than create a reminder
-    # that can never reach anyone.
-    if audience == ChatReminder.Audience.ATTENDEES and room is None:
+    # "Everyone invited" needs somebody to invite. A room has members and
+    # a task has an assignee/creator/supervisor; with neither there is
+    # nobody to reach, so fall back rather than create a reminder that can
+    # only ever notify its author.
+    if audience == ChatReminder.Audience.ATTENDEES and room is None and not task_id:
         audience = ChatReminder.Audience.ME
 
     return ChatReminder.objects.create(
@@ -155,6 +156,7 @@ def create_reminder(owner, *, title, remind_at, note='', room=None,
         room=room,
         message=message,
         meeting_id=meeting_id or None,
+        task_id=task_id or None,
         remind_at=when,
         audience=audience,
         source=source if source in dict(ChatReminder.Source.choices) else 'manual',
@@ -166,13 +168,39 @@ def create_reminder(owner, *, title, remind_at, note='', room=None,
 def recipients_for(reminder):
     """Who gets a receipt. Always includes the owner."""
     people = {reminder.owner_id: reminder.owner}
-    if reminder.audience == ChatReminder.Audience.ATTENDEES and reminder.room_id:
+
+    if reminder.audience != ChatReminder.Audience.ATTENDEES:
+        return list(people.values())
+
+    if reminder.room_id:
         try:
             for user in reminder.room.members.all():
                 people.setdefault(user.id, user)
         except Exception:
             log.exception('reminders: could not read room members for %s',
                           reminder.pk)
+
+    elif reminder.task_id:
+        # A task has no member list, but it does have the three people who
+        # would actually want chasing: whoever it is on, whoever asked for
+        # it, and their supervisor.
+        try:
+            from apps.tasks.models import Task
+            task = (Task.objects
+                    .select_related('assigned_to', 'assigned_by')
+                    .filter(pk=reminder.task_id)
+                    .first())
+            if task:
+                for user in (task.assigned_to, task.assigned_by):
+                    if user is not None:
+                        people.setdefault(user.id, user)
+                profile = getattr(task.assigned_to, 'staffprofile', None)
+                if profile and profile.supervisor_id:
+                    people.setdefault(profile.supervisor_id, profile.supervisor)
+        except Exception:
+            log.exception('reminders: could not read task people for %s',
+                          reminder.pk)
+
     return list(people.values())
 
 
@@ -367,10 +395,15 @@ def serialize(receipt, viewer=None):
                         else ''),
         'message_id':  str(reminder.message_id) if reminder.message_id else '',
         'meeting_id':  str(reminder.meeting_id) if reminder.meeting_id else '',
+        'task_id':     str(reminder.task_id) if reminder.task_id else '',
         'is_owner':    bool(viewer and reminder.owner_id == viewer.id),
         'owner_name':  _name(reminder.owner),
-        'url':         (f'/messages/{reminder.room_id}/'
-                        if reminder.room_id else ''),
+        # Where "open this" goes. A task reminder belongs on the task
+        # page; without this it would send you to a chat room that may
+        # have nothing to do with it.
+        'url':         (f'/tasks/{reminder.task_id}/' if reminder.task_id
+                        else (f'/messages/{reminder.room_id}/'
+                              if reminder.room_id else '')),
     }
 
 
@@ -545,6 +578,17 @@ class ReminderCreateView(LoginRequiredMixin, View):
             message = ChatMessage.objects.filter(
                 id=message_id, room=room, is_deleted=False).first()
 
+        # A task reminder must point at a task this person can actually
+        # see. Taking the id on trust would let anyone attach a reminder
+        # to any task uuid and read its title back out of the feed.
+        task_id = (request.POST.get('task_id') or '').strip() or None
+        if task_id:
+            task_id = _validated_task_id(request.user, task_id)
+            if task_id is None:
+                return JsonResponse(
+                    {'ok': False, 'error': 'That task could not be found.'},
+                    status=404)
+
         try:
             reminder = create_reminder(
                 request.user,
@@ -554,6 +598,7 @@ class ReminderCreateView(LoginRequiredMixin, View):
                 room=room,
                 message=message,
                 meeting_id=(request.POST.get('meeting_id') or '').strip() or None,
+                task_id=task_id,
                 audience=request.POST.get('audience', 'me'),
                 source=request.POST.get('source', 'manual'),
                 notify_email=request.POST.get('email') == '1',
@@ -747,7 +792,8 @@ class ReminderCalendarFeedView(LoginRequiredMixin, View):
                 'title':     ('✓ ' if done else '⏰ ') + r.title,
                 'start':     timezone.localtime(r.remind_at).isoformat(),
                 'allDay':    False,
-                'url':       f'/messages/{r.room_id}/' if r.room_id else '',
+                'url':       (f'/tasks/{r.task_id}/' if r.task_id
+                              else (f'/messages/{r.room_id}/' if r.room_id else '')),
                 'color':     '#94a3b8' if done else '#f59e0b',
                 'textColor': '#ffffff',
                 'extendedProps': {
@@ -763,6 +809,7 @@ class ReminderCalendarFeedView(LoginRequiredMixin, View):
                     'room_id':     str(r.room_id) if r.room_id else '',
                     'room_name':   r.room.name if r.room_id and r.room else '',
                     'meeting_id':  str(r.meeting_id) if r.meeting_id else '',
+                    'task_id':     str(r.task_id) if r.task_id else '',
                     'owner_name':  _name(r.owner),
                     'is_owner':    r.owner_id == request.user.id,
                 },
@@ -785,6 +832,84 @@ def _parse_feed_date(value):
     if timezone.is_naive(parsed):
         parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
     return parsed
+
+
+def _validated_task_id(user, task_id):
+    """
+    Return *task_id* if this user may attach a reminder to that task,
+    otherwise None.
+
+    Imported lazily and wrapped: the tasks app is a separate app and the
+    reminders module must keep working (just without task links) if it
+    is ever absent or mid-migration.
+    """
+    try:
+        from apps.tasks.models import Task
+    except Exception:
+        return None
+    try:
+        task = Task.objects.filter(pk=task_id).first()
+    except (ValueError, TypeError):
+        return None
+    if task is None:
+        return None
+    if (task.assigned_to_id == user.id
+            or task.assigned_by_id == user.id
+            or user.is_superuser
+            or task.collaborators.filter(pk=user.pk).exists()):
+        return str(task.pk)
+    # Not obviously theirs — allow it only if the task isn't private, so
+    # a supervisor or colleague can still set themselves a nudge.
+    return str(task.pk) if not task.is_private else None
+
+
+class TaskRemindersView(LoginRequiredMixin, View):
+    """
+    GET /messages/reminders/for-task/<task_id>/
+
+    Reminders this user has on one task, for the task page's Actions
+    panel. Scoped to the viewer — one person's reminder about a task is
+    not everybody's business, and showing a colleague's private nudge on
+    a shared page would be a small but real leak.
+    """
+
+    def get(self, request, task_id):
+        rows = (ChatReminder.objects
+                .filter(task_id=task_id,
+                        status__in=[ChatReminder.Status.PENDING,
+                                    ChatReminder.Status.FIRED])
+                .filter(Q(owner=request.user) | Q(receipts__user=request.user))
+                .distinct()
+                .order_by('remind_at')[:20])
+
+        receipts = {
+            r['reminder_id']: r for r in
+            ChatReminderReceipt.objects
+            .filter(user=request.user, reminder__in=[r.pk for r in rows])
+            .values('reminder_id', 'id', 'state')
+        }
+
+        out = []
+        for r in rows:
+            mine = receipts.get(r.pk) or {}
+            state = mine.get('state', '')
+            if state in (ChatReminderReceipt.State.RESOLVED,
+                         ChatReminderReceipt.State.DISMISSED):
+                continue                      # done — don't clutter the panel
+            out.append({
+                'id':         str(r.pk),
+                'receipt_id': str(mine['id']) if mine.get('id') else '',
+                'title':      r.title,
+                'note':       r.note,
+                'remind_at':  timezone.localtime(r.remind_at).isoformat(),
+                'state':      state or r.status,
+                'fired':      r.status == ChatReminder.Status.FIRED,
+                'audience':   r.audience,
+                'is_owner':   r.owner_id == request.user.id,
+                'owner_name': _name(r.owner),
+            })
+
+        return JsonResponse({'ok': True, 'reminders': out})
 
 
 class ReminderCancelView(LoginRequiredMixin, View):

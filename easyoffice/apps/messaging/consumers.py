@@ -403,6 +403,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Broadcast pin/unpin events to every open client in the room."""
         await self.send(text_data=json.dumps(event['payload']))
 
+    # ✉️ MEMO acknowledgements. Echoed to everyone including the person
+    # who acknowledged: the sender needs the running tally, and the
+    # acknowledger's other tabs need to stop offering the button.
+    async def chat_memo(self, event):
+        await self.send(text_data=json.dumps(event['payload']))
+
     # ✅ READ RECEIPTS — delivered/read watermark updates.
     #
     # Unlike chat_typing we DO echo this back to the originator. The

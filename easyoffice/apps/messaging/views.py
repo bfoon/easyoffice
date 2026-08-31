@@ -429,6 +429,15 @@ def _serialize_chat_message(msg, viewer=None):
 
     if msg.message_type == 'command':
         payload['command_payload'] = getattr(msg, 'command_payload', {}) or {}
+        # ✉️ A memo keeps its subject and body inside the ENCRYPTED content
+        # field, so the client can't split them itself. Fold the parsed
+        # view (subject, body, priority, ack tally) into the payload here —
+        # one place, and every transport that uses this serializer gets it.
+        try:
+            from apps.messaging import memo as _memo
+            _memo.decorate_payload(payload, msg, viewer)
+        except Exception:
+            pass
 
     return payload
 

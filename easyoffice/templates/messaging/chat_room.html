@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% load humanize %}
 {% load chat_extras %}
+{% load memo_extras %}
 
 <!-- A DM's stored name holds both people; everywhere a room is NAMED we show
    the other person instead. room_display_name does that for every room type. -->
@@ -2068,6 +2069,419 @@
   .mobile-attach-tray .tray-btn:active{ background:var(--eo-border); }
   .mobile-attach-tray.open ~ .input-row #emojiPicker{ bottom:auto; top:42px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   📐 ADAPTIVE LAYOUT — sized against the CHAT, not the window
+   ───────────────────────────────────────────────────────────────────────
+   Every rule above this point keys off the VIEWPORT. That was the bug:
+   the app shell (top bar, left nav, page padding) eats a few hundred
+   pixels before .msg-layout gets any, so a 1100px window can leave the
+   layout with ~800px — and at 800px the old CSS was still drawing three
+   full columns. The message column ended up ~230px wide with two panels
+   crowding it, exactly what the screenshot shows.
+
+   These rules use a CONTAINER query, so they respond to how much room
+   the chat actually has. Shedding order as that room shrinks:
+
+     ≤1180   members panel leaves the flow, becomes an overlay drawer
+     ≤980    rooms sidebar → icon rail; composer tools → + tray
+     ≤780    sidebar hidden (back button instead); header → ⋮ menu
+     ≤560    compact paddings and avatars
+
+   The old viewport rules are left in place untouched: they are the
+   fallback for browsers without container queries, and nothing here
+   regresses if @container is unsupported.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.msg-layout{
+  container-type:inline-size;
+  container-name:chat;
+  /* inline-size containment means the box may no longer be sized by its
+     contents, so state the width explicitly in case an ancestor is a
+     shrink-to-fit (flex/grid/inline-block) context. */
+  box-sizing:border-box;
+  width:100%;
+  min-width:0;
+}
+
+/* Close button for the members drawer — hidden while it is a column. */
+.panel-drawer-close{ display:none; }
+
+/* ── ≤1180px: two columns + a members DRAWER ─────────────────────────── */
+@container chat (max-width:1180px){
+  .msg-sidebar{ width:212px; }
+
+  .msg-members-panel{
+    position:absolute;
+    top:0; right:0; bottom:0;
+    width:min(320px, 82%);
+    max-width:320px;
+    display:flex;
+    transform:translateX(100%);
+    visibility:hidden;
+    transition:transform .25s cubic-bezier(.2,.8,.25,1), visibility 0s linear .25s;
+    box-shadow:-10px 0 30px rgba(0,0,0,.14);
+    z-index:45;
+  }
+  .msg-members-panel.open{
+    transform:translateX(0);
+    visibility:visible;
+    transition:transform .25s cubic-bezier(.2,.8,.25,1), visibility 0s;
+  }
+  /* The desktop toggle adds .collapsed (width:0). In drawer mode width is
+     not how we hide it, so neutralise that or the panel becomes a sliver. */
+  .msg-members-panel.collapsed{
+    width:min(320px, 82%);
+    max-width:320px;
+    display:flex;
+  }
+  .panel-drawer-close{ display:inline-flex; }
+
+  /* The chat column now owns the space the panel gave back. */
+  .chat-body{ max-width:86%; }
+  .chat-header-pinned{ display:none !important; }
+  .chat-header .btn-label{ display:none !important; }
+  .chat-header{ gap:6px; padding:10px 12px; }
+  .chat-header .eo-btn-sm{ padding:0 9px; }
+}
+
+/* ── ≤980px: sidebar becomes an icon rail, composer folds into + ─────── */
+@container chat (max-width:980px){
+  .msg-sidebar{ width:56px; }
+  .msg-sidebar .msg-room-info,
+  .msg-sidebar .msg-section-label,
+  .msg-sidebar .msg-unread-badge,
+  .msg-sidebar .sidebar-find{ display:none; }
+  .msg-sidebar .msg-room-item{ justify-content:center; padding:8px 6px; }
+  .msg-sidebar .msg-room-item.active{ border-left-width:3px; padding-left:3px; }
+  .msg-sidebar .msg-sidebar-title span{ display:none; }
+  .msg-sidebar-head{ flex-direction:column; gap:6px; padding:10px 6px; }
+
+  #dmPresenceLabel{ display:none; }
+  #dmPresenceBadge{ padding:5px; gap:0; }
+
+  .chat-body{ max-width:90%; }
+  .bubble-file-card{ min-width:0; max-width:100%; width:100%; }
+
+  /* Composer: the eight-button strip does not fit — fold it into the tray. */
+  .input-row{ gap:5px; padding:5px 7px; align-items:center; }
+  .input-row > .chat-attach-btn,
+  .input-row > label.chat-attach-btn{ display:none; }
+  .input-row > #mobileAttachToggle{ display:inline-flex !important; }
+  .input-row .chat-textarea{ flex:1 1 auto; min-width:0; }
+}
+
+/* ── ≤780px: single column. Sidebar gone, header collapses to ⋮ ──────── */
+@container chat (max-width:780px){
+  .msg-sidebar{ display:none !important; }
+  .chat-mobile-only{ display:inline-flex !important; }
+
+  .chat-header{ padding:8px 10px; gap:6px; min-height:56px; }
+  .chat-header-subtitle{ display:none; }
+  .chat-header-title{ font-size:.9rem; }
+  .chat-header #openSearchBtn,
+  .chat-header #openCalendarBtn,
+  .chat-header #toggleMembers,
+  .chat-header #myStatusBtn{ display:none !important; }
+  .hdr-more-wrap{ display:inline-flex !important; }
+
+  /* One call button with a voice/video menu instead of two buttons. */
+  .chat-header #btnStartVoiceCall,
+  .chat-header #btnStartVideoCall{ display:none !important; }
+  .chat-header .call-menu-wrap,
+  .chat-header #callMenuBtnMobile{ display:inline-flex !important; }
+
+  .chat-messages{ padding:10px 8px; }
+  .chat-body{ max-width:94%; }
+  .bubble-image img{ max-width:220px; max-height:180px; }
+
+  .msg-members-panel,
+  .msg-members-panel.collapsed{ width:100%; max-width:340px; }
+  .search-drawer{ width:100%; border-left:0; box-shadow:none; }
+  .chat-input-area{ padding:8px 8px calc(8px + env(safe-area-inset-bottom)); }
+
+  /* No hover on touch — reveal the action row on tap/focus. */
+  .chat-msg:focus-within .msg-actions,
+  .chat-msg.msg-tapped .msg-actions{ opacity:1; }
+}
+
+/* ── ≤560px: squeeze the furniture ───────────────────────────────────── */
+@container chat (max-width:560px){
+  .chat-header{ gap:4px; padding:8px; }
+  .chat-header .eo-btn-icon,
+  .chat-header .eo-btn-sm{ min-width:34px; min-height:34px; padding:0 6px; }
+  .chat-header-avatar{ width:32px; height:32px; }
+  .chat-body{ max-width:96%; }
+  /* Nothing left in the header but back / avatar / name / ⋮ — the call
+     buttons are in the ⋮ list at this size. */
+  .chat-header .call-menu-wrap,
+  .chat-header #callMenuBtnMobile{ display:none !important; }
+  #dmPresenceBadge{ display:none; }
+  .msg-members-panel,
+  .msg-members-panel.collapsed{ width:100%; max-width:none; }
+}
+
+/* ── Right panel: stop the Shared tabs colliding at narrow widths ────── */
+.shared-tab-switch{ flex-wrap:nowrap; min-width:0; }
+.shared-tab-btn{
+  min-width:0;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.sidepanel-section-header{ gap:8px; min-width:0; }
+.sidepanel-section-header > span:first-child{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+/* ── 🐞 Emoji picker was unreachable between 641px and 1000px ─────────
+   #emojiPicker lives inside .emoji-wrap, and the tray rules set that
+   wrapper to display:none — a child of a display:none element never
+   renders, whatever position it is given. So the tray's 😊 button did
+   nothing in that whole range. Keep the wrapper rendered at zero width
+   and hide only the button it holds; the picker then opens normally,
+   anchored to the composer, with no position:fixed hack. ─────────────── */
+.input-row > .emoji-wrap{ position:relative; }
+@media(max-width:1000px){
+  .input-row > .emoji-wrap{
+    display:block !important;
+    width:0;
+    overflow:visible;
+    flex:0 0 0px;
+  }
+  .input-row > .emoji-wrap > #emojiBtn{ display:none; }
+  #emojiPicker{ left:0; bottom:46px; }
+}
+/* Container-width twin of the rule above. */
+@container chat (max-width:980px){
+  .input-row > .emoji-wrap{
+    display:block !important;
+    width:0;
+    overflow:visible;
+    flex:0 0 0px;
+  }
+  .input-row > .emoji-wrap > #emojiBtn{ display:none; }
+  #emojiPicker{ left:0; bottom:46px; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   🧰 TOOL MENU — one toggle, one vertical LIST
+   ───────────────────────────────────────────────────────────────────────
+   The old tray was a horizontal strip of icon chips you had to scroll
+   sideways through, with no labels. On a narrow screen that is the worst
+   of both worlds: it eats a row of height AND hides half its contents.
+
+   It is now an anchored pop-up list — same shape as the header's ⋮ menu —
+   sitting above the + button and out of the layout flow, so it costs no
+   height until it is opened. Every entry is labelled.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.input-row{ position:relative; }
+
+#mobileAttachTray{ display:none !important; }
+#mobileAttachTray.open{ display:flex !important; }
+
+.mobile-attach-tray{
+  position:absolute;
+  bottom:calc(100% + 10px);
+  left:0;
+  z-index:120;
+  flex-direction:column;
+  gap:2px;
+  width:min(268px, calc(100vw - 32px));
+  max-height:min(360px, 60vh);
+  overflow-y:auto;
+  padding:6px;
+  margin:0;
+  background:var(--eo-surface);
+  border:1px solid var(--eo-border);
+  border-radius:12px;
+  box-shadow:0 12px 34px rgba(15,23,42,.16);
+  animation:toolMenuIn .14s ease-out;
+}
+@keyframes toolMenuIn{
+  from{ opacity:0; transform:translateY(6px); }
+  to{ opacity:1; transform:translateY(0); }
+}
+.mobile-attach-tray .tray-btn{
+  display:flex;
+  flex-direction:row;
+  align-items:center;
+  justify-content:flex-start;
+  gap:11px;
+  width:100%;
+  min-width:0;
+  min-height:42px;
+  padding:9px 11px;
+  background:none;
+  border:0;
+  border-radius:9px;
+  color:var(--eo-text);
+  font-size:.86rem;
+  font-weight:600;
+  text-align:left;
+  cursor:pointer;
+}
+.mobile-attach-tray .tray-btn > i,
+.mobile-attach-tray .tray-btn > span:first-child{
+  flex:0 0 20px;
+  width:20px;
+  text-align:center;
+  font-size:1rem;
+  color:var(--eo-accent);
+}
+.mobile-attach-tray .tray-btn > span:last-child{
+  flex:1 1 auto;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.mobile-attach-tray .tray-btn:hover,
+.mobile-attach-tray .tray-btn:active,
+.mobile-attach-tray .tray-btn:focus-visible{ background:var(--eo-bg); }
+.tray-sep{
+  height:1px;
+  margin:4px 6px;
+  background:var(--eo-border);
+  flex-shrink:0;
+}
+
+/* ── ✉️ MEMO — a chat message with a subject line ─────────────────────── */
+.memo-card{
+  display:block;
+  min-width:0;
+  max-width:min(460px, 100%);
+  border-radius:12px;
+  overflow:hidden;
+  background:var(--eo-surface);
+  border:1px solid var(--eo-border);
+  border-left:4px solid var(--eo-accent);
+  text-align:left;
+  color:var(--eo-text);
+}
+.bubble.memo-bubble{
+  background:transparent !important;
+  border:0;
+  padding:0;
+  color:var(--eo-text) !important;
+  max-width:100%;
+}
+.memo-head{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  padding:8px 12px 0;
+}
+.memo-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  font-size:.6rem;
+  font-weight:800;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:var(--eo-accent);
+}
+.memo-prio{
+  font-size:.6rem;
+  font-weight:800;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  padding:2px 7px;
+  border-radius:999px;
+}
+.memo-prio.high{ background:#fee2e2; color:#b91c1c; }
+.memo-prio.normal{ background:#eef2ff; color:#4338ca; }
+.memo-prio.low{ background:#f1f5f9; color:#64748b; }
+.memo-subject{
+  padding:3px 12px 0;
+  font-size:.95rem;
+  font-weight:700;
+  line-height:1.35;
+  color:var(--eo-text);
+  word-break:break-word;
+}
+.memo-meta{
+  padding:4px 12px 0;
+  font-size:.7rem;
+  color:var(--eo-text-muted);
+  display:flex;
+  flex-wrap:wrap;
+  gap:4px 10px;
+}
+.memo-meta .memo-meta-item{ display:inline-flex; align-items:center; gap:4px; }
+.memo-body{
+  padding:8px 12px 10px;
+  font-size:.87rem;
+  line-height:1.55;
+  color:var(--eo-text);
+  white-space:pre-wrap;
+  word-break:break-word;
+}
+.memo-actions{
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  padding:0 10px 10px;
+}
+.memo-action{
+  border:1px solid var(--eo-border);
+  background:var(--eo-bg);
+  color:var(--eo-text);
+  border-radius:8px;
+  padding:5px 10px;
+  font-size:.72rem;
+  font-weight:700;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  transition:background .12s, border-color .12s;
+}
+.memo-action:hover{ background:var(--eo-surface); border-color:var(--eo-accent); }
+.memo-action i{ font-size:.8rem; color:var(--eo-accent); }
+
+/* Memo composer */
+.memo-grid{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0,1fr));
+  gap:12px;
+}
+.memo-cc-list{
+  max-height:150px;
+  overflow-y:auto;
+  border:1px solid var(--eo-border);
+  border-radius:10px;
+  padding:4px;
+}
+.memo-cc-row{
+  display:flex;
+  align-items:center;
+  gap:9px;
+  padding:6px 8px;
+  border-radius:8px;
+  cursor:pointer;
+  font-size:.83rem;
+  color:var(--eo-text);
+}
+.memo-cc-row:hover{ background:var(--eo-bg); }
+.memo-cc-row input{ flex-shrink:0; }
+.memo-preview-line{
+  font-size:.72rem;
+  color:var(--eo-text-muted);
+  margin-top:6px;
+}
+@media(max-width:640px){
+  .memo-grid{ grid-template-columns:1fr; }
+}
+@container chat (max-width:640px){
+  .memo-grid{ grid-template-columns:1fr; }
+}
 </style>
 
 <div class="msg-layout">
@@ -2307,9 +2721,14 @@
             <i class="bi bi-three-dots-vertical"></i>
           </button>
           <div id="chatHeaderMoreMenu">
+            {% if room.room_type == 'direct' %}
+            <button type="button" onclick="hdrMoreAction('voice')"><i class="bi bi-telephone-fill"></i><span>Voice call</span></button>
+            <button type="button" onclick="hdrMoreAction('video')"><i class="bi bi-camera-video-fill"></i><span>Video call</span></button>
+            {% endif %}
             <button type="button" onclick="hdrMoreAction('search')"><i class="bi bi-search"></i><span>Search messages</span></button>
             <button type="button" onclick="hdrMoreAction('calendar')"><i class="bi bi-calendar3"></i><span>Calendar &amp; meetings</span></button>
-            <button type="button" onclick="hdrMoreAction('members')"><i class="bi bi-people"></i><span>Members</span></button>
+            <button type="button" onclick="hdrMoreAction('members')"><i class="bi bi-people"></i><span>Members &amp; pins</span></button>
+            <button type="button" onclick="hdrMoreAction('memo')"><i class="bi bi-envelope-paper"></i><span>Write a memo</span></button>
             <button type="button" onclick="hdrMoreAction('status')"><i class="bi bi-circle-half"></i><span>Set your status</span></button>
           </div>
         </div>
@@ -2404,6 +2823,12 @@
                   </div>
                   {% if msg.content %}<div class="bubble-file-caption">{{ msg.content }}</div>{% endif %}
                 </div>
+
+   {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'memo' %}
+     <!-- ✉️ Memo. Subject and body live inside the encrypted content field,
+        so the filter does the split server-side and hands the card over as
+        JSON; EOMemo.hydrate() draws it. -->
+     <div class="eo-memo-mount" data-memo="{{ msg|memo_data:request.user }}"></div>
 
    {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'meeting_invite' %}
      <!-- 📅 Empty shell. EOCalendar.hydrate() fills it with live RSVP state,
@@ -2553,7 +2978,13 @@
                       {% if msg.content %}<div class="bubble-file-caption">{{ msg.content }}</div>{% endif %}
                     </div>
 
-                  {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'meeting_invite' %}
+                  {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'memo' %}
+     <!-- ✉️ Memo. Subject and body live inside the encrypted content field,
+        so the filter does the split server-side and hands the card over as
+        JSON; EOMemo.hydrate() draws it. -->
+     <div class="eo-memo-mount" data-memo="{{ msg|memo_data:request.user }}"></div>
+
+   {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'meeting_invite' %}
                     <!-- 📅 Empty shell. EOCalendar.hydrate() fills it with live RSVP state,
                        so an invite sent last month still shows the current tally instead
                        of a snapshot frozen at send time. -->
@@ -2686,7 +3117,13 @@
                       {% if msg.content %}<div class="bubble-file-caption">{{ msg.content }}</div>{% endif %}
                     </div>
 
-                  {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'meeting_invite' %}
+                  {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'memo' %}
+     <!-- ✉️ Memo. Subject and body live inside the encrypted content field,
+        so the filter does the split server-side and hands the card over as
+        JSON; EOMemo.hydrate() draws it. -->
+     <div class="eo-memo-mount" data-memo="{{ msg|memo_data:request.user }}"></div>
+
+   {% elif msg.message_type == 'command' and msg.command_payload.command_type == 'meeting_invite' %}
                     <!-- 📅 Empty shell. EOCalendar.hydrate() fills it with live RSVP state,
 <!––                       so an invite sent last month still shows the current tally instead––>
                        of a snapshot frozen at send time. -->
@@ -2821,43 +3258,56 @@
     <div class="emoji-hint" id="emojiHint" role="status" aria-live="polite"></div>
   </div>
 
-  <!-- 📱 MOBILE: horizontal tool tray, toggled by the + button below.
-       On desktop it's hidden entirely (see @media(min-width:641px) above). -->
-  <div class="mobile-attach-tray" id="mobileAttachTray" role="toolbar" aria-label="Attach tools">
-    <label class="tray-btn" title="Upload file">
-      <i class="bi bi-paperclip"></i><span>File</span>
-      <input type="file" id="fileInputMobile" accept="*/*" style="display:none" onchange="handleFileSelect(this); closeMobileTray()"/>
-    </label>
-    <button type="button" class="tray-btn" title="Attach from Files app"
-            onclick="openFilePicker(); closeMobileTray()">
-      <i class="bi bi-folder2-open"></i><span>Files</span>
-    </button>
-    <button type="button" class="tray-btn" title="Create poll"
-            onclick="openModal('pollModal'); closeMobileTray()">
-      <i class="bi bi-bar-chart"></i><span>Poll</span>
-    </button>
-    <button type="button" class="tray-btn" title="New meeting"
-            onclick="window.EOCalendar && window.EOCalendar.compose(); closeMobileTray()">
-      <i class="bi bi-calendar-plus"></i><span>Meet</span>
-    </button>
-    <button type="button" class="tray-btn" id="trayEmojiBtn" title="Emoji">
-      <span style="font-size:1.05rem;line-height:1">😊</span><span>Emoji</span>
-    </button>
-    <button type="button" class="tray-btn" id="traySpellBtn" title="Text suggestions">
-      <i class="bi bi-spellcheck"></i><span>Spell</span>
-    </button>
-  </div>
+  <!-- The tool menu now lives INSIDE .input-row (anchored above the +
+       button) so it costs no vertical space until it is opened. -->
 
   <!-- 📅 Fills in when a meeting you've accepted is minutes away -->
   <div class="eo-soon-strip" id="eoSoonStrip"></div>
 
   <div class="input-row">
-    <!-- 📱 MOBILE: + toggle — expands/collapses #mobileAttachTray -->
+    <!-- 🧰 The one toggle. Everything else folds in here when the chat is
+         narrow; on a wide chat the individual buttons show instead. -->
     <button type="button" class="chat-attach-btn" id="mobileAttachToggle"
-            title="Attachments" aria-expanded="false" aria-controls="mobileAttachTray"
+            title="Tools" aria-expanded="false" aria-controls="mobileAttachTray"
             onclick="toggleMobileTray()">
       <i class="bi bi-plus-lg"></i>
     </button>
+
+    <!-- Anchored tool LIST — labelled rows, not a sideways icon strip. -->
+    <div class="mobile-attach-tray" id="mobileAttachTray" role="menu" aria-label="Message tools">
+      <label class="tray-btn" role="menuitem" title="Upload a file from this device">
+        <input type="file" id="fileInputMobile" accept="*/*" style="display:none" onchange="handleFileSelect(this); closeMobileTray()"/>
+        <i class="bi bi-paperclip"></i><span>Upload a file</span>
+      </label>
+      <button type="button" class="tray-btn" role="menuitem" title="Attach from Files app"
+              onclick="openFilePicker(); closeMobileTray()">
+        <i class="bi bi-folder2-open"></i><span>Attach from Files</span>
+      </button>
+
+      <div class="tray-sep" role="separator"></div>
+
+      <button type="button" class="tray-btn" role="menuitem" title="Write a memo with a subject line"
+              onclick="closeMobileTray(); openMemoComposer()">
+        <i class="bi bi-envelope-paper"></i><span>Memo (with subject)</span>
+      </button>
+      <button type="button" class="tray-btn" role="menuitem" title="Create poll"
+              onclick="openModal('pollModal'); closeMobileTray()">
+        <i class="bi bi-bar-chart"></i><span>Create a poll</span>
+      </button>
+      <button type="button" class="tray-btn" role="menuitem" title="New meeting"
+              onclick="window.EOCalendar && window.EOCalendar.compose(); closeMobileTray()">
+        <i class="bi bi-calendar-plus"></i><span>New meeting</span>
+      </button>
+
+      <div class="tray-sep" role="separator"></div>
+
+      <button type="button" class="tray-btn" role="menuitem" id="trayEmojiBtn" title="Emoji">
+        <span style="line-height:1">😊</span><span>Emoji</span>
+      </button>
+      <button type="button" class="tray-btn" role="menuitem" id="traySpellBtn" title="Text suggestions">
+        <i class="bi bi-spellcheck"></i><span>Text suggestions</span>
+      </button>
+    </div>
 
     <label class="chat-attach-btn" title="Upload file from device" style="cursor:pointer">
       <i class="bi bi-paperclip"></i>
@@ -2866,6 +3316,11 @@
 
     <button type="button" class="chat-attach-btn" title="Attach from Files app" onclick="openFilePicker()">
       <i class="bi bi-folder2-open"></i>
+    </button>
+
+    <button type="button" class="chat-attach-btn" id="memoBtn"
+            title="Memo — send with a subject line" onclick="openMemoComposer()">
+      <i class="bi bi-envelope-paper"></i>
     </button>
 
     <button type="button" class="chat-attach-btn" title="Create poll" onclick="openModal('pollModal')">
@@ -2919,12 +3374,18 @@
   <aside class="msg-members-panel" id="membersPanel">
     <div class="panel-head">
       <span>Members ({{ members.count }})</span>
-      {% if can_manage_room and room.room_type != 'direct' %}
-      <div style="display:flex;gap:6px">
+      <div style="display:flex;gap:6px;align-items:center">
+        {% if can_manage_room and room.room_type != 'direct' %}
         <button class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm" title="Add member" onclick="openModal('addMemberModal')"><i class="bi bi-person-plus"></i></button>
         <button class="eo-btn eo-btn-danger eo-btn-icon eo-btn-sm" title="Delete channel" onclick="openModal('deleteRoomModal')"><i class="bi bi-trash"></i></button>
+        {% endif %}
+        <!-- Only rendered as a drawer (see .panel-drawer-close); as a
+             column there is nothing to close. -->
+        <button type="button" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm panel-drawer-close"
+                id="closeMembersDrawer" title="Close panel" onclick="closeMembersDrawer()">
+          <i class="bi bi-x-lg"></i>
+        </button>
       </div>
-      {% endif %}
     </div>
 
     <div class="panel-scroll-wrap">
@@ -3369,6 +3830,95 @@
         <button type="button" class="eo-btn eo-btn-secondary" onclick="closeModal('forwardModal')">Cancel</button>
         <button type="button" class="eo-btn eo-btn-primary" id="confirmForwardBtn" onclick="confirmForwardMessage()">
           <i class="bi bi-forward"></i> Forward
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     ✉️ MEMO COMPOSER — a chat message that behaves like an email
+     ───────────────────────────────────────────────────────────────────────
+     Subject, priority, reply-by date, acknowledgement request and Cc, sent
+     down the SAME pipe as any other message. No new model, no migration:
+     the fields are serialised into the message body in a fixed, readable
+     shape ("[MEMO] Subject: …") which the client re-renders as a card.
+     A client that doesn't know about memos still shows something sensible —
+     a plain-text memo, which is exactly what it is.
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div class="msg-modal-backdrop" id="memoModal">
+  <div class="msg-modal">
+    <div class="msg-modal-head">
+      <div style="font-size:1rem;font-weight:700;color:var(--eo-text)">
+        <i class="bi bi-envelope-paper" style="color:var(--eo-accent)"></i> New memo
+      </div>
+      <button type="button" onclick="closeModal('memoModal')" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+
+    <div class="msg-modal-body">
+      <div class="eo-form-group">
+        <label class="eo-form-label" for="memoSubject">Subject</label>
+        <input type="text" id="memoSubject" class="eo-form-control" maxlength="140"
+               placeholder="What is this about?" autocomplete="off">
+      </div>
+
+      <div class="eo-form-group">
+        <div class="memo-grid">
+          <div>
+            <label class="eo-form-label" for="memoPriority">Priority</label>
+            <select id="memoPriority" class="eo-form-control">
+              <option value="normal" selected>Normal</option>
+              <option value="high">High</option>
+              <option value="low">Low / FYI</option>
+            </select>
+          </div>
+          <div>
+            <label class="eo-form-label" for="memoDue">Reply by <span style="font-weight:400;color:var(--eo-text-muted)">(optional)</span></label>
+            <input type="date" id="memoDue" class="eo-form-control">
+          </div>
+        </div>
+      </div>
+
+      <div class="eo-form-group">
+        <label class="eo-form-label" for="memoBody">Message</label>
+        <textarea id="memoBody" class="eo-form-control" rows="7"
+                  placeholder="Write the memo…" style="resize:vertical;line-height:1.55"></textarea>
+      </div>
+
+      <div class="eo-form-group">
+        <label class="poll-setting-check" style="cursor:pointer">
+          <input type="checkbox" id="memoAck">
+          <span>Ask recipients to acknowledge</span>
+        </label>
+      </div>
+
+      <div class="eo-form-group" id="memoCcGroup">
+        <label class="eo-form-label">Cc <span style="font-weight:400;color:var(--eo-text-muted)">— tags them so they get notified</span></label>
+        <div class="memo-cc-list" id="memoCcList"></div>
+      </div>
+
+      <div class="eo-form-group">
+        <label class="poll-setting-check" style="cursor:pointer">
+          <input type="checkbox" id="memoEmail">
+          <span>Also send this to their email inbox</span>
+        </label>
+        <div class="memo-preview-line">
+          Emailing a memo sends the subject and body through the mail
+          server, so that copy is no longer covered by the app's
+          encryption. Leave this off unless the memo needs to reach
+          someone who isn't in the app.
+        </div>
+      </div>
+
+      <div class="memo-preview-line" id="memoPreviewLine"></div>
+      <div id="memoError" style="display:none;margin-top:10px;padding:9px 12px;border-radius:9px;background:#fee2e2;color:#b91c1c;font-size:.82rem;font-weight:600"></div>
+
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+        <button type="button" class="eo-btn eo-btn-secondary" onclick="closeModal('memoModal')">Cancel</button>
+        <button type="button" class="eo-btn eo-btn-primary" id="sendMemoBtn" onclick="sendMemo()">
+          <i class="bi bi-send-fill"></i> Send memo
         </button>
       </div>
     </div>
@@ -3943,6 +4493,8 @@
     }).join('') || '?';
   }
 
+  /* Exported below for apps that live in their own script block
+     (the memo module needs the CSRF cookie and the message appender). */
   function getCookie(n){
     var v = document.cookie.match('(^|;) ?' + n + '=([^;]*)(;|$)');
     return v ? decodeURIComponent(v[2]) : null;
@@ -5157,6 +5709,12 @@ window.addEventListener('beforeunload', function(){
         return;
       }
 
+      /* ✉️ Somebody acknowledged a memo — repaint that card's tally. */
+      if(d.type === 'memo_update'){
+        if(window.EOMemo) window.EOMemo.onSocketEvent(d);
+        return;
+      }
+
       if(d.type === 'poll_update'){
         updatePollUI(d);
         return;
@@ -5682,26 +6240,71 @@ function stopPollStatePolling(){
   }
   window.clearSelectedFile = clearSelectedFile;
 
+  /* ═══════════════════════════════════════════════════════════════════
+     📐 DRAWER MODE — asked of the CSS, not guessed from window width
+     ───────────────────────────────────────────────────────────────────
+     The members panel is a column at wide chat widths and an overlay
+     drawer at narrow ones, and the breakpoint now depends on how much
+     room .msg-layout has, not on window.innerWidth. Rather than repeat
+     that threshold in JS (where it would drift out of sync the first
+     time the CSS changed), just read what the browser actually applied:
+     the drawer rules set position:absolute, the column rules do not.
+     ═══════════════════════════════════════════════════════════════════ */
+  function membersDrawerMode(){
+    var mp = byId('membersPanel');
+    if(!mp) return false;
+    try{ return getComputedStyle(mp).position === 'absolute'; }
+    catch(_){ return window.innerWidth <= 640; }
+  }
+  window.membersDrawerMode = membersDrawerMode;
+
+  function closeMembersDrawer(){
+    var mp = byId('membersPanel');
+    var backdrop = byId('chatDrawerBackdrop');
+    if(mp) mp.classList.remove('open');
+    var searchOpen = (function(){
+      var d = byId('searchDrawer');
+      return !!(d && d.classList.contains('open'));
+    })();
+    if(backdrop && !searchOpen) backdrop.classList.remove('show');
+  }
+  window.closeMembersDrawer = closeMembersDrawer;
+
   (function(){
     var mp = byId('membersPanel');
     var tmb = byId('toggleMembers');
     var backdrop = byId('chatDrawerBackdrop');
     if(tmb && mp){
       tmb.addEventListener('click', function(){
-        // On mobile: slide-in drawer with backdrop
-        // On desktop: keep the legacy width-collapse behaviour
-        if (window.innerWidth <= 640){
+        // Narrow: slide-in drawer with backdrop.
+        // Wide:   the legacy width-collapse, which keeps the column.
+        if (membersDrawerMode()){
           var isOpen = mp.classList.toggle('open');
           if (backdrop) backdrop.classList.toggle('show', isOpen);
-          // Close search drawer if opening members
+          // Two overlays on the same edge would stack — close the other.
           if (isOpen && typeof window.closeSearchDrawer === 'function') {
             window.closeSearchDrawer();
           }
         } else {
+          mp.classList.remove('open');
           mp.classList.toggle('collapsed');
         }
       });
     }
+    // A window resize can move us across the breakpoint while the drawer
+    // is open; drop the overlay state so it doesn't linger as a column.
+    var rt = null;
+    window.addEventListener('resize', function(){
+      clearTimeout(rt);
+      rt = setTimeout(function(){
+        if(!membersDrawerMode() && mp && mp.classList.contains('open')){
+          closeMembersDrawer();
+        }
+      }, 160);
+    });
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape' && membersDrawerMode()) closeMembersDrawer();
+    });
   })();
 
   /* ═══════════════════════════════════════════════════════════════════════
@@ -5745,7 +6348,8 @@ function stopPollStatePolling(){
       drawer.classList.add('open');
       drawer.setAttribute('aria-hidden', 'false');
       if (backdrop) backdrop.classList.add('show');
-      if (window.innerWidth <= 640 && membersPanel && membersPanel.classList.contains('open')){
+      // Both drawers occupy the same right edge — never show two at once.
+      if (membersPanel && membersPanel.classList.contains('open')){
         membersPanel.classList.remove('open');
       }
       setTimeout(function(){ input.focus(); }, 200);
@@ -6165,6 +6769,14 @@ function stopPollStatePolling(){
       if(typeof toggleStatusPicker === 'function') toggleStatusPicker();
       return;
     }
+    if(what === 'memo'){
+      if(typeof openMemoComposer === 'function') openMemoComposer();
+      return;
+    }
+    if(what === 'voice' || what === 'video'){
+      if(typeof callStart === 'function') callStart(what);
+      return;
+    }
     var map = { search: 'openSearchBtn', calendar: 'openCalendarBtn', members: 'toggleMembers' };
     var el = byId(map[what]);
     if(el) el.click();
@@ -6237,28 +6849,14 @@ function stopPollStatePolling(){
     var tb = byId('trayEmojiBtn');
     if(tb){
       tb.addEventListener('click', function(e){
+        // stopPropagation matters: the document-level closer would
+        // otherwise fire straight after and shut the picker again.
         e.stopPropagation();
-        var picker = byId('emojiPicker');
-        if(!picker) return;
-        // The .emoji-wrap parent is hidden wherever the + tray is in use
-        // (now up to 1000px, not just phones), so position the picker
-        // relative to the viewport and anchor it above the input.
-        if (window.innerWidth <= 1000){
-          picker.style.position = 'fixed';
-          picker.style.left = '50%';
-          picker.style.transform = 'translateX(-50%)';
-          // Sit just above the input area
-          var ia = document.querySelector('.chat-input-area');
-          var rect = ia ? ia.getBoundingClientRect() : null;
-          picker.style.bottom = rect ? (window.innerHeight - rect.top + 8) + 'px' : '70px';
-          picker.style.top = 'auto';
-          picker.style.display = picker.style.display === 'block' ? 'none' : 'block';
-          closeMobileTray();
-        } else {
-          // Desktop path — delegate to the existing button
-          var btn = byId('emojiBtn');
-          if(btn){ closeMobileTray(); btn.click(); }
-        }
+        // The picker's wrapper is now kept rendered (at zero width) at
+        // every breakpoint, so one code path serves all widths.
+        var btn = byId('emojiBtn');
+        closeMobileTray();
+        if(btn) btn.click();
       });
     }
     var ts = byId('traySpellBtn');
@@ -7408,6 +8006,13 @@ function stopPollStatePolling(){
     scrollBottom();
   }
 
+  /* Scripts in their own block (the memo module) need these three. Kept
+     as a single explicit export list rather than scattering window.*
+     assignments through the file. */
+  window.appendMessage  = appendMessage;
+  window.setSendEnabled = setSendEnabled;
+  window.getCookie      = getCookie;
+
   /* ⚡ Shared message-DOM builder — used by appendMessage() for live
      WebSocket/poll messages AND by fetchOlderMessages() when prepending
      paginated history. Returns the node; caller decides where it goes. */
@@ -7513,6 +8118,16 @@ function stopPollStatePolling(){
         fw.appendChild(cap);
       }
       body.appendChild(fw);
+
+    } else if(mtype === 'command' && data.command_payload &&
+              data.command_payload.command_type === 'memo'){
+      /* ✉️ Same mount the server renders for history, filled from the
+         payload the serializer already sends. */
+      var memoMount = document.createElement('div');
+      memoMount.className = 'eo-memo-mount';
+      memoMount.setAttribute('data-memo', JSON.stringify(data.command_payload));
+      body.appendChild(memoMount);
+      if(window.EOMemo) window.EOMemo.hydrate(body);
 
     } else if(mtype === 'command' && data.command_payload &&
               data.command_payload.command_type === 'meeting_invite'){
@@ -9288,6 +9903,358 @@ if (spellcheckToggleBtn) {
       window.openNewDm();
     }
   });
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     ✉️ MEMO — compose, render, acknowledge
+     ───────────────────────────────────────────────────────────────────────
+     A memo is a real server-side object now (apps/messaging/memo.py), not
+     text with a marker in it. The subject and body are stored inside the
+     ENCRYPTED content field and split server-side, so this file never
+     needs to know the storage format — it just draws what the payload
+     says and posts back to two endpoints.
+
+         POST  <room>/memo/create/
+         POST  <room>/memo/<message_id>/ack/
+
+     Cards mount in three places and all three go through hydrate():
+       • server-rendered history   → <div class="eo-memo-mount" data-memo>
+       • live WebSocket messages   → same mount, built in buildMessageNode
+       • paginated older batches   → same, via the MutationObserver
+     ═══════════════════════════════════════════════════════════════════════ -->
+<script>
+(function(){
+  'use strict';
+
+  var ROOM_URL = window.location.pathname.replace(/\/+$/, '') + '/';
+  var PRIORITY_LABEL = { high:'High', normal:'Normal', low:'Low' };
+
+  function byId(id){ return document.getElementById(id); }
+  function esc(s){
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  function csrf(){
+    if(typeof window.getCookie === 'function') return window.getCookie('csrftoken');
+    var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? m[1] : '';
+  }
+
+  /* ── Compose ─────────────────────────────────────────────────────── */
+
+  function members(){
+    var raw = byId('roomMembersData');
+    if(!raw) return [];
+    try{
+      return (JSON.parse(raw.textContent || '[]') || [])
+        .filter(function(m){ return !m.is_self; });
+    }catch(_){ return []; }
+  }
+
+  function buildCcList(){
+    var wrap  = byId('memoCcList');
+    var group = byId('memoCcGroup');
+    if(!wrap) return;
+    var people = members();
+    // In a DM there is exactly one other person — a Cc box would be noise.
+    if(people.length < 2){
+      if(group) group.style.display = 'none';
+      wrap.innerHTML = '';
+      return;
+    }
+    if(group) group.style.display = '';
+    wrap.innerHTML = people.map(function(m){
+      return '<label class="memo-cc-row">' +
+               '<input type="checkbox" class="memo-cc-check" value="' + esc(m.id) + '">' +
+               '<span>' + esc(m.full_name || m.username) + '</span>' +
+             '</label>';
+    }).join('');
+  }
+
+  function openMemoComposer(prefillSubject){
+    buildCcList();
+    var f = {
+      subject: byId('memoSubject'), body: byId('memoBody'),
+      prio: byId('memoPriority'),   due: byId('memoDue'),
+      ack: byId('memoAck'),         email: byId('memoEmail')
+    };
+    if(f.subject) f.subject.value = prefillSubject || '';
+    if(f.body)    f.body.value = '';
+    if(f.prio)    f.prio.value = 'normal';
+    if(f.due)     f.due.value = '';
+    if(f.ack)     f.ack.checked = false;
+    if(f.email)   f.email.checked = false;
+
+    // Don't throw away a half-written message when the memo tool opens.
+    var chatInput = byId('chatInput');
+    if(chatInput && chatInput.value.trim() && f.body){
+      f.body.value = chatInput.value.trim();
+    }
+
+    setMemoError('');
+    if(typeof window.openModal === 'function') window.openModal('memoModal');
+    setTimeout(function(){ if(f.subject) f.subject.focus(); }, 60);
+  }
+  window.openMemoComposer = openMemoComposer;
+
+  function setMemoError(text){
+    var el = byId('memoError');
+    if(!el) return;
+    el.textContent = text || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+
+  function sendMemo(){
+    var subject = ((byId('memoSubject') || {}).value || '').trim();
+    var body    = ((byId('memoBody') || {}).value || '').trim();
+
+    if(!subject){ setMemoError('A memo needs a subject.');
+                  var s = byId('memoSubject'); if(s) s.focus(); return; }
+    if(!body){    setMemoError('A memo needs a message.');
+                  var b = byId('memoBody'); if(b) b.focus(); return; }
+
+    var btn = byId('sendMemoBtn');
+    if(btn){ btn.disabled = true; btn.innerHTML = 'Sending…'; }
+    setMemoError('');
+
+    var fd = new FormData();
+    fd.append('csrfmiddlewaretoken', csrf());
+    fd.append('subject', subject);
+    fd.append('body', body);
+    fd.append('priority', (byId('memoPriority') || {}).value || 'normal');
+    fd.append('due', (byId('memoDue') || {}).value || '');
+    if((byId('memoAck') || {}).checked)   fd.append('ack', '1');
+    if((byId('memoEmail') || {}).checked) fd.append('email', '1');
+    Array.prototype.forEach.call(
+      document.querySelectorAll('.memo-cc-check:checked'),
+      function(el){ fd.append('cc[]', el.value); }
+    );
+
+    fetch(ROOM_URL + 'memo/create/', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'same-origin',
+      body: fd
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d || !d.ok){
+        setMemoError((d && d.error) || 'The memo could not be sent.');
+        return;
+      }
+      if(typeof window.closeModal === 'function') window.closeModal('memoModal');
+      // The socket echo usually beats this; appendMessage de-duplicates
+      // on message id, so an optimistic append is safe either way.
+      if(typeof window.appendMessage === 'function' && d.payload){
+        try{ window.appendMessage(d.payload); }catch(_){}
+      }
+      var chatInput = byId('chatInput');
+      if(chatInput && chatInput.value.trim() === body){
+        chatInput.value = '';
+        chatInput.style.height = 'auto';
+        if(typeof window.setSendEnabled === 'function') window.setSendEnabled();
+      }
+    })
+    .catch(function(){ setMemoError('Network error — the memo was not sent.'); })
+    .finally(function(){
+      if(btn){ btn.disabled = false;
+               btn.innerHTML = '<i class="bi bi-send-fill"></i> Send memo'; }
+    });
+  }
+  window.sendMemo = sendMemo;
+
+  /* ── Render ──────────────────────────────────────────────────────── */
+
+  function prettyDate(iso){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+    try{
+      return new Date(iso + 'T00:00:00').toLocaleDateString(undefined,
+        { day:'numeric', month:'short', year:'numeric' });
+    }catch(_){ return iso; }
+  }
+
+  function cardHtml(memo){
+    var prio = ['high','normal','low'].indexOf(memo.priority) >= 0
+      ? memo.priority : 'normal';
+
+    var meta = [];
+    if(memo.due){
+      meta.push('<span class="memo-meta-item"><i class="bi bi-clock"></i>Reply by '
+                + esc(prettyDate(memo.due)) + '</span>');
+    }
+    if(memo.cc && memo.cc.length){
+      meta.push('<span class="memo-meta-item"><i class="bi bi-people"></i>Cc '
+                + esc(memo.cc.map(function(c){ return c.name; }).join(', ')) + '</span>');
+    }
+    if(memo.emailed_to){
+      meta.push('<span class="memo-meta-item"><i class="bi bi-envelope-check"></i>Emailed to '
+                + esc(memo.emailed_to) + '</span>');
+    }
+    if(memo.ack_requested){
+      meta.push('<span class="memo-meta-item"><i class="bi bi-check2-square"></i>'
+                + esc(memo.ack_count) + ' of ' + esc(memo.ack_total)
+                + ' acknowledged</span>');
+    }
+
+    var bodyHtml = (typeof window.renderRichText === 'function')
+      ? window.renderRichText(memo.body || '')
+      : esc(memo.body || '');
+
+    var actions = ['<button type="button" class="memo-action" data-memo-reply>' +
+                     '<i class="bi bi-reply"></i>Reply' +
+                   '</button>'];
+    if(memo.ack_requested){
+      actions.unshift(memo.acked_by_me
+        ? '<button type="button" class="memo-action" disabled>' +
+            '<i class="bi bi-check2-all"></i>Acknowledged</button>'
+        : '<button type="button" class="memo-action" data-memo-ack>' +
+            '<i class="bi bi-check2"></i>Acknowledge</button>');
+    }
+    actions.push('<button type="button" class="memo-action" data-memo-copy>' +
+                   '<i class="bi bi-clipboard"></i>Copy</button>');
+
+    return '' +
+      '<div class="memo-card">' +
+        '<div class="memo-head">' +
+          '<span class="memo-badge"><i class="bi bi-envelope-paper"></i>Memo</span>' +
+          (prio !== 'normal'
+            ? '<span class="memo-prio ' + prio + '">' + esc(PRIORITY_LABEL[prio])
+              + ' priority</span>'
+            : '') +
+        '</div>' +
+        '<div class="memo-subject">' + esc(memo.subject) + '</div>' +
+        (meta.length ? '<div class="memo-meta">' + meta.join('') + '</div>' : '') +
+        '<div class="memo-body">' + bodyHtml + '</div>' +
+        '<div class="memo-actions">' + actions.join('') + '</div>' +
+      '</div>';
+  }
+
+  function hydrate(root){
+    var scope = (root && root.querySelectorAll) ? root : document;
+    var mounts = scope.querySelectorAll('.eo-memo-mount:not([data-memo-ready])');
+    Array.prototype.forEach.call(mounts, function(el){
+      el.setAttribute('data-memo-ready', '1');
+      var memo;
+      try{ memo = JSON.parse(el.getAttribute('data-memo') || '{}'); }
+      catch(_){ return; }
+      if(!memo || !memo.subject) return;
+      paint(el, memo);
+    });
+  }
+
+  function paint(el, memo){
+    el._memo = memo;
+    el.setAttribute('data-memo-id', memo.message_id || '');
+    el.innerHTML = cardHtml(memo);
+  }
+
+  /* Repaint every mount showing this memo — a memo can appear twice on
+     one page (in history and pinned), and both tallies must agree. */
+  function repaint(memoId, memo){
+    var sel = '.eo-memo-mount[data-memo-id="' + String(memoId).replace(/"/g,'') + '"]';
+    Array.prototype.forEach.call(document.querySelectorAll(sel), function(el){
+      // Keep this viewer's own "acked_by_me" — the broadcast carries the
+      // acknowledger's perspective, not each recipient's.
+      var mine = el._memo && el._memo.acked_by_me;
+      var next = JSON.parse(JSON.stringify(memo));
+      next.acked_by_me = next.acked_by_me || mine || false;
+      paint(el, next);
+    });
+  }
+
+  /* ── Actions ─────────────────────────────────────────────────────── */
+
+  document.addEventListener('click', function(e){
+    var btn = e.target.closest && e.target.closest('.memo-action');
+    if(!btn || btn.disabled) return;
+    var mount = btn.closest('.eo-memo-mount');
+    var memo = mount && mount._memo;
+    if(!memo) return;
+
+    if(btn.hasAttribute('data-memo-reply')){
+      var subject = /^re:/i.test(memo.subject) ? memo.subject : 'Re: ' + memo.subject;
+      openMemoComposer(subject);
+      return;
+    }
+
+    if(btn.hasAttribute('data-memo-ack')){
+      btn.disabled = true;
+      var fd = new FormData();
+      fd.append('csrfmiddlewaretoken', csrf());
+      fetch(ROOM_URL + 'memo/' + memo.message_id + '/ack/', {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin',
+        body: fd
+      })
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d && d.ok && d.memo){
+          d.memo.acked_by_me = true;
+          repaint(memo.message_id, d.memo);
+        }else{
+          btn.disabled = false;
+        }
+      })
+      .catch(function(){ btn.disabled = false; });
+      return;
+    }
+
+    if(btn.hasAttribute('data-memo-copy')){
+      var plain = memo.subject + '\n\n' + memo.body;
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(plain).then(function(){
+          var old = btn.innerHTML;
+          btn.innerHTML = '<i class="bi bi-check2"></i>Copied';
+          setTimeout(function(){ btn.innerHTML = old; }, 1400);
+        }, function(){});
+      }
+    }
+  });
+
+  /* ── Boot ────────────────────────────────────────────────────────── */
+
+  window.EOMemo = {
+    hydrate: hydrate,
+    compose: openMemoComposer,
+    onSocketEvent: function(d){
+      if(d && d.type === 'memo_update' && d.memo){
+        repaint(d.message_id, d.memo);
+      }
+    }
+  };
+
+  function boot(){
+    hydrate(document);
+
+    var msgs = byId('chatMessages');
+    if(msgs && window.MutationObserver){
+      new MutationObserver(function(muts){
+        for(var i = 0; i < muts.length; i++){
+          if(muts[i].addedNodes && muts[i].addedNodes.length){
+            hydrate(msgs);
+            return;
+          }
+        }
+      }).observe(msgs, { childList:true, subtree:true });
+    }
+
+    // Ctrl/Cmd + Shift + M — write a memo without reaching for the menu.
+    document.addEventListener('keydown', function(e){
+      if((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'm' || e.key === 'M')){
+        e.preventDefault();
+        openMemoComposer();
+      }
+    });
+  }
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', boot);
+  }else{
+    boot();
+  }
 })();
 </script>
 

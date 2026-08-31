@@ -1,5 +1,6 @@
 from django.urls import path
 from apps.messaging import views
+from apps.messaging import memo
 from apps.messaging import floating_chat_views
 from apps.messaging import typing_views
 from apps.messaging import read_receipts
@@ -43,6 +44,16 @@ urlpatterns = [
 
     # 🔥 NEW → CLOSE POLL
     path('poll/<uuid:poll_id>/close/', views.ClosePollView.as_view(), name='close_chat_poll'),
+
+    # ─────────────────────────────────────────────
+    # ✉️ MEMOS (chat messages with a subject line)
+    # ─────────────────────────────────────────────
+    path('<uuid:room_id>/memo/create/',
+         memo.CreateMemoView.as_view(),
+         name='create_chat_memo'),
+    path('<uuid:room_id>/memo/<uuid:message_id>/ack/',
+         memo.AcknowledgeMemoView.as_view(),
+         name='ack_chat_memo'),
 
     path('notifications/poll/', views.NotificationPollView.as_view(), name='notifications_poll'),
 

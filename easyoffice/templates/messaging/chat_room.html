@@ -2482,6 +2482,148 @@
 @container chat (max-width:640px){
   .memo-grid{ grid-template-columns:1fr; }
 }
+
+/* ── 🖋️ Memo rich-text editor ─────────────────────────────────────────── */
+.memo-toolbar{
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:2px;
+  padding:5px 6px;
+  border:1px solid var(--eo-border);
+  border-bottom:0;
+  border-radius:10px 10px 0 0;
+  background:var(--eo-bg);
+}
+.memo-tool{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:30px;
+  height:30px;
+  padding:0 6px;
+  border:0;
+  border-radius:7px;
+  background:none;
+  color:var(--eo-text);
+  font-size:.92rem;
+  cursor:pointer;
+  position:relative;
+  transition:background .12s, color .12s;
+}
+.memo-tool:hover{ background:var(--eo-border); }
+.memo-tool.active{
+  background:color-mix(in srgb, var(--eo-accent) 16%, transparent);
+  color:var(--eo-accent);
+}
+.memo-tool-sep{
+  width:1px;
+  height:20px;
+  margin:0 4px;
+  background:var(--eo-border);
+  flex-shrink:0;
+}
+.memo-tool-select{
+  height:30px;
+  max-width:118px;
+  padding:0 6px;
+  border:1px solid var(--eo-border);
+  border-radius:7px;
+  background:var(--eo-surface);
+  color:var(--eo-text);
+  font-size:.76rem;
+  font-family:inherit;
+  cursor:pointer;
+}
+/* The colour buttons hide a real <input type=color> behind the icon so we
+   get the native picker on every platform, phones included. */
+.memo-tool-color{ padding-bottom:5px; }
+.memo-tool-color input[type=color]{
+  position:absolute;
+  inset:0;
+  opacity:0;
+  width:100%;
+  height:100%;
+  border:0;
+  padding:0;
+  cursor:pointer;
+}
+.memo-color-chip{
+  position:absolute;
+  left:5px; right:5px; bottom:3px;
+  height:3px;
+  border-radius:2px;
+  pointer-events:none;
+}
+.memo-editor{
+  min-height:170px;
+  max-height:340px;
+  overflow-y:auto;
+  padding:12px 14px;
+  border:1px solid var(--eo-border);
+  border-radius:0 0 10px 10px;
+  background:var(--eo-surface);
+  color:var(--eo-text);
+  font-size:.9rem;
+  line-height:1.6;
+  outline:none;
+}
+.memo-editor:focus{ border-color:var(--eo-accent); }
+.memo-editor:empty::before{
+  content:attr(data-placeholder);
+  color:var(--eo-text-muted);
+  pointer-events:none;
+}
+.memo-editor p{ margin:0 0 .6em; }
+.memo-editor p:last-child{ margin-bottom:0; }
+.memo-editor ul,.memo-editor ol{ margin:0 0 .6em; padding-left:1.4em; }
+.memo-editor blockquote{
+  margin:0 0 .6em;
+  padding-left:12px;
+  border-left:3px solid var(--eo-border);
+  color:var(--eo-text-muted);
+}
+
+/* Formatted memo body as it appears in the conversation. Note the
+   white-space reset: a plain body relies on pre-wrap, but a formatted one
+   carries its own <p> and <br>, and pre-wrap on top of those doubles
+   every gap. */
+.memo-body.rich{ white-space:normal; }
+.memo-body.rich p{ margin:0 0 .6em; }
+.memo-body.rich p:last-child{ margin-bottom:0; }
+.memo-body.rich ul,.memo-body.rich ol{ margin:0 0 .6em; padding-left:1.35em; }
+.memo-body.rich li{ margin:.15em 0; }
+.memo-body.rich blockquote{
+  margin:0 0 .6em;
+  padding:2px 0 2px 11px;
+  border-left:3px solid var(--eo-accent);
+  color:var(--eo-text-muted);
+}
+.memo-body.rich a{ color:var(--eo-accent); text-decoration:underline; }
+.memo-body.rich code{
+  background:var(--eo-bg);
+  border:1px solid var(--eo-border);
+  border-radius:4px;
+  padding:0 4px;
+  font-size:.9em;
+}
+.memo-body.rich pre{
+  background:var(--eo-bg);
+  border:1px solid var(--eo-border);
+  border-radius:8px;
+  padding:8px 10px;
+  overflow-x:auto;
+  margin:0 0 .6em;
+}
+.memo-body.rich mark{ background:#fde68a; color:#111827; padding:0 2px; }
+.memo-body.rich h4{ margin:0 0 .4em; font-size:1.02em; font-weight:700; }
+
+@media(max-width:640px){
+  .memo-toolbar{ gap:1px; padding:4px; }
+  .memo-tool{ min-width:32px; height:32px; }
+  .memo-tool-select{ max-width:96px; }
+  .memo-editor{ min-height:140px; font-size:1rem; }
+}
 </style>
 
 <div class="msg-layout">
@@ -3883,8 +4025,73 @@
 
       <div class="eo-form-group">
         <label class="eo-form-label" for="memoBody">Message</label>
-        <textarea id="memoBody" class="eo-form-control" rows="7"
-                  placeholder="Write the memo…" style="resize:vertical;line-height:1.55"></textarea>
+
+        <!-- 🖋️ Formatting toolbar. Everything here maps to a style the
+             server's allowlist accepts; nothing else can survive the
+             round trip, so the toolbar and the sanitiser stay in step. -->
+        <div class="memo-toolbar" id="memoToolbar" role="toolbar" aria-label="Formatting">
+          <select class="memo-tool-select" id="memoFont" title="Font" aria-label="Font">
+            <option value="">Font</option>
+            <option value="Arial">Arial</option>
+            <option value="Helvetica">Helvetica</option>
+            <option value="Georgia">Georgia</option>
+            <option value="Times New Roman">Times New Roman</option>
+            <option value="Courier New">Courier New</option>
+            <option value="Verdana">Verdana</option>
+            <option value="Tahoma">Tahoma</option>
+            <option value="Trebuchet MS">Trebuchet MS</option>
+            <option value="Calibri">Calibri</option>
+            <option value="Cambria">Cambria</option>
+            <option value="Segoe UI">Segoe UI</option>
+          </select>
+
+          <select class="memo-tool-select" id="memoSize" title="Size" aria-label="Text size">
+            <option value="">Size</option>
+            <option value="12px">Small</option>
+            <option value="14px">Normal</option>
+            <option value="18px">Large</option>
+            <option value="24px">Heading</option>
+            <option value="32px">Title</option>
+          </select>
+
+          <span class="memo-tool-sep"></span>
+
+          <button type="button" class="memo-tool" data-cmd="bold" title="Bold (Ctrl+B)"><i class="bi bi-type-bold"></i></button>
+          <button type="button" class="memo-tool" data-cmd="italic" title="Italic (Ctrl+I)"><i class="bi bi-type-italic"></i></button>
+          <button type="button" class="memo-tool" data-cmd="underline" title="Underline (Ctrl+U)"><i class="bi bi-type-underline"></i></button>
+          <button type="button" class="memo-tool" data-cmd="strikeThrough" title="Strikethrough"><i class="bi bi-type-strikethrough"></i></button>
+
+          <span class="memo-tool-sep"></span>
+
+          <label class="memo-tool memo-tool-color" title="Text colour">
+            <i class="bi bi-fonts"></i>
+            <input type="color" id="memoColor" value="#1e293b" aria-label="Text colour">
+            <span class="memo-color-chip" id="memoColorChip" style="background:#1e293b"></span>
+          </label>
+          <label class="memo-tool memo-tool-color" title="Highlight">
+            <i class="bi bi-highlighter"></i>
+            <input type="color" id="memoHighlight" value="#fde68a" aria-label="Highlight colour">
+            <span class="memo-color-chip" id="memoHighlightChip" style="background:#fde68a"></span>
+          </label>
+
+          <span class="memo-tool-sep"></span>
+
+          <button type="button" class="memo-tool" data-cmd="insertUnorderedList" title="Bulleted list"><i class="bi bi-list-ul"></i></button>
+          <button type="button" class="memo-tool" data-cmd="insertOrderedList" title="Numbered list"><i class="bi bi-list-ol"></i></button>
+          <button type="button" class="memo-tool" data-cmd="justifyLeft" title="Align left"><i class="bi bi-text-left"></i></button>
+          <button type="button" class="memo-tool" data-cmd="justifyCenter" title="Centre"><i class="bi bi-text-center"></i></button>
+          <button type="button" class="memo-tool" data-cmd="justifyRight" title="Align right"><i class="bi bi-text-right"></i></button>
+
+          <span class="memo-tool-sep"></span>
+
+          <button type="button" class="memo-tool" id="memoLinkBtn" title="Insert link"><i class="bi bi-link-45deg"></i></button>
+          <button type="button" class="memo-tool" data-cmd="removeFormat" title="Clear formatting"><i class="bi bi-eraser"></i></button>
+        </div>
+
+        <div class="memo-editor" id="memoBody" contenteditable="true" role="textbox"
+             aria-multiline="true" aria-label="Memo message"
+             data-placeholder="Write the memo…"></div>
+        <div class="memo-preview-line" id="memoCount"></div>
       </div>
 
       <div class="eo-form-group">
@@ -9942,6 +10149,255 @@ if (spellcheckToggleBtn) {
     return m ? m[1] : '';
   }
 
+  /* ── 🖋️ Rich text ─────────────────────────────────────────────────
+     A mirror of the server's allowlist (apps/messaging/memo.py). The
+     SERVER is the one that decides what gets stored — this exists so
+     that (a) pasted markup is cleaned before it lands in the editor,
+     and (b) nothing reaches innerHTML unfiltered even if a body somehow
+     entered the database by another route. Two checks, not one, because
+     the cost is a few lines and the failure mode is stored XSS. */
+
+  var RICH_TAGS = {
+    P:1, BR:1, DIV:1, SPAN:1, B:1, STRONG:1, I:1, EM:1, U:1, S:1, STRIKE:1,
+    DEL:1, MARK:1, SUB:1, SUP:1, UL:1, OL:1, LI:1, BLOCKQUOTE:1, CODE:1,
+    PRE:1, A:1, H4:1
+  };
+  var RICH_DROP = { SCRIPT:1, STYLE:1, IFRAME:1, OBJECT:1, EMBED:1, SVG:1,
+                    MATH:1, TEMPLATE:1, NOSCRIPT:1, LINK:1, META:1, IMG:1 };
+  var RICH_STYLE_PROPS = ['color','background-color','font-family','font-size',
+                          'font-weight','font-style','text-decoration','text-align'];
+  var RICH_BAD_VALUE = /url\s*\(|expression\s*\(|javascript\s*:|@import|\/\*/i;
+
+  function cleanStyle(el){
+    var keep = [];
+    for(var i = 0; i < RICH_STYLE_PROPS.length; i++){
+      var prop = RICH_STYLE_PROPS[i];
+      var val = '';
+      try{ val = el.style.getPropertyValue(prop); }catch(_){ val = ''; }
+      if(!val || val.length > 120 || RICH_BAD_VALUE.test(val)) continue;
+      keep.push(prop + ':' + val);
+    }
+    el.removeAttribute('style');
+    if(keep.length) el.setAttribute('style', keep.join(';'));
+  }
+
+  function sanitizeNode(node){
+    var kids = Array.prototype.slice.call(node.childNodes);
+    for(var i = 0; i < kids.length; i++){
+      var child = kids[i];
+      if(child.nodeType === 3) continue;                  // text
+      if(child.nodeType !== 1){ child.remove(); continue; } // comments etc.
+
+      var tag = child.tagName;
+      if(RICH_DROP[tag]){ child.remove(); continue; }
+
+      if(!RICH_TAGS[tag]){
+        // Unwrap: keep the words, lose the element.
+        while(child.firstChild) node.insertBefore(child.firstChild, child);
+        child.remove();
+        continue;
+      }
+
+      // Strip every attribute, then put back only the ones we publish.
+      var href = (tag === 'A') ? (child.getAttribute('href') || '') : '';
+      var styleAttr = child.getAttribute('style') || '';
+      var attrs = Array.prototype.slice.call(child.attributes);
+      for(var a = 0; a < attrs.length; a++) child.removeAttribute(attrs[a].name);
+
+      if(styleAttr){ child.setAttribute('style', styleAttr); cleanStyle(child); }
+
+      if(tag === 'A'){
+        var low = href.trim().toLowerCase();
+        if(low.indexOf('http://') === 0 || low.indexOf('https://') === 0 ||
+           low.indexOf('mailto:') === 0 || low.indexOf('/') === 0){
+          child.setAttribute('href', href.trim());
+          child.setAttribute('target', '_blank');
+          child.setAttribute('rel', 'noopener noreferrer nofollow');
+        }else{
+          while(child.firstChild) node.insertBefore(child.firstChild, child);
+          child.remove();
+          continue;
+        }
+      }
+      sanitizeNode(child);
+    }
+    return node;
+  }
+
+  function sanitizeHtml(html){
+    var doc = document.implementation.createHTMLDocument('m');
+    doc.body.innerHTML = String(html || '');
+    return sanitizeNode(doc.body).innerHTML;
+  }
+
+  function editor(){ return byId('memoBody'); }
+
+  function editorHtml(){
+    var el = editor();
+    return el ? sanitizeHtml(el.innerHTML) : '';
+  }
+
+  function editorText(){
+    var el = editor();
+    return el ? (el.innerText || el.textContent || '').trim() : '';
+  }
+
+  function exec(cmd, value){
+    var el = editor();
+    if(el) el.focus();
+    try{ document.execCommand(cmd, false, value === undefined ? null : value); }
+    catch(_){}
+    syncToolbarState();
+  }
+
+  /* Light up the buttons that apply where the caret currently is. */
+  function syncToolbarState(){
+    var map = { bold:'bold', italic:'italic', underline:'underline',
+                strikeThrough:'strikeThrough',
+                insertUnorderedList:'insertUnorderedList',
+                insertOrderedList:'insertOrderedList',
+                justifyLeft:'justifyLeft', justifyCenter:'justifyCenter',
+                justifyRight:'justifyRight' };
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#memoToolbar .memo-tool[data-cmd]'),
+      function(btn){
+        var cmd = btn.getAttribute('data-cmd');
+        if(!map[cmd]) return;
+        var on = false;
+        try{ on = document.queryCommandState(map[cmd]); }catch(_){}
+        btn.classList.toggle('active', !!on);
+      });
+  }
+
+  function initEditor(){
+    var el = editor();
+    if(!el || el._memoWired) return;
+    el._memoWired = true;
+
+    // styleWithCSS makes execCommand emit <span style> instead of the
+    // legacy <font> element, which is what the server allowlist accepts.
+    try{ document.execCommand('styleWithCSS', false, true); }catch(_){}
+
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#memoToolbar .memo-tool[data-cmd]'),
+      function(btn){
+        // mousedown, not click: click fires after the editor has already
+        // lost the selection, so the command would apply to nothing.
+        btn.addEventListener('mousedown', function(e){
+          e.preventDefault();
+          exec(btn.getAttribute('data-cmd'));
+        });
+      });
+
+    var font = byId('memoFont');
+    if(font) font.addEventListener('change', function(){
+      if(font.value) exec('fontName', font.value);
+      font.value = '';
+    });
+
+    var size = byId('memoSize');
+    if(size) size.addEventListener('change', function(){
+      if(size.value) applyStyle('font-size', size.value);
+      size.value = '';
+    });
+
+    wireColor('memoColor', 'memoColorChip', 'foreColor');
+    wireColor('memoHighlight', 'memoHighlightChip', 'hiliteColor');
+
+    var link = byId('memoLinkBtn');
+    if(link) link.addEventListener('mousedown', function(e){
+      e.preventDefault();
+      var url = window.prompt('Link address', 'https://');
+      if(!url) return;
+      if(!/^(https?:\/\/|mailto:|\/)/i.test(url)){
+        setMemoError('Links must start with http://, https:// or mailto:');
+        return;
+      }
+      exec('createLink', url);
+    });
+
+    // Paste arrives from anywhere — Word, another site, a mail client.
+    // Clean it here so the editor only ever holds markup the server will
+    // accept, and the user sees now what they'll get after sending.
+    el.addEventListener('paste', function(e){
+      var cb = e.clipboardData || window.clipboardData;
+      if(!cb) return;
+      e.preventDefault();
+      var html = '';
+      try{ html = cb.getData('text/html'); }catch(_){}
+      if(html){
+        document.execCommand('insertHTML', false, sanitizeHtml(html));
+      }else{
+        document.execCommand('insertText', false, cb.getData('text/plain') || '');
+      }
+    });
+
+    el.addEventListener('keyup', syncToolbarState);
+    el.addEventListener('mouseup', syncToolbarState);
+    el.addEventListener('input', updateCount);
+
+    el.addEventListener('keydown', function(e){
+      // Ctrl/Cmd+Enter sends, matching the main composer's muscle memory.
+      if((e.ctrlKey || e.metaKey) && e.key === 'Enter'){
+        e.preventDefault();
+        sendMemo();
+      }
+    });
+  }
+
+  /* execCommand has no font-size-in-pixels command (fontSize takes 1–7),
+     so wrap the selection ourselves. */
+  function applyStyle(prop, value){
+    var el = editor();
+    if(!el) return;
+    el.focus();
+    var sel = window.getSelection();
+    if(!sel || !sel.rangeCount || sel.isCollapsed){
+      // Nothing selected — apply to the whole editor so "set the size"
+      // does something visible rather than silently no-op.
+      el.style.setProperty(prop, value);
+      return;
+    }
+    var range = sel.getRangeAt(0);
+    var span = document.createElement('span');
+    span.style.setProperty(prop, value);
+    try{
+      span.appendChild(range.extractContents());
+      range.insertNode(span);
+      sel.removeAllRanges();
+      var after = document.createRange();
+      after.selectNodeContents(span);
+      sel.addRange(after);
+    }catch(_){}
+  }
+
+  function wireColor(inputId, chipId, command){
+    var input = byId(inputId);
+    var chip  = byId(chipId);
+    if(!input) return;
+    input.addEventListener('input', function(){
+      if(chip) chip.style.background = input.value;
+    });
+    input.addEventListener('change', function(){
+      if(chip) chip.style.background = input.value;
+      exec(command, input.value);
+    });
+  }
+
+  function updateCount(){
+    var el = byId('memoCount');
+    if(!el) return;
+    var n = editorText().length;
+    el.textContent = n ? (n + ' characters') : '';
+  }
+
+  function setMemoError(text){
+    var el = byId('memoError');
+    if(!el) return;
+    el.textContent = text || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+
   /* ── Compose ─────────────────────────────────────────────────────── */
 
   function members(){
@@ -9975,13 +10431,14 @@ if (spellcheckToggleBtn) {
 
   function openMemoComposer(prefillSubject){
     buildCcList();
+    initEditor();
     var f = {
       subject: byId('memoSubject'), body: byId('memoBody'),
       prio: byId('memoPriority'),   due: byId('memoDue'),
       ack: byId('memoAck'),         email: byId('memoEmail')
     };
     if(f.subject) f.subject.value = prefillSubject || '';
-    if(f.body)    f.body.value = '';
+    if(f.body){ f.body.innerHTML = ''; f.body.style.cssText = ''; }
     if(f.prio)    f.prio.value = 'normal';
     if(f.due)     f.due.value = '';
     if(f.ack)     f.ack.checked = false;
@@ -9990,30 +10447,26 @@ if (spellcheckToggleBtn) {
     // Don't throw away a half-written message when the memo tool opens.
     var chatInput = byId('chatInput');
     if(chatInput && chatInput.value.trim() && f.body){
-      f.body.value = chatInput.value.trim();
+      f.body.textContent = chatInput.value.trim();
     }
 
     setMemoError('');
+    updateCount();
+    syncToolbarState();
     if(typeof window.openModal === 'function') window.openModal('memoModal');
     setTimeout(function(){ if(f.subject) f.subject.focus(); }, 60);
   }
   window.openMemoComposer = openMemoComposer;
 
-  function setMemoError(text){
-    var el = byId('memoError');
-    if(!el) return;
-    el.textContent = text || '';
-    el.style.display = text ? 'block' : 'none';
-  }
-
   function sendMemo(){
     var subject = ((byId('memoSubject') || {}).value || '').trim();
-    var body    = ((byId('memoBody') || {}).value || '').trim();
+    var html    = editorHtml();
+    var plain   = editorText();
 
     if(!subject){ setMemoError('A memo needs a subject.');
                   var s = byId('memoSubject'); if(s) s.focus(); return; }
-    if(!body){    setMemoError('A memo needs a message.');
-                  var b = byId('memoBody'); if(b) b.focus(); return; }
+    if(!plain){   setMemoError('A memo needs a message.');
+                  var b = editor(); if(b) b.focus(); return; }
 
     var btn = byId('sendMemoBtn');
     if(btn){ btn.disabled = true; btn.innerHTML = 'Sending…'; }
@@ -10022,7 +10475,8 @@ if (spellcheckToggleBtn) {
     var fd = new FormData();
     fd.append('csrfmiddlewaretoken', csrf());
     fd.append('subject', subject);
-    fd.append('body', body);
+    fd.append('body', html);
+    fd.append('body_format', 'html');
     fd.append('priority', (byId('memoPriority') || {}).value || 'normal');
     fd.append('due', (byId('memoDue') || {}).value || '');
     if((byId('memoAck') || {}).checked)   fd.append('ack', '1');
@@ -10051,7 +10505,7 @@ if (spellcheckToggleBtn) {
         try{ window.appendMessage(d.payload); }catch(_){}
       }
       var chatInput = byId('chatInput');
-      if(chatInput && chatInput.value.trim() === body){
+      if(chatInput && chatInput.value.trim() === plain){
         chatInput.value = '';
         chatInput.style.height = 'auto';
         if(typeof window.setSendEnabled === 'function') window.setSendEnabled();
@@ -10098,9 +10552,15 @@ if (spellcheckToggleBtn) {
                 + ' acknowledged</span>');
     }
 
-    var bodyHtml = (typeof window.renderRichText === 'function')
-      ? window.renderRichText(memo.body || '')
-      : esc(memo.body || '');
+    // A formatted body is markup the SERVER already allowlisted; it goes
+    // through the client sanitiser as well before touching innerHTML. A
+    // plain body keeps the old path so links and @mentions still light up.
+    var rich = memo.body_format === 'html';
+    var bodyHtml = rich
+      ? sanitizeHtml(memo.body || '')
+      : ((typeof window.renderRichText === 'function')
+          ? window.renderRichText(memo.body || '')
+          : esc(memo.body || ''));
 
     var actions = ['<button type="button" class="memo-action" data-memo-reply>' +
                      '<i class="bi bi-reply"></i>Reply' +

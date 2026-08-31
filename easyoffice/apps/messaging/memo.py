@@ -81,7 +81,9 @@ SETTINGS
 
 import json
 import logging
+import re
 import threading
+from html.parser import HTMLParser
 
 from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -105,6 +107,305 @@ DEFAULT_BODY_MAX = 5000
 # line. Written only by build_content() and read only by split_content(),
 # so the format never leaks into calling code.
 _SEPARATOR = '\n\n'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 🖋️ RICH TEXT
+# ─────────────────────────────────────────────────────────────────────────────
+# A formatted memo body is stored as a small, strictly-defined subset of
+# HTML. That subset is enforced HERE, on write, by an allowlist parser —
+# never by the browser, and never by trusting what the composer sent.
+#
+# This matters more than it usually would. A memo body is rendered with
+# innerHTML into every recipient's page, so anything that survives this
+# function runs in their session. The rule is therefore: an element, an
+# attribute or a CSS property that is not explicitly named below does not
+# survive, and no value is passed through without being matched against a
+# pattern. Dropping a tag keeps its TEXT — a memo never silently loses
+# words, only formatting.
+#
+# bleach would do the same job; this is written by hand so the app gains
+# no new dependency and the exact allowlist is readable in one screen.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Tags kept as tags. Everything else is unwrapped (its text is kept).
+ALLOWED_TAGS = {
+    'p', 'br', 'div', 'span',
+    'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'del', 'mark', 'sub', 'sup',
+    'ul', 'ol', 'li', 'blockquote', 'code', 'pre', 'a', 'h4',
+}
+
+# Tags whose *content* is dropped too — text inside them is never wanted.
+DROP_WITH_CONTENT = {'script', 'style', 'iframe', 'object', 'embed', 'svg',
+                     'math', 'template', 'noscript', 'title'}
+
+VOID_TAGS = {'br'}
+
+# Attributes, per tag. 'style' is filtered property-by-property below.
+ALLOWED_ATTRS = {
+    '*': {'style'},
+    'a': {'href', 'title'},
+}
+
+ALLOWED_STYLE_PROPS = {
+    'color', 'background-color', 'font-family', 'font-size', 'font-weight',
+    'font-style', 'text-decoration', 'text-decoration-line', 'text-align',
+}
+
+# Colours: hex or rgb()/rgba() only. Named colours are allowed from a short
+# list — "red" is fine, but an arbitrary identifier is not, because that is
+# where CSS-wide keywords and vendor oddities creep in.
+_COLOR_NAMES = {
+    'black', 'white', 'red', 'green', 'blue', 'yellow', 'orange', 'purple',
+    'grey', 'gray', 'brown', 'pink', 'teal', 'navy', 'maroon', 'olive',
+    'silver', 'lime', 'aqua', 'cyan', 'magenta', 'gold', 'transparent',
+    'inherit', 'currentcolor',
+}
+_RE_HEX = re.compile(r'^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$')
+_RE_RGB = re.compile(
+    r'^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(?:,\s*(?:0|1|0?\.\d+)\s*)?\)$'
+)
+_RE_FONT_SIZE = re.compile(r'^(\d{1,3}(?:\.\d+)?)(px|pt|em|rem|%)$')
+_FONT_SIZE_BOUNDS = {          # (min, max) per unit — a memo is a message,
+    'px':  (8, 48),            # not a poster. Anything outside is dropped
+    'pt':  (6, 36),            # rather than clamped, so the composer's own
+    'em':  (0.5, 3),           # presets always land inside the range.
+    'rem': (0.5, 3),
+    '%':   (50, 300),
+}
+_RE_FONT_WEIGHT = re.compile(r'^(?:normal|bold|bolder|lighter|[1-9]00)$')
+
+# Font families are matched against a fixed list rather than pattern-checked:
+# a family name is free text, and free text in a style attribute is how
+# url() and expression() get in.
+DEFAULT_FONTS = [
+    'Arial', 'Helvetica', 'Georgia', 'Times New Roman', 'Courier New',
+    'Verdana', 'Tahoma', 'Trebuchet MS', 'Calibri', 'Cambria',
+    'Segoe UI', 'Roboto', 'Inter', 'system-ui', 'monospace', 'serif',
+    'sans-serif',
+]
+
+_DANGEROUS = re.compile(r'(?:url\s*\(|expression\s*\(|javascript\s*:|/\*|\*/|@import|&#)', re.I)
+
+MAX_HTML_BYTES = 200_000       # a sane ceiling on one memo's markup
+MAX_NESTING = 20
+
+
+def allowed_fonts():
+    fonts = getattr(settings, 'MESSAGING_MEMO_FONTS', None) or DEFAULT_FONTS
+    return [str(f) for f in fonts]
+
+
+def _font_family_ok(value):
+    """True when every family in the stack is one we publish."""
+    known = {f.lower() for f in allowed_fonts()}
+    known |= {'serif', 'sans-serif', 'monospace', 'cursive', 'system-ui', 'inherit'}
+    for part in value.split(','):
+        name = part.strip().strip('\'"').lower()
+        if not name or name not in known:
+            return False
+    return True
+
+
+def _style_value_ok(prop, value):
+    value = value.strip()
+    if not value or len(value) > 120 or _DANGEROUS.search(value):
+        return False
+
+    if prop in ('color', 'background-color'):
+        v = value.lower()
+        return bool(_RE_HEX.match(value) or _RE_RGB.match(v) or v in _COLOR_NAMES)
+    if prop == 'font-family':
+        return _font_family_ok(value)
+    if prop == 'font-size':
+        match = _RE_FONT_SIZE.match(value)
+        if match:
+            try:
+                number = float(match.group(1))
+            except ValueError:
+                return False
+            low, high = _FONT_SIZE_BOUNDS[match.group(2)]
+            return low <= number <= high
+        return value.lower() in (
+            'small', 'medium', 'large', 'x-large', 'smaller', 'larger')
+    if prop == 'font-weight':
+        return bool(_RE_FONT_WEIGHT.match(value.lower()))
+    if prop == 'font-style':
+        return value.lower() in ('normal', 'italic', 'oblique')
+    if prop in ('text-decoration', 'text-decoration-line'):
+        parts = value.lower().split()
+        return bool(parts) and all(
+            p in ('underline', 'line-through', 'overline', 'none') for p in parts)
+    if prop == 'text-align':
+        return value.lower() in ('left', 'right', 'center', 'justify')
+    return False
+
+
+def _clean_style(raw):
+    """Filter a style attribute down to the properties we publish."""
+    kept = []
+    for declaration in (raw or '').split(';'):
+        if ':' not in declaration:
+            continue
+        prop, _, value = declaration.partition(':')
+        prop = prop.strip().lower()
+        if prop not in ALLOWED_STYLE_PROPS:
+            continue
+        if _style_value_ok(prop, value):
+            kept.append(f'{prop}:{value.strip()}')
+    return ';'.join(kept)
+
+
+def _clean_href(raw):
+    href = (raw or '').strip()
+    if not href or len(href) > 2000:
+        return ''
+    low = href.lower().replace('\t', '').replace('\n', '').replace('\r', '')
+    if low.startswith(('http://', 'https://', 'mailto:', '/')):
+        return href
+    return ''      # javascript:, data:, vbscript:, protocol-relative, …
+
+
+class _Sanitizer(HTMLParser):
+    """Allowlist rewriter. Unknown tags are unwrapped, their text kept."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out = []
+        self.open_stack = []
+        self.skip_depth = 0          # inside <script> etc.
+
+    # ── helpers ──────────────────────────────────────────────────────────
+    def _emit(self, text):
+        self.out.append(text)
+
+    def _attrs_for(self, tag, attrs):
+        allowed = ALLOWED_ATTRS.get('*', set()) | ALLOWED_ATTRS.get(tag, set())
+        rendered = []
+        for name, value in attrs:
+            name = (name or '').lower()
+            if name not in allowed:
+                continue
+            if name == 'style':
+                cleaned = _clean_style(value)
+                if cleaned:
+                    rendered.append(f'style="{escape(cleaned)}"')
+            elif name == 'href':
+                href = _clean_href(value)
+                if href:
+                    rendered.append(f'href="{escape(href)}"')
+            elif name == 'title':
+                rendered.append(f'title="{escape((value or "")[:200])}"')
+        if tag == 'a':
+            if not any(r.startswith('href=') for r in rendered):
+                return None          # a link with no usable target is just text
+            # Never hand a memo link opener-access to the chat window.
+            rendered.append('target="_blank"')
+            rendered.append('rel="noopener noreferrer nofollow"')
+        return rendered
+
+    # ── parser callbacks ─────────────────────────────────────────────────
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if self.skip_depth or tag in DROP_WITH_CONTENT:
+            self.skip_depth += 1
+            return
+        if tag not in ALLOWED_TAGS or len(self.open_stack) >= MAX_NESTING:
+            return                    # unwrap: children still get emitted
+        rendered = self._attrs_for(tag, attrs)
+        if rendered is None:
+            return
+        if tag in VOID_TAGS:
+            self._emit(f'<{tag}>')
+            return
+        self.open_stack.append(tag)
+        self._emit('<' + tag + (' ' + ' '.join(rendered) if rendered else '') + '>')
+
+    def handle_startendtag(self, tag, attrs):
+        tag = tag.lower()
+        if self.skip_depth:
+            return
+        if tag in VOID_TAGS:
+            self._emit(f'<{tag}>')
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if self.skip_depth:
+            self.skip_depth -= 1
+            return
+        if tag in VOID_TAGS or tag not in ALLOWED_TAGS:
+            return
+        if tag in self.open_stack:
+            # Close everything opened inside it too, so a stray </p> can't
+            # leave the document unbalanced.
+            while self.open_stack:
+                open_tag = self.open_stack.pop()
+                self._emit(f'</{open_tag}>')
+                if open_tag == tag:
+                    break
+
+    def handle_data(self, data):
+        if self.skip_depth:
+            return
+        self._emit(escape(data))
+
+    def handle_comment(self, data):
+        pass
+
+    def handle_decl(self, decl):
+        pass
+
+    def unknown_decl(self, data):
+        pass
+
+    def result(self):
+        while self.open_stack:
+            self._emit(f'</{self.open_stack.pop()}>')
+        return ''.join(self.out)
+
+
+def sanitize_html(html: str) -> str:
+    """
+    Return *html* reduced to the memo formatting subset.
+
+    Safe to call on anything, including markup this app never produced —
+    a paste out of Word, or a hand-crafted request body.
+    """
+    if not html:
+        return ''
+    if len(html) > MAX_HTML_BYTES:
+        html = html[:MAX_HTML_BYTES]
+    parser = _Sanitizer()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:
+        log.exception('memo: sanitiser failed — falling back to plain text')
+        return escape(strip_html(html))
+    return parser.result().strip()
+
+
+_RE_TAG = re.compile(r'<[^>]+>')
+_RE_BLOCK_BREAK = re.compile(r'</\s*(?:p|div|li|blockquote|h4|pre)\s*>|<\s*br\s*/?>', re.I)
+
+
+def strip_html(html: str) -> str:
+    """
+    Plain-text rendering of a memo body, for previews, notifications,
+    mention parsing and the clipboard. Block ends become newlines so the
+    text doesn't run together.
+    """
+    if not html:
+        return ''
+    import html as _html
+    text = _RE_BLOCK_BREAK.sub('\n', html)
+    text = _RE_TAG.sub('', text)
+    text = _html.unescape(text)
+    return re.sub(r'\n{3,}', '\n\n', text).strip()
+
+
+def looks_like_html(value: str) -> bool:
+    return bool(value) and bool(re.search(r'<(?:/?[a-zA-Z]+)[^>]*>', value))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -172,11 +473,23 @@ def memo_view_payload(msg, viewer=None) -> dict:
     if priority not in PRIORITIES:
         priority = 'normal'
 
+    # Older memos predate rich text and have no marker; anything without
+    # one is plain text, which the client escapes. Re-sanitising on READ
+    # as well as write costs little and means a body that somehow got into
+    # the database another way still can't put script into a page.
+    body_format = payload.get('body_format')
+    if body_format != 'html':
+        body_format = 'html' if looks_like_html(body) and payload.get('body_format') else 'text'
+    if body_format == 'html':
+        body = sanitize_html(body)
+
     return {
         'command_type':   COMMAND_TYPE,
         'message_id':     str(msg.pk),
         'subject':        subject,
         'body':           body,
+        'body_format':    body_format,
+        'body_text':      strip_html(body) if body_format == 'html' else body,
         'priority':       priority,
         'due':            payload.get('due') or '',
         'ack_requested':  bool(payload.get('ack_requested')),
@@ -236,23 +549,44 @@ class MemoError(ValueError):
 
 
 def create_memo(room, sender, *, subject, body, priority='normal', due='',
-                ack_requested=False, cc_users=None, reply_to=None):
+                ack_requested=False, cc_users=None, reply_to=None,
+                body_format='text'):
     """
     Create and persist a memo message. Returns the ChatMessage.
+
+    ``body_format`` is 'html' for a formatted body (bold, colour, fonts)
+    or 'text' for plain. HTML is passed through sanitize_html() here —
+    this is the ONLY write path into a memo body, and EditMessageView
+    refuses non-text messages, so nothing can reach a recipient's page
+    without going through the allowlist.
 
     Raises MemoError with a user-facing message on bad input.
     """
     subject = ' '.join((subject or '').split())
-    body = (body or '').strip()
+    body = body or ''
+
+    body_format = 'html' if body_format == 'html' else 'text'
+    if body_format == 'html':
+        body = sanitize_html(body)
+        plain = strip_html(body)
+    else:
+        body = body.strip()
+        plain = body
 
     if not subject:
         raise MemoError('A memo needs a subject.')
-    if not body:
+    if not plain.strip():
         raise MemoError('A memo needs a message.')
     if len(subject) > SUBJECT_MAX:
         subject = subject[:SUBJECT_MAX]
-    if len(body) > _body_max():
-        body = body[:_body_max()]
+    if len(plain) > _body_max():
+        # Measure the limit against readable text, not markup — otherwise
+        # a heavily formatted memo hits the ceiling far sooner than a
+        # plain one of the same length, which reads as a bug.
+        raise MemoError(
+            f'That memo is too long ({len(plain)} characters; '
+            f'the limit is {_body_max()}).'
+        )
 
     priority = (priority or 'normal').lower()
     if priority not in PRIORITIES:
@@ -286,6 +620,7 @@ def create_memo(room, sender, *, subject, body, priority='normal', due='',
             'priority':      priority,
             'due':           due,
             'ack_requested': bool(ack_requested),
+            'body_format':   body_format,
             'cc':            cc,
             'acks':          {},
             'emailed_to':    0,
@@ -333,12 +668,18 @@ def _email_enabled():
     return bool(getattr(settings, 'MESSAGING_MEMO_EMAIL_ENABLED', True))
 
 
-def _memo_email_html(*, subject, body, sender_name, room_name, priority,
-                     due, ack_requested, org_name, chat_url):
+def _memo_email_html(*, subject, body, body_format, sender_name, room_name,
+                     priority, due, ack_requested, org_name, chat_url):
     """
     Every interpolated value is escaped — this is assembled as HTML and
     lands in mail clients, so an unescaped body would be an injection
     vector into recipients' inboxes.
+
+    The one exception is a formatted body, which is inserted as markup
+    because that is the whole point of the feature. It is safe to do so
+    ONLY because it went through sanitize_html() on the way into the
+    database — it is not user input at this point, it is allowlisted
+    output. Mail clients strip most of what survives anyway.
     """
     prio_row = ''
     if priority == 'high':
@@ -367,7 +708,10 @@ def _memo_email_html(*, subject, body, sender_name, room_name, priority,
             '</td></tr>'
         )
 
-    body_html = escape(body).replace('\n', '<br>')
+    if body_format == 'html':
+        body_html = body
+    else:
+        body_html = escape(body).replace('\n', '<br>')
 
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"/></head>
@@ -430,7 +774,9 @@ def email_memo(msg, room, sender, recipients):
     room_name = room.name or 'a chat'
 
     html = _memo_email_html(
-        subject=subject, body=body, sender_name=sender_name,
+        subject=subject, body=body,
+        body_format=(payload.get('body_format') or 'text'),
+        sender_name=sender_name,
         room_name=room_name, priority=payload.get('priority') or 'normal',
         due=payload.get('due') or '',
         ack_requested=bool(payload.get('ack_requested')),
@@ -554,6 +900,7 @@ class CreateMemoView(LoginRequiredMixin, View):
                 room, request.user,
                 subject=request.POST.get('subject', ''),
                 body=request.POST.get('body', ''),
+                body_format=request.POST.get('body_format', 'text'),
                 priority=request.POST.get('priority', 'normal'),
                 due=request.POST.get('due', ''),
                 ack_requested=request.POST.get('ack') == '1',

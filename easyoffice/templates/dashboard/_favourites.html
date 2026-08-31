@@ -1,0 +1,732 @@
+{% comment %}
+templates/dashboard/_favourites.html
+====================================
+⭐ The Favourites tab: a grid of tiles for whatever this person pinned.
+
+Include ONCE near the top of the dashboard's content block, directly
+after the page header:
+
+    {% include 'dashboard/_favourites.html' %}
+
+HOW THE TAB SWITCH WORKS
+------------------------
+The tab strip does not wrap the rest of the dashboard in a container.
+It marks every element that follows it as the "overview" pane at runtime
+and toggles those. That matters because supervisor_dashboard.html and
+admin_dashboard.html both APPEND their own cards after this point via
+{{ block.super }} — a wrapper div would have to be opened here and
+closed in three different templates, and the moment a fourth dashboard
+appeared it would be wrong. Marking siblings adapts to whatever the page
+turns out to contain.
+
+WHERE THE PICKER GETS ITS LIST
+------------------------------
+From the sidebar that is already on the page — every `.eo-nav-link` in
+`.eo-nav`. There is deliberately no catalogue of modules anywhere: the
+sidebar has already applied every permission check, so a link the user
+cannot see is not in their DOM and cannot be pinned. See the note in
+apps/dashboard/models.py.
+{% endcomment %}
+
+<style>
+  .dash-tabs{
+    display:flex;
+    align-items:center;
+    gap:4px;
+    margin-bottom:18px;
+    border-bottom:1px solid var(--eo-border);
+    overflow-x:auto;
+    scrollbar-width:none;
+  }
+  .dash-tabs::-webkit-scrollbar{ display:none; }
+  .dash-tab{
+    position:relative;
+    display:inline-flex;
+    align-items:center;
+    gap:7px;
+    padding:10px 15px;
+    border:0;
+    background:none;
+    color:var(--eo-text-muted);
+    font-family:inherit;
+    font-size:.87rem;
+    font-weight:600;
+    white-space:nowrap;
+    cursor:pointer;
+    border-bottom:2px solid transparent;
+    margin-bottom:-1px;
+    transition:color .14s, border-color .14s;
+  }
+  .dash-tab:hover{ color:var(--eo-text); }
+  .dash-tab.active{
+    color:var(--eo-accent, #4f46e5);
+    border-bottom-color:var(--eo-accent, #4f46e5);
+  }
+  .dash-tab .dash-tab-count{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-width:19px;
+    height:19px;
+    padding:0 5px;
+    border-radius:999px;
+    background:var(--eo-border);
+    color:var(--eo-text-muted);
+    font-size:.68rem;
+    font-weight:800;
+  }
+  .dash-tab.active .dash-tab-count{
+    background:var(--eo-accent, #4f46e5);
+    color:#fff;
+  }
+
+  /* ── Tile grid ─────────────────────────────────────────────────────── */
+  .fav-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(150px, 1fr));
+    gap:14px;
+  }
+  .fav-tile{
+    position:relative;
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+    gap:11px;
+    padding:17px 16px;
+    min-height:118px;
+    border:1px solid var(--eo-border);
+    border-radius:15px;
+    background:var(--eo-surface, #fff);
+    text-decoration:none;
+    color:var(--eo-text);
+    transition:transform .14s ease, box-shadow .14s ease, border-color .14s;
+  }
+  .fav-tile:hover{
+    transform:translateY(-2px);
+    box-shadow:0 10px 26px rgba(15,23,42,.09);
+    border-color:transparent;
+    color:var(--eo-text);
+  }
+  .fav-tile:focus-visible{ outline:2px solid var(--eo-accent); outline-offset:2px; }
+
+  /* The accent is a wash behind the icon rather than a coloured tile —
+     forty saturated squares is a toy, forty white cards with a coloured
+     glyph is a tool. */
+  .fav-icon{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:42px;
+    height:42px;
+    border-radius:12px;
+    font-size:1.2rem;
+    flex-shrink:0;
+  }
+  .fav-label{
+    font-size:.88rem;
+    font-weight:650;
+    line-height:1.3;
+    word-break:break-word;
+  }
+  .fav-sub{
+    font-size:.7rem;
+    color:var(--eo-text-muted);
+    margin-top:-6px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    max-width:100%;
+  }
+  .fav-remove{
+    position:absolute;
+    top:8px;
+    right:8px;
+    width:26px;
+    height:26px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    border:0;
+    border-radius:8px;
+    background:transparent;
+    color:var(--eo-text-muted);
+    font-size:.78rem;
+    cursor:pointer;
+    opacity:0;
+    transition:opacity .13s, background .13s, color .13s;
+  }
+  .fav-tile:hover .fav-remove,
+  .fav-remove:focus-visible{ opacity:1; }
+  .fav-remove:hover{ background:#fee2e2; color:#b91c1c; }
+
+  /* Drag to reorder */
+  .fav-tile.dragging{ opacity:.4; }
+  .fav-tile.drop-before{ box-shadow:-3px 0 0 var(--eo-accent, #4f46e5); }
+  .fav-grid.reordering .fav-tile{ cursor:grab; }
+
+  .fav-add{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    min-height:118px;
+    border:1.5px dashed var(--eo-border);
+    border-radius:15px;
+    background:transparent;
+    color:var(--eo-text-muted);
+    font-family:inherit;
+    font-size:.82rem;
+    font-weight:600;
+    cursor:pointer;
+    transition:border-color .14s, color .14s, background .14s;
+  }
+  .fav-add:hover{
+    border-color:var(--eo-accent, #4f46e5);
+    color:var(--eo-accent, #4f46e5);
+    background:rgba(79,70,229,.03);
+  }
+  .fav-add i{ font-size:1.3rem; }
+
+  .fav-empty{
+    text-align:center;
+    padding:44px 20px;
+    color:var(--eo-text-muted);
+  }
+  .fav-empty i{
+    font-size:2.4rem;
+    display:block;
+    margin-bottom:12px;
+    opacity:.45;
+  }
+
+  /* ── Picker ────────────────────────────────────────────────────────── */
+  .fav-modal-backdrop{
+    position:fixed;
+    inset:0;
+    z-index:11000;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(15,23,42,.45);
+  }
+  .fav-modal-backdrop.open{ display:flex; }
+  .fav-modal{
+    width:min(560px, 100%);
+    max-height:min(680px, 92vh);
+    display:flex;
+    flex-direction:column;
+    background:var(--eo-surface, #fff);
+    border-radius:16px;
+    box-shadow:0 24px 60px rgba(15,23,42,.3);
+    overflow:hidden;
+  }
+  .fav-modal-head{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    padding:15px 18px;
+    border-bottom:1px solid var(--eo-border);
+    font-weight:700;
+  }
+  .fav-modal-body{ padding:14px 18px 18px; overflow-y:auto; }
+  .fav-search{
+    width:100%;
+    padding:10px 12px;
+    border:1px solid var(--eo-border);
+    border-radius:10px;
+    font-size:.88rem;
+    font-family:inherit;
+    margin-bottom:12px;
+    background:var(--eo-surface);
+    color:var(--eo-text);
+  }
+  .fav-search:focus{ outline:none; border-color:var(--eo-accent, #4f46e5); }
+  .fav-pick-group{
+    font-size:.65rem;
+    font-weight:800;
+    letter-spacing:.09em;
+    text-transform:uppercase;
+    color:var(--eo-text-muted);
+    margin:14px 0 6px;
+  }
+  .fav-pick{
+    display:flex;
+    align-items:center;
+    gap:11px;
+    width:100%;
+    padding:9px 11px;
+    border:1px solid transparent;
+    border-radius:10px;
+    background:none;
+    color:var(--eo-text);
+    font-family:inherit;
+    font-size:.87rem;
+    text-align:left;
+    cursor:pointer;
+  }
+  .fav-pick:hover{ background:var(--eo-bg, #f8fafc); }
+  .fav-pick i:first-child{ width:20px; text-align:center; color:var(--eo-accent); }
+  .fav-pick .fav-pick-state{ margin-left:auto; font-size:.72rem; font-weight:700; }
+  .fav-pick.is-pinned .fav-pick-state{ color:var(--eo-accent, #4f46e5); }
+  .fav-pick.is-pinned{ background:rgba(79,70,229,.05); }
+
+  @media (max-width:640px){
+    .fav-grid{ grid-template-columns:repeat(auto-fill, minmax(128px, 1fr)); gap:11px; }
+    .fav-tile{ min-height:104px; padding:14px; }
+    .fav-remove{ opacity:1; }
+  }
+</style>
+
+<div class="dash-tabs" id="dashTabs" role="tablist">
+  <button type="button" class="dash-tab active" data-dash-tab="overview" role="tab">
+    <i class="bi bi-speedometer2"></i> Overview
+  </button>
+  <button type="button" class="dash-tab" data-dash-tab="favourites" role="tab">
+    <i class="bi bi-star-fill"></i> Favourites
+    <span class="dash-tab-count" id="favCount">0</span>
+  </button>
+</div>
+
+<div id="favPane" hidden>
+  <div class="eo-card">
+    <div class="eo-card-header">
+      <div>
+        <h2 class="eo-card-title">Favourites</h2>
+        <p class="eo-card-subtitle" id="favSubtitle">
+          Pin the pages you use most. Drag a tile to reorder.
+        </p>
+      </div>
+      <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" id="favPinPageBtn">
+        <i class="bi bi-bookmark-plus"></i> Pin current page
+      </button>
+    </div>
+
+    <div id="favBody">
+      <div class="fav-empty"><i class="bi bi-hourglass"></i>Loading…</div>
+    </div>
+  </div>
+</div>
+
+<div class="fav-modal-backdrop" id="favPickerModal">
+  <div class="fav-modal" role="dialog" aria-modal="true" aria-labelledby="favPickerTitle">
+    <div class="fav-modal-head">
+      <span id="favPickerTitle"><i class="bi bi-star"></i> Add to favourites</span>
+      <button type="button" class="eo-btn eo-btn-secondary eo-btn-icon eo-btn-sm"
+              id="favPickerClose"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div class="fav-modal-body">
+      <input type="search" class="fav-search" id="favPickerSearch"
+             placeholder="Search menus…" autocomplete="off">
+      <div id="favPickerList"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  var BASE = '/dashboard/favourites/';
+  var favourites = [];
+  var overviewNodes = [];
+
+  function $(id){ return document.getElementById(id); }
+  function esc(s){
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  function csrf(){
+    var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? m[1] : '';
+  }
+  function post(path, data){
+    var fd = new FormData();
+    fd.append('csrfmiddlewaretoken', csrf());
+    Object.keys(data || {}).forEach(function(k){
+      if(data[k] !== undefined && data[k] !== null) fd.append(k, data[k]);
+    });
+    return fetch(BASE + path, {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'same-origin',
+      body: fd
+    }).then(function(r){ return r.json(); });
+  }
+
+  /* A stable colour per label, so two tiles are never the same hue by
+     accident and the same app is the same colour on everyone's screen. */
+  var PALETTE = ['#4f46e5','#0891b2','#059669','#d97706','#dc2626',
+                 '#7c3aed','#db2777','#2563eb','#65a30d','#ea580c'];
+  function colourFor(fav){
+    if(fav.colour) return fav.colour;
+    var h = 0, s = fav.label || fav.url || '';
+    for(var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return PALETTE[h % PALETTE.length];
+  }
+  function tint(hex, alpha){
+    var r = parseInt(hex.slice(1,3),16),
+        g = parseInt(hex.slice(3,5),16),
+        b = parseInt(hex.slice(5,7),16);
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+  }
+
+  /* ── Tabs ────────────────────────────────────────────────────────── */
+
+  function collectOverview(){
+    /* Everything after the tab strip belongs to the Overview pane. Done
+       once, at load, before any tab switching hides things. */
+    var tabs = $('dashTabs');
+    var pane = $('favPane');
+    if(!tabs) return;
+    var node = tabs.nextElementSibling;
+    while(node){
+      if(node !== pane && node.id !== 'favPickerModal') overviewNodes.push(node);
+      node = node.nextElementSibling;
+    }
+  }
+
+  function showTab(name){
+    var favouritesTab = (name === 'favourites');
+    overviewNodes.forEach(function(n){ n.hidden = favouritesTab; });
+    $('favPane').hidden = !favouritesTab;
+    document.querySelectorAll('.dash-tab').forEach(function(b){
+      b.classList.toggle('active', b.getAttribute('data-dash-tab') === name);
+    });
+    /* Put it in the hash so a reload, a bookmark or a shared link all
+       land on the tab the person was actually looking at. */
+    var hash = favouritesTab ? '#favourites' : '';
+    if(window.location.hash !== hash){
+      history.replaceState(null, '', window.location.pathname +
+                           window.location.search + hash);
+    }
+  }
+
+  document.addEventListener('click', function(e){
+    var tab = e.target.closest && e.target.closest('[data-dash-tab]');
+    if(tab) showTab(tab.getAttribute('data-dash-tab'));
+  });
+
+  /* ── Render ──────────────────────────────────────────────────────── */
+
+  function render(){
+    var body = $('favBody');
+    var count = $('favCount');
+    if(count) count.textContent = favourites.length;
+    if(!body) return;
+
+    if(!favourites.length){
+      body.innerHTML =
+        '<div class="fav-empty">' +
+          '<i class="bi bi-stars"></i>' +
+          '<p style="font-size:.9rem;margin-bottom:14px">Nothing pinned yet. ' +
+            'Add the pages you open every day and they will live here.</p>' +
+          '<button type="button" class="eo-btn eo-btn-primary eo-btn-sm" data-fav-open-picker>' +
+            '<i class="bi bi-plus-lg"></i> Add favourites</button>' +
+        '</div>';
+      return;
+    }
+
+    var html = '<div class="fav-grid" id="favGrid">';
+    favourites.forEach(function(f){
+      var c = colourFor(f);
+      html +=
+        '<a class="fav-tile" href="' + esc(f.url) + '" draggable="true" ' +
+           'data-fav-id="' + esc(f.id) + '">' +
+          '<span class="fav-icon" style="background:' + tint(c, .12) +
+                 ';color:' + esc(c) + '"><i class="' + esc(f.icon) + '"></i></span>' +
+          '<span class="fav-label">' + esc(f.label) + '</span>' +
+          '<span class="fav-sub">' + esc(f.url) + '</span>' +
+          '<button type="button" class="fav-remove" data-fav-remove="' + esc(f.id) + '" ' +
+                  'title="Remove from favourites" aria-label="Remove ' + esc(f.label) + '">' +
+            '<i class="bi bi-x-lg"></i></button>' +
+        '</a>';
+    });
+    html += '<button type="button" class="fav-add" data-fav-open-picker>' +
+              '<i class="bi bi-plus-lg"></i>Add</button>';
+    html += '</div>';
+    body.innerHTML = html;
+    wireDrag();
+  }
+
+  function load(){
+    fetch(BASE, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'same-origin'
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      favourites = (d && d.ok) ? (d.favourites || []) : [];
+      render();
+      markSidebar();
+    })
+    .catch(function(){
+      var body = $('favBody');
+      if(body) body.innerHTML =
+        '<div class="fav-empty"><i class="bi bi-wifi-off"></i>' +
+        'Couldn’t load your favourites.</div>';
+    });
+  }
+
+  /* ── Add / remove ────────────────────────────────────────────────── */
+
+  function add(item){
+    return post('add/', item).then(function(d){
+      if(!d || !d.ok){
+        if(d && d.error) alert(d.error);
+        return false;
+      }
+      if(d.created) favourites.push(d.favourite);
+      render();
+      markSidebar();
+      return true;
+    });
+  }
+
+  function remove(id){
+    return post('remove/', { id: id }).then(function(d){
+      if(d && d.ok){
+        favourites = favourites.filter(function(f){ return f.id !== id; });
+        render();
+        markSidebar();
+      }
+    });
+  }
+
+  document.addEventListener('click', function(e){
+    var rm = e.target.closest && e.target.closest('[data-fav-remove]');
+    if(rm){
+      e.preventDefault();
+      e.stopPropagation();
+      remove(rm.getAttribute('data-fav-remove'));
+      return;
+    }
+    if(e.target.closest && e.target.closest('[data-fav-open-picker]')){
+      e.preventDefault();
+      openPicker();
+    }
+  });
+
+  var pinPage = $('favPinPageBtn');
+  if(pinPage){
+    pinPage.addEventListener('click', function(){
+      /* Pins the page you came from, not the dashboard you're standing
+         on — you press this after arriving somewhere useful. */
+      var title = (document.title || '').split('|')[0].trim() || 'Saved page';
+      var target = document.referrer && document.referrer.indexOf(location.origin) === 0
+        ? document.referrer.slice(location.origin.length)
+        : (location.pathname + location.search);
+      add({ label: title, url: target, icon: 'bi-bookmark-fill', kind: 'page' })
+        .then(function(ok){ if(ok) showTab('favourites'); });
+    });
+  }
+
+  /* ── Picker: reads the sidebar that is already on the page ───────── */
+
+  function sidebarItems(){
+    var out = [];
+    document.querySelectorAll('.eo-nav .eo-nav-section').forEach(function(section){
+      var groupEl = section.querySelector('.eo-nav-label');
+      var group = groupEl ? groupEl.textContent.trim() : 'Menu';
+      section.querySelectorAll('.eo-nav-link').forEach(function(link){
+        var href = link.getAttribute('href') || '';
+        if(!href || href === '#' || href.charAt(0) !== '/') return;
+        var labelEl = link.querySelector('span:not(.eo-badge)');
+        var iconEl = link.querySelector('i');
+        out.push({
+          group: group,
+          label: (labelEl ? labelEl.textContent : link.textContent).trim(),
+          url: href,
+          icon: iconEl ? (iconEl.className.match(/bi-[a-z0-9-]+/) || ['bi-star'])[0]
+                       : 'bi-star'
+        });
+      });
+    });
+    return out;
+  }
+
+  function pinnedUrls(){
+    var set = {};
+    favourites.forEach(function(f){ set[f.url] = f.id; });
+    return set;
+  }
+
+  function renderPicker(filter){
+    var list = $('favPickerList');
+    if(!list) return;
+    var items = sidebarItems();
+    var pinned = pinnedUrls();
+    var q = (filter || '').trim().toLowerCase();
+
+    if(!items.length){
+      list.innerHTML = '<div class="fav-empty"><i class="bi bi-list"></i>' +
+        'No menu items found on this page.</div>';
+      return;
+    }
+
+    var groups = {}, order = [];
+    items.forEach(function(it){
+      if(q && it.label.toLowerCase().indexOf(q) === -1) return;
+      if(!groups[it.group]){ groups[it.group] = []; order.push(it.group); }
+      groups[it.group].push(it);
+    });
+
+    if(!order.length){
+      list.innerHTML = '<div class="fav-empty"><i class="bi bi-search"></i>' +
+        'Nothing matches “' + esc(filter) + '”.</div>';
+      return;
+    }
+
+    var html = '';
+    order.forEach(function(g){
+      html += '<div class="fav-pick-group">' + esc(g) + '</div>';
+      groups[g].forEach(function(it){
+        var on = !!pinned[it.url];
+        html +=
+          '<button type="button" class="fav-pick' + (on ? ' is-pinned' : '') + '" ' +
+                  'data-fav-toggle="' + esc(it.url) + '" ' +
+                  'data-fav-label="' + esc(it.label) + '" ' +
+                  'data-fav-icon="' + esc(it.icon) + '">' +
+            '<i class="' + esc(it.icon) + '"></i>' +
+            '<span>' + esc(it.label) + '</span>' +
+            '<span class="fav-pick-state">' +
+              (on ? '<i class="bi bi-star-fill"></i> Pinned' : 'Add') +
+            '</span>' +
+          '</button>';
+      });
+    });
+    list.innerHTML = html;
+  }
+
+  function openPicker(){
+    renderPicker('');
+    $('favPickerModal').classList.add('open');
+    var search = $('favPickerSearch');
+    if(search){ search.value = ''; setTimeout(function(){ search.focus(); }, 60); }
+  }
+  function closePicker(){ $('favPickerModal').classList.remove('open'); }
+
+  var closeBtn = $('favPickerClose');
+  if(closeBtn) closeBtn.addEventListener('click', closePicker);
+  $('favPickerModal').addEventListener('click', function(e){
+    if(e.target === this) closePicker();
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape') closePicker();
+  });
+  var searchEl = $('favPickerSearch');
+  if(searchEl) searchEl.addEventListener('input', function(){
+    renderPicker(searchEl.value);
+  });
+
+  document.addEventListener('click', function(e){
+    var btn = e.target.closest && e.target.closest('[data-fav-toggle]');
+    if(!btn) return;
+    var url = btn.getAttribute('data-fav-toggle');
+    var pinned = pinnedUrls();
+    if(pinned[url]){
+      remove(pinned[url]).then(function(){ renderPicker(searchEl ? searchEl.value : ''); });
+    }else{
+      add({
+        label: btn.getAttribute('data-fav-label'),
+        url: url,
+        icon: btn.getAttribute('data-fav-icon'),
+        kind: 'nav'
+      }).then(function(){ renderPicker(searchEl ? searchEl.value : ''); });
+    }
+  });
+
+  /* ── Sidebar stars ───────────────────────────────────────────────── */
+
+  function markSidebar(){
+    var pinned = pinnedUrls();
+    document.querySelectorAll('.eo-nav .eo-nav-link').forEach(function(link){
+      var href = link.getAttribute('href') || '';
+      var on = !!pinned[href];
+      link.classList.toggle('is-favourite', on);
+      link.setAttribute('data-favourite', on ? '1' : '0');
+    });
+  }
+
+  /* ── Drag to reorder ─────────────────────────────────────────────── */
+
+  var dragId = null;
+
+  function wireDrag(){
+    var grid = $('favGrid');
+    if(!grid) return;
+
+    grid.addEventListener('dragstart', function(e){
+      var tile = e.target.closest('.fav-tile');
+      if(!tile) return;
+      dragId = tile.getAttribute('data-fav-id');
+      tile.classList.add('dragging');
+      grid.classList.add('reordering');
+      try{ e.dataTransfer.effectAllowed = 'move';
+           e.dataTransfer.setData('text/plain', dragId); }catch(_){}
+    });
+
+    grid.addEventListener('dragover', function(e){
+      if(!dragId) return;
+      e.preventDefault();
+      var over = e.target.closest('.fav-tile');
+      grid.querySelectorAll('.drop-before').forEach(function(t){
+        t.classList.remove('drop-before');
+      });
+      if(over && over.getAttribute('data-fav-id') !== dragId){
+        over.classList.add('drop-before');
+      }
+    });
+
+    grid.addEventListener('drop', function(e){
+      if(!dragId) return;
+      e.preventDefault();
+      var over = e.target.closest('.fav-tile');
+      if(over && over.getAttribute('data-fav-id') !== dragId){
+        var from = favourites.findIndex(function(f){ return f.id === dragId; });
+        var to = favourites.findIndex(function(f){
+          return f.id === over.getAttribute('data-fav-id');
+        });
+        if(from > -1 && to > -1){
+          var moved = favourites.splice(from, 1)[0];
+          favourites.splice(to, 0, moved);
+          render();
+          post('reorder/', {
+            order: favourites.map(function(f){ return f.id; }).join(',')
+          }).catch(function(){});
+        }
+      }
+      cleanupDrag();
+    });
+
+    grid.addEventListener('dragend', cleanupDrag);
+  }
+
+  function cleanupDrag(){
+    dragId = null;
+    var grid = $('favGrid');
+    if(!grid) return;
+    grid.classList.remove('reordering');
+    grid.querySelectorAll('.dragging, .drop-before').forEach(function(t){
+      t.classList.remove('dragging', 'drop-before');
+    });
+  }
+
+  /* ── Boot ────────────────────────────────────────────────────────── */
+
+  function boot(){
+    collectOverview();
+    if(window.location.hash === '#favourites') showTab('favourites');
+    load();
+  }
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', boot);
+  }else{
+    boot();
+  }
+})();
+</script>

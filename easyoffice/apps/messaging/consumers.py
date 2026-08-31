@@ -110,6 +110,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         await self.channel_layer.group_add(self.room_group, self.channel_name)
+
+        # ⏰ Also join this user's PERSONAL group. Reminders are addressed
+        # to a person, not a room — the sweep has no idea which room (if
+        # any) they happen to have open. The poll endpoint is what
+        # guarantees delivery; this just makes it instant when a socket
+        # happens to be up.
+        self.user_group = f'user_{self.user.id}'
+        await self.channel_layer.group_add(self.user_group, self.channel_name)
+
         await self.accept()
 
         # ✅ READ RECEIPTS: the moment this socket joins the group, every
@@ -121,6 +130,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def disconnect(self, code):
         try:
             await self.channel_layer.group_discard(self.room_group, self.channel_name)
+        except Exception:
+            pass
+        try:
+            if getattr(self, 'user_group', None):
+                await self.channel_layer.group_discard(
+                    self.user_group, self.channel_name)
         except Exception:
             pass
 
@@ -407,6 +422,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
     # who acknowledged: the sender needs the running tally, and the
     # acknowledger's other tabs need to stop offering the button.
     async def chat_memo(self, event):
+        await self.send(text_data=json.dumps(event['payload']))
+
+    # ⏰ REMINDERS. Sent to the per-user group, not the room group, so this
+    # arrives regardless of which conversation is open.
+    async def reminder_event(self, event):
         await self.send(text_data=json.dumps(event['payload']))
 
     # ✅ READ RECEIPTS — delivered/read watermark updates.

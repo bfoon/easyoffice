@@ -1,6 +1,7 @@
 from django.urls import path
 from apps.messaging import views
 from apps.messaging import memo
+from apps.messaging import reminders
 from apps.messaging import floating_chat_views
 from apps.messaging import typing_views
 from apps.messaging import read_receipts
@@ -54,6 +55,24 @@ urlpatterns = [
     path('<uuid:room_id>/memo/<uuid:message_id>/ack/',
          memo.AcknowledgeMemoView.as_view(),
          name='ack_chat_memo'),
+
+    # ─────────────────────────────────────────────
+    # ⏰ REMINDERS
+    # Not room-scoped: a reminder belongs to a person, and the popup that
+    # shows it lives on every page.
+    # ─────────────────────────────────────────────
+    path('reminders/create/',
+         reminders.ReminderCreateView.as_view(),   name='reminder_create'),
+    path('reminders/open/',
+         reminders.ReminderOpenListView.as_view(), name='reminder_open'),
+    path('reminders/upcoming/',
+         reminders.ReminderUpcomingView.as_view(), name='reminder_upcoming'),
+    path('reminders/<uuid:receipt_id>/snooze/',
+         reminders.ReminderSnoozeView.as_view(),   name='reminder_snooze'),
+    path('reminders/<uuid:receipt_id>/resolve/',
+         reminders.ReminderResolveView.as_view(),  name='reminder_resolve'),
+    path('reminders/<uuid:reminder_id>/cancel/',
+         reminders.ReminderCancelView.as_view(),   name='reminder_cancel'),
 
     path('notifications/poll/', views.NotificationPollView.as_view(), name='notifications_poll'),
 

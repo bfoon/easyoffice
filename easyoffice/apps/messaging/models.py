@@ -328,3 +328,9 @@ class DeviceToken(models.Model):
 # MUST be at the bottom, AFTER ChatMessage is defined.
 # ─────────────────────────────────────────────────────────────────────────────
 _connect_post_init(ChatMessage)
+
+# ⏰ Reminder models (kept in their own file for clarity). Imported here so
+# makemigrations sees them.
+from apps.messaging.models_reminders import (  # noqa: E402,F401
+    ChatReminder, ChatReminderReceipt,
+)

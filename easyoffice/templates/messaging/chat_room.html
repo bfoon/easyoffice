@@ -2871,6 +2871,7 @@
             <button type="button" onclick="hdrMoreAction('calendar')"><i class="bi bi-calendar3"></i><span>Calendar &amp; meetings</span></button>
             <button type="button" onclick="hdrMoreAction('members')"><i class="bi bi-people"></i><span>Members &amp; pins</span></button>
             <button type="button" onclick="hdrMoreAction('memo')"><i class="bi bi-envelope-paper"></i><span>Write a memo</span></button>
+            <button type="button" onclick="hdrMoreAction('reminder')"><i class="bi bi-alarm"></i><span>Set a reminder</span></button>
             <button type="button" onclick="hdrMoreAction('status')"><i class="bi bi-circle-half"></i><span>Set your status</span></button>
           </div>
         </div>
@@ -3432,6 +3433,10 @@
               onclick="closeMobileTray(); openMemoComposer()">
         <i class="bi bi-envelope-paper"></i><span>Memo (with subject)</span>
       </button>
+      <button type="button" class="tray-btn" role="menuitem" title="Set a reminder"
+              onclick="closeMobileTray(); EOReminders.compose({roomId:'{{ room.id }}'})">
+        <i class="bi bi-alarm"></i><span>Set a reminder</span>
+      </button>
       <button type="button" class="tray-btn" role="menuitem" title="Create poll"
               onclick="openModal('pollModal'); closeMobileTray()">
         <i class="bi bi-bar-chart"></i><span>Create a poll</span>
@@ -3463,6 +3468,11 @@
     <button type="button" class="chat-attach-btn" id="memoBtn"
             title="Memo — send with a subject line" onclick="openMemoComposer()">
       <i class="bi bi-envelope-paper"></i>
+    </button>
+
+    <button type="button" class="chat-attach-btn" id="reminderBtn"
+            title="Set a reminder" onclick="EOReminders.compose({roomId:'{{ room.id }}'})">
+      <i class="bi bi-alarm"></i>
     </button>
 
     <button type="button" class="chat-attach-btn" title="Create poll" onclick="openModal('pollModal')">
@@ -5916,6 +5926,13 @@ window.addEventListener('beforeunload', function(){
         return;
       }
 
+      /* ⏰ A reminder fired. It is addressed to the PERSON, so it arrives
+         on the per-user group regardless of which room is open. */
+      if(d.type === 'reminder_due'){
+        if(window.EOReminders) window.EOReminders.onSocketEvent(d);
+        return;
+      }
+
       /* ✉️ Somebody acknowledged a memo — repaint that card's tally. */
       if(d.type === 'memo_update'){
         if(window.EOMemo) window.EOMemo.onSocketEvent(d);
@@ -6978,6 +6995,10 @@ function stopPollStatePolling(){
     }
     if(what === 'memo'){
       if(typeof openMemoComposer === 'function') openMemoComposer();
+      return;
+    }
+    if(what === 'reminder'){
+      if(window.EOReminders) window.EOReminders.compose({ roomId: ROOM_ID });
       return;
     }
     if(what === 'voice' || what === 'video'){
@@ -10572,6 +10593,8 @@ if (spellcheckToggleBtn) {
         : '<button type="button" class="memo-action" data-memo-ack>' +
             '<i class="bi bi-check2"></i>Acknowledge</button>');
     }
+    actions.push('<button type="button" class="memo-action" data-memo-remind>' +
+                   '<i class="bi bi-alarm"></i>Remind me</button>');
     actions.push('<button type="button" class="memo-action" data-memo-copy>' +
                    '<i class="bi bi-clipboard"></i>Copy</button>');
 
@@ -10586,7 +10609,7 @@ if (spellcheckToggleBtn) {
         '</div>' +
         '<div class="memo-subject">' + esc(memo.subject) + '</div>' +
         (meta.length ? '<div class="memo-meta">' + meta.join('') + '</div>' : '') +
-        '<div class="memo-body">' + bodyHtml + '</div>' +
+        '<div class="memo-body' + (rich ? ' rich' : '') + '">' + bodyHtml + '</div>' +
         '<div class="memo-actions">' + actions.join('') + '</div>' +
       '</div>';
   }
@@ -10662,6 +10685,27 @@ if (spellcheckToggleBtn) {
       return;
     }
 
+    if(btn.hasAttribute('data-memo-remind')){
+      if(window.EOReminders){
+        // A memo with a reply-by date pre-fills the reminder for the
+        // morning of that day; otherwise default to an hour from now.
+        var when = null;
+        if(memo.due){
+          var d = new Date(memo.due + 'T09:00');
+          if(!isNaN(d.getTime()) && d > new Date()) when = d;
+        }
+        window.EOReminders.compose({
+          title: memo.subject,
+          note: (memo.body_text || memo.body || '').slice(0, 400),
+          roomId: (typeof ROOM_ID !== 'undefined' ? ROOM_ID : ''),
+          messageId: memo.message_id,
+          source: 'memo',
+          when: when
+        });
+      }
+      return;
+    }
+
     if(btn.hasAttribute('data-memo-copy')){
       var plain = memo.subject + '\n\n' + memo.body;
       if(navigator.clipboard && navigator.clipboard.writeText){
@@ -10717,6 +10761,10 @@ if (spellcheckToggleBtn) {
   }
 })();
 </script>
+
+<!-- ── ⏰ Reminder popups. Safe to include here AND from base.html: the
+     script no-ops if it has already run on this page. ──────────────────── -->
+{% include "messaging/_reminders.html" %}
 
 <!-- ── 📅 Calendar, meeting invites, RSVP cards and reminders ──────────────── -->
 {% include "messaging/_chat_calendar.html" %}

@@ -205,7 +205,7 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 MEDIA_URL = config('MEDIA_URL', default='/media/')
 MEDIA_ROOT = config('MEDIA_ROOT', default=str(BASE_DIR / 'media'))
 
-MAX_UPLOAD_SIZE = config('MAX_UPLOAD_SIZE', default=50, cast=int) * 1024 * 1024
+MAX_UPLOAD_SIZE = config('MAX_UPLOAD_SIZE', default=500, cast=int) * 1024 * 1024
 
 # 🔒 Enforce the same ceiling at the request-parsing layer so oversized
 # bodies are rejected before views ever run (memory-exhaustion guard).

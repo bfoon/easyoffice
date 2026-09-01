@@ -503,9 +503,31 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         inner_type = str(inner.get('type') or '')
 
-        # Presence smuggled down the typing channel — forward it correctly
-        # instead of mangling it into a typing event.
-        if inner_type and inner_type != 'typing' and inner_type != 'chat_typing':
+        # 🩹 THE BUG THIS COMMENT USED TO CAUSE.
+        #
+        # The previous guard accepted only 'typing' and 'chat_typing' and
+        # dropped everything else. But when the fields are at the TOP
+        # LEVEL there is no separate inner type to read — `inner` IS the
+        # channel-layer envelope, so inner_type is the ROUTING KEY,
+        # 'chat.typing', which is exactly what Channels requires it to be
+        # in order to reach this method at all.
+        #
+        # So the guard discarded every event produced by:
+        #     ChatConsumer._receive   (the WebSocket path the composer uses)
+        #     typing_views.py         (the HTTP fallback)
+        # and let through only views.py::_broadcast_typing, which happens
+        # to nest under 'payload'. Both of the paths a person's keystrokes
+        # actually travel were silently dropped one line before delivery.
+        #
+        # The real intent was narrower: forward a NON-typing event that was
+        # smuggled down this channel to its proper handler, and drop
+        # anything with no sender. Name the typing spellings explicitly
+        # rather than treating "not one of two strings" as "not typing".
+        TYPING_TYPES = ('', 'typing', 'chat_typing', 'chat.typing')
+
+        if inner_type not in TYPING_TYPES:
+            # Presence smuggled down the typing channel — forward it
+            # correctly instead of mangling it into a typing event.
             if inner_type == 'presence_update':
                 await self.send(text_data=json.dumps(inner))
             return

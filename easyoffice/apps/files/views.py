@@ -49,6 +49,11 @@ from apps.files.models import (
 
 )
 
+# Folder (directory) upload lives in its own module — views.py is long
+# enough. Re-exported here so URL patterns can keep referring to
+# views.FolderUploadView alongside everything else.
+from apps.files.folder_upload import FolderUploadView  # noqa: F401
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -2572,10 +2577,21 @@ class FileUploadView(LoginRequiredMixin, View):
         folder_id = request.POST.get('folder_id')
         folder = None
         if folder_id:
-            try:
-                folder = FileFolder.objects.get(id=folder_id)
-            except FileFolder.DoesNotExist:
-                folder = None
+            # Was FileFolder.objects.get(id=folder_id) with no permission
+            # check, so any signed-in user could drop a file into anyone
+            # else's folder just by supplying its id. Same check the folder
+            # upload endpoint uses.
+            candidate = FileFolder.objects.filter(id=folder_id).first()
+            if candidate is not None and _can_edit_folder(request.user, candidate):
+                folder = candidate
+            elif candidate is not None:
+                if _is_ajax(request):
+                    return JsonResponse(
+                        {'ok': False, 'error': 'You cannot upload into that folder.'},
+                        status=403,
+                    )
+                messages.error(request, 'You cannot upload into that folder.')
+                return redirect('file_manager')
 
         project = None
         project_id = request.POST.get('project_id')

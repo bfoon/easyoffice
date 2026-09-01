@@ -795,6 +795,334 @@
     attachDragHandlers();
   });
 
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     SECTION 11b — FOLDER UPLOAD  (directory picker + folder drag-and-drop)
+
+     A browser cannot post a directory. It posts a flat list of files, each
+     carrying the path it had on disk. So the job here is:
+
+       1. collect {file, path} pairs — from a webkitdirectory input, or by
+          walking the entry tree of a drag-and-drop;
+       2. send them to /files/upload-folder/ in batches, SEQUENTIALLY;
+       3. show progress, because a real folder takes a while.
+
+     Batches are sequential on purpose. The server creates each folder with a
+     get-or-create keyed on (name, parent, owner); two batches in flight at
+     once would both look up "Reports", both miss, and both create it. One
+     request at a time keeps the tree correct at the cost of some throughput.
+  ═══════════════════════════════════════════════════════════════════════════ */
+
+  var FOLDER_UPLOAD_URL   = '/files/upload-folder/';
+  var BATCH_MAX_FILES     = 25;
+  var BATCH_MAX_BYTES     = 20 * 1024 * 1024;   // keep each POST modest
+  var TRAVERSAL_MAX_FILES = 2000;               // guard against a dropped $HOME
+
+  /** Destination folder: the upload form's hidden field, else the URL. */
+  function currentFolderId() {
+    var input = document.querySelector('#uploadForm [name="folder_id"]')
+             || document.querySelector('[name="folder_id"]');
+    if (input && input.value) return input.value;
+
+    var m = window.location.search.match(/[?&]folder=([0-9a-f-]{36})/i);
+    return m ? m[1] : '';
+  }
+
+  function currentProjectId() {
+    var input = document.querySelector('[name="project_id"]');
+    return input && input.value ? input.value : '';
+  }
+
+  /* ── Progress panel ──────────────────────────────────────────────────────
+     Built in JS so this works whether or not file_manager.html has been
+     updated with the markup. */
+
+  var _fuPanel = null;
+
+  function folderProgressOpen(label) {
+    if (!_fuPanel) {
+      _fuPanel = document.createElement('div');
+      _fuPanel.id = 'folderUploadProgress';
+      _fuPanel.style.cssText =
+        'position:fixed;right:20px;bottom:20px;z-index:9999;width:320px;' +
+        'background:var(--eo-surface,#fff);border:1px solid var(--eo-border,#e2e8f0);' +
+        'border-radius:12px;box-shadow:0 10px 30px rgba(15,23,42,.18);padding:14px 16px;' +
+        'font-size:.82rem;color:var(--eo-text,#0f172a)';
+      _fuPanel.innerHTML =
+        '<div style="display:flex;align-items:center;gap:9px;margin-bottom:8px">' +
+          '<i class="bi bi-folder-plus" style="color:var(--eo-accent,#2196f3)"></i>' +
+          '<strong id="fuTitle" style="flex:1;font-size:.85rem"></strong>' +
+          '<button type="button" id="fuClose" style="background:none;border:none;' +
+            'cursor:pointer;color:var(--eo-text-muted,#64748b);display:none">' +
+            '<i class="bi bi-x-lg"></i></button>' +
+        '</div>' +
+        '<div id="fuDetail" style="color:var(--eo-text-muted,#64748b);margin-bottom:8px"></div>' +
+        '<div style="height:6px;background:var(--eo-border,#e2e8f0);border-radius:3px;overflow:hidden">' +
+          '<div id="fuBar" style="height:100%;width:0%;background:var(--eo-accent,#2196f3);' +
+            'border-radius:3px;transition:width .2s"></div>' +
+        '</div>';
+      document.body.appendChild(_fuPanel);
+      _fuPanel.querySelector('#fuClose').addEventListener('click', folderProgressClose);
+    }
+    _fuPanel.style.display = '';
+    _fuPanel.querySelector('#fuTitle').textContent = label;
+    _fuPanel.querySelector('#fuClose').style.display = 'none';
+    return _fuPanel;
+  }
+
+  function folderProgressUpdate(done, total, detail) {
+    if (!_fuPanel) return;
+    var pct = total ? Math.round((done / total) * 100) : 0;
+    _fuPanel.querySelector('#fuBar').style.width = pct + '%';
+    _fuPanel.querySelector('#fuDetail').textContent =
+      detail || (done + ' of ' + total + ' files · ' + pct + '%');
+  }
+
+  function folderProgressDone(text) {
+    if (!_fuPanel) return;
+    _fuPanel.querySelector('#fuBar').style.width = '100%';
+    _fuPanel.querySelector('#fuTitle').textContent = 'Upload complete';
+    _fuPanel.querySelector('#fuDetail').textContent = text;
+    _fuPanel.querySelector('#fuClose').style.display = '';
+    setTimeout(folderProgressClose, 6000);
+  }
+
+  function folderProgressClose() {
+    if (_fuPanel) _fuPanel.style.display = 'none';
+  }
+
+  /* ── Batching and upload ─────────────────────────────────────────────── */
+
+  function buildBatches(entries) {
+    var batches = [], current = [], bytes = 0;
+    for (var i = 0; i < entries.length; i++) {
+      var size = entries[i].file.size || 0;
+      var wouldOverflow = current.length >= BATCH_MAX_FILES ||
+                          (current.length && bytes + size > BATCH_MAX_BYTES);
+      if (wouldOverflow) { batches.push(current); current = []; bytes = 0; }
+      current.push(entries[i]);
+      bytes += size;
+    }
+    if (current.length) batches.push(current);
+    return batches;
+  }
+
+  function postBatch(batch) {
+    return new Promise(function (resolve) {
+      var fd = new FormData();
+      var folderId  = currentFolderId();
+      var projectId = currentProjectId();
+
+      if (folderId)  fd.append('folder_id', folderId);
+      if (projectId) fd.append('project_id', projectId);
+
+      var visibility = document.querySelector('#uploadForm [name="visibility"]');
+      fd.append('visibility', visibility && visibility.value ? visibility.value : 'private');
+
+      for (var i = 0; i < batch.length; i++) {
+        fd.append('files[]', batch[i].file);
+        fd.append('paths[]', batch[i].path);
+      }
+
+      post(FOLDER_UPLOAD_URL, fd,
+        function (d) { resolve({ ok: true, data: d }); },
+        function (err) { resolve({ ok: false, error: err }); }
+      );
+    });
+  }
+
+  function uploadFolderEntries(entries, label) {
+    if (!entries.length) { toast('That folder is empty.', 'error'); return; }
+
+    if (entries.length > TRAVERSAL_MAX_FILES) {
+      toast('That folder has ' + entries.length + ' files — over the ' +
+            TRAVERSAL_MAX_FILES + ' limit for one upload.', 'error');
+      return;
+    }
+
+    var batches = buildBatches(entries);
+    var totalFiles = entries.length;
+    var doneFiles = 0, stored = 0, folders = 0, skipped = 0, failed = 0;
+
+    folderProgressOpen('Uploading ' + label);
+    folderProgressUpdate(0, totalFiles);
+
+    // Sequential — see the note at the top of this section.
+    var chain = Promise.resolve();
+    batches.forEach(function (batch) {
+      chain = chain.then(function () {
+        return postBatch(batch).then(function (res) {
+          doneFiles += batch.length;
+          if (res.ok) {
+            stored  += res.data.stored || 0;
+            folders += res.data.folders_created || 0;
+            skipped += res.data.skipped_count || 0;
+            failed  += res.data.failed_count || 0;
+          } else {
+            failed += batch.length;
+          }
+          folderProgressUpdate(doneFiles, totalFiles);
+        });
+      });
+    });
+
+    chain.then(function () {
+      var parts = [stored + ' file' + (stored === 1 ? '' : 's')];
+      if (folders) parts.push(folders + ' folder' + (folders === 1 ? '' : 's'));
+      var summary = parts.join(', ') + ' uploaded';
+      if (skipped) summary += ' · ' + skipped + ' skipped';
+      if (failed)  summary += ' · ' + failed + ' failed';
+
+      folderProgressDone(summary);
+      toast(summary + '.', failed ? 'error' : 'success');
+      closeModal('uploadModal');
+      refreshFileGrid();
+    });
+  }
+
+  /* ── Source 1: the directory picker ──────────────────────────────────── */
+
+  window.handleFolderChange = function (input) {
+    var files = input && input.files;
+    if (!files || !files.length) return;
+
+    var entries = [];
+    for (var i = 0; i < files.length; i++) {
+      entries.push({
+        file: files[i],
+        path: files[i].webkitRelativePath || files[i].name,
+      });
+    }
+
+    var first = entries[0].path.split('/')[0];
+    uploadFolderEntries(entries, '"' + first + '"');
+    input.value = '';
+  };
+
+  /* ── Source 2: dragging a folder onto the dropzone ───────────────────── */
+
+  /**
+   * readEntries() returns at most 100 children per call — a folder with 250
+   * files silently loses 150 of them if you call it once. Keep calling until
+   * it returns an empty array.
+   */
+  function readAllEntries(reader) {
+    return new Promise(function (resolve, reject) {
+      var all = [];
+      (function next() {
+        reader.readEntries(function (batch) {
+          if (!batch.length) { resolve(all); return; }
+          all = all.concat(Array.prototype.slice.call(batch));
+          next();
+        }, reject);
+      })();
+    });
+  }
+
+  function walkEntry(entry, prefix, out) {
+    if (!entry) return Promise.resolve();
+
+    if (entry.isFile) {
+      return new Promise(function (resolve) {
+        entry.file(function (file) {
+          out.push({ file: file, path: prefix + entry.name });
+          resolve();
+        }, function () { resolve(); });   // unreadable file — skip, don't abort
+      });
+    }
+
+    if (entry.isDirectory) {
+      var reader = entry.createReader();
+      return readAllEntries(reader).then(function (children) {
+        return children.reduce(function (chain, child) {
+          return chain.then(function () {
+            return walkEntry(child, prefix + entry.name + '/', out);
+          });
+        }, Promise.resolve());
+      }).catch(function () { /* unreadable directory — skip */ });
+    }
+
+    return Promise.resolve();
+  }
+
+  function handleDroppedItems(items) {
+    var roots = [];
+    for (var i = 0; i < items.length; i++) {
+      var entry = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
+      if (entry) roots.push(entry);
+    }
+    if (!roots.length) return null;
+
+    var hasDirectory = roots.some(function (e) { return e.isDirectory; });
+    if (!hasDirectory) return null;      // plain files — let the old path run
+
+    var out = [];
+    folderProgressOpen('Reading folder…');
+    folderProgressUpdate(0, 1, 'Scanning…');
+
+    return roots.reduce(function (chain, entry) {
+      return chain.then(function () { return walkEntry(entry, '', out); });
+    }, Promise.resolve()).then(function () {
+      var label = roots.length === 1 ? '"' + roots[0].name + '"'
+                                     : roots.length + ' folders';
+      uploadFolderEntries(out, label);
+    });
+  }
+
+  /* ── Wiring ──────────────────────────────────────────────────────────── */
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var dropZone = byId('dropZone');
+
+    // Use the template's input when it exists; create one when it doesn't, so
+    // this works without a file_manager.html change.
+    var folderInput = byId('folderInput');
+    if (!folderInput) {
+      folderInput = document.createElement('input');
+      folderInput.type = 'file';
+      folderInput.id = 'folderInput';
+      folderInput.multiple = true;
+      folderInput.style.display = 'none';
+      folderInput.setAttribute('webkitdirectory', '');
+      folderInput.setAttribute('directory', '');
+      document.body.appendChild(folderInput);
+    }
+    folderInput.addEventListener('change', function () {
+      window.handleFolderChange(folderInput);
+    });
+
+    window.pickFolder = function () { folderInput.click(); };
+
+    // Offer the action inside the upload modal if the template has no button.
+    if (dropZone && !byId('pickFolderBtn')) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.id = 'pickFolderBtn';
+      btn.className = 'eo-btn eo-btn-secondary eo-btn-sm';
+      btn.style.cssText = 'margin-top:10px;width:100%';
+      btn.innerHTML = '<i class="bi bi-folder-plus"></i> Upload a folder instead';
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        window.pickFolder();
+      });
+      dropZone.parentNode.insertBefore(btn, dropZone.nextSibling);
+    }
+
+    // Folder-aware drop. Runs at capture time so it can claim the event
+    // before the single-file handler below sees it.
+    if (dropZone) {
+      dropZone.addEventListener('drop', function (e) {
+        var items = e.dataTransfer && e.dataTransfer.items;
+        if (!items || !items.length) return;
+        var handled = handleDroppedItems(items);
+        if (handled) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }, true);
+    }
+  });
+
   /* ═══════════════════════════════════════════════════════════════════════════
      SECTION 12 — NEW FOLDER SCOPE PICKER
   ═══════════════════════════════════════════════════════════════════════════ */

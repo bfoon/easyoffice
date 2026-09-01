@@ -167,7 +167,13 @@ def _visible_files_qs(user):
         Q(visibility='unit', unit=unit) |
         Q(visibility='department', department=dept) |
         Q(shared_with=user) |
-        Q(share_access__user=user)
+        Q(share_access__user=user) |
+        # Documents this user was asked to sign, or signed. Delivery grants
+        # explicit share rows on completion, but these clauses also cover
+        # requests that completed before that existed, and in-flight ones.
+        Q(signature_requests__signers__user=user) |
+        Q(signature_requests__cc_recipients__user=user) |
+        Q(signature_attachments__request__signers__user=user)
     ).select_related('folder').distinct()
 
     all_candidate_files = SharedFile.objects.select_related('folder').prefetch_related(
@@ -201,6 +207,49 @@ def _visible_folders_qs(user):
         Q(share_access__user=user)
     ).distinct()
 
+def _signature_permission_for(user, f):
+    """
+    Read access earned by taking part in a signature request on this file.
+
+    A signer who is not the file owner previously had no permission at all on
+    the document they had just signed: the signed copy is created with
+    ``uploaded_by`` set to the *original* owner and no share rows, so
+    ``FileDownloadView`` raised Http404 and the signer got "page not found"
+    when they came back for their own signed document.
+
+    Participation is checked against the request itself rather than relying
+    on share rows existing, so this also repairs every request that completed
+    before signed-copy delivery was added.
+
+    Covers the primary document (which becomes the signed PDF once the
+    request completes), and every attached document on the request.
+    """
+    if not getattr(user, 'is_authenticated', False):
+        return None
+
+    participant = (
+        Q(created_by=user)
+        | Q(signers__user=user)
+        | Q(cc_recipients__user=user)
+    )
+
+    try:
+        involved = SignatureRequest.objects.filter(
+            participant, document=f
+        ).exists()
+
+        if not involved:
+            involved = SignatureRequest.objects.filter(
+                participant, documents__document=f
+            ).exists()
+    except Exception:
+        return None
+
+    # View only. Being asked to sign something never grants the right to
+    # rename, move or delete the owner's file.
+    return 'view' if involved else None
+
+
 def _file_permission_for(user, f):
     if f.uploaded_by_id == user.id or user.is_superuser:
         return 'full'
@@ -227,7 +276,9 @@ def _file_permission_for(user, f):
     if getattr(f, 'inherit_folder_sharing', True) and f.folder_id:
         inherited_perm = _inherited_folder_permission_for(user, f.folder)
 
-    return _max_perm(direct_perm, inherited_perm)
+    signature_perm = _signature_permission_for(user, f)
+
+    return _max_perm(_max_perm(direct_perm, inherited_perm), signature_perm)
 
 
 def _folder_permission_for(user, folder):
@@ -1401,6 +1452,19 @@ def _embed_signatures_in_pdf(sig_req):
 
     sig_req.document = signed_file
     sig_req.save(update_fields=['document'])
+
+    # Put the signed copy into every participant's file system straight away.
+    # Notifications and chat delivery are handled separately, on completion —
+    # this call only grants access, so it is safe to run here and is
+    # idempotent if delivery runs again afterwards.
+    try:
+        from apps.files.signature_delivery import grant_signed_file_access
+        grant_signed_file_access(sig_req, signed_file)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            'Could not grant signed-copy access for %s', sig_req.pk
+        )
 
     return signed_file
 

@@ -51,6 +51,18 @@
 .pos-cart .qty input{width:52px;text-align:center;padding:4px;border:1px solid #cbd5e1;
   border-radius:8px;font-weight:700}
 .pos-cart .rm{border:0;background:none;color:#dc2626;cursor:pointer;font-size:16px}
+/* Editable selling price */
+.pos-price-in{width:92px;padding:5px 8px;border:1px solid #cbd5e1;border-radius:8px;
+  font-weight:700;text-align:right;font-size:13.5px;background:#fff}
+.pos-price-in:focus{outline:none;border-color:#13a0a0;
+  box-shadow:0 0 0 3px rgba(19,160,160,.16)}
+.pos-price-in.ovr{border-color:#b45309;background:#fffbeb;color:#b45309}
+.pos-price-was{font-size:11px;color:#b45309;margin-top:3px;display:flex;
+  align-items:center;gap:5px;justify-content:flex-end}
+.pos-price-was s{color:#94a3b8}
+.pos-price-was button{border:0;background:none;color:#b45309;cursor:pointer;
+  font-size:13px;line-height:1;padding:0}
+.pos-ovr-row{color:#b45309;font-weight:700}
 .pos-empty{padding:44px 10px;text-align:center;color:#94a3b8}
 .pos-empty i{font-size:40px;display:block;margin-bottom:8px;color:#cbd5e1}
 
@@ -164,8 +176,9 @@
         <table class="pos-cart">
           <thead>
             <tr>
-              <th style="width:44%">Item</th>
-              <th>Price</th>
+              <th style="width:38%">Item</th>
+              <th style="width:120px" title="Click a price to sell at a different rate">
+                Price <i class="bi bi-pencil" style="font-size:10px;opacity:.6"></i></th>
               <th style="width:140px">Qty</th>
               <th style="text-align:right">Total</th>
               <th></th>
@@ -189,6 +202,11 @@
       <div class="pos-tot"><span>Items</span><span id="pos-t-items">0</span></div>
       <div class="pos-tot"><span>Subtotal</span>
         <span>{{ currency }} <span id="pos-t-sub">0.00</span></span></div>
+      <div class="pos-tot pos-ovr-row" id="pos-ovr-row" style="display:none">
+        <span><i class="bi bi-tag"></i> Price changes
+          (<span id="pos-t-ovr-n">0</span>)</span>
+        <span id="pos-t-ovr">0.00</span>
+      </div>
       <div class="pos-tot">
         <span>Discount
           <button class="eo-btn eo-btn-secondary eo-btn-sm" id="pos-discount-btn"
@@ -308,6 +326,7 @@ const POS = (() => {
     search:   "{% url 'pos_search' %}",
     add:      "{% url 'pos_basket_add' %}",
     qty:      "{% url 'pos_basket_qty' %}",
+    price:    "{% url 'pos_basket_price' %}",
     discount: "{% url 'pos_basket_discount' %}",
     clear:    "{% url 'pos_basket_clear' %}",
     complete: "{% url 'pos_complete' %}",
@@ -360,7 +379,18 @@ const POS = (() => {
             ${it.stock !== null && it.stock !== undefined
               ? ' · stock: ' + it.stock : ''}</div>
         </td>
-        <td>${money(it.unit_price)}</td>
+        <td>
+          <input type="number" min="0" step="0.01" data-act="price"
+                 class="pos-price-in${it.price_overridden ? ' ovr' : ''}"
+                 value="${money(it.unit_price)}"
+                 title="Selling price — change it for this sale">
+          ${it.price_overridden ? `
+            <div class="pos-price-was">
+              <s>${money(it.list_price)}</s>
+              <button data-act="resetprice" title="Back to the system price">
+                <i class="bi bi-arrow-counterclockwise"></i></button>
+            </div>` : ''}
+        </td>
         <td>
           <div class="qty">
             <button data-act="dec">−</button>
@@ -379,6 +409,19 @@ const POS = (() => {
         e => setQty(it.item_id, parseInt(e.target.value || '0', 10));
       tr.querySelector('[data-act=rm]').onclick =
         () => setQty(it.item_id, 0);
+
+      // Price editing: Enter (or leaving the box) commits, Escape aborts.
+      const priceIn = tr.querySelector('[data-act=price]');
+      priceIn.onchange = e => setPrice(it.item_id, e.target.value);
+      priceIn.onkeydown = e => {
+        if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+        if (e.key === 'Escape') { e.target.value = money(it.unit_price);
+                                  e.target.blur(); }
+      };
+      priceIn.onfocus = e => e.target.select();
+      const resetBtn = tr.querySelector('[data-act=resetprice]');
+      if (resetBtn) resetBtn.onclick = () => resetPrice(it.item_id);
+
       body.appendChild(tr);
     });
     $('pos-empty').style.display = (basket.items || []).length ? 'none' : 'block';
@@ -387,6 +430,16 @@ const POS = (() => {
     $('pos-t-disc').textContent  = money(basket.discount);
     $('pos-t-total').textContent = money(basket.total);
     $('pos-pay-btn').disabled    = !(basket.items || []).length;
+
+    // Price-change summary — how far this basket sits off the system prices.
+    const n = basket.override_count || 0;
+    const d = parseFloat(basket.override_delta || 0) || 0;
+    $('pos-ovr-row').style.display = n ? 'flex' : 'none';
+    if (n) {
+      $('pos-t-ovr-n').textContent = n;
+      $('pos-t-ovr').textContent =
+        (d > 0 ? '+' : d < 0 ? '−' : '') + CURRENCY + ' ' + money(Math.abs(d));
+    }
   }
 
   function apply(resp) {
@@ -416,6 +469,29 @@ const POS = (() => {
   async function setQty(itemId, qty) {
     const resp = await post(URLS.qty, {item_id: itemId, qty: Math.max(0, qty)});
     resp.ok ? apply(resp) : toast(resp.error || 'Update failed.', 'err');
+  }
+
+  // ── Price override ──────────────────────────────────────────────────
+  // Every cashier may change a line price; the server records the system
+  // price alongside it so the day book can report the difference.
+  async function setPrice(itemId, price) {
+    const v = parseFloat(price);
+    if (isNaN(v) || v < 0) { toast('Enter a valid price.', 'err'); render(); return; }
+    const resp = await post(URLS.price, {item_id: itemId, price: v.toFixed(2)});
+    if (!resp.ok) { toast(resp.error || 'Price change failed.', 'err'); render(); return; }
+    apply(resp);
+    const line = (basket.items || []).find(i => i.item_id === itemId);
+    if (line && line.price_overridden) {
+      toast('Price changed — this will show on the sales report.', 'warn');
+    }
+    scanInput.focus();
+  }
+
+  async function resetPrice(itemId) {
+    const resp = await post(URLS.price, {item_id: itemId, reset: true});
+    resp.ok ? apply(resp)
+            : toast(resp.error || 'Could not restore the price.', 'err');
+    scanInput.focus();
   }
 
   // A short confirmation tone, like a supermarket till.

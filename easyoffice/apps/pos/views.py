@@ -14,6 +14,7 @@ Endpoints
   GET  /pos/api/search/?q=…       type-ahead product search
   POST /pos/api/basket/add/       {code|inventory_id|manual…, qty}
   POST /pos/api/basket/qty/       {item_id, qty}        (0 removes)
+  POST /pos/api/basket/price/     {item_id, price} | {item_id, reset:true}
   POST /pos/api/basket/discount/  {amount}
   POST /pos/api/basket/clear/
   POST /pos/api/complete/         payment + optional customer details
@@ -28,18 +29,21 @@ from __future__ import annotations
 
 import json
 import logging
+from decimal import Decimal
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
-from django.db.models import Count, Sum
+from django.db.models import (
+    Count, DecimalField, ExpressionWrapper, F, Sum,
+)
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.generic import View, TemplateView
 
 from . import inventory, services
-from .models import POSSale
+from .models import POSSale, POSSaleItem
 from .services import POSError
 
 logger = logging.getLogger(__name__)
@@ -111,6 +115,11 @@ def _line_payload(i) -> dict:
         'sku': i.sku,
         'barcode': i.barcode,
         'unit_price': str(i.unit_price),
+        # System price to compare against + whether the cashier changed it.
+        'list_price': str(i.list_price) if i.list_price is not None else None,
+        'price_overridden': bool(i.price_overridden),
+        'price_delta': str(i.price_delta),
+        'line_delta': str(i.line_delta),
         'quantity': i.quantity,
         'line_total': str(i.line_total),
         'stock': stock,
@@ -128,15 +137,20 @@ def _line_payload(i) -> dict:
 
 
 def _basket_payload(sale: POSSale) -> dict:
+    lines = list(sale.items.all())
     return {
         'sale_id': str(sale.pk),
         'status': sale.status,
         'currency': sale.currency,
-        'items': [_line_payload(i) for i in sale.items.all()],
+        'items': [_line_payload(i) for i in lines],
         'subtotal': str(sale.subtotal),
         'discount': str(sale.discount),
         'total': str(sale.total),
         'item_count': sale.item_count,
+        # Price-override summary for the till panel.
+        'override_count': sum(1 for i in lines if i.price_overridden),
+        'override_delta': str(sum((i.line_delta for i in lines),
+                                  Decimal('0.00'))),
     }
 
 
@@ -244,7 +258,12 @@ class BasketAddView(POSAccessMixin, View):
                 )
 
         try:
-            services.add_item(sale, product, qty=int(qty))
+            # {unit_price} (or {price}) sells this line at a price the
+            # cashier chose; the system price is still recorded.
+            services.add_item(
+                sale, product, qty=int(qty),
+                unit_price=data.get('unit_price', data.get('price')),
+            )
         except POSError as e:
             return JsonResponse({'ok': False, 'error': str(e)}, status=400)
 
@@ -260,6 +279,32 @@ class BasketQtyView(POSAccessMixin, View):
         sale = services.get_or_create_open_basket(request.user)
         try:
             services.set_quantity(sale, data.get('item_id'), int(data.get('qty', 1)))
+        except (POSError, ValueError, TypeError) as e:
+            return JsonResponse({'ok': False, 'error': str(e)}, status=400)
+        return JsonResponse({'ok': True, 'basket': _basket_payload(sale)})
+
+
+class BasketPriceView(POSAccessMixin, View):
+    """
+    Change the selling price of one basket line.
+
+      {item_id, price, note?}   → sell at this price
+      {item_id, reset: true}    → back to the system price
+
+    Open to every cashier; every change is flagged on the line and rolled
+    up on the day book.
+    """
+
+    def post(self, request):
+        data = _json_body(request)
+        sale = services.get_or_create_open_basket(request.user)
+        try:
+            if data.get('reset'):
+                services.reset_price(sale, data.get('item_id'))
+            else:
+                services.set_price(sale, data.get('item_id'),
+                                   data.get('price'),
+                                   note=data.get('note', ''))
         except (POSError, ValueError, TypeError) as e:
             return JsonResponse({'ok': False, 'error': str(e)}, status=400)
         return JsonResponse({'ok': True, 'basket': _basket_payload(sale)})
@@ -454,6 +499,23 @@ class SalesTodayView(POSAccessMixin, TemplateView):
         ctx['by_method'] = (completed.values('payment_method')
                             .annotate(count=Count('id'), total=Sum('total'))
                             .order_by('-total'))
+
+        # ── Price overrides: what was sold off the system price today ────
+        overridden = POSSaleItem.objects.filter(
+            sale__in=completed, price_overridden=True)
+        delta = overridden.aggregate(
+            d=Sum(ExpressionWrapper(
+                (F('unit_price') - F('list_price')) * F('quantity'),
+                output_field=DecimalField(max_digits=14, decimal_places=2),
+            ))
+        )['d'] or Decimal('0.00')
+        ctx['override_summary'] = {
+            'lines': overridden.count(),
+            'sales': overridden.values('sale_id').distinct().count(),
+            'delta': delta,                 # signed: − = sold below list
+            'abs': abs(delta),              # for display next to the sign
+        }
+
         ctx['can_void'] = can_void_sale(self.request.user)
         ctx['today'] = today
         return ctx

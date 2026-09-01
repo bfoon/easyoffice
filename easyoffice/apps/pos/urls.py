@@ -19,6 +19,7 @@ urlpatterns = [
     # Basket
     path('api/basket/add/',         views.BasketAddView.as_view(),      name='pos_basket_add'),
     path('api/basket/qty/',         views.BasketQtyView.as_view(),      name='pos_basket_qty'),
+    path('api/basket/price/',       views.BasketPriceView.as_view(),    name='pos_basket_price'),
     path('api/basket/discount/',    views.BasketDiscountView.as_view(), name='pos_basket_discount'),
     path('api/basket/clear/',       views.BasketClearView.as_view(),    name='pos_basket_clear'),
 

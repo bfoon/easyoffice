@@ -46,15 +46,30 @@ def get_or_create_open_basket(user) -> POSSale:
     return sale or POSSale.objects.create(cashier=user)
 
 
-def add_item(sale: POSSale, product: dict, qty: int = 1) -> POSSaleItem:
-    """Add a product dict (from inventory adapter) — merges same-product lines."""
+def add_item(sale: POSSale, product: dict, qty: int = 1,
+             unit_price=None) -> POSSaleItem:
+    """
+    Add a product dict (from the inventory adapter) to the basket.
+
+    `unit_price` overrides what the customer is charged for this line; the
+    system price stays on the line as `list_price` so the override is
+    visible on the day book. Same-product lines merge only when they carry
+    the SAME price — a scan at a different price gets its own line rather
+    than silently absorbing the override.
+    """
     if not sale.is_draft:
         raise POSError('This sale is already closed.')
     qty = max(1, int(qty))
 
+    list_price = D(product.get('price'))
+    price = list_price if unit_price in (None, '') else D(unit_price)
+    if price < 0:
+        raise POSError('Price cannot be negative.')
+
     line = None
     if product.get('inventory_id'):
-        line = sale.items.filter(inventory_id=product['inventory_id']).first()
+        line = sale.items.filter(inventory_id=product['inventory_id'],
+                                 unit_price=price).first()
 
     if line:
         line.quantity += qty
@@ -66,9 +81,56 @@ def add_item(sale: POSSale, product: dict, qty: int = 1) -> POSSaleItem:
             sku=product.get('sku', ''),
             barcode=product.get('barcode', ''),
             name=product.get('name') or 'Item',
-            unit_price=D(product.get('price')),
+            unit_price=price,
+            list_price=list_price,
             quantity=qty,
         )
+    sale.recalc_totals()
+    return line
+
+
+def set_price(sale: POSSale, item_id, price, note: str = '') -> POSSaleItem:
+    """
+    Change what the customer pays for one line. The system price is kept
+    on the line (back-filled for older lines) so the change is flagged and
+    reportable. Any cashier may do this — the day book shows who did.
+    """
+    if not sale.is_draft:
+        raise POSError('This sale is already closed.')
+    line = sale.items.filter(pk=item_id).first()
+    if not line:
+        raise POSError('Line not found.')
+
+    price = D(price)
+    if price < 0:
+        raise POSError('Price cannot be negative.')
+
+    if line.list_price is None:
+        # No baseline recorded (older line) — the price it was carrying
+        # becomes the baseline, so the change registers as an override.
+        line.list_price = line.unit_price
+
+    line.unit_price = price
+    line.price_override_note = (note or '')[:200]
+    line.save(update_fields=['unit_price', 'list_price', 'price_override_note',
+                             'updated_at'])
+    sale.recalc_totals()
+    return line
+
+
+def reset_price(sale: POSSale, item_id) -> POSSaleItem:
+    """Put a line back on the system price."""
+    if not sale.is_draft:
+        raise POSError('This sale is already closed.')
+    line = sale.items.filter(pk=item_id).first()
+    if not line:
+        raise POSError('Line not found.')
+    if line.list_price is None:
+        return line          # nothing to restore
+
+    line.unit_price = line.list_price
+    line.price_override_note = ''
+    line.save(update_fields=['unit_price', 'price_override_note', 'updated_at'])
     sale.recalc_totals()
     return line
 
@@ -221,6 +283,18 @@ def complete_sale(sale: POSSale, *, payment_method: str, amount_tendered=None,
     if stock_warnings:
         logger.warning('POS: sale %s completed on short stock — %s',
                        sale.sale_no, ' | '.join(stock_warnings))
+
+    # Price overrides are allowed for every cashier, but they leave a trail:
+    # flagged on each line, summarised on the day book, and logged here.
+    overrides = [l for l in lines if l.price_overridden]
+    if overrides:
+        logger.info(
+            'POS: sale %s has %d price override(s) by %s — %s',
+            sale.sale_no, len(overrides),
+            getattr(sale.cashier, 'username', sale.cashier_id),
+            ' | '.join(f'{l.name}: {l.list_price} → {l.unit_price} '
+                       f'×{l.quantity} ({l.line_delta:+})' for l in overrides),
+        )
 
     sale.status = POSSale.Status.COMPLETED
     sale.completed_at = timezone.now()

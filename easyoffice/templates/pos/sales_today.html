@@ -19,6 +19,10 @@
 .zs-badge.completed{background:#ecfdf5;color:#059669}
 .zs-badge.voided{background:#fef2f2;color:#dc2626}
 .zs-badge.draft{background:#f1f5f9;color:#64748b}
+.zs-badge.override{background:#fffbeb;color:#b45309;border:1px solid #fde68a;
+  margin-left:6px;cursor:help}
+.zs-card.override .v{color:#b45309}
+.zs-ovr-note{font-size:11.5px;color:#b45309;margin-top:2px}
 </style>
 
 <div class="eo-page-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
@@ -51,6 +55,18 @@
     <div class="l">{{ m.payment_method|title }} ({{ m.count }})</div>
   </div>
   {% endfor %}
+  {% if override_summary.lines %}
+  <div class="zs-card override" title="Lines sold at a price the cashier set at the till">
+    <div class="v">
+      {% if override_summary.delta > 0 %}+{% elif override_summary.delta < 0 %}−{% endif %}GMD
+      {{ override_summary.abs }}
+    </div>
+    <div class="l">Off system price</div>
+    <div class="zs-ovr-note">
+      {{ override_summary.lines }} line(s) on {{ override_summary.sales }} sale(s)
+    </div>
+  </div>
+  {% endif %}
 </div>
 
 <table class="zs-table">
@@ -63,7 +79,15 @@
   <tbody>
     {% for s in sales %}
     <tr>
-      <td style="font-weight:700">{{ s.sale_no|default:'—' }}</td>
+      <td style="font-weight:700">
+        {{ s.sale_no|default:'—' }}
+        {% if s.has_price_override %}
+        <span class="zs-badge override"
+              title="{{ s.price_override_count }} line(s) sold at a price set by the cashier ({{ s.price_override_delta }} vs system price)">
+          <i class="bi bi-tag"></i> price
+        </span>
+        {% endif %}
+      </td>
       <td>{{ s.completed_at|date:'H:i'|default:'—' }}</td>
       <td>{{ s.cashier.get_full_name|default:s.cashier.username }}</td>
       <td>{{ s.customer_name|default:'—' }}</td>

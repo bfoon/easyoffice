@@ -8,6 +8,11 @@ Design notes
 • Sale lines SNAPSHOT the product (sku, barcode, name, unit price) at the
   moment of sale, so receipts stay correct forever even if inventory
   prices or names change later.
+• PRICE OVERRIDE: `unit_price` is what the customer actually pays and is
+  editable at the till; `list_price` keeps the system price the line was
+  scanned at. When the two differ the line is flagged
+  (`price_overridden`) so the day book can report what was discounted
+  off-book and by whom.
 • The link to the live inventory row is a soft reference
   (`inventory_id` stored as text) resolved through apps/pos/inventory.py,
   so the POS works with the orders-app inventory regardless of its exact
@@ -136,6 +141,23 @@ class POSSale(TimeStampedModel):
     def item_count(self):
         return sum(i.quantity for i in self.items.all())
 
+    # ── Price overrides (cashier changed the price at the till) ──────────
+    @property
+    def has_price_override(self) -> bool:
+        return any(i.price_overridden for i in self.items.all())
+
+    @property
+    def price_override_count(self) -> int:
+        return sum(1 for i in self.items.all() if i.price_overridden)
+
+    @property
+    def price_override_delta(self) -> Decimal:
+        """
+        Money gained (+) or given away (−) by till price changes on this
+        sale, versus the system prices.
+        """
+        return sum((i.line_delta for i in self.items.all()), Decimal('0.00'))
+
     def recalc_totals(self, save=True):
         """Recompute money fields from the lines. Discount/tax stay as set."""
         sub = sum((i.line_total for i in self.items.all()), Decimal('0.00'))
@@ -161,9 +183,24 @@ class POSSaleItem(TimeStampedModel):
     sku        = models.CharField(max_length=64, blank=True)
     barcode    = models.CharField(max_length=64, blank=True, db_index=True)
     name       = models.CharField(max_length=255)
+    # What the customer is charged. Editable at the till.
     unit_price = models.DecimalField(max_digits=12, decimal_places=2)
     quantity   = models.PositiveIntegerField(default=1)
     line_total = models.DecimalField(max_digits=12, decimal_places=2)
+
+    # ── Price override trail ─────────────────────────────────────────────
+    # The system's price for this product when the line was created. Null
+    # on lines created before this feature and on ad-hoc manual lines that
+    # never had a system price. Kept so the day book can show exactly what
+    # was given away (or added) at the counter.
+    list_price = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True,
+        help_text='System price when scanned. unit_price differs when the '
+                  'cashier changed it.')
+    price_overridden = models.BooleanField(
+        default=False, db_index=True,
+        help_text='Set automatically when unit_price ≠ list_price.')
+    price_override_note = models.CharField(max_length=200, blank=True)
 
     # Set at completion so voids know what to put back
     stock_deducted = models.BooleanField(default=False)
@@ -190,8 +227,33 @@ class POSSaleItem(TimeStampedModel):
     def sold_short(self) -> bool:
         return self.stock_shortfall > 0
 
+    # ── Price override ───────────────────────────────────────────────────
+    @property
+    def price_delta(self) -> Decimal:
+        """Per-unit difference from the system price (− = sold cheaper)."""
+        if self.list_price is None:
+            return Decimal('0.00')
+        return (self.unit_price - self.list_price).quantize(Decimal('0.01'))
+
+    @property
+    def line_delta(self) -> Decimal:
+        """Whole-line difference from the system price."""
+        return (self.price_delta * self.quantity).quantize(Decimal('0.01'))
+
     def save(self, *args, **kwargs):
         self.line_total = (self.unit_price * self.quantity).quantize(Decimal('0.01'))
+        # A line is flagged only when a system price exists to differ from,
+        # so manual/ad-hoc lines are never counted as overrides.
+        self.price_overridden = bool(
+            self.list_price is not None and self.unit_price != self.list_price
+        )
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None:
+            # Keep the derived fields in step with partial saves.
+            fields = set(update_fields)
+            if 'unit_price' in fields or 'quantity' in fields or 'list_price' in fields:
+                fields.update({'line_total', 'price_overridden'})
+                kwargs['update_fields'] = list(fields)
         super().save(*args, **kwargs)
 
 

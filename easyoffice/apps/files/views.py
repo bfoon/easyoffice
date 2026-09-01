@@ -1803,6 +1803,12 @@ def _uploaded_image_to_data_url(upload):
       - saved signatures page
       - signing modal
       - final PDF stamping
+
+    The image is normalised first: the paper is removed, the ink is trimmed
+    to its bounding box and the result is stored as a transparent PNG. Doing
+    it here means a signature is clean everywhere it is later reused, instead
+    of each consumer re-deriving it (and the PDF stamper being the only place
+    that ever tried).
     """
     import base64
     import mimetypes
@@ -1810,6 +1816,15 @@ def _uploaded_image_to_data_url(upload):
     if not upload:
         return ''
 
+    try:
+        from apps.files.signature_image import normalize_uploaded_image
+        cleaned = normalize_uploaded_image(upload)
+        if cleaned:
+            return cleaned
+    except Exception:
+        pass
+
+    # Fall back to the raw bytes rather than losing the signature.
     raw = upload.read()
     try:
         upload.seek(0)
@@ -1966,25 +1981,38 @@ def normalize_initials(value, signer_name=''):
 
 def _strip_white_background(img, threshold=235):
     """
-    Make white / near-white pixels of a signature image fully transparent.
+    Make the paper behind a signature fully transparent.
 
-    Drawn or uploaded signatures (especially scans and JPEGs) usually sit on
-    a solid white canvas. Burned into the PDF as-is, that white rectangle
-    covers any document text behind the field. Pixels whose R, G and B are
-    all >= threshold become transparent; everything else (the ink) is kept.
-    Images that already carry transparency are left untouched apart from the
-    white-pixel knockout, so partially transparent PNGs still work.
+    Kept under the original name so every existing call site keeps working,
+    but the implementation now lives in apps.files.signature_image. The old
+    hard ``r,g,b >= 235`` knockout produced three defects that showed up on
+    every signed PDF: a grey halo around the strokes (anti-aliased edge
+    pixels sat just under the threshold), staircase edges (alpha was binary),
+    and complete failure on anything that was not pure white — phone photos
+    of paper are cream with a shadow gradient, so the whole page survived.
+
+    The replacement measures the local background, chooses its threshold with
+    Otsu, and cuts with a soft ramp, which keeps anti-aliased edges. The
+    ``threshold`` argument is accepted for backwards compatibility and mapped
+    onto the new sensitivity scale.
     """
-    img = img.convert('RGBA')
-    pixels = img.getdata()
-    out = []
-    for r, g, b, a in pixels:
-        if r >= threshold and g >= threshold and b >= threshold:
-            out.append((r, g, b, 0))
-        else:
-            out.append((r, g, b, a))
-    img.putdata(out)
-    return img
+    from apps.files.signature_image import strip_background
+
+    # Old callers passed a brightness cut-off; a lower value meant "be more
+    # aggressive". Map that intent onto the new sensitivity knob.
+    try:
+        sensitivity = max(0.5, min(1.8, 235.0 / float(threshold or 235)))
+    except Exception:
+        sensitivity = 1.0
+
+    try:
+        return strip_background(img, sensitivity=sensitivity, keep_colour=True)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            'signature background removal failed; stamping the original image'
+        )
+        return img.convert('RGBA')
 
 
 def _draw_easyoffice_signature_box(c, field, value, fx, fy, fw, fh, sig_req, document):
@@ -5949,7 +5977,19 @@ class QuickSignView(LoginRequiredMixin, View):
                             _, b64 = sig_data.split(',', 1)
                             raw = base64.b64decode(b64)
 
-                            img_stream = BytesIO(raw)
+                            # Knock out the paper before stamping. Without
+                            # this the quick-sign path burned the signature's
+                            # own white rectangle over the document text —
+                            # the signature-request path already did strip it.
+                            try:
+                                img_stream = BytesIO()
+                                _strip_white_background(
+                                    Image.open(BytesIO(raw))
+                                ).save(img_stream, format='PNG')
+                                img_stream.seek(0)
+                            except Exception:
+                                img_stream = BytesIO(raw)
+
                             pad = 2
 
                             c.drawImage(

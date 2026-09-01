@@ -1,12 +1,145 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}Saved Signatures{% endblock %}
 {% block breadcrumb %}<a href="{% url 'file_manager' %}">Files</a> / Saved Signatures{% endblock %}
 
 {% block content %}
+<link href="https://fonts.googleapis.com/css2?family=Allura&family=Dancing+Script:wght@500;700&family=Great+Vibes&family=Mr+Dafoe&family=Pinyon+Script&family=Sacramento&display=swap" rel="stylesheet"/>
+
+<style>
+  /* ── Signature studio ─────────────────────────────────────────────────── */
+
+  /* Transparency checkerboard. Every signature preview sits on this, so a
+     signature that still carries a white box is immediately obvious to the
+     user instead of showing up for the first time on a signed PDF. */
+  .sig-alpha{
+    background-color:#fff;
+    background-image:
+      linear-gradient(45deg,#e8edf4 25%,transparent 25%,transparent 75%,#e8edf4 75%),
+      linear-gradient(45deg,#e8edf4 25%,transparent 25%,transparent 75%,#e8edf4 75%);
+    background-size:16px 16px;
+    background-position:0 0,8px 8px;
+  }
+
+  .sig-tabs{
+    display:flex;gap:4px;padding:4px;background:var(--eo-bg);
+    border:1px solid var(--eo-border);border-radius:11px;margin-bottom:16px;
+  }
+  .sig-tab{
+    flex:1;padding:9px 10px;font-size:.82rem;font-weight:600;border:none;
+    border-radius:8px;background:transparent;color:var(--eo-text-muted);
+    cursor:pointer;transition:var(--eo-transition);
+  }
+  .sig-tab:hover{color:var(--eo-text)}
+  .sig-tab.active{background:var(--eo-surface);color:var(--eo-accent);box-shadow:var(--eo-shadow)}
+
+  /* Drawing pad. Fixed aspect so the ratio of a saved signature is
+     predictable when it is scaled into a PDF field. */
+  .sig-pad-wrap{position:relative;border:2px solid var(--eo-border);border-radius:11px;overflow:hidden}
+  .sig-pad-wrap.is-active{border-color:var(--eo-accent)}
+  .sig-pad-wrap.has-ink{border-color:var(--eo-success)}
+  #sigPad{display:block;width:100%;height:190px;cursor:crosshair}
+  .sig-baseline{
+    position:absolute;left:8%;right:8%;bottom:34%;height:1px;
+    background:repeating-linear-gradient(90deg,#94a3b8 0 7px,transparent 7px 14px);
+    opacity:.55;pointer-events:none;
+  }
+  .sig-baseline::after{
+    content:'✕';position:absolute;left:-14px;top:-9px;font-size:.72rem;color:#94a3b8;
+  }
+  .sig-pad-hint{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-size:.84rem;color:var(--eo-text-light);pointer-events:none;transition:opacity .15s;
+  }
+
+  .sig-toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:10px}
+  .sig-swatches{display:flex;gap:6px}
+  .sig-swatch{
+    width:26px;height:26px;border-radius:50%;border:2px solid transparent;
+    cursor:pointer;padding:0;outline:2px solid var(--eo-border);outline-offset:-2px;
+  }
+  .sig-swatch.active{outline:2px solid var(--eo-accent);outline-offset:2px}
+
+  .sig-range{width:104px;accent-color:var(--eo-accent);cursor:pointer}
+
+  .sig-fonts{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .sig-font{
+    padding:10px 8px;border:1.5px solid var(--eo-border);border-radius:9px;
+    background:var(--eo-surface);cursor:pointer;font-size:1.35rem;line-height:1.1;
+    color:var(--eo-text);position:relative;transition:var(--eo-transition);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  .sig-font:hover{border-color:var(--eo-accent)}
+  .sig-font.active{border-color:var(--eo-accent);box-shadow:0 0 0 3px rgba(33,150,243,.14)}
+  .sig-font small{
+    display:block;font-family:var(--eo-font);font-size:.62rem;font-weight:700;
+    letter-spacing:.04em;text-transform:uppercase;color:var(--eo-text-muted);margin-top:3px;
+  }
+
+  .ff-dancing-script{font-family:'Dancing Script',cursive}
+  .ff-great-vibes   {font-family:'Great Vibes',cursive}
+  .ff-allura        {font-family:'Allura',cursive}
+  .ff-sacramento    {font-family:'Sacramento',cursive}
+  .ff-pinyon-script {font-family:'Pinyon Script',cursive}
+  .ff-mr-dafoe      {font-family:'Mr Dafoe',cursive}
+
+  .sig-typed-preview{
+    margin-top:12px;border:1.5px solid var(--eo-border);border-radius:10px;
+    min-height:104px;display:flex;align-items:center;justify-content:center;
+    font-size:2.7rem;line-height:1.35;padding:10px 16px;overflow:hidden;
+    white-space:nowrap;color:#0f172a;
+  }
+
+  .sig-drop{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:30px 18px;border:2px dashed var(--eo-border);border-radius:11px;
+    cursor:pointer;background:var(--eo-bg);transition:var(--eo-transition);text-align:center;
+  }
+  .sig-drop:hover,.sig-drop.dragover{border-color:var(--eo-accent);background:rgba(33,150,243,.05)}
+
+  .sig-compare{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  .sig-compare figure{margin:0}
+  .sig-compare figcaption{
+    font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--eo-text-muted);margin-bottom:4px;
+  }
+  .sig-compare .box{
+    border:1px solid var(--eo-border);border-radius:9px;height:112px;
+    display:flex;align-items:center;justify-content:center;overflow:hidden;
+  }
+  .sig-compare img{max-width:100%;max-height:100px;object-fit:contain}
+
+  .sig-card{
+    padding:14px 16px;background:var(--eo-bg);border-radius:11px;
+    border:1.5px solid var(--eo-border);transition:var(--eo-transition);
+  }
+  .sig-card.is-default{border-color:var(--eo-accent);box-shadow:0 0 0 3px rgba(33,150,243,.1)}
+  .sig-card-preview{
+    border-radius:8px;min-height:78px;display:flex;align-items:center;justify-content:center;
+    margin-bottom:10px;border:1px solid var(--eo-border);padding:8px;overflow:hidden;
+  }
+  .sig-card-preview img{max-width:100%;max-height:64px;object-fit:contain}
+  .sig-card-preview .typed{font-size:1.9rem;color:#0f172a;line-height:1.2;white-space:nowrap}
+
+  .sig-note{
+    display:flex;gap:9px;align-items:flex-start;font-size:.76rem;
+    color:var(--eo-text-muted);line-height:1.5;margin-top:12px;
+  }
+  .sig-note i{color:var(--eo-accent);margin-top:1px}
+
+  @media (max-width:575px){
+    .sig-fonts{grid-template-columns:1fr}
+    .sig-compare{grid-template-columns:1fr}
+  }
+</style>
+
 <div class="eo-page-header">
   <div>
     <h1 class="eo-page-title">Saved Signatures</h1>
-    <p class="eo-page-subtitle">Manage your reusable signatures — draw, type, or upload</p>
+    <p class="eo-page-subtitle">
+      Draw, type or upload once — every signature is stored as a transparent PNG, so it sits on
+      the document instead of covering it.
+    </p>
   </div>
   <a href="{% url 'my_signatures' %}" class="eo-btn eo-btn-secondary">
     <i class="bi bi-arrow-left"></i> My Signatures
@@ -15,130 +148,221 @@
 
 <div class="row g-4">
 
-  <!-- ── Create new signature ── -->
-  <div class="col-lg-6">
+  <!-- ══ Create ════════════════════════════════════════════════════════════ -->
+  <div class="col-lg-7">
     <div class="eo-card">
       <div class="eo-card-header" style="margin-bottom:18px">
         <div>
-          <h2 class="eo-card-title">Add New Signature</h2>
-          <p class="eo-card-subtitle">Draw, type or upload your signature to save for quick reuse</p>
+          <h2 class="eo-card-title">Add a signature</h2>
+          <p class="eo-card-subtitle">Pressure-sensitive pad, six signature fonts, or an image of your wet-ink signature</p>
         </div>
         <i class="bi bi-pen-fill" style="font-size:1.4rem;color:var(--eo-accent)"></i>
       </div>
 
-      <form method="post" enctype="multipart/form-data" id="saveForm">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="save"/>
-        <input type="hidden" name="sig_type" id="sigTypeHidden" value="draw"/>
-        <input type="hidden" name="data" id="sigDataHidden"/>
+      {% csrf_token %}
 
-        <div class="eo-form-group">
-          <label class="eo-form-label">Label</label>
-          <input type="text" name="name" class="eo-form-control" placeholder="e.g. My Signature, Formal, Initials" value="My Signature"/>
-        </div>
+      <div class="eo-form-group">
+        <label class="eo-form-label" for="sigName">Label</label>
+        <input type="text" id="sigName" class="eo-form-control"
+               placeholder="e.g. Full signature, Initials, Formal" value="My Signature"/>
+        <div class="eo-form-hint">Only you see this label — it helps you pick the right one when signing.</div>
+      </div>
 
-        <!-- Tabs -->
-        <div style="display:flex;gap:0;border:1.5px solid var(--eo-border);border-radius:9px;overflow:hidden;margin-bottom:14px">
-          <button type="button" class="save-tab active" onclick="setSaveTab('draw')" style="flex:1;padding:9px;font-size:.82rem;font-weight:600;background:var(--eo-accent);color:#fff;border:none;cursor:pointer">
-            <i class="bi bi-pen me-1"></i>Draw
-          </button>
-          <button type="button" class="save-tab" onclick="setSaveTab('type')" style="flex:1;padding:9px;font-size:.82rem;font-weight:600;background:var(--eo-bg);color:var(--eo-text-muted);border:none;cursor:pointer;border-left:1px solid var(--eo-border)">
-            <i class="bi bi-type me-1"></i>Type
-          </button>
-          <button type="button" class="save-tab" onclick="setSaveTab('upload')" style="flex:1;padding:9px;font-size:.82rem;font-weight:600;background:var(--eo-bg);color:var(--eo-text-muted);border:none;cursor:pointer;border-left:1px solid var(--eo-border)">
-            <i class="bi bi-upload me-1"></i>Upload
-          </button>
-        </div>
-
-        <!-- Draw tab -->
-        <div id="stDraw">
-          <canvas id="sigCanvas" style="width:100%;height:150px;border:2px solid var(--eo-border);border-radius:9px;cursor:crosshair;display:block;background:#fff;touch-action:none"></canvas>
-          <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:.75rem;color:var(--eo-text-muted)">
-            <span>Draw your signature using your mouse or finger</span>
-            <button type="button" onclick="clearSigCanvas()" style="background:none;border:none;cursor:pointer;color:var(--eo-text-muted);font-size:.75rem;font-weight:600"><i class="bi bi-arrow-counterclockwise"></i> Clear</button>
-          </div>
-        </div>
-
-        <!-- Type tab -->
-        <div id="stType" style="display:none">
-          <input type="text" id="typedSig" placeholder="Type your full name or initials"
-                 oninput="updateTypedPreview(this.value)"
-                 style="width:100%;padding:14px;border:2px solid var(--eo-border);border-radius:9px;font-size:1.6rem;font-family:'Dancing Script',cursive,serif;text-align:center;outline:none;color:var(--eo-text);background:var(--eo-bg);transition:border-color .15s"/>
-          <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600;700&display=swap" rel="stylesheet"/>
-          <div style="margin-top:8px;font-size:.75rem;color:var(--eo-text-muted)">Choose a style:</div>
-          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap" id="fontChoices">
-            <button type="button" onclick="setFont('Dancing Script')" class="font-btn active" data-font="Dancing Script" style="padding:6px 14px;border-radius:7px;border:1.5px solid var(--eo-border);background:var(--eo-bg);cursor:pointer;font-family:'Dancing Script',cursive;font-size:1rem;color:var(--eo-text)">Script</button>
-            <button type="button" onclick="setFont('Caveat')" class="font-btn" data-font="Caveat" style="padding:6px 14px;border-radius:7px;border:1.5px solid var(--eo-border);background:var(--eo-bg);cursor:pointer;font-family:'Caveat',cursive;font-size:1rem;color:var(--eo-text)">Casual</button>
-          </div>
-        </div>
-
-        <!-- Upload tab -->
-        <div id="stUpload" style="display:none">
-          <label style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;border:2px dashed var(--eo-border);border-radius:9px;cursor:pointer;transition:border-color .14s;background:var(--eo-bg)"
-                 onmouseover="this.style.borderColor='var(--eo-accent)'" onmouseout="this.style.borderColor='var(--eo-border)'">
-            <i class="bi bi-cloud-upload" style="font-size:2rem;color:var(--eo-text-muted);margin-bottom:10px"></i>
-            <span style="font-size:.86rem;font-weight:600;color:var(--eo-text)">Click to upload signature image</span>
-            <span style="font-size:.75rem;color:var(--eo-text-muted);margin-top:4px">PNG, JPG — transparent background recommended</span>
-            <input type="file" name="image" id="uploadInput" accept="image/png,image/jpeg" style="display:none" onchange="previewUpload(this)"/>
-          </label>
-          <div id="uploadPreviewWrap" style="display:none;margin-top:10px;text-align:center">
-            <img id="uploadPreviewImg" style="max-width:100%;max-height:120px;border:1px solid var(--eo-border);border-radius:8px"/>
-          </div>
-        </div>
-
-        <div style="margin-top:16px;display:flex;gap:10px;align-items:center">
-          <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:.82rem;color:var(--eo-text-muted)">
-            <input type="checkbox" name="is_default" style="width:16px;height:16px"/>
-            Set as default signature
-          </label>
-        </div>
-
-        <button type="submit" class="eo-btn eo-btn-primary" style="width:100%;margin-top:16px;padding:12px" onclick="return prepSave()">
-          <i class="bi bi-floppy"></i> Save Signature
+      <div class="sig-tabs" role="tablist">
+        <button type="button" class="sig-tab active" data-tab="draw" role="tab">
+          <i class="bi bi-pen me-1"></i>Draw
         </button>
-      </form>
+        <button type="button" class="sig-tab" data-tab="type" role="tab">
+          <i class="bi bi-type me-1"></i>Type
+        </button>
+        <button type="button" class="sig-tab" data-tab="upload" role="tab">
+          <i class="bi bi-cloud-upload me-1"></i>Upload
+        </button>
+      </div>
+
+      <!-- ── Draw ─────────────────────────────────────────────────────────── -->
+      <section id="tabDraw">
+        <div class="sig-pad-wrap sig-alpha" id="padWrap">
+          <canvas id="sigPad"></canvas>
+          <div class="sig-baseline"></div>
+          <div class="sig-pad-hint" id="padHint">Sign above the line</div>
+        </div>
+
+        <div class="sig-toolbar">
+          <div class="sig-swatches" id="inkSwatches" role="radiogroup" aria-label="Ink colour">
+            <button type="button" class="sig-swatch active" data-ink="#0f172a" style="background:#0f172a" title="Ink black"></button>
+            <button type="button" class="sig-swatch" data-ink="#0c235c" style="background:#0c235c" title="Navy"></button>
+            <button type="button" class="sig-swatch" data-ink="#0e57c2" style="background:#0e57c2" title="Blue"></button>
+          </div>
+
+          <label style="display:flex;align-items:center;gap:7px;font-size:.76rem;color:var(--eo-text-muted);font-weight:600">
+            <i class="bi bi-brush"></i>
+            <input type="range" class="sig-range" id="penWeight" min="2.4" max="7" step="0.2" value="4.2"/>
+          </label>
+
+          <div style="margin-left:auto;display:flex;gap:6px">
+            <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" id="padUndo">
+              <i class="bi bi-arrow-90deg-left"></i> Undo
+            </button>
+            <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" id="padClear">
+              <i class="bi bi-arrow-counterclockwise"></i> Clear
+            </button>
+          </div>
+        </div>
+
+        <div class="sig-note">
+          <i class="bi bi-info-circle-fill"></i>
+          <span>
+            Stroke thickness follows your pen pressure, or your drawing speed on a mouse or
+            trackpad. Draw a little larger than feels natural — the signature is trimmed to the
+            ink and scaled to each signature field.
+          </span>
+        </div>
+      </section>
+
+      <!-- ── Type ─────────────────────────────────────────────────────────── -->
+      <section id="tabType" style="display:none">
+        <div class="eo-form-group" style="margin-bottom:14px">
+          <label class="eo-form-label" for="typedText">Your name as you sign it</label>
+          <input type="text" id="typedText" class="eo-form-control"
+                 placeholder="Type your full name or initials" value="{{ request.user.full_name|default:'' }}"/>
+        </div>
+
+        <label class="eo-form-label">Signature style</label>
+        <div class="sig-fonts" id="fontPicker" role="radiogroup" aria-label="Signature font">
+          <button type="button" class="sig-font ff-dancing-script active" data-font="Dancing Script">
+            <span class="fp-sample">Signature</span><small>Dancing Script</small>
+          </button>
+          <button type="button" class="sig-font ff-great-vibes" data-font="Great Vibes">
+            <span class="fp-sample">Signature</span><small>Great Vibes</small>
+          </button>
+          <button type="button" class="sig-font ff-allura" data-font="Allura">
+            <span class="fp-sample">Signature</span><small>Allura</small>
+          </button>
+          <button type="button" class="sig-font ff-sacramento" data-font="Sacramento">
+            <span class="fp-sample">Signature</span><small>Sacramento</small>
+          </button>
+          <button type="button" class="sig-font ff-pinyon-script" data-font="Pinyon Script">
+            <span class="fp-sample">Signature</span><small>Pinyon Script</small>
+          </button>
+          <button type="button" class="sig-font ff-mr-dafoe" data-font="Mr Dafoe">
+            <span class="fp-sample">Signature</span><small>Mr Dafoe</small>
+          </button>
+        </div>
+
+        <div class="sig-typed-preview sig-alpha ff-dancing-script" id="typedPreview">Signature</div>
+
+        <div class="sig-note">
+          <i class="bi bi-shield-check"></i>
+          <span>
+            Typed signatures are stored as text plus the font you chose, then rendered from the
+            real typeface when the PDF is produced — so they stay sharp at any zoom level and
+            never carry a background.
+          </span>
+        </div>
+      </section>
+
+      <!-- ── Upload ───────────────────────────────────────────────────────── -->
+      <section id="tabUpload" style="display:none">
+        <label class="sig-drop" id="dropZone">
+          <i class="bi bi-cloud-upload" style="font-size:1.9rem;color:var(--eo-text-muted);margin-bottom:8px"></i>
+          <span style="font-size:.88rem;font-weight:700;color:var(--eo-text)">
+            Drop a photo or scan here, or click to browse
+          </span>
+          <span style="font-size:.75rem;color:var(--eo-text-muted);margin-top:4px">
+            PNG, JPG or WEBP — a phone photo of a signature on plain paper works fine
+          </span>
+          <input type="file" id="uploadInput" accept="image/png,image/jpeg,image/webp" style="display:none"/>
+        </label>
+
+        <div id="uploadResult" style="display:none">
+          <div class="sig-compare">
+            <figure>
+              <figcaption>Original</figcaption>
+              <div class="box" style="background:var(--eo-bg)"><img id="origPreview" alt="Original upload"/></div>
+            </figure>
+            <figure>
+              <figcaption>Background removed</figcaption>
+              <div class="box sig-alpha"><img id="cleanPreview" alt="Cleaned signature"/></div>
+            </figure>
+          </div>
+
+          <div class="sig-toolbar">
+            <label style="display:flex;align-items:center;gap:8px;font-size:.76rem;color:var(--eo-text-muted);font-weight:600">
+              Cut sensitivity
+              <input type="range" class="sig-range" id="cutSensitivity" min="0.5" max="1.8" step="0.05" value="1"/>
+            </label>
+
+            <div class="sig-swatches" id="uploadInk" role="radiogroup" aria-label="Ink colour">
+              <button type="button" class="sig-swatch active" data-ink="#0f172a" style="background:#0f172a" title="Ink black"></button>
+              <button type="button" class="sig-swatch" data-ink="#0c235c" style="background:#0c235c" title="Navy"></button>
+              <button type="button" class="sig-swatch" data-ink="#0e57c2" style="background:#0e57c2" title="Blue"></button>
+              <button type="button" class="sig-swatch" data-ink=""
+                      style="background:linear-gradient(135deg,#f87171,#60a5fa)" title="Keep original colour"></button>
+            </div>
+
+            <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm" id="uploadReset" style="margin-left:auto">
+              <i class="bi bi-x-lg"></i> Remove
+            </button>
+          </div>
+
+          <div class="sig-note">
+            <i class="bi bi-magic"></i>
+            <span>
+              The paper, shadows and JPEG noise are removed automatically and the edges stay soft,
+              so no grey halo appears when the signature is stamped. Slide left if any background
+              survives, right if faint strokes are being lost.
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Save ─────────────────────────────────────────────────────────── -->
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:20px;
+                  padding-top:16px;border-top:1px solid var(--eo-border)">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.83rem;color:var(--eo-text)">
+          <input type="checkbox" id="isDefault" style="width:16px;height:16px"/>
+          Use this as my default signature
+        </label>
+        <button type="button" class="eo-btn eo-btn-primary" id="saveBtn" style="margin-left:auto;min-width:180px">
+          <i class="bi bi-floppy"></i> Save signature
+        </button>
+      </div>
+      <div id="saveError" style="display:none;margin-top:10px;font-size:.8rem;color:var(--eo-danger);font-weight:600"></div>
     </div>
   </div>
 
-  <!-- ── Saved signatures list ── -->
-  <div class="col-lg-6">
-    <div class="eo-card">
+  <!-- ══ Existing signatures ═══════════════════════════════════════════════ -->
+  <div class="col-lg-5">
+    <div class="eo-card" style="position:sticky;top:20px">
       <div class="eo-card-header" style="margin-bottom:16px">
-        <h2 class="eo-card-title">Your Saved Signatures</h2>
+        <h2 class="eo-card-title">Your signatures</h2>
         <span style="font-size:.78rem;color:var(--eo-text-muted)">{{ signatures|length }} saved</span>
       </div>
 
       {% if signatures %}
-      <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 220px);overflow-y:auto">
         {% for sig in signatures %}
-        <div style="padding:14px 16px;background:var(--eo-bg);border-radius:10px;border:1.5px solid {% if sig.is_default %}var(--eo-accent){% else %}var(--eo-border){% endif %}">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-            <div style="display:flex;align-items:center;gap:8px">
-              <span style="font-size:.88rem;font-weight:700;color:var(--eo-text)">{{ sig.name }}</span>
+        <div class="sig-card{% if sig.is_default %} is-default{% endif %}">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:8px;min-width:0">
+              <span style="font-size:.88rem;font-weight:700;color:var(--eo-text);
+                           overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ sig.name }}</span>
               {% if sig.is_default %}
-              <span style="font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:12px;background:var(--eo-accent);color:#fff">Default</span>
+              <span style="font-size:.64rem;font-weight:700;padding:2px 8px;border-radius:12px;
+                           background:var(--eo-accent);color:#fff;flex-shrink:0">DEFAULT</span>
               {% endif %}
             </div>
-            <span style="font-size:.72rem;color:var(--eo-text-muted);padding:2px 8px;background:var(--eo-surface);border-radius:12px;border:1px solid var(--eo-border)">
+            <span style="font-size:.7rem;color:var(--eo-text-muted);padding:2px 8px;
+                         background:var(--eo-surface);border-radius:12px;border:1px solid var(--eo-border);flex-shrink:0">
               <i class="bi {% if sig.sig_type == 'draw' %}bi-pen{% elif sig.sig_type == 'type' %}bi-type{% else %}bi-image{% endif %} me-1"></i>
               {{ sig.get_sig_type_display }}
             </span>
           </div>
 
-          <!-- Signature preview -->
-          <div style="background:#fff;border-radius:7px;padding:10px;min-height:60px;display:flex;align-items:center;justify-content:center;margin-bottom:10px;border:1px solid #e2e8f0">
-            {% if sig.sig_type == 'draw' %}
-            <canvas id="preview-{{ sig.id }}" style="max-width:100%;max-height:60px" data-src="{{ sig.data }}"></canvas>
-            {% elif sig.sig_type == 'type' %}
-            <span style="font-family:'Dancing Script',cursive;font-size:1.5rem;color:#1e293b">{{ sig.data }}</span>
-            {% elif sig.sig_type == 'upload' %}
-            {% if sig.data %}
-              <img src="{{ sig.data }}" style="max-width:100%;max-height:60px"/>
-            {% elif sig.image %}
-              <img src="{{ sig.image.url }}" style="max-width:100%;max-height:60px"/>
-            {% endif %}
-          {% endif %}
-          </div>
+          <div class="sig-card-preview sig-alpha"
+               data-preview="{{ sig.preview_data|default:sig.data }}"
+               data-kind="{{ sig.sig_type }}"></div>
 
           <div style="display:flex;gap:6px">
             {% if not sig.is_default %}
@@ -147,131 +371,323 @@
               <input type="hidden" name="action" value="set_default"/>
               <input type="hidden" name="sig_id" value="{{ sig.id }}"/>
               <button type="submit" class="eo-btn eo-btn-secondary eo-btn-sm" style="width:100%">
-                <i class="bi bi-star"></i> Set Default
+                <i class="bi bi-star"></i> Set default
               </button>
             </form>
             {% else %}
-            <div style="flex:1;display:flex;align-items:center;gap:5px;font-size:.78rem;color:var(--eo-accent);font-weight:600">
-              <i class="bi bi-star-fill"></i> Default signature
+            <div style="flex:1;display:flex;align-items:center;gap:5px;font-size:.76rem;
+                        color:var(--eo-accent);font-weight:700">
+              <i class="bi bi-star-fill"></i> Applied automatically
             </div>
             {% endif %}
+            <button type="button" class="eo-btn eo-btn-secondary eo-btn-sm eo-btn-icon js-download"
+                    data-name="{{ sig.name }}" title="Download transparent PNG">
+              <i class="bi bi-download"></i>
+            </button>
             <form method="post" onsubmit="return confirm('Delete this signature?')">
               {% csrf_token %}
               <input type="hidden" name="action" value="delete"/>
               <input type="hidden" name="sig_id" value="{{ sig.id }}"/>
-              <button type="submit" class="eo-btn eo-btn-danger eo-btn-sm eo-btn-icon"><i class="bi bi-trash"></i></button>
+              <button type="submit" class="eo-btn eo-btn-danger eo-btn-sm eo-btn-icon" title="Delete">
+                <i class="bi bi-trash"></i>
+              </button>
             </form>
           </div>
         </div>
         {% endfor %}
       </div>
-
       {% else %}
       <div style="text-align:center;padding:48px 24px;color:var(--eo-text-muted)">
-        <i class="bi bi-pen" style="font-size:2.5rem;display:block;margin-bottom:14px;opacity:.25"></i>
-        <div style="font-size:.95rem;font-weight:700;color:var(--eo-text);margin-bottom:6px">No saved signatures yet</div>
-        <p style="font-size:.84rem">Create your first signature using the form on the left.</p>
+        <i class="bi bi-pen" style="font-size:2.4rem;display:block;margin-bottom:14px;opacity:.25"></i>
+        <div style="font-size:.95rem;font-weight:700;color:var(--eo-text);margin-bottom:6px">
+          No signatures yet
+        </div>
+        <p style="font-size:.84rem">Create your first one with the studio on the left. It will then be
+        offered on every document you are asked to sign.</p>
       </div>
       {% endif %}
     </div>
   </div>
-
 </div>
 
-<link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600;700&family=Caveat:wght@600&display=swap" rel="stylesheet"/>
-
+<script src="{% static 'js/eo_signature.js' %}"></script>
 <script>
-// ── Canvas ──
-var canvas = document.getElementById('sigCanvas');
-var ctx = canvas.getContext('2d');
-var drawing = false, hasSig = false;
-(function() {
-  var ratio = window.devicePixelRatio || 1;
-  var w = canvas.offsetWidth || 320, h = 150;
-  canvas.width = w*ratio; canvas.height = h*ratio;
-  canvas.style.width = w+'px'; canvas.style.height = h+'px';
-  ctx.scale(ratio, ratio);
-  ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.strokeStyle = '#1e293b';
-})();
-function getP(e) { var r=canvas.getBoundingClientRect(); var s=e.touches?e.touches[0]:e; return {x:s.clientX-r.left,y:s.clientY-r.top}; }
-canvas.addEventListener('mousedown',  function(e){ drawing=true; var p=getP(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); });
-canvas.addEventListener('mousemove',  function(e){ if(!drawing) return; var p=getP(e); ctx.lineTo(p.x,p.y); ctx.stroke(); hasSig=true; canvas.style.borderColor='var(--eo-success)'; });
-canvas.addEventListener('mouseup',    function(){ drawing=false; });
-canvas.addEventListener('mouseleave', function(){ drawing=false; });
-canvas.addEventListener('touchstart', function(e){ e.preventDefault(); drawing=true; var p=getP(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); }, {passive:false});
-canvas.addEventListener('touchmove',  function(e){ e.preventDefault(); if(!drawing) return; var p=getP(e); ctx.lineTo(p.x,p.y); ctx.stroke(); hasSig=true; }, {passive:false});
-canvas.addEventListener('touchend',   function(){ drawing=false; });
+(function () {
+  'use strict';
 
-function clearSigCanvas() { ctx.clearRect(0,0,canvas.width,canvas.height); hasSig=false; canvas.style.borderColor='var(--eo-border)'; }
+  var CSRF = (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value || '';
+  var POST_URL = window.location.pathname;
 
-// ── Save tab switch ──
-var currentSaveTab = 'draw';
-function setSaveTab(t) {
-  currentSaveTab = t;
-  document.getElementById('sigTypeHidden').value = t;
-  ['draw','type','upload'].forEach(function(tab) {
-    document.getElementById('st'+tab.charAt(0).toUpperCase()+tab.slice(1)).style.display = tab===t?'':'none';
+  /* ── Tabs ──────────────────────────────────────────────────────────────── */
+  var mode = 'draw';
+  var panels = { draw: 'tabDraw', type: 'tabType', upload: 'tabUpload' };
+
+  document.querySelectorAll('.sig-tab').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      mode = btn.dataset.tab;
+      document.querySelectorAll('.sig-tab').forEach(function (b) {
+        b.classList.toggle('active', b === btn);
+      });
+      Object.keys(panels).forEach(function (k) {
+        document.getElementById(panels[k]).style.display = (k === mode) ? '' : 'none';
+      });
+      if (mode === 'draw' && pad) pad.resize();
+      hideError();
+    });
   });
-  document.querySelectorAll('.save-tab').forEach(function(b, i) {
-    var tabs = ['draw','type','upload'];
-    var isActive = tabs[i]===t;
-    b.style.background = isActive ? 'var(--eo-accent)' : 'var(--eo-bg)';
-    b.style.color = isActive ? '#fff' : 'var(--eo-text-muted)';
+
+  /* ── Draw pad ──────────────────────────────────────────────────────────── */
+  var padWrap = document.getElementById('padWrap');
+  var padHint = document.getElementById('padHint');
+  var pad = new EOSignaturePad(document.getElementById('sigPad'), {
+    ink: '#0f172a',
+    onChange: function (p) {
+      var empty = p.isEmpty();
+      padHint.style.opacity = empty ? '1' : '0';
+      padWrap.classList.toggle('has-ink', !empty);
+    }
   });
-}
 
-// ── Typed signature ──
-var selectedFont = 'Dancing Script';
-function setFont(font) {
-  selectedFont = font;
-  document.querySelectorAll('.font-btn').forEach(function(b) {
-    b.style.borderColor = b.dataset.font===font ? 'var(--eo-accent)' : 'var(--eo-border)';
+  document.getElementById('padUndo').addEventListener('click', function () { pad.undo(); });
+  document.getElementById('padClear').addEventListener('click', function () { pad.clear(); });
+
+  document.getElementById('penWeight').addEventListener('input', function () {
+    pad.setWeight(parseFloat(this.value));
   });
-  var input = document.getElementById('typedSig');
-  input.style.fontFamily = "'"+font+"', cursive";
-}
-function updateTypedPreview(v) { /* live */ }
 
-// ── Upload preview ──
-function previewUpload(input) {
-  var file = input.files[0];
-  if (!file) return;
-  var reader = new FileReader();
-  reader.onload = function(e) {
-    var wrap = document.getElementById('uploadPreviewWrap');
-    var img  = document.getElementById('uploadPreviewImg');
-    img.src  = e.target.result;
-    wrap.style.display = '';
-  };
-  reader.readAsDataURL(file);
-}
+  document.querySelectorAll('#inkSwatches .sig-swatch').forEach(function (sw) {
+    sw.addEventListener('click', function () {
+      document.querySelectorAll('#inkSwatches .sig-swatch').forEach(function (s) {
+        s.classList.toggle('active', s === sw);
+      });
+      pad.setInk(sw.dataset.ink);
+    });
+  });
 
-// ── Prepare form submit ──
-function prepSave() {
-  if (currentSaveTab === 'draw') {
-    if (!hasSig) { alert('Please draw your signature.'); return false; }
-    document.getElementById('sigDataHidden').value = canvas.toDataURL('image/png');
-  } else if (currentSaveTab === 'type') {
-    var t = document.getElementById('typedSig').value.trim();
-    if (!t) { alert('Please type your signature.'); return false; }
-    document.getElementById('sigDataHidden').value = t;
+  /* ── Typed ─────────────────────────────────────────────────────────────── */
+  var typedFont = 'Dancing Script';
+  var typedInk = '#0f172a';
+  var typedInput = document.getElementById('typedText');
+  var typedPreview = document.getElementById('typedPreview');
+
+  function fontClass(name) { return 'ff-' + name.toLowerCase().replace(/\s+/g, '-'); }
+
+  function paintTypedPreview() {
+    var text = (typedInput.value || '').trim() || 'Signature';
+    typedPreview.textContent = text;
+    typedPreview.className = 'sig-typed-preview sig-alpha ' + fontClass(typedFont);
+    typedPreview.style.color = typedInk;
+    document.querySelectorAll('.fp-sample').forEach(function (s) {
+      s.textContent = text.length > 16 ? text.slice(0, 16) : text;
+    });
   }
-  // upload: handled by file input directly
-  return true;
-}
 
-// ── Load drawn signature previews ──
-document.querySelectorAll('canvas[data-src]').forEach(function(c) {
-  var src = c.dataset.src;
-  if (!src) return;
-  var img = new Image();
-  img.onload = function() {
-    // Scale to fit
-    var ratio = Math.min(c.parentElement.offsetWidth/img.width, 60/img.height);
-    c.width = img.width*ratio; c.height = img.height*ratio;
-    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-  };
-  img.src = src;
-});
+  typedInput.addEventListener('input', paintTypedPreview);
+
+  document.querySelectorAll('#fontPicker .sig-font').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      typedFont = btn.dataset.font;
+      document.querySelectorAll('#fontPicker .sig-font').forEach(function (b) {
+        b.classList.toggle('active', b === btn);
+      });
+      paintTypedPreview();
+    });
+  });
+  paintTypedPreview();
+
+  /* ── Upload + background removal ───────────────────────────────────────── */
+  var dropZone = document.getElementById('dropZone');
+  var uploadInput = document.getElementById('uploadInput');
+  var uploadResult = document.getElementById('uploadResult');
+  var origPreview = document.getElementById('origPreview');
+  var cleanPreview = document.getElementById('cleanPreview');
+  var sensitivity = document.getElementById('cutSensitivity');
+
+  var sourceImage = null;      // the untouched upload, for re-cleaning
+  var cleanedDataUrl = '';
+  var uploadInk = '#0f172a';
+
+  function recleanUpload() {
+    if (!sourceImage) return;
+    var result = EOSignatureImage.fromImage(sourceImage, {
+      sensitivity: parseFloat(sensitivity.value),
+      ink: uploadInk || null
+    });
+    cleanedDataUrl = result.dataUrl;
+    cleanPreview.src = cleanedDataUrl;
+  }
+
+  function loadUpload(file) {
+    if (!file) return;
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) {
+      showError('Please choose a PNG, JPG or WEBP image.');
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var img = new Image();
+      img.onload = function () {
+        sourceImage = img;
+        origPreview.src = e.target.result;
+        uploadResult.style.display = '';
+        recleanUpload();
+        hideError();
+      };
+      img.onerror = function () { showError('That image could not be read.'); };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  uploadInput.addEventListener('change', function () { loadUpload(this.files[0]); });
+  sensitivity.addEventListener('input', recleanUpload);
+
+  document.querySelectorAll('#uploadInk .sig-swatch').forEach(function (sw) {
+    sw.addEventListener('click', function () {
+      document.querySelectorAll('#uploadInk .sig-swatch').forEach(function (s) {
+        s.classList.toggle('active', s === sw);
+      });
+      uploadInk = sw.dataset.ink;
+      recleanUpload();
+    });
+  });
+
+  document.getElementById('uploadReset').addEventListener('click', function () {
+    sourceImage = null; cleanedDataUrl = '';
+    uploadInput.value = '';
+    uploadResult.style.display = 'none';
+  });
+
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    dropZone.addEventListener(ev, function (e) {
+      e.preventDefault(); dropZone.classList.add('dragover');
+    });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    dropZone.addEventListener(ev, function (e) {
+      e.preventDefault(); dropZone.classList.remove('dragover');
+    });
+  });
+  dropZone.addEventListener('drop', function (e) {
+    if (e.dataTransfer && e.dataTransfer.files.length) loadUpload(e.dataTransfer.files[0]);
+  });
+
+  /* ── Save ──────────────────────────────────────────────────────────────── */
+  var saveBtn = document.getElementById('saveBtn');
+  var saveError = document.getElementById('saveError');
+
+  function showError(msg) { saveError.textContent = msg; saveError.style.display = ''; }
+  function hideError() { saveError.style.display = 'none'; }
+
+  function dataUrlToBlob(dataUrl) {
+    var parts = dataUrl.split(',');
+    var mime = (parts[0].match(/:(.*?);/) || [])[1] || 'image/png';
+    var bin = atob(parts[1]);
+    var buf = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return new Blob([buf], { type: mime });
+  }
+
+  saveBtn.addEventListener('click', function () {
+    hideError();
+
+    var fd = new FormData();
+    fd.append('csrfmiddlewaretoken', CSRF);
+    fd.append('action', 'save');
+    fd.append('name', (document.getElementById('sigName').value || 'My Signature').trim() || 'My Signature');
+    fd.append('sig_type', mode);
+    if (document.getElementById('isDefault').checked) fd.append('is_default', 'on');
+
+    if (mode === 'draw') {
+      if (pad.isEmpty()) { showError('Draw your signature first.'); return; }
+      fd.append('data', pad.toDataURL());
+
+    } else if (mode === 'type') {
+      var text = (typedInput.value || '').trim();
+      if (!text) { showError('Type your name first.'); return; }
+      fd.append('typed_text', text);
+      fd.append('font_name', typedFont);
+
+    } else {
+      if (!cleanedDataUrl) { showError('Choose a signature image first.'); return; }
+      // Send the cleaned, transparent PNG as the file itself, so the stored
+      // ImageField and the stored data URL are identical and both transparent.
+      fd.append('image', dataUrlToBlob(cleanedDataUrl), 'signature.png');
+      fd.append('data', cleanedDataUrl);
+    }
+
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Saving…';
+
+    fetch(POST_URL, {
+      method: 'POST',
+      body: fd,
+      credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' }
+    }).then(function (r) {
+      return r.json().catch(function () { return { status: r.ok ? 'ok' : 'error' }; });
+    }).then(function (data) {
+      if (data.status === 'ok') { window.location.reload(); return; }
+      showError(data.message || 'The signature could not be saved.');
+    }).catch(function () {
+      showError('Network error — the signature was not saved.');
+    }).finally(function () {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = '<i class="bi bi-floppy"></i> Save signature';
+    });
+  });
+
+  /* ── Render the saved-signature previews ───────────────────────────────── */
+  document.querySelectorAll('.sig-card-preview').forEach(function (box) {
+    var value = box.dataset.preview || '';
+
+    if (value.indexOf('data:image') === 0 || /^https?:\/\/|^\//.test(value)) {
+      var img = new Image();
+      img.alt = 'Saved signature';
+      img.src = value;
+      box.appendChild(img);
+      return;
+    }
+
+    var font = 'Dancing Script';
+    var text = value;
+    if (value.indexOf('font:') === 0 && value.indexOf('|') > -1) {
+      font = value.slice(5, value.indexOf('|')) || font;
+      text = value.slice(value.indexOf('|') + 1);
+    }
+    var span = document.createElement('span');
+    span.className = 'typed ' + fontClass(font);
+    span.textContent = text || '—';
+    box.appendChild(span);
+  });
+
+  /* ── Download a saved signature as a transparent PNG ───────────────────── */
+  document.querySelectorAll('.js-download').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var card = btn.closest('.sig-card');
+      var box = card.querySelector('.sig-card-preview');
+      var value = box.dataset.preview || '';
+      var name = (btn.dataset.name || 'signature').replace(/[^\w\-. ]+/g, '') || 'signature';
+
+      var href = value;
+      if (value.indexOf('data:image') !== 0) {
+        var font = 'Dancing Script', text = value;
+        if (value.indexOf('font:') === 0 && value.indexOf('|') > -1) {
+          font = value.slice(5, value.indexOf('|')) || font;
+          text = value.slice(value.indexOf('|') + 1);
+        }
+        href = EOSignatureImage.renderTyped(text, font, {}).toDataURL('image/png');
+      }
+
+      var a = document.createElement('a');
+      a.href = href;
+      a.download = name + '.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+  });
+
+})();
 </script>
 {% endblock %}

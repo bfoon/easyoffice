@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-{% load humanize %}
+{% load humanize static %}
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -462,12 +462,38 @@
     .ff-pinyon-script    { font-family:"Pinyon Script", cursive; }
     .ff-mr-dafoe         { font-family:"Mr Dafoe", cursive; }
 
-    /* Draw canvas — DocuSign-style bigger pad, fits the modal width */
+    /* Draw pad. The checkerboard is deliberate: it shows the signer that
+       what they draw is transparent ink, not a white sticker that will be
+       pasted over the document text. */
+    .draw-pad-wrap{
+      position:relative;border:1.5px solid var(--border);border-radius:var(--radius);
+      overflow:hidden;
+      background-color:#fff;
+      background-image:
+        linear-gradient(45deg,#eef2f7 25%,transparent 25%,transparent 75%,#eef2f7 75%),
+        linear-gradient(45deg,#eef2f7 25%,transparent 25%,transparent 75%,#eef2f7 75%);
+      background-size:16px 16px;background-position:0 0,8px 8px;
+    }
+    .draw-pad-wrap.has-ink{border-color:#16a34a}
     #drawCanvas{
       width:100%;height:240px;
-      border:1px solid var(--border);border-radius:var(--radius);
-      background:#fff;touch-action:none;cursor:crosshair;display:block;
+      touch-action:none;cursor:crosshair;display:block;background:transparent;
     }
+    .draw-baseline{
+      position:absolute;left:8%;right:8%;bottom:32%;height:1px;pointer-events:none;
+      background:repeating-linear-gradient(90deg,#94a3b8 0 7px,transparent 7px 14px);opacity:.6;
+    }
+    .draw-hint{
+      position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+      font-size:.85rem;color:#94a3b8;pointer-events:none;transition:opacity .15s;
+    }
+    .ink-swatches{display:flex;gap:6px}
+    .ink-swatch{
+      width:24px;height:24px;border-radius:50%;border:none;cursor:pointer;padding:0;
+      outline:2px solid var(--border);outline-offset:-2px;
+    }
+    .ink-swatch.active{outline:2px solid var(--accent, #2563eb);outline-offset:2px}
+    .pen-range{width:96px;cursor:pointer}
 
     /* Bigger upload preview that actually shows the signature */
     #uploadedSignaturePreview{
@@ -841,13 +867,38 @@
             <div id="sigModeDraw" style="display:none">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
                 <label class="label" style="margin:0">Draw your signature</label>
-                <button type="button" class="btn btn-ghost btn-sm" onclick="clearDraw()">
-                  <i class="bi bi-arrow-counterclockwise"></i> Clear
-                </button>
+                <div style="display:flex;gap:6px">
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="undoDraw()">
+                    <i class="bi bi-arrow-90deg-left"></i> Undo
+                  </button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="clearDraw()">
+                    <i class="bi bi-arrow-counterclockwise"></i> Clear
+                  </button>
+                </div>
               </div>
-              <canvas id="drawCanvas" width="1100" height="320"></canvas>
+
+              <div class="draw-pad-wrap" id="drawPadWrap">
+                <canvas id="drawCanvas"></canvas>
+                <div class="draw-baseline"></div>
+                <div class="draw-hint" id="drawHint">Sign above the line</div>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:8px">
+                <div class="ink-swatches" id="drawInk" role="radiogroup" aria-label="Ink colour">
+                  <button type="button" class="ink-swatch active" data-ink="#0f172a" style="background:#0f172a" title="Ink black"></button>
+                  <button type="button" class="ink-swatch" data-ink="#0c235c" style="background:#0c235c" title="Navy"></button>
+                  <button type="button" class="ink-swatch" data-ink="#0e57c2" style="background:#0e57c2" title="Blue"></button>
+                </div>
+                <label style="display:flex;align-items:center;gap:7px;font-size:.74rem;color:var(--text-muted)">
+                  <i class="bi bi-brush"></i>
+                  <input type="range" class="pen-range" id="penWeight" min="2.4" max="7" step="0.2" value="4.2">
+                </label>
+              </div>
+
               <div style="font-size:.74rem;color:var(--text-muted);margin-top:6px">
-                Use your mouse, trackpad, or finger to sign. The signature is rendered at high resolution and will fit cleanly into the signature box on the PDF.
+                Stroke weight follows your pen pressure, or your speed on a mouse or finger.
+                The signature is captured at high resolution, trimmed to the ink, and stamped
+                with a transparent background so the document stays readable underneath it.
               </div>
             </div>
 
@@ -953,6 +1004,10 @@
 
 {% if not error and not already_done %}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Shared signature engine: pressure-aware pad + background removal.
+     Same file the Saved Signatures studio uses, so a signature drawn here
+     and one saved there are produced by identical code. -->
+<script src="{% static 'js/eo_signature.js' %}"></script>
 <script>
 (function(){
   'use strict';
@@ -1348,34 +1403,46 @@
     updateTypedPreview();
   };
 
+  // The pad itself lives in eo_signature.js so the signing page and the
+  // Saved Signatures studio cannot drift apart.
+  var eoPad = null;
+
   function initDrawCanvas(){
     var c = document.getElementById('drawCanvas');
-    if (!c || c.dataset.ready) return;
-    c.dataset.ready = '1';
-    var ctx = c.getContext('2d');
-    ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#0f172a';
-    function pos(e){
-      var r = c.getBoundingClientRect();
-      var t = e.touches ? e.touches[0] : e;
-      return { x:(t.clientX-r.left)*(c.width/r.width), y:(t.clientY-r.top)*(c.height/r.height) };
+    if (!c) return;
+    if (eoPad){ eoPad.resize(); return; }
+
+    var wrap = document.getElementById('drawPadWrap');
+    var hint = document.getElementById('drawHint');
+
+    eoPad = new EOSignaturePad(c, {
+      ink: '#0f172a',
+      onChange: function(pad){
+        drawDirty = !pad.isEmpty();
+        if (hint) hint.style.opacity = drawDirty ? '0' : '1';
+        if (wrap) wrap.classList.toggle('has-ink', drawDirty);
+      }
+    });
+
+    document.querySelectorAll('#drawInk .ink-swatch').forEach(function(sw){
+      sw.addEventListener('click', function(){
+        document.querySelectorAll('#drawInk .ink-swatch').forEach(function(s){
+          s.classList.toggle('active', s === sw);
+        });
+        eoPad.setInk(sw.dataset.ink);
+      });
+    });
+
+    var weight = document.getElementById('penWeight');
+    if (weight){
+      weight.addEventListener('input', function(){
+        eoPad.setWeight(parseFloat(this.value));
+      });
     }
-    function down(e){ drawing = true; drawDirty = true; var p = pos(e); lastX = p.x; lastY = p.y; e.preventDefault(); }
-    function move(e){ if (!drawing) return; var p = pos(e);
-      ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(p.x, p.y); ctx.stroke();
-      lastX = p.x; lastY = p.y; e.preventDefault();
-    }
-    function up(){ drawing = false; }
-    c.addEventListener('mousedown', down);
-    c.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
-    c.addEventListener('touchstart', down, { passive:false });
-    c.addEventListener('touchmove',  move, { passive:false });
-    window.addEventListener('touchend', up);
   }
-  window.clearDraw = function(){
-    var c = document.getElementById('drawCanvas'); if (!c) return;
-    c.getContext('2d').clearRect(0, 0, c.width, c.height); drawDirty = false;
-  };
+
+  window.clearDraw = function(){ if (eoPad) eoPad.clear(); };
+  window.undoDraw  = function(){ if (eoPad) eoPad.undo(); };
 
   window.saveCurrentField = function(){
     if (!currentField) return;
@@ -1386,8 +1453,9 @@
     if (type === 'signature'){
       if (currentSigMode === 'upload' && uploadedSignatureData){
         value = uploadedSignatureData; finalType = 'upload';
-      } else if (currentSigMode === 'draw' && drawDirty){
-        value = document.getElementById('drawCanvas').toDataURL('image/png'); finalType = 'draw';
+      } else if (currentSigMode === 'draw' && drawDirty && eoPad){
+        // Trimmed to the ink and transparent — no white box to knock out later.
+        value = eoPad.toDataURL(); finalType = 'draw';
       } else if (currentSigMode === 'type'){
         value = 'font:' + currentSigFont + '|' + (document.getElementById('signatureTyped').value || signerName);
         finalType = 'type';
@@ -1429,8 +1497,7 @@
         var u = document.getElementById('signatureImageUpload'); if (u) u.value = '';
         var w = document.getElementById('uploadedSignaturePreview'); if (w) w.style.display = 'none';
         drawDirty = false;
-        var c = document.getElementById('drawCanvas');
-        if (c){ c.getContext('2d').clearRect(0, 0, c.width, c.height); }
+        if (eoPad) eoPad.clear();
         closeFieldModal();
         renderFields();
         updateCompleteState();
@@ -1443,14 +1510,32 @@
     if (!/^image\/(png|jpeg|webp)$/.test(file.type)){
       alert('Please upload a PNG, JPG, or WEBP image.'); input.value = ''; return;
     }
-    var reader = new FileReader();
-    reader.onload = function(e){
-      uploadedSignatureData = e.target.result;
+
+    function show(dataUrl){
+      uploadedSignatureData = dataUrl;
       var wrap = document.getElementById('uploadedSignaturePreview');
       var img  = document.getElementById('uploadedSignatureImg');
-      if (wrap && img){ img.src = uploadedSignatureData; wrap.style.display = 'block'; }
-      if (currentField) currentField.savedData = uploadedSignatureData;
-    };
+      if (wrap && img){ img.src = dataUrl; wrap.style.display = 'block'; }
+      if (currentField) currentField.savedData = dataUrl;
+    }
+
+    // Remove the paper before the image is ever attached to the field: a
+    // photographed signature otherwise stamps its own white rectangle over
+    // the document. Falls back to the raw upload if anything goes wrong —
+    // the server-side normaliser is the second line of defence.
+    if (window.EOSignatureImage){
+      EOSignatureImage.fromFile(file, { sensitivity: 1, ink: null })
+        .then(function(res){ show(res.dataUrl); })
+        .catch(function(){
+          var r = new FileReader();
+          r.onload = function(e){ show(e.target.result); };
+          r.readAsDataURL(file);
+        });
+      return;
+    }
+
+    var reader = new FileReader();
+    reader.onload = function(e){ show(e.target.result); };
     reader.readAsDataURL(file);
   };
 

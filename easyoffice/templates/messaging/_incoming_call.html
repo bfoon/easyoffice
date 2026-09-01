@@ -1,0 +1,365 @@
+{% comment %}
+templates/messaging/_incoming_call.html
+=======================================
+📞 The global incoming-call handler.
+
+WHAT WAS WRONG
+--------------
+base.html carried the banner's CSS, the banner markup, and two buttons
+wired to eoCallBannerAccept() / eoCallBannerDecline() — and a comment
+saying "Polls /messages/call/incoming/ on every page". Neither the poller
+nor either function existed anywhere in the project. chat_room.html even
+had a note deferring to it ("base.html's global incoming-call banner
+polls /call/incoming/"), so both sides assumed the other did the work.
+
+The result was a call that looked fine from the caller's seat: the ring
+POST succeeded, the server stashed the ring record, the offer and ICE
+candidates went out — and nobody ever asked the server whether there was
+a call waiting. The banner was a display:none div that nothing could
+show. The caller sat on "Calling…" until the 40-second timeout.
+
+So this is the missing half. Include it ONCE from base.html, replacing
+the comment block, inside the same guard that hides it on the popup:
+
+    {% if request.user.is_authenticated and request.resolver_match.url_name != 'call_window' %}
+      {% include "messaging/_incoming_call.html" %}
+    {% endif %}
+
+The banner markup already in base.html can stay exactly as it is — this
+file finds it by id and drives it. If it isn't on the page, this builds
+its own, so the include also works standalone.
+
+WHY POLLING AND NOT A SOCKET
+----------------------------
+A ring must reach you on the leave-request page, the task list, anywhere.
+The chat WebSocket only exists on chat pages, so it cannot be the
+delivery mechanism for a call — it can only make one faster. The poll is
+what guarantees arrival; the socket path is an optimisation that fires
+when a chat page happens to be open.
+
+Three seconds is the cadence, against a 35-second server-side ring TTL:
+fast enough that the callee's phone rings while the caller still expects
+it to, slow enough to be one cheap cache read per user per three seconds.
+{% endcomment %}
+
+<script>
+(function(){
+  'use strict';
+
+  /* base.html may include this twice, or a page may include it directly
+     as well. Second instance stands down rather than double-ringing. */
+  if(window.EOIncomingCall) return;
+
+  var POLL_MS       = 3000;
+  var INCOMING_URL  = '/messages/call/incoming/';
+  var CLEAR_URL     = '/messages/call/clear/';
+  var WINDOW_URL    = '/messages/call/window/';
+
+  var current = null;      // the ring we are currently showing
+  var timer   = null;
+  var audio   = null;
+  var busy    = false;     // an accept/decline is in flight
+  var handled = {};        // ring keys another surface has taken
+
+  function $(id){ return document.getElementById(id); }
+  function csrf(){
+    var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? m[1] : '';
+  }
+
+  /* Identity of one ring, keyed exactly as chat_room.html keys it so the
+     two agree on what "the same call" means. */
+  function ringKey(ring){
+    if(!ring) return '';
+    return (ring.room_id || '') + '|' + (ring.caller_id || '') +
+           '|' + (ring.started_at || '');
+  }
+
+  /* chat_room.html shows its own in-page modal when a ring arrives on
+     that room's socket, and announces it here. Without this the callee
+     sitting in the conversation gets two rings for one call: the modal
+     and the banner, each with its own Accept button. */
+  var bannerBC = null;
+  try{ bannerBC = new BroadcastChannel('easyoffice-banner'); }catch(_){ bannerBC = null; }
+  if(bannerBC){
+    bannerBC.onmessage = function(ev){
+      if(!ev || !ev.data || ev.data.type !== 'banner-handled') return;
+      var key = ev.data.ring_id;
+      if(!key) return;
+      handled[key] = Date.now();
+      if(current && ringKey(current) === key) hide();
+    };
+  }
+
+  /* Keys don't accumulate: a ring only lives 35 seconds server-side, so
+     anything older than a couple of minutes can never come back. */
+  setInterval(function(){
+    var cutoff = Date.now() - 120000;
+    Object.keys(handled).forEach(function(k){
+      if(handled[k] < cutoff) delete handled[k];
+    });
+  }, 60000);
+
+  /* ── Banner ──────────────────────────────────────────────────────── */
+
+  function ensureBanner(){
+    var el = $('eoCallBanner');
+    if(el) return el;
+
+    /* base.html normally provides this. Build a fallback so the include
+       is self-sufficient if it is ever used on a page that doesn't. */
+    el = document.createElement('div');
+    el.className = 'eo-call-banner';
+    el.id = 'eoCallBanner';
+    el.setAttribute('role', 'alert');
+    el.setAttribute('aria-live', 'assertive');
+    el.innerHTML =
+      '<div class="eo-cb-avatar" id="eoCallBannerAvatar">?</div>' +
+      '<div class="eo-cb-text">' +
+        '<span class="eo-cb-name" id="eoCallBannerName">Someone</span>' +
+        '<span class="eo-cb-sub" id="eoCallBannerSub">Incoming call…</span>' +
+      '</div>' +
+      '<button class="eo-cb-btn decline" type="button" data-call-decline>' +
+        '<i class="bi bi-telephone-x-fill"></i><span>Decline</span></button>' +
+      '<button class="eo-cb-btn accept" type="button" data-call-accept>' +
+        '<i class="bi bi-telephone-fill"></i><span>Accept</span></button>';
+    document.body.insertBefore(el, document.body.firstChild);
+    return el;
+  }
+
+  function initials(name){
+    var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if(!parts.length) return '?';
+    if(parts.length === 1) return parts[0].charAt(0).toUpperCase();
+    return (parts[0].charAt(0) + parts[parts.length-1].charAt(0)).toUpperCase();
+  }
+
+  function show(ring){
+    var el = ensureBanner();
+    var avatar = $('eoCallBannerAvatar');
+    var name   = $('eoCallBannerName');
+    var sub    = $('eoCallBannerSub');
+
+    if(name) name.textContent = ring.caller_name || 'Someone';
+    if(sub){
+      sub.textContent = (ring.call_kind === 'video')
+        ? 'Incoming video call…' : 'Incoming voice call…';
+    }
+    if(avatar){
+      if(ring.caller_avatar){
+        avatar.innerHTML = '<img src="' + ring.caller_avatar + '" alt="">';
+      }else{
+        avatar.textContent = initials(ring.caller_name);
+      }
+    }
+
+    el.classList.add('active');
+    document.body.classList.add('eo-call-banner-active');
+    startTone();
+    notifyOS(ring);
+  }
+
+  function hide(){
+    var el = $('eoCallBanner');
+    if(el) el.classList.remove('active');
+    document.body.classList.remove('eo-call-banner-active');
+    stopTone();
+    current = null;
+  }
+
+  /* ── Ring tone ───────────────────────────────────────────────────── */
+
+  function startTone(){
+    if(audio) return;
+    /* WebAudio rather than an asset: no file to ship, no 404 to debug,
+       and it works before any user gesture on desktop. If the browser
+       blocks it (autoplay policy) the banner still shows — the sound is
+       a bonus, never the notification itself. */
+    try{
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if(!Ctx) return;
+      var ctx = new Ctx();
+      var stopped = false;
+
+      function beep(){
+        if(stopped) return;
+        var osc = ctx.createOscillator();
+        var gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = 480;
+        gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.06, ctx.currentTime + 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.9);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime + 1.0);
+      }
+
+      beep();
+      var iv = setInterval(beep, 2400);
+      audio = { stop: function(){
+        stopped = true;
+        clearInterval(iv);
+        try{ ctx.close(); }catch(_){}
+      }};
+    }catch(_){ audio = null; }
+  }
+
+  function stopTone(){
+    if(audio){ try{ audio.stop(); }catch(_){} audio = null; }
+  }
+
+  function notifyOS(ring){
+    try{
+      if(!('Notification' in window)) return;
+      if(Notification.permission !== 'granted') return;
+      if(!document.hidden) return;
+      var n = new Notification((ring.caller_name || 'Someone') + ' is calling', {
+        body: ring.call_kind === 'video' ? 'Video call' : 'Voice call',
+        tag: 'call-' + ring.room_id,
+        requireInteraction: true
+      });
+      n.onclick = function(){ window.focus(); n.close(); };
+    }catch(_){}
+  }
+
+  /* ── Actions ─────────────────────────────────────────────────────── */
+
+  function claim(ring){
+    /* Announce that this surface is handling the ring, so the chat page's
+       in-page modal closes instead of leaving two Accept buttons on
+       screen for one call. */
+    var key = ringKey(ring);
+    handled[key] = Date.now();
+    if(bannerBC){
+      try{ bannerBC.postMessage({ type: 'banner-handled', ring_id: key }); }
+      catch(_){}
+    }
+  }
+
+  function accept(){
+    if(!current || busy) return;
+    busy = true;
+    var ring = current;
+    claim(ring);
+    stopTone();
+
+    /* The popup MUST be opened synchronously inside this click handler.
+       Opening it from a fetch callback puts it outside the user-gesture
+       window and every popup blocker kills it — which looks exactly like
+       "accept does nothing". */
+    var url = WINDOW_URL + ring.room_id + '/?kind=' +
+              encodeURIComponent(ring.call_kind || 'voice') + '&mode=incoming';
+    var win = window.open(url, 'eoCallWindow_' + ring.room_id,
+                          'width=980,height=720,menubar=no,toolbar=no');
+
+    if(!win){
+      /* Blocked anyway — fall back to navigating this tab, which is
+         better than silently dropping the call. */
+      window.location.href = url;
+      return;
+    }
+
+    hide();
+    busy = false;
+  }
+
+  function decline(){
+    if(!current || busy) return;
+    busy = true;
+    var ring = current;
+    claim(ring);
+    hide();
+
+    var fd = new FormData();
+    fd.append('csrfmiddlewaretoken', csrf());
+    fd.append('reason', 'declined');
+    fd.append('call_kind', ring.call_kind || 'voice');
+
+    fetch(CLEAR_URL + ring.room_id + '/', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'X-CSRFToken': csrf(), 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd
+    })
+    .catch(function(){})
+    .finally(function(){ busy = false; });
+  }
+
+  /* base.html's markup calls these by name from inline onclick. */
+  window.eoCallBannerAccept  = accept;
+  window.eoCallBannerDecline = decline;
+
+  /* The fallback banner uses data attributes instead. */
+  document.addEventListener('click', function(e){
+    if(!e.target.closest) return;
+    if(e.target.closest('[data-call-accept]'))  accept();
+    if(e.target.closest('[data-call-decline]')) decline();
+  });
+
+  /* ── Poll ────────────────────────────────────────────────────────── */
+
+  function poll(){
+    fetch(INCOMING_URL, {
+      credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d || !d.ok) return;
+      var ring = d.ring;
+
+      if(!ring){
+        /* The record expired or the caller hung up. */
+        if(current) hide();
+        return;
+      }
+      var key = ringKey(ring);
+      if(handled[key]) return;                                  // chat page has it
+      if(current && ringKey(current) === key) return;            // already ringing
+      current = ring;
+      show(ring);
+    })
+    .catch(function(){
+      /* A dropped poll means we don't know, not that the call ended.
+         Keep whatever is on screen and try again next tick. */
+    });
+  }
+
+  function start(){
+    stop();
+    poll();
+    timer = setInterval(poll, POLL_MS);
+  }
+  function stop(){
+    if(timer){ clearInterval(timer); timer = null; }
+  }
+
+  /* Keep polling while hidden — a call arriving in a background tab is
+     precisely the case the OS notification and the tone are for. Only the
+     tone is suppressed by the browser, not the ring itself. */
+  document.addEventListener('visibilitychange', function(){
+    if(!document.hidden) poll();
+  });
+  window.addEventListener('beforeunload', stop);
+
+  /* If a chat page has a socket open, a ring can arrive instantly instead
+     of waiting up to three seconds for the next poll. chat_room.html
+     forwards call_ring signals here. */
+  window.EOIncomingCall = {
+    onRing: function(ring){
+      if(!ring || !ring.room_id) return;
+      if(current && current.room_id === ring.room_id) return;
+      current = ring;
+      show(ring);
+    },
+    dismiss: hide,
+    refresh: poll
+  };
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', start);
+  }else{
+    start();
+  }
+})();
+</script>

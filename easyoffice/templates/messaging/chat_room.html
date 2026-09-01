@@ -234,6 +234,80 @@
 .chat-send-btn:disabled{opacity:.4;cursor:not-allowed;}
 .typing-indicator{font-size:.73rem;color:var(--eo-text-muted);margin-top:4px;height:16px;}
 
+/* ── ⌨️ Typing bubble ──────────────────────────────────────────────────
+   Lives in the message flow as a real incoming bubble rather than a line
+   of grey text under the composer, which is where the old indicator sat
+   and where nobody was looking. It occupies the spot the message is
+   about to land in, so the eye is already in the right place when it
+   arrives. Never rendered for yourself — see startTyping(). */
+.typing-row{
+  display:flex;
+  gap:10px;
+  padding:2px 0 6px;
+  animation:typingRowIn .18s ease-out;
+}
+@keyframes typingRowIn{
+  from{ opacity:0; transform:translateY(4px); }
+  to{ opacity:1; transform:none; }
+}
+.typing-row .chat-avatar{ position:relative; }
+/* Two or more people typing: stack their avatars instead of growing the
+   row, so the bubble never shifts position as people join and leave. */
+.typing-row .typing-avatar-stack{
+  display:flex;
+  width:36px;
+  flex-shrink:0;
+  position:relative;
+  height:36px;
+}
+.typing-row .typing-avatar-stack > *{
+  position:absolute;
+  top:0;
+  width:36px;
+  height:36px;
+  border-radius:50%;
+  border:2px solid var(--eo-surface);
+  box-sizing:border-box;
+}
+.typing-row .typing-avatar-stack > *:nth-child(2){ transform:translate(9px, 5px) scale(.72); }
+.typing-row .typing-avatar-stack > *:nth-child(3){ transform:translate(-6px, 8px) scale(.6); }
+
+.typing-bubble{
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  padding:11px 14px;
+  background:var(--eo-bg);
+  border-radius:4px 16px 16px 16px;
+  min-height:38px;
+}
+.typing-dot{
+  width:7px;
+  height:7px;
+  border-radius:50%;
+  background:var(--eo-text-muted);
+  opacity:.45;
+  animation:typingDot 1.25s infinite ease-in-out;
+}
+.typing-dot:nth-child(2){ animation-delay:.16s; }
+.typing-dot:nth-child(3){ animation-delay:.32s; }
+@keyframes typingDot{
+  0%, 60%, 100%{ transform:translateY(0) scale(1); opacity:.35; }
+  30%          { transform:translateY(-4px) scale(1.12); opacity:.95; }
+}
+.typing-name{
+  font-size:.7rem;
+  color:var(--eo-text-muted);
+  margin:3px 0 0 3px;
+}
+
+/* Respect the OS setting — bouncing dots are exactly the kind of endless
+   motion that setting exists to stop. */
+@media (prefers-reduced-motion: reduce){
+  .typing-dot{ animation:none; opacity:.55; }
+  .typing-row{ animation:none; }
+}
+
 /* Members panel */
 .msg-members-panel{width:220px;flex-shrink:0;border-left:1px solid var(--eo-border);background:var(--eo-bg);display:flex;flex-direction:column;overflow:hidden;transition:width .2s;}
 .msg-members-panel.collapsed{width:0;overflow:hidden;}
@@ -3507,7 +3581,6 @@
     <div class="command-chip-row" id="commandChipRow" style="margin-bottom:0"></div>
   </div>
 
-  <div class="typing-indicator" id="typingIndicator"></div>
 </div>
 {% endif %}
   </main>
@@ -4604,7 +4677,6 @@
 
   var socket = null;
   var reconnectDelay = 1000;
-  var typingTimeout = null;
   var replyToId = null;
   var pendingFile = null;
   var pickedFileData = null;
@@ -5905,13 +5977,12 @@ window.addEventListener('beforeunload', function(){
         return;
       }
 
-      /* 🩹 The consumer emits 'chat_typing'; typing_views.py and the old
+      /* ⌨️ The consumer emits 'chat_typing'; typing_views.py and the old
          client agreed on 'typing'. Accept both so the indicator works no
-         matter which path fired it. */
+         matter which path fired it. The consumer already refuses to echo
+         a typing event back to its sender; startTyping() checks again. */
       if(d.type === 'typing' || d.type === 'chat_typing'){
-        if(String(d.sender_id || '') !== String(USER_ID)){
-          showTyping(d.sender_name || 'Someone');
-        }
+        startTyping(d);
         return;
       }
 
@@ -7353,9 +7424,12 @@ function stopPollStatePolling(){
       debounceEmojiHint();
       _clearEmojiHintStateIfEmpty();
 
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        try { socket.send(JSON.stringify({ type: 'typing' })); } catch (_) {}
-      }
+      /* One ping every 2s while typing, not one per keystroke. The old
+         code sent a frame on every character — a fast typist generated
+         ~60 socket messages a sentence, each fanned out to every member
+         of the room. The receiver's TTL is 4s, so 2s keeps the bubble
+         alive continuously with a comfortable margin. */
+      pingTyping();
     });
 
     chatInput.addEventListener('keydown', function (e) {
@@ -8231,6 +8305,11 @@ function stopPollStatePolling(){
     var wrap = buildMessageNode(data);
     if(!wrap) return;
     msgs.appendChild(wrap);
+
+    // Their message arriving IS them having stopped typing. Leaving the
+    // bubble up for the rest of its TTL reads as "still more coming".
+    if(data.sender_id) clearTypingFor(data.sender_id);
+
     scrollBottom();
   }
 
@@ -8476,15 +8555,122 @@ function stopPollStatePolling(){
     return wrap;
   }
 
-  function showTyping(name){
-    var el = byId('typingIndicator');
-    if(!el) return;
-    el.textContent = name + ' is typing…';
-    clearTimeout(typingTimeout);
-    typingTimeout = setTimeout(function(){
-      el.textContent = '';
-    }, 3000);
+  /* ═══════════════════════════════════════════════════════════════════
+     ⌨️ TYPING BUBBLE
+     ───────────────────────────────────────────────────────────────────
+     State is per PERSON, not one global flag. The old indicator was a
+     single line of text that the last event to arrive overwrote, so two
+     people typing showed one name, and one person stopping cleared the
+     line for both. Here each typist has their own entry and their own
+     expiry timer; the bubble is drawn from whoever is still in the map.
+
+     Nobody's own typing can reach this. The consumer refuses to echo a
+     typing event back to its sender (chat_typing, consumers.py) and the
+     check below refuses it again — one of the two is redundant, which is
+     the point: this is the bug that keeps coming back, so it is now
+     wrong in two independent places before it can happen.
+     ═══════════════════════════════════════════════════════════════════ */
+
+  var typists = {};            // user_id -> {name, initials, avatar, timer}
+  var TYPING_TTL = 4000;       // no ping for this long → they stopped
+  var lastTypingPing = 0;
+  var TYPING_PING_MS = 2000;
+
+  function pingTyping(){
+    if(!socket || socket.readyState !== WebSocket.OPEN) return;
+    var now = Date.now();
+    if(now - lastTypingPing < TYPING_PING_MS) return;
+    lastTypingPing = now;
+    try{ socket.send(JSON.stringify({ type: 'typing' })); }catch(_){}
   }
+
+  function startTyping(data){
+    var id = String(data.sender_id || '');
+    if(!id) return;                          // no sender → not a real event
+    if(id === String(USER_ID)) return;       // never yourself
+
+    var existing = typists[id];
+    if(existing) clearTimeout(existing.timer);
+
+    typists[id] = {
+      name:     data.sender_name || 'Someone',
+      initials: data.sender_initials ||
+                ((data.sender_name || '?').charAt(0) || '?').toUpperCase(),
+      avatar:   data.sender_avatar_url || '',
+      timer:    setTimeout(function(){ stopTyping(id); }, TYPING_TTL)
+    };
+    renderTyping();
+  }
+
+  function stopTyping(id){
+    id = String(id || '');
+    var entry = typists[id];
+    if(!entry) return;
+    clearTimeout(entry.timer);
+    delete typists[id];
+    renderTyping();
+  }
+
+  function renderTyping(){
+    var msgs = byId('chatMessages');
+    if(!msgs) return;
+
+    var ids = Object.keys(typists);
+    var row = byId('typingRow');
+
+    if(!ids.length){
+      if(row) row.remove();
+      return;
+    }
+
+    /* Was the reader already at the bottom? Only then do we follow the
+       bubble down — yanking someone out of the history they are reading
+       because a colleague started typing is the rudest thing a chat can
+       do. */
+    var atBottom = (msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight) < 80;
+
+    if(!row){
+      row = document.createElement('div');
+      row.className = 'typing-row';
+      row.id = 'typingRow';
+      row.setAttribute('aria-live', 'polite');
+    }
+
+    var stack = ids.slice(0, 3).map(function(id){
+      var t = typists[id];
+      return t.avatar
+        ? '<img src="' + t.avatar + '" alt="">'
+        : '<span class="initials-bubble">' + esc(t.initials) + '</span>';
+    }).join('');
+
+    var names = ids.map(function(id){ return typists[id].name; });
+    var label;
+    if(names.length === 1)      label = names[0] + ' is typing';
+    else if(names.length === 2) label = names[0] + ' and ' + names[1] + ' are typing';
+    else                        label = names.length + ' people are typing';
+
+    row.innerHTML =
+      '<div class="chat-avatar"><div class="typing-avatar-stack">' + stack + '</div></div>' +
+      '<div class="chat-body">' +
+        '<div class="typing-bubble" role="status" aria-label="' + esc(label) + '">' +
+          '<span class="typing-dot"></span>' +
+          '<span class="typing-dot"></span>' +
+          '<span class="typing-dot"></span>' +
+        '</div>' +
+        '<div class="typing-name">' + esc(label) + '</div>' +
+      '</div>';
+
+    /* Always last in the flow, even if a message arrived while someone
+       was mid-sentence. */
+    msgs.appendChild(row);
+    if(atBottom) scrollBottom();
+  }
+
+  /* A person's message arriving IS them having stopped typing. Waiting
+     for the 4-second timer would leave the bubble sitting under their own
+     new message, which reads as a second message still coming. */
+  function clearTypingFor(senderId){ stopTyping(senderId); }
+  window.__clearTypingFor = clearTypingFor;
 
   var REACTION_SET = ['👍','❤️','😂','😮','😢','🙏'];
 

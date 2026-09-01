@@ -1270,13 +1270,12 @@ def _embed_signatures_in_pdf(sig_req):
         # ══════════════════════════════════════════════════════════════════════
         hdr_y = page_h - STRIP_H   # bottom-left Y of header strip
 
-        # Background
-        c.setFillColorRGB(0.937, 0.953, 1.0)     # very light blue-white
-        c.setStrokeColorRGB(*DS_BLUE)
-        c.setLineWidth(0.4)
-        c.rect(0, hdr_y, page_w, STRIP_H, stroke=0, fill=1)
-
-        # Bottom border line of header
+        # TRANSPARENT HEADER:
+        # This used to be an opaque light-blue band across the full page
+        # width. On documents whose content runs close to the top margin —
+        # letterheads, UN memos, anything with a logo — the band painted over
+        # it. The strip is now unfilled: only the hairline rule and the
+        # header text are drawn, so whatever is underneath stays visible.
         c.setStrokeColorRGB(*DS_BLUE)
         c.setLineWidth(0.8)
         c.line(0, hdr_y, page_w, hdr_y)
@@ -1302,11 +1301,9 @@ def _embed_signatures_in_pdf(sig_req):
         # ══════════════════════════════════════════════════════════════════════
         ftr_y = 0.0
 
-        # Background
-        c.setFillColorRGB(0.937, 0.953, 1.0)
-        c.rect(0, ftr_y, page_w, STRIP_H, stroke=0, fill=1)
-
-        # Top border line of footer
+        # TRANSPARENT FOOTER: unfilled, same reasoning as the header above.
+        # The rule line is the only separator; page content behind the strip
+        # is no longer covered by a blue band.
         c.setStrokeColorRGB(*DS_BLUE)
         c.setLineWidth(0.8)
         c.line(0, STRIP_H, page_w, STRIP_H)
@@ -5923,10 +5920,8 @@ class QuickSignView(LoginRequiredMixin, View):
                 overlay = BytesIO()
                 c = rl_canvas.Canvas(overlay, pagesize=(page_w, page_h))
 
-                # Header strip
+                # Header strip — transparent, rule line only (no blue band).
                 hdr_y = page_h - STRIP_H
-                c.setFillColorRGB(0.937, 0.953, 1.0)
-                c.rect(0, hdr_y, page_w, STRIP_H, stroke=0, fill=1)
                 c.setStrokeColorRGB(*DS_BLUE)
                 c.setLineWidth(0.8)
                 c.line(0, hdr_y, page_w, hdr_y)
@@ -5940,9 +5935,7 @@ class QuickSignView(LoginRequiredMixin, View):
                 c.drawString(52, hdr_y + STRIP_H * 0.28, f'\u00B7  {pdf.name}')
                 c.drawRightString(page_w - 5, hdr_y + STRIP_H * 0.28, f'Page {page_num} / {len(reader.pages)}')
 
-                # Footer strip
-                c.setFillColorRGB(0.937, 0.953, 1.0)
-                c.rect(0, 0, page_w, STRIP_H, stroke=0, fill=1)
+                # Footer strip — transparent, rule line only (no blue band).
                 c.setStrokeColorRGB(*DS_BLUE)
                 c.setLineWidth(0.8)
                 c.line(0, STRIP_H, page_w, STRIP_H)

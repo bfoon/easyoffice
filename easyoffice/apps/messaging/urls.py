@@ -130,6 +130,13 @@ urlpatterns = [
          views.ChatMessageFileView.as_view(),
          name='chat_message_file'),
 
+    # Attached files-app documents (ChatMessage.linked_file, pinned room
+    # files). Previously served straight off /media/, which leaked them if
+    # nginx served that path and 404'd in the preview modal if it didn't.
+    path('<uuid:room_id>/file/<uuid:file_id>/',
+         views.ChatSharedFileView.as_view(),
+         name='chat_shared_file'),
+
     # ─────────────────────────────────────────────
     # FILES (CHAT + PROJECT)
     # ─────────────────────────────────────────────

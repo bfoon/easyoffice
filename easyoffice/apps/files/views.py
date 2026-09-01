@@ -1250,6 +1250,34 @@ def _embed_signatures_in_pdf(sig_req):
     if not document or not getattr(document, 'file', None):
         return None
 
+    # ── Idempotency guard ────────────────────────────────────────────────────
+    # This function replaces sig_req.document with the stamped copy. Run it
+    # twice and the second pass stamps the *already stamped* file: you get
+    # "Report — signed — signed.pdf", a second header/footer strip on every
+    # page, and every signature drawn on top of itself.
+    #
+    # That is not hypothetical — finalise_signature_after_sign calls this
+    # whenever every signer has signed, and it fires once per signature save.
+    # Two signers finishing within the same second, or any retry of the last
+    # one, runs it twice. The task's docstring claims the step is skipped for
+    # an already-completed request, but nothing actually checked.
+    #
+    # The marker is the id of the file we produced. If the request still
+    # points at it, the work is done.
+    _meta = sig_req.metadata or {}
+    _done_id = _meta.get('signed_document_id')
+    if _done_id and str(sig_req.document_id) == str(_done_id):
+        return document
+
+    # Fallback for requests stamped before the marker existed: a completed
+    # request whose document is already named "… — signed.pdf" has been
+    # through here.
+    if (
+        getattr(sig_req, 'status', '') == 'completed'
+        and (document.name or '').lower().endswith('— signed.pdf'.lower())
+    ):
+        return document
+
     from apps.files.models import SignatureField
     fields = list(
         SignatureField.objects
@@ -1451,7 +1479,15 @@ def _embed_signatures_in_pdf(sig_req):
         pass
 
     sig_req.document = signed_file
-    sig_req.save(update_fields=['document'])
+    # Record which file we produced so a second run is a no-op (see the
+    # idempotency guard at the top of this function).
+    try:
+        _meta = sig_req.metadata or {}
+        _meta['signed_document_id'] = str(signed_file.id)
+        sig_req.metadata = _meta
+        sig_req.save(update_fields=['document', 'metadata'])
+    except Exception:
+        sig_req.save(update_fields=['document'])
 
     # Put the signed copy into every participant's file system straight away.
     # Notifications and chat delivery are handled separately, on completion —

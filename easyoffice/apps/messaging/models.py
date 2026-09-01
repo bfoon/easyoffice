@@ -132,14 +132,15 @@ class ChatMessage(EncryptedContentMixin, models.Model):
             except Exception:
                 pass
         if self.linked_file_id:
-            # SharedFile links are governed by the files app's own ACLs.
-            # ⚠️ If files-app media is also publicly served, apply the same
-            # authenticated-serving pattern there.
-            try:
-                if self.linked_file and self.linked_file.file:
-                    return self.linked_file.file.url
-            except Exception:
-                pass
+            # The warning that used to sit here has been acted on: attached
+            # SharedFiles are no longer handed out as raw MEDIA paths either.
+            # ChatSharedFileView re-checks room membership on every request,
+            # exactly like the direct-upload route above.
+            #
+            # The old `self.linked_file.file.url` was both a leak (public if
+            # nginx serves MEDIA) and a bug (nginx's own 404 page rendered
+            # inside the chat preview modal when it doesn't).
+            return f'/messages/{self.room_id}/file/{self.linked_file_id}/'
         return ''
 
     @property

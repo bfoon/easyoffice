@@ -9,6 +9,7 @@ from django.http import HttpResponse, HttpResponseForbidden, JsonResponse, FileR
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.clickjacking import xframe_options_sameorigin
+from django.urls import reverse
 from django.conf import settings
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -243,12 +244,10 @@ def _get_msg_file_url(msg):
             pass
 
     if getattr(msg, 'linked_file_id', None):
-        try:
-            lf = msg.linked_file
-            if lf and lf.file:
-                return lf.file.url
-        except Exception:
-            pass
+        # 🔒 Never lf.file.url. That is a raw MEDIA path: public if nginx
+        # serves it, and a 404 inside the preview modal if nginx doesn't.
+        # ChatSharedFileView re-checks room membership on every request.
+        return _shared_file_url(msg.room_id, msg.linked_file_id)
 
     return ''
 
@@ -764,10 +763,16 @@ def _get_project_chat_files_for_user(user, project, room=None):
 
     files = []
     for f in qs[:100]:
-        try:
-            file_url = f.file.url
-        except Exception:
-            continue
+        if room is not None:
+            # Membership-checked route (see ChatSharedFileView).
+            file_url = _shared_file_url(room.id, f.id)
+        else:
+            # No room context — fall back to the files app's own
+            # permission-checked preview endpoint rather than a MEDIA path.
+            try:
+                file_url = reverse('file_preview', kwargs={'pk': f.id})
+            except Exception:
+                file_url = f'/files/{f.id}/preview/'
 
         files.append({
             'id': str(f.id),
@@ -1538,10 +1543,12 @@ class ChatFilePickerAPIView(LoginRequiredMixin, View):
 
         files = []
         for f in qs:
-            try:
-                url = f.file.url
-            except Exception:
+            if not f.file:
                 continue
+            # Picker entries are files the user can already see, but the URL
+            # still goes through Django: a MEDIA path here would be public
+            # and would 404 in the preview modal (see ChatSharedFileView).
+            url = _shared_file_url(room_id, f.id)
             files.append({
                 'id':            str(f.id),
                 'name':          f.name,
@@ -1605,10 +1612,7 @@ class ChatAttachSharedFileView(LoginRequiredMixin, View):
         room.save(update_fields=['updated_at'])
         ChatRoomMember.objects.filter(room=room, user=request.user).update(last_read=timezone.now())
 
-        try:
-            file_url = shared_file.file.url
-        except Exception:
-            file_url = ''
+        file_url = _shared_file_url(room.id, shared_file.id)
 
         payload = {
             'type':             'chat_message',
@@ -3103,10 +3107,7 @@ class PresentListFilesView(LoginRequiredMixin, View):
             ext = _os.path.splitext(name)[1].lower()
             if ext not in allowed_exts:
                 continue
-            try:
-                url = sf.file.url
-            except Exception:
-                continue
+            url = _shared_file_url(room.id, sf.id)
             if ext in _PRESENT_ALLOWED_PDF:
                 kind = 'pdf'
             elif ext in _PRESENT_ALLOWED_PPTX:
@@ -3487,6 +3488,120 @@ _INLINE_SAFE_CONTENT_TYPES = {
     'image/png', 'image/jpeg', 'image/gif', 'image/webp',
     'application/pdf',
 }
+
+
+@method_decorator(xframe_options_sameorigin, name='dispatch')
+class ChatSharedFileView(LoginRequiredMixin, View):
+    """
+    GET /messages/<room_id>/file/<file_id>/
+    Streams a files-app SharedFile that has been attached to, or pinned in,
+    this room — to ROOM MEMBERS ONLY.
+
+    Why this exists
+    ───────────────
+    ChatMessageFileView covers `ChatMessage.file` (a direct chat upload).
+    It does NOT cover `ChatMessage.linked_file`, which is how a SharedFile
+    gets attached — the file picker, the pin panel, and the signed-document
+    delivery all produce linked_file messages.
+
+    Those were serialised as `linked_file.file.url`: a raw MEDIA path. Two
+    consequences, both live:
+
+      • If MEDIA is served by nginx, the path is public — anyone with the URL
+        reads the document, room membership and FileShareAccess irrelevant.
+        For a signed contract that is the worst possible file to leak.
+      • If nginx is NOT configured to serve that path (or the file lives
+        under a different storage root), the browser gets nginx's own
+        "404 Not Found" page inside the preview modal. That is the bug this
+        view fixes: the file was fine, the URL was never Django's to serve.
+
+    Access rule — any one of:
+      1. the file is pinned to this room (ChatRoomFile), which by design
+         grants every member access;
+      2. the user already has files-app permission on it;
+      3. it is linked on a live message in this room, which is what sending
+         an attachment is understood to mean.
+
+    X-Frame-Options is relaxed to SAMEORIGIN for the same reason as
+    ChatMessageFileView: the preview modal renders PDFs in an iframe and the
+    site-wide default is DENY.
+    """
+
+    def get(self, request, room_id, file_id):
+        from apps.files.models import SharedFile
+
+        room = get_object_or_404(ChatRoom, id=room_id, members=request.user)
+        shared_file = get_object_or_404(SharedFile, id=file_id)
+
+        if not self._may_read(request.user, room, shared_file):
+            raise Http404('File not available in this room.')
+
+        if not shared_file.file:
+            raise Http404('File data unavailable.')
+
+        import mimetypes
+        display_name = shared_file.name or os.path.basename(shared_file.file.name)
+        ctype = (mimetypes.guess_type(display_name)[0]
+                 or mimetypes.guess_type(shared_file.file.name)[0]
+                 or 'application/octet-stream')
+
+        inline = ctype in _INLINE_SAFE_CONTENT_TYPES
+
+        try:
+            fh = shared_file.file.open('rb')
+        except Exception:
+            # The row exists but the bytes do not — a storage path mismatch
+            # or a file removed underneath us. Say so plainly in the log; the
+            # user still gets a 404, but now it is Django's and traceable.
+            _presence_log.warning(
+                'Chat attachment %s has no readable bytes at %s',
+                shared_file.pk, getattr(shared_file.file, 'name', '?'),
+            )
+            raise Http404('File data unavailable.')
+
+        resp = FileResponse(
+            fh,
+            content_type=ctype if inline else 'application/octet-stream',
+            as_attachment=not inline,
+            filename=display_name,
+        )
+        resp['X-Content-Type-Options'] = 'nosniff'
+        resp['Cache-Control'] = 'private, max-age=300'
+        return resp
+
+    @staticmethod
+    def _may_read(user, room, shared_file):
+        try:
+            if ChatRoomFile.objects.filter(room=room, file=shared_file).exists():
+                return True
+        except Exception:
+            pass
+
+        try:
+            from apps.files.views import _file_permission_for
+            if _file_permission_for(user, shared_file):
+                return True
+        except Exception:
+            pass
+
+        try:
+            return ChatMessage.objects.filter(
+                room=room, linked_file=shared_file, is_deleted=False,
+            ).exists()
+        except Exception:
+            return False
+
+
+def _shared_file_url(room_id, file_id):
+    """Authenticated URL for a SharedFile attached to a room."""
+    if not room_id or not file_id:
+        return ''
+    try:
+        return reverse('chat_shared_file', kwargs={
+            'room_id': room_id, 'file_id': file_id,
+        })
+    except Exception:
+        return f'/messages/{room_id}/file/{file_id}/'
 
 
 @method_decorator(xframe_options_sameorigin, name='dispatch')

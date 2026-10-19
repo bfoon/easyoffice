@@ -3,6 +3,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from django.views.generic import RedirectView   # ← NEW
+from apps.marketing.views_landing import LandingView, LandingEnquiryView
 
 urlpatterns = [
     # Admin
@@ -12,6 +13,11 @@ urlpatterns = [
 
     # Authentication
     path('auth/', include('apps.core.urls.auth')),
+
+    # Public landing page (signed-in users are redirected to the dashboard).
+    # Must stay above the root dashboard include so it wins for '/'.
+    path('', LandingView.as_view(), name='landing'),
+    path('enquiry/', LandingEnquiryView.as_view(), name='landing_enquiry'),
 
     # Dashboard
     path('dashboard/', include('apps.dashboard.urls')),

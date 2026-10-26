@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% load invest_tags %}
+{% block title %}Investments{% endblock %}
+{% block breadcrumb %}<strong>Investments</strong>{% endblock %}
+{% block content %}
+<div class="container-fluid py-3">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div><h4 class="mb-0"><i class="bi bi-graph-up-arrow me-2"></i>Investments</h4><small class="text-muted">Investor money, listings and profit sharing</small></div>
+    <div class="d-flex gap-2">
+      <a href="{% url 'investments:invitation_list' %}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-envelope-plus me-1"></i>Invite investors</a>
+      <a href="{% url 'investments:opportunity_create' %}" class="btn btn-primary btn-sm"><i class="bi bi-plus-lg me-1"></i>New listing</a>
+    </div>
+  </div>
+  {% include "investments/admin/_nav.html" %}
+
+  {% if pending.apps or pending.deposits or pending.withdrawals or pending.drafts %}
+  <div class="alert alert-warning d-flex flex-wrap gap-3 align-items-center py-2">
+    <strong>Waiting on you:</strong>
+    {% if pending.apps %}<a href="{% url 'investments:application_list' %}">{{ pending.apps }} application{{ pending.apps|pluralize }}</a>{% endif %}
+    {% if pending.deposits %}<a href="{% url 'investments:deposit_list' %}">{{ pending.deposits }} deposit{{ pending.deposits|pluralize }}</a>{% endif %}
+    {% if pending.withdrawals %}<a href="{% url 'investments:withdrawal_list' %}">{{ pending.withdrawals }} withdrawal{{ pending.withdrawals|pluralize }}</a>{% endif %}
+    {% if pending.drafts %}<a href="{% url 'investments:distribution_list' %}?status=draft">{{ pending.drafts }} payout{{ pending.drafts|pluralize }} to approve</a>{% endif %}
+  </div>
+  {% endif %}
+
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-lg"><div class="inv-kpi"><div class="l">Capital invested</div><div class="v text-capital">{{ aum|money:0 }}</div><div class="s">across all listings</div></div></div>
+    <div class="col-6 col-lg"><div class="inv-kpi"><div class="l">Held in wallets</div><div class="v">{{ wallets|money:0 }}</div><div class="s">owed to investors, not invested</div></div></div>
+    <div class="col-6 col-lg"><div class="inv-kpi"><div class="l">Paid to investors, 30 days</div><div class="v text-profit">{{ paid30|money:0 }}</div><div class="s">from {{ profit30|money:0 }} net profit</div></div></div>
+    <div class="col-6 col-lg"><div class="inv-kpi"><div class="l">Active investors</div><div class="v">{{ investors }}</div><div class="s">in: {{ flows.deposits|money:0 }} · out: {{ flows.withdrawals|money:0 }} (30d)</div></div></div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-lg-8"><div class="inv-card h-100"><div class="h">Capital under management</div><div class="b"><div style="height:260px"><canvas id="aum"></canvas></div></div></div></div>
+    <div class="col-lg-4"><div class="inv-card h-100"><div class="h">By listing</div><div class="b"><div style="height:260px"><canvas id="alloc"></canvas></div></div></div></div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-8">
+      <div class="inv-card">
+        <div class="h">Listings <a class="small fw-normal" href="{% url 'investments:opportunity_list' %}">All listings</a></div>
+        <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+          <thead><tr><th class="ps-3">Listing</th><th>Status</th><th class="text-end">Capital</th><th style="width:22%">Funded</th><th class="text-end">Investors</th><th class="text-end pe-3">Yearly return</th></tr></thead>
+          <tbody>
+          {% for r in opp_rows %}
+            <tr>
+              <td class="ps-3"><a href="{% url 'investments:opportunity_detail' r.o.pk %}">{{ r.o.title }}</a></td>
+              <td><span class="badge bg-{% if r.o.status == 'open' %}success{% elif r.o.status == 'paused' %}warning text-dark{% else %}secondary{% endif %}">{{ r.o.get_status_display }}</span></td>
+              <td class="text-end num">{{ r.cap|money:0 }}</td>
+              <td><div class="progress" style="height:6px"><div class="progress-bar" style="width:{{ r.funded|floatformat:0 }}%;background:#2f5d8a"></div></div><small class="text-muted">{{ r.funded|floatformat:0 }}%</small></td>
+              <td class="text-end">{{ r.n }}</td>
+              <td class="text-end pe-3 num">{% if r.rate.basis == 'none' %}—{% else %}{{ r.annual|floatformat:1 }}%{% if r.rate.basis == 'estimated' %} <small class="text-muted">est.</small>{% endif %}{% endif %}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="text-muted p-4 text-center">No live listings. <a href="{% url 'investments:opportunity_create' %}">Create the first one</a> and link the inventory items whose sales will earn for investors.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table></div>
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="inv-card">
+        <div class="h">Latest wallet activity</div>
+        <ul class="list-group list-group-flush">
+          {% for t in recent %}
+            <li class="list-group-item d-flex justify-content-between gap-2 small">
+              <span><a href="{% url 'investments:investor_detail' t.account.pk %}">{{ t.account.display_name }}</a><br><span class="text-muted">{{ t.get_kind_display }}, {{ t.created_at|date:"j M H:i" }}</span></span>
+              <span class="num {% if t.amount > 0 %}text-profit{% else %}text-danger{% endif %}">{{ t.amount|signed_money }}</span>
+            </li>
+          {% empty %}<li class="list-group-item text-muted small">No activity yet.</li>{% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{{ chart|json_script:"inv-chart" }}
+{% endblock %}
+{% block extra_js %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script>
+(function () {
+  const d = JSON.parse(JSON.parse(document.getElementById('inv-chart').textContent));
+  const cur = '{% currency %}';
+  const fmt = v => cur + ' ' + Number(v).toLocaleString('en-GB', {maximumFractionDigits: 0});
+  new Chart(document.getElementById('aum'), { type: 'line',
+    data: { labels: d.aum.labels, datasets: [{ data: d.aum.values, borderColor: '#2f5d8a', backgroundColor: '#2f5d8a22', fill: true, pointRadius: 0, tension: .25 }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ' ' + fmt(c.raw) } } },
+      scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } }, y: { ticks: { callback: fmt } } } } });
+  if (d.alloc.length) new Chart(document.getElementById('alloc'), { type: 'doughnut',
+    data: { labels: d.alloc.map(a => a.label), datasets: [{ data: d.alloc.map(a => a.value), backgroundColor: ['#2f5d8a', '#1f8a5b', '#5b8fb9', '#4fae84', '#c9922e', '#7a9cc0', '#93c7ad'] }] },
+    options: { maintainAspectRatio: false, cutout: '62%', plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } }, tooltip: { callbacks: { label: c => ' ' + c.label + ': ' + fmt(c.raw) } } } } });
+})();
+</script>
+{% endblock %}

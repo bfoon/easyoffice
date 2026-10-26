@@ -1,0 +1,165 @@
+{% extends "investments/portal/base.html" %}
+{% load invest_tags %}
+{% block title %}{{ o.title }} — my investment{% endblock %}
+
+{% block extra_css %}
+<style>
+  .back { display: inline-flex; gap: 6px; margin-bottom: 14px; text-decoration: none; font-size: 14px; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+  .top h1 { margin: 0; font-size: clamp(24px, 3.5vw, 32px); }
+  .figs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: var(--r-lg); overflow: hidden; margin-bottom: 18px; }
+  .figs > div { background: var(--card); padding: 18px 20px; }
+  .figs b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .figs span { font-size: 13px; color: var(--ink-3); }
+  @media (max-width: 760px) { .figs { grid-template-columns: 1fr 1fr; } }
+  .ev { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 11px 0; border-bottom: 1px solid #edf2f1; }
+  .ev:last-child { border-bottom: 0; }
+  .ev .ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; }
+  .ic-invest, .ic-redeem { background: var(--capital-bg); color: var(--capital); }
+  .ic-profit_reinvest, .ic-profit_paid { background: var(--profit-bg); color: var(--profit); }
+  .ic-loss, .ic-fee { background: var(--loss-bg); color: var(--loss); }
+  .choice { display: grid; gap: 8px; }
+  .choice label { display: flex; gap: 10px; border: 1px solid var(--rule); border-radius: 10px; padding: 10px 12px; font-weight: 500; cursor: pointer; margin: 0; }
+  .choice input { accent-color: var(--river); margin-top: 4px; }
+  .choice small { display: block; color: var(--ink-3); font-weight: 400; }
+</style>
+{% endblock %}
+
+{% block content %}
+<a class="back" href="{% url 'invest:dashboard' %}"><i class="bi bi-arrow-left"></i>Overview</a>
+<div class="top">
+  <div>
+    <div class="faint">My investment in</div>
+    <h1 class="display">{{ o.title }}</h1>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap">
+    {% if o.status == 'open' %}<a class="btn btn-go" href="{% url 'invest:opportunity_detail' o.slug %}"><i class="bi bi-plus-lg"></i>Add money</a>{% endif %}
+    {% if h.capital > 0 %}<button class="btn btn-quiet" type="button" onclick="IP.open('redeemModal')">Take money out</button>{% endif %}
+  </div>
+</div>
+
+<div class="figs">
+  <div><span>Capital now</span><b style="color:var(--capital)">{{ h.capital|money }}</b><span>You put in {{ h.principal_contributed|money:0 }}</span></div>
+  <div><span>Profit earned</span><b class="pos">{{ h.profit_total|money }}</b><span>{{ h.profit_reinvested|money:0 }} reinvested, {{ h.profit_paid_out|money:0 }} to wallet</span></div>
+  <div><span>Overall return</span><b class="{% if h.net_gain >= 0 %}pos{% else %}neg{% endif %}">{{ h.roi_pct|pct:2 }}</b><span>{% if h.losses_total or h.fees_total %}after {{ h.losses_total|add:h.fees_total|money:0 }} losses/fees{% else %}no losses or fees{% endif %}</span></div>
+  <div><span>Next payout</span><b>{{ next_payout|date:"j M" }}</b><span>{% if rate.basis != 'none' %}~{{ annual|floatformat:1 }}% a year at this pace{% else %}first payout pending{% endif %}</span></div>
+</div>
+
+<div class="grid g-main">
+  <div>
+    <section class="card">
+      <h2>Capital and profit over time</h2>
+      <div style="position:relative;height:280px"><canvas id="hChart" aria-label="Capital and profit history with 12-month projection"></canvas></div>
+      <p class="faint" style="margin:10px 0 0">Solid lines are what has happened; the dashed line is the expected next 12 months with the shaded range between the cautious and strong cases.</p>
+    </section>
+
+    <section class="card">
+      <h2>History</h2>
+      {% for e in events %}
+        <div class="ev">
+          <div class="ic ic-{{ e.kind }}"><i class="bi {% if e.kind == 'invest' %}bi-arrow-down-circle{% elif e.kind == 'redeem' %}bi-arrow-up-circle{% elif e.kind == 'loss' or e.kind == 'fee' %}bi-dash-circle{% else %}bi-stars{% endif %}"></i></div>
+          <div>
+            <div>{{ e.get_kind_display }}</div>
+            <div class="faint">{{ e.occurred_at|date:"j M Y, H:i" }}{% if e.note %} — {{ e.note }}{% endif %}</div>
+          </div>
+          <div class="t-right num">
+            <div class="{% if e.kind == 'loss' or e.kind == 'fee' or e.kind == 'redeem' %}neg{% else %}pos{% endif %}">{% if e.kind == 'loss' or e.kind == 'fee' or e.kind == 'redeem' %}−{% else %}+{% endif %}{{ e.amount|money }}</div>
+            <div class="faint">capital {{ e.capital_after|money:0 }}</div>
+          </div>
+        </div>
+      {% empty %}
+        <p class="faint">No activity yet.</p>
+      {% endfor %}
+    </section>
+  </div>
+
+  <aside>
+    <section class="card">
+      <h2>What happens to profit</h2>
+      <form method="post">
+        {% csrf_token %}<input type="hidden" name="action" value="payout_mode">
+        <div class="choice">
+          <label><input type="radio" name="mode" value="reinvest" {% if h.payout_mode == 'reinvest' %}checked{% endif %}><span>Reinvest<small>Added to capital, so next period you earn on a bigger amount.</small></span></label>
+          <label><input type="radio" name="mode" value="wallet" {% if h.payout_mode == 'wallet' %}checked{% endif %}><span>Pay to wallet<small>Capital stays fixed; profit can be withdrawn or invested elsewhere.</small></span></label>
+        </div>
+        <button class="btn btn-primary btn-sm" style="margin-top:12px">Save choice</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Lock-in</h2>
+      {% if h.is_locked %}
+        <p class="muted" style="margin:0">Until <b>{{ h.lock_ends_at|date:"j M Y" }}</b>, taking money out costs {{ o.early_exit_fee_pct|pct:1 }} of the amount{% if fee_now %} ({{ fee_now|money }} if you took it all today){% endif %}.</p>
+      {% else %}
+        <p class="muted" style="margin:0">No lock-in. You can move capital back to your wallet at any time, free of charge.</p>
+      {% endif %}
+      <p class="faint" style="margin:10px 0 0">Adding money restarts the {{ o.lock_in_days }}-day lock-in.</p>
+    </section>
+
+    <section class="card">
+      <h2>How your share is worked out</h2>
+      <p class="faint" style="margin:0">Each period we total the profit from the listing’s items, take the {{ o.investor_share_pct|pct:0 }} investor share{% if o.scale_by_funding %} (scaled by how much of the target is funded){% endif %}, and split it by how much each investor had in, and for how long. Money added halfway through a period earns half a period.</p>
+    </section>
+  </aside>
+</div>
+
+<div class="modal" id="redeemModal" role="dialog" aria-modal="true" aria-labelledby="redeemTitle">
+  <div>
+    <h3 id="redeemTitle">Take money out</h3>
+    <p class="faint">The amount goes back to your wallet. From there you can withdraw it or invest elsewhere.</p>
+    <form method="post">
+      {% csrf_token %}<input type="hidden" name="action" value="redeem">
+      <div class="field">
+        <label for="rAmount">Amount</label>
+        <div class="input-money"><span>{% currency %}</span><input class="input" id="rAmount" name="amount" inputmode="decimal" required></div>
+        <div class="help">Available: {{ h.capital|money }}{% if h.is_locked %}. A {{ o.early_exit_fee_pct|pct:1 }} early-exit fee applies.{% endif %}</div>
+        <div class="help" id="rFee"></div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
+        <button type="button" class="btn btn-quiet" onclick="IP.close(this)">Cancel</button>
+        <button type="submit" name="all" value="1" class="btn btn-quiet" formnovalidate>Take it all</button>
+        <button type="submit" class="btn btn-primary">Move to wallet</button>
+      </div>
+    </form>
+  </div>
+</div>
+{{ chart|json_script:"chart-data" }}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const d = JSON.parse(JSON.parse(document.getElementById('chart-data').textContent));
+  const locked = {{ h.is_locked|yesno:"true,false" }}, feePct = {{ o.early_exit_fee_pct }};
+  const r = document.getElementById('rAmount');
+  if (r && locked) r.addEventListener('input', () => {
+    const v = parseFloat(r.value.replace(/,/g, '')) || 0;
+    document.getElementById('rFee').textContent = v ? `Fee ${IP.fmt(v * feePct / 100, 2)}, you receive ${IP.fmt(v - v * feePct / 100, 2)}` : '';
+  });
+
+  const cv = document.getElementById('hChart');
+  if (!cv) return;
+  const H = d.hist, P = d.proj;
+  if (!H.labels.length) return;
+  const n = H.labels.length, m = P.labels.length - 1;
+  const pad = k => Array(k).fill(null);
+  const lastCap = H.capital[n - 1], lastProf = H.profit[n - 1];
+  const reinvest = '{{ h.payout_mode }}' === 'reinvest';
+  const val = p => reinvest ? p.capital : lastCap + p.profit;
+  new Chart(cv, {
+    type: 'line',
+    data: { labels: H.labels.concat(P.labels.slice(1)), datasets: [
+      { label: 'Capital', data: H.capital.concat(pad(m)), borderColor: '#2f5d8a', backgroundColor: '#2f5d8a22', fill: 'origin', stepped: true, pointRadius: 2, borderWidth: 2 },
+      { label: 'Profit earned', data: H.profit.concat(pad(m)), borderColor: '#1f8a5b', backgroundColor: 'transparent', stepped: true, pointRadius: 2, borderWidth: 2 },
+      { label: 'Strong case', data: pad(n - 1).concat([lastCap], P.high.slice(1).map(val)), borderColor: 'transparent', backgroundColor: '#c9922e22', fill: '+1', pointRadius: 0, tension: .3 },
+      { label: 'Cautious case', data: pad(n - 1).concat([lastCap], P.low.slice(1).map(val)), borderColor: 'transparent', fill: false, pointRadius: 0, tension: .3 },
+      { label: 'Expected value', data: pad(n - 1).concat([lastCap], P.base.slice(1).map(val)), borderColor: '#c9922e', borderDash: [6, 4], borderWidth: 2, fill: false, pointRadius: 0, tension: .3 },
+    ]},
+    options: { maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+      scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 8, maxRotation: 0 } },
+                y: { grid: { color: '#edf2f1' }, ticks: { callback: v => IP.fmt(v) } } },
+      plugins: { tooltip: { filter: i => i.raw !== null, callbacks: { label: c => ` ${c.dataset.label}: ${IP.fmt(c.raw)}` } } } },
+  });
+})();
+</script>
+{% endblock %}

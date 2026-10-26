@@ -81,6 +81,8 @@ LOCAL_APPS = [
     'apps.customforms',
     'apps.marketing',
     'apps.admin_security.apps.AdminSecurityConfig',
+    'apps.features',
+    'apps.investments',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -100,6 +102,11 @@ MIDDLEWARE = [
     'apps.core.middleware.OfficeBrandingMiddleware',
     'apps.user_admin.middleware.PasswordChangeRequiredMiddleware',
     'apps.poi.middleware.POIConfinementMiddleware',
+    # Keeps external investors inside /invest/ (before the feature gate so a
+    # switched-off portal shows investors the plain page, not the intranet).
+    'apps.investments.middleware.InvestorConfinementMiddleware',
+    # Blocks URLs of modules a superuser has switched off (apps/features).
+    'apps.features.middleware.FeatureGateMiddleware',
 ]
 
 ROOT_URLCONF = 'easyoffice.urls'
@@ -129,6 +136,8 @@ TEMPLATES = [
                 'apps.core.context_processors.unread_notifications',
                 'apps.messaging.context_processors.unread_messages',
                 'apps.user_admin.context_processors.admin_flags',
+                'apps.features.context_processors.features',
+                'apps.investments.context_processors.investment_flags',
             ],
         },
     },
@@ -516,3 +525,27 @@ POS_ALLOW_OVERSELL  = False          # True lets stock go negative
 POS_REQUIRE_CASH_SESSION = True
 
 from .settings_security import *   # noqa: F401,F403
+
+
+# =============================================================
+# INVESTMENTS (apps.investments)
+# =============================================================
+# KYC documents and deposit receipts live under PRIVATE_ROOT with random
+# names and are streamed only through permission-checking views. The default
+# sits inside the media volume (so it survives rebuilds) — block it in nginx:
+#     location ^~ /media/_private/ { deny all; return 404; }
+INVESTMENTS = {
+    'CURRENCY': config('INVESTMENTS_CURRENCY', default='GMD'),
+    'MIN_DEPOSIT': config('INVESTMENTS_MIN_DEPOSIT', default='500'),
+    'MIN_WITHDRAWAL': config('INVESTMENTS_MIN_WITHDRAWAL', default='500'),
+    'INVITE_DAYS': config('INVESTMENTS_INVITE_DAYS', default=14, cast=int),
+    'ACTIVATION_HOURS': config('INVESTMENTS_ACTIVATION_HOURS', default=72, cast=int),
+    'MANAGER_GROUPS': ['Investment Manager', 'CEO'],
+    'PRIVATE_ROOT': config('INVESTMENTS_PRIVATE_ROOT',
+                           default=os.path.join(str(MEDIA_ROOT), '_private', 'investments')),
+    # Shown on the investor wallet page under "How to deposit".
+    'DEPOSIT_INSTRUCTIONS': [
+        {'method': 'Wave', 'detail': 'Send to Easy Solutions — +220 000 0000'},
+        {'method': 'Bank transfer', 'detail': 'Easy Solutions Ltd · Bank name · Account 0000000000'},
+    ],
+}

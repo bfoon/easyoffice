@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% load invest_tags %}
+{% block title %}{{ app.full_name }} — application{% endblock %}
+{% block breadcrumb %}<a href="{% url 'investments:application_list' %}">Applications</a> / <strong>{{ app.full_name }}</strong>{% endblock %}
+{% block content %}
+<div class="container-fluid py-3">
+  <h4 class="mb-3"><i class="bi bi-graph-up-arrow me-2"></i>Investments</h4>
+  {% include "investments/admin/_nav.html" %}
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+    <div>
+      <h5 class="mb-1">{{ app.full_name }}</h5>
+      <span class="badge bg-{% if app.status == 'approved' %}success{% elif app.status == 'rejected' %}secondary{% elif app.status == 'info_requested' %}info text-dark{% else %}warning text-dark{% endif %}">{{ app.get_status_display }}</span>
+      <small class="text-muted ms-2">Submitted {{ app.created_at|date:"j M Y H:i" }}{% if app.signed_ip %} from {{ app.signed_ip }}{% endif %}</small>
+    </div>
+    {% if account %}<a class="btn btn-outline-primary btn-sm" href="{% url 'investments:investor_detail' account.pk %}">Open investor account {{ account.account_no }}</a>{% endif %}
+  </div>
+
+  {% if duplicates %}
+  <div class="alert alert-warning small"><strong>Possible duplicates:</strong>
+    {% for d in duplicates %}<a href="{% url 'investments:application_detail' d.pk %}">{{ d.full_name }} ({{ d.get_status_display }})</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+    share this email, phone or ID number.</div>
+  {% endif %}
+
+  <div class="row g-3">
+    <div class="col-lg-8">
+      <div class="inv-card mb-3"><div class="h">Personal details</div><div class="b"><div class="row small g-3">
+        <div class="col-md-4"><div class="text-muted">Email</div>{{ app.email }}</div>
+        <div class="col-md-4"><div class="text-muted">Phone</div>{{ app.phone }}</div>
+        <div class="col-md-4"><div class="text-muted">Date of birth</div>{{ app.date_of_birth|date:"j M Y"|default:"—" }}</div>
+        <div class="col-md-4"><div class="text-muted">Nationality</div>{{ app.nationality|default:"—" }}</div>
+        <div class="col-md-8"><div class="text-muted">Address</div>{{ app.address }}{% if app.city %}, {{ app.city }}{% endif %}, {{ app.country }}</div>
+        <div class="col-md-4"><div class="text-muted">Occupation</div>{{ app.occupation|default:"—" }}</div>
+        <div class="col-md-4"><div class="text-muted">Employer</div>{{ app.employer|default:"—" }}</div>
+        <div class="col-md-4"><div class="text-muted">Next of kin</div>{{ app.next_of_kin_name|default:"—" }}{% if app.next_of_kin_phone %}<br>{{ app.next_of_kin_phone }} ({{ app.next_of_kin_relationship }}){% endif %}</div>
+      </div></div></div>
+
+      <div class="inv-card mb-3"><div class="h">Identity documents</div><div class="b">
+        <p class="small mb-2"><span class="text-muted">{{ app.get_id_type_display }}:</span> <strong>{{ app.id_number }}</strong></p>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <div class="small text-muted mb-1">ID document</div>
+            {% if app.id_document %}
+              {% url 'investments:private_file' 'application' app.pk 'id_document' as idurl %}
+              {% if '.pdf' in app.id_document.name %}<iframe src="{{ idurl }}" style="width:100%;height:320px;border:1px solid var(--bs-border-color);border-radius:8px" title="ID document"></iframe>
+              {% else %}<a href="{{ idurl }}" target="_blank" rel="noopener"><img src="{{ idurl }}" alt="ID document" style="max-width:100%;max-height:320px;border-radius:8px;border:1px solid var(--bs-border-color)"></a>{% endif %}
+              <a class="small" href="{{ idurl }}?dl=1">Download</a>
+            {% else %}<span class="text-danger small">Not uploaded</span>{% endif %}
+          </div>
+          <div class="col-md-6">
+            <div class="small text-muted mb-1">Proof of address</div>
+            {% if app.proof_of_address %}
+              {% url 'investments:private_file' 'application' app.pk 'proof_of_address' as poaurl %}
+              {% if '.pdf' in app.proof_of_address.name %}<iframe src="{{ poaurl }}" style="width:100%;height:320px;border:1px solid var(--bs-border-color);border-radius:8px" title="Proof of address"></iframe>
+              {% else %}<a href="{{ poaurl }}" target="_blank" rel="noopener"><img src="{{ poaurl }}" alt="Proof of address" style="max-width:100%;max-height:320px;border-radius:8px;border:1px solid var(--bs-border-color)"></a>{% endif %}
+              <a class="small" href="{{ poaurl }}?dl=1">Download</a>
+            {% else %}<span class="text-muted small">Not provided</span>{% endif %}
+          </div>
+        </div>
+      </div></div>
+
+      <div class="inv-card"><div class="h">Investment profile</div><div class="b"><div class="row small g-3">
+        <div class="col-md-4"><div class="text-muted">Expects to invest</div><strong class="num">{{ app.expected_amount|money:0 }}</strong></div>
+        <div class="col-md-4"><div class="text-muted">Risk</div>{{ app.get_risk_tolerance_display }}</div>
+        <div class="col-md-4"><div class="text-muted">Horizon</div>{{ app.get_horizon_display }}</div>
+        <div class="col-md-6"><div class="text-muted">Source of funds</div>{{ app.get_source_of_funds_display }}{% if app.source_of_funds_detail %} — {{ app.source_of_funds_detail }}{% endif %}</div>
+        <div class="col-md-6"><div class="text-muted">Payouts to</div>{{ app.get_payout_method_display }}: {{ app.payout_account_name }} {{ app.payout_account_number }} {{ app.payout_bank_name }}</div>
+        <div class="col-12"><div class="text-muted">Signed</div>“{{ app.signature_name }}” on {{ app.signed_at|date:"j M Y H:i" }}, terms accepted: {{ app.agreed_terms|yesno:"yes,no" }}</div>
+      </div></div></div>
+    </div>
+
+    <div class="col-lg-4">
+      {% if app.status == 'submitted' or app.status == 'info_requested' %}
+      <div class="inv-card mb-3"><div class="h">Decision</div><div class="b">
+        <form method="post" class="mb-3">{% csrf_token %}<input type="hidden" name="action" value="approve">
+          <label class="form-label small fw-semibold" for="an">Internal note <span class="text-muted fw-normal">(optional)</span></label>
+          <textarea id="an" name="note" rows="2" class="form-control form-control-sm mb-2" placeholder="ID checked against original"></textarea>
+          <button class="btn btn-success btn-sm w-100" onclick="return confirm('Approve and create the investor account?')"><i class="bi bi-check2-circle me-1"></i>Approve and create account</button>
+          <div class="form-text">Creates a portal-only login and emails a set-password link. Staff who already have an EasyOffice account keep their login.</div>
+        </form>
+        <hr>
+        <form method="post" class="mb-3">{% csrf_token %}<input type="hidden" name="action" value="info">
+          <label class="form-label small fw-semibold" for="inn">Ask for more information</label>
+          <textarea id="inn" name="note" rows="2" class="form-control form-control-sm mb-2" placeholder="Please upload the back of your ID card." required></textarea>
+          <button class="btn btn-outline-primary btn-sm w-100">Send request</button>
+        </form>
+        <hr>
+        <form method="post">{% csrf_token %}<input type="hidden" name="action" value="reject">
+          <label class="form-label small fw-semibold" for="rn">Reject with a reason</label>
+          <textarea id="rn" name="note" rows="2" class="form-control form-control-sm mb-2" placeholder="Shown to the applicant"></textarea>
+          <button class="btn btn-outline-danger btn-sm w-100" onclick="return confirm('Reject this application?')">Reject</button>
+        </form>
+      </div></div>
+      {% endif %}
+      <div class="inv-card"><div class="h">Review trail</div><div class="b small">
+        {% if app.invitation %}<div class="mb-2"><span class="text-muted">Invited by</span> {{ app.invitation.invited_by.get_full_name|default:app.invitation.invited_by.email|default:"—" }} on {{ app.invitation.created_at|date:"j M Y" }}</div>{% endif %}
+        {% if app.info_request_note %}<div class="mb-2"><span class="text-muted">Info requested:</span> {{ app.info_request_note }}</div>{% endif %}
+        {% if app.reviewed_at %}<div><span class="text-muted">Last reviewed by</span> {{ app.reviewed_by.get_full_name|default:app.reviewed_by.email }} on {{ app.reviewed_at|date:"j M Y H:i" }}{% if app.review_note %}<br>“{{ app.review_note }}”{% endif %}</div>{% else %}<span class="text-muted">Not reviewed yet.</span>{% endif %}
+      </div></div>
+    </div>
+  </div>
+</div>
+{% endblock %}

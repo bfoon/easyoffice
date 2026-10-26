@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% load invest_tags %}
+{% block title %}{{ acc.display_name }}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'investments:investor_list' %}">Investors</a> / <strong>{{ acc.display_name }}</strong>{% endblock %}
+{% block content %}
+<div class="container-fluid py-3">
+  <h4 class="mb-3"><i class="bi bi-graph-up-arrow me-2"></i>Investments</h4>
+  {% include "investments/admin/_nav.html" %}
+  <div class="d-flex flex-wrap justify-content-between gap-2 mb-3">
+    <div>
+      <h5 class="mb-1">{{ acc.display_name }} <small class="text-muted num">{{ acc.account_no }}</small></h5>
+      <span class="badge bg-{% if acc.status == 'active' %}success{% elif acc.status == 'pending' %}info text-dark{% elif acc.status == 'suspended' %}warning text-dark{% else %}secondary{% endif %}">{{ acc.get_status_display }}</span>
+      <small class="text-muted ms-2">{{ acc.user.email }} · {{ acc.user.phone }} · {% if acc.portal_only %}portal-only login{% else %}staff account{% endif %}</small>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      {% if acc.application %}<a class="btn btn-outline-secondary btn-sm" href="{% url 'investments:application_detail' acc.application.pk %}">Application &amp; KYC</a>{% endif %}
+      {% if acc.status == 'pending' %}<form method="post">{% csrf_token %}<input type="hidden" name="action" value="resend_activation"><button class="btn btn-outline-primary btn-sm">Resend activation email</button></form>{% endif %}
+      {% if acc.status == 'active' %}<form method="post" onsubmit="return confirm('Suspend? The investor will not be able to move money.')">{% csrf_token %}<input type="hidden" name="action" value="suspend"><button class="btn btn-outline-warning btn-sm">Suspend</button></form>
+      {% elif acc.status == 'suspended' %}<form method="post">{% csrf_token %}<input type="hidden" name="action" value="reactivate"><button class="btn btn-outline-success btn-sm">Reactivate</button></form>{% endif %}
+    </div>
+  </div>
+
+  {% if not recon.ok %}<div class="alert alert-danger small">Wallet balance {{ recon.cached|money }} does not match the ledger total {{ recon.ledger|money }}. Investigate before moving money.</div>{% endif %}
+
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-lg-3"><div class="inv-kpi"><div class="l">Wallet</div><div class="v">{{ acc.wallet_balance|money }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="inv-kpi"><div class="l">Invested</div><div class="v text-capital">{{ invested|money }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="inv-kpi"><div class="l">Profit earned</div><div class="v text-profit">{{ earned|money }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="inv-kpi"><div class="l">Payouts to</div><div class="v" style="font-size:1rem">{{ acc.get_payout_method_display }}</div><div class="s">{{ acc.payout_account_name }} {{ acc.payout_account_number }}</div></div></div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-8">
+      <div class="inv-card mb-3"><div class="h">Holdings</div><div class="table-responsive"><table class="table table-sm align-middle mb-0">
+        <thead><tr><th class="ps-3">Listing</th><th class="text-end">Capital</th><th class="text-end">Put in</th><th class="text-end">Profit</th><th>Profit goes to</th><th class="pe-3">Status</th></tr></thead>
+        <tbody>{% for h in holdings %}
+          <tr><td class="ps-3"><a href="{% url 'investments:opportunity_detail' h.opportunity.pk %}">{{ h.opportunity.title }}</a></td>
+            <td class="text-end num">{{ h.capital|money }}</td><td class="text-end num">{{ h.principal_contributed|money:0 }}</td>
+            <td class="text-end num text-profit">{{ h.profit_total|money }}</td><td class="small">{{ h.get_payout_mode_display }}</td>
+            <td class="pe-3 small">{{ h.get_status_display }}{% if h.is_locked %}, locked to {{ h.lock_ends_at|date:"j M" }}{% endif %}</td></tr>
+        {% empty %}<tr><td colspan="6" class="text-muted p-3">No holdings.</td></tr>{% endfor %}</tbody>
+      </table></div></div>
+
+      <div class="inv-card"><div class="h">Wallet ledger <small class="text-muted fw-normal">latest 100</small></div><div class="table-responsive"><table class="table table-sm align-middle mb-0">
+        <thead><tr><th class="ps-3">When</th><th>Type</th><th>Details</th><th class="text-end">Amount</th><th class="text-end pe-3">Balance</th></tr></thead>
+        <tbody>{% for t in txns %}
+          <tr><td class="ps-3 small text-nowrap">{{ t.created_at|date:"j M Y H:i" }}</td><td class="small">{{ t.get_kind_display }}</td>
+            <td class="small">{{ t.description }}{% if t.reference %} <span class="text-muted">({{ t.reference }})</span>{% endif %}</td>
+            <td class="text-end num {% if t.amount > 0 %}text-profit{% else %}text-danger{% endif %}">{{ t.amount|signed_money }}</td>
+            <td class="text-end num pe-3 text-muted">{{ t.balance_after|money }}</td></tr>
+        {% empty %}<tr><td colspan="5" class="text-muted p-3">No transactions.</td></tr>{% endfor %}</tbody>
+      </table></div></div>
+    </div>
+    <div class="col-lg-4">
+      <div class="inv-card mb-3"><div class="h">Manual adjustment</div><form method="post" class="b">
+        {% csrf_token %}<input type="hidden" name="action" value="adjust">
+        <label class="form-label small fw-semibold" for="adj">Amount <span class="text-muted fw-normal">(negative to debit)</span></label>
+        <input id="adj" name="amount" class="form-control form-control-sm mb-2" inputmode="decimal" required>
+        <label class="form-label small fw-semibold" for="adjn">Reason</label>
+        <input id="adjn" name="note" class="form-control form-control-sm mb-2" required placeholder="Shown on the investor's statement">
+        <button class="btn btn-outline-primary btn-sm w-100" onclick="return confirm('Post this adjustment to the wallet?')">Post adjustment</button>
+        <div class="form-text">Use for corrections only. Deposits should go through the deposit queue.</div>
+      </form></div>
+      <div class="inv-card mb-3"><div class="h">Access</div><form method="post" class="b small">
+        {% csrf_token %}<input type="hidden" name="action" value="portal_only">
+        <p class="mb-2">{% if acc.portal_only %}Confined to the investor portal.{% else %}Can use the rest of EasyOffice (staff).{% endif %}</p>
+        <input type="hidden" name="value" value="{% if acc.portal_only %}0{% else %}1{% endif %}">
+        <button class="btn btn-light btn-sm">{% if acc.portal_only %}Allow full EasyOffice access{% else %}Confine to investor portal{% endif %}</button>
+      </form></div>
+      <div class="inv-card mb-3"><div class="h">Recent deposits</div><ul class="list-group list-group-flush small">
+        {% for d in deposits %}<li class="list-group-item d-flex justify-content-between"><span>{{ d.created_at|date:"j M" }} {{ d.get_method_display }}</span><span class="num">{{ d.amount|money:0 }} <span class="badge bg-light text-dark">{{ d.get_status_display }}</span></span></li>{% empty %}<li class="list-group-item text-muted">None</li>{% endfor %}
+      </ul></div>
+      <div class="inv-card"><div class="h">Recent withdrawals</div><ul class="list-group list-group-flush small">
+        {% for w in withdrawals %}<li class="list-group-item d-flex justify-content-between"><span>{{ w.created_at|date:"j M" }} {{ w.get_method_display }}</span><span class="num">{{ w.amount|money:0 }} <span class="badge bg-light text-dark">{{ w.get_status_display }}</span></span></li>{% empty %}<li class="list-group-item text-muted">None</li>{% endfor %}
+      </ul></div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,274 @@
+{% extends "investments/portal/base.html" %}
+{% load invest_tags humanize %}
+{% block title %}Overview{% endblock %}
+
+{% block extra_css %}
+<style>
+  .hero { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 18px; margin-bottom: 18px; }
+  @media (max-width: 900px) { .hero { grid-template-columns: 1fr; } }
+  .worth { background: var(--river); color: #e6f1ef; border-radius: var(--r-lg); padding: 26px 28px; }
+  .worth .lbl { color: #a9c7c2; font-size: 14px; }
+  .worth .big { font-size: clamp(34px, 5vw, 50px); line-height: 1.05; margin: 6px 0 18px; color: #fff; }
+  .worth .split { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: rgba(255,255,255,.12); }
+  .worth .split i { display: block; height: 100%; }
+  .worth .legend { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 12px; font-size: 14px; }
+  .worth .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 7px; vertical-align: -1px; background: var(--c); }
+  .worth .acts { display: flex; gap: 10px; margin-top: 22px; flex-wrap: wrap; }
+  .worth .btn-quiet { color: #e6f1ef; border-color: rgba(255,255,255,.25); }
+  .worth .btn-quiet:hover { background: rgba(255,255,255,.08); }
+  .worth .btn-go { background: #e6f1ef; color: var(--river); }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: var(--r-lg); overflow: hidden; }
+  .stats > div { background: var(--card); padding: 18px 20px; }
+  .stats .v { font-size: 22px; margin-top: 2px; }
+  .stats .s { font-size: 13px; color: var(--ink-3); }
+  .k-cap { color: var(--capital); } .k-prof { color: var(--profit); } .k-fc { color: #9c6e18; }
+
+  .ribbon-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .ribbon-key { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13.5px; color: var(--ink-2); }
+  .ribbon-key span::before { content: ""; display: inline-block; width: 14px; height: 4px; border-radius: 2px; margin-right: 6px; vertical-align: 3px; background: var(--c); }
+  .ribbon-key .dash::before { background: repeating-linear-gradient(90deg, var(--c) 0 5px, transparent 5px 8px); }
+  .ribbon { position: relative; height: 320px; }
+
+  .hold { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 14px 0; border-bottom: 1px solid #edf2f1; text-decoration: none; color: inherit; }
+  .hold:last-child { border-bottom: 0; }
+  .hold:hover .hold-title { color: var(--river-2); text-decoration: underline; }
+  .hold-title { font-weight: 600; }
+  .hold .meta { font-size: 13px; color: var(--ink-3); }
+  .goal-track { height: 12px; border-radius: 999px; background: #e3ebe9; overflow: hidden; margin: 10px 0 8px; }
+  .goal-track i { display: block; height: 100%; background: linear-gradient(90deg, var(--capital), var(--profit)); }
+  .act { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid #edf2f1; font-size: 14px; }
+  .act:last-child { border-bottom: 0; }
+  .empty { text-align: center; padding: 28px 10px; }
+  .empty i { font-size: 30px; color: var(--ink-3); }
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <div class="worth">
+    <div class="lbl">Your money with us</div>
+    <div class="big display num">{{ pf.net_worth|money }}</div>
+    {% with total=pf.net_worth %}
+    <div class="split" role="img" aria-label="Wallet {{ account.wallet_balance|money }}, invested {{ pf.capital|money }}">
+      {% if total %}
+      <i style="width:{% widthratio account.wallet_balance total 100 %}%;background:#9fc6bf"></i>
+      <i style="width:{% widthratio pf.capital total 100 %}%;background:#7fa6d1"></i>
+      {% endif %}
+    </div>
+    {% endwith %}
+    <div class="legend">
+      <span style="--c:#9fc6bf">Wallet <b class="num">{{ account.wallet_balance|money }}</b></span>
+      <span style="--c:#7fa6d1">Invested <b class="num">{{ pf.capital|money }}</b></span>
+    </div>
+    <div class="acts">
+      <a class="btn btn-go" href="{% url 'invest:opportunities' %}"><i class="bi bi-plus-lg"></i>Invest</a>
+      <a class="btn btn-quiet" href="{% url 'invest:wallet' %}?do=deposit">Add money</a>
+      <a class="btn btn-quiet" href="{% url 'invest:wallet' %}?do=withdraw">Withdraw</a>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div>
+      <div class="s">Capital invested</div>
+      <div class="v display num k-cap">{{ pf.capital|money:0 }}</div>
+      <div class="s">You put in {{ pf.principal|money:0 }}</div>
+    </div>
+    <div>
+      <div class="s">Profit earned</div>
+      <div class="v display num k-prof">{{ pf.profit|money:0 }}</div>
+      <div class="s">{% if pf.losses %}after {{ pf.losses|money:0 }} fees/losses · {% endif %}return {{ pf.roi|pct:1 }}</div>
+    </div>
+    <div>
+      <div class="s">Earned this month</div>
+      <div class="v display num k-prof">{{ month_profit|money:0 }}</div>
+      <div class="s">{% if next_payouts %}Next payout {{ next_payouts.0.at|date:"j M" }}{% else %}No active investments{% endif %}</div>
+    </div>
+    <div>
+      <div class="s">Expected next 12 months</div>
+      <div class="v display num k-fc">{{ expected_12m|money:0 }}</div>
+      <div class="s">If listings keep performing as they have</div>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="ribbon-head">
+    <div>
+      <h2 style="margin-bottom:4px">How your investment is growing</h2>
+      <div class="faint">Past: what you put in and the profit on top of it. Ahead: the expected path, with a cautious and a strong case.</div>
+    </div>
+    <div class="ribbon-key">
+      <span style="--c:var(--capital)">Money you put in</span>
+      <span style="--c:var(--profit)">Profit</span>
+      <span class="dash" style="--c:var(--forecast)">Forecast</span>
+    </div>
+  </div>
+  {% if pf.holdings %}
+    <div class="ribbon"><canvas id="ribbon" aria-label="Capital and profit over time with forecast"></canvas></div>
+  {% else %}
+    <div class="empty">
+      <i class="bi bi-graph-up"></i>
+      <p class="muted">Your growth chart starts with your first investment.</p>
+      <a class="btn btn-primary" href="{% url 'invest:opportunities' %}">Browse listings</a>
+    </div>
+  {% endif %}
+</section>
+
+<div class="grid g-main" style="margin-top:18px">
+  <div>
+    <section class="card">
+      <h2>Your investments</h2>
+      {% for h in pf.holdings %}
+        <a class="hold" href="{% url 'invest:holding_detail' h.pk %}">
+          <div>
+            <div class="hold-title">{{ h.opportunity.title }}</div>
+            <div class="meta">
+              {% if h.status == 'closed' %}Closed{% else %}{{ h.get_payout_mode_display }}{% endif %}
+              {% if h.is_locked %}<span title="Early-exit fee applies until this date"> · locked until {{ h.lock_ends_at|date:"j M" }}</span>{% endif %}
+            </div>
+          </div>
+          <div class="t-right">
+            <div class="num" style="font-weight:600">{{ h.capital|money }}</div>
+            <div class="meta num {% if h.net_gain >= 0 %}pos{% else %}neg{% endif %}">{{ h.net_gain|signed_money }} ({{ h.roi_pct|pct:1 }})</div>
+          </div>
+        </a>
+      {% empty %}
+        <div class="empty"><p class="muted">You have not invested yet. Money in your wallet earns nothing until you put it in a listing.</p></div>
+      {% endfor %}
+    </section>
+
+    <section class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <h2 style="margin:0">Recent activity</h2>
+        <a class="faint" href="{% url 'invest:wallet' %}">Full history</a>
+      </div>
+      {% for t in activity %}
+        <div class="act">
+          <div>
+            <div>{{ t.description|default:t.get_kind_display }}</div>
+            <div class="faint">{{ t.created_at|date:"j M Y, H:i" }}</div>
+          </div>
+          <div class="num t-right {% if t.amount > 0 %}pos{% elif t.amount < 0 %}neg{% endif %}" style="white-space:nowrap">{{ t.amount|signed_money }}</div>
+        </div>
+      {% empty %}
+        <p class="faint">Nothing yet. Start by adding money to your wallet.</p>
+      {% endfor %}
+    </section>
+  </div>
+
+  <div>
+    {% if chart_has_alloc or pf.active %}
+    <section class="card">
+      <h2>Where your money is</h2>
+      <div style="position:relative;height:200px"><canvas id="alloc" aria-label="Allocation by listing"></canvas></div>
+    </section>
+    {% endif %}
+
+    <section class="card">
+      <h2>Upcoming payouts</h2>
+      {% for r in next_payouts %}
+        <div class="act">
+          <div>{{ r.h.opportunity.title }}<div class="faint">{{ r.h.opportunity.get_distribution_frequency_display }}</div></div>
+          <div class="t-right num">{{ r.at|date:"j M" }}<div class="faint">{{ r.at|naturaltime }}</div></div>
+        </div>
+      {% empty %}
+        <p class="faint">Payouts appear here once you hold an investment.</p>
+      {% endfor %}
+      <p class="faint" style="margin:10px 0 0">Profit for each period is worked out after it ends and approved by our team, usually within a few days.</p>
+    </section>
+
+    <section class="card">
+      <h2>{% if goal %}{{ goal.label }}{% else %}Set a goal{% endif %}</h2>
+      {% if goal %}
+        <div class="num"><b>{{ pf.net_worth|money:0 }}</b> <span class="faint">of {{ goal.amount|money:0 }}</span></div>
+        <div class="goal-track"><i style="width:{{ goal.pct|floatformat:0 }}%"></i></div>
+        <div class="faint">
+          {% if goal.eta == 'reached' %}Goal reached.
+          {% elif goal.eta %}On the expected path you reach it around {{ goal.eta }}.
+          {% else %}Not reached within 12 months on the expected path. Adding money or reinvesting profit gets you there sooner.{% endif %}
+        </div>
+      {% else %}
+        <p class="faint">Saving for a car, school fees or a house? Set a target and see when you are likely to reach it.</p>
+        <a class="btn btn-quiet btn-sm" href="{% url 'invest:profile' %}#goal">Set a goal</a>
+      {% endif %}
+    </section>
+
+    {% if updates %}
+    <section class="card">
+      <h2>News from your listings</h2>
+      {% for u in updates %}
+        <div class="act" style="display:block">
+          <div style="font-weight:600">{{ u.title }}</div>
+          <div class="faint">{{ u.opportunity.title }}, {{ u.created_at|date:"j M" }}</div>
+          <div class="muted" style="font-size:14px;margin-top:4px">{{ u.body|truncatewords:28 }}</div>
+        </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+  </div>
+</div>
+{{ chart|json_script:"chart-data" }}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const raw = JSON.parse(document.getElementById('chart-data').textContent);
+  const data = JSON.parse(raw);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const C = {cap: css('--capital'), prof: css('--profit'), fc: css('--forecast')};
+
+  const ribbon = document.getElementById('ribbon');
+  if (ribbon && data.history.labels.length) {
+    const h = data.history, f = data.forecast;
+    const nowCapital = h.capital[h.capital.length - 1] || 0;
+    const nowPrincipal = h.principal[h.principal.length - 1] || 0;
+    const nowValue = nowPrincipal + (h.profit[h.profit.length - 1] || 0);
+    const labels = h.labels.concat(f.labels.slice(1));
+    const pad = n => Array(n).fill(null);
+    const histLen = h.labels.length, fcLen = f.labels.length - 1;
+
+    const principal = h.principal.concat(pad(fcLen));
+    const value = h.principal.map((p, i) => p + h.profit[i]).concat(pad(fcLen));
+    const fcStart = pad(histLen - 1);
+    const fcBase = fcStart.concat([nowValue], f.base.slice(1).map(p => nowValue + p.profit));
+    const fcLow = fcStart.concat([nowValue], f.low.slice(1).map(p => nowValue + p.profit));
+    const fcHigh = fcStart.concat([nowValue], f.high.slice(1).map(p => nowValue + p.profit));
+
+    new Chart(ribbon, {
+      type: 'line',
+      data: { labels, datasets: [
+        { label: 'Money you put in', data: principal, borderColor: C.cap, backgroundColor: C.cap + '33', fill: 'origin', pointRadius: 0, borderWidth: 2, tension: .25 },
+        { label: 'Value with profit', data: value, borderColor: C.prof, backgroundColor: C.prof + '40', fill: '-1', pointRadius: 0, borderWidth: 2, tension: .25 },
+        { label: 'Strong case', data: fcHigh, borderColor: 'transparent', backgroundColor: C.fc + '22', fill: '+1', pointRadius: 0, tension: .3 },
+        { label: 'Cautious case', data: fcLow, borderColor: 'transparent', backgroundColor: 'transparent', fill: false, pointRadius: 0, tension: .3 },
+        { label: 'Expected', data: fcBase, borderColor: C.fc, borderDash: [6, 4], borderWidth: 2, fill: false, pointRadius: 0, tension: .3 },
+      ]},
+      options: {
+        maintainAspectRatio: false, interaction: {mode: 'index', intersect: false},
+        scales: {
+          x: { grid: {display: false}, ticks: {maxTicksLimit: 8, maxRotation: 0} },
+          y: { grid: {color: '#edf2f1'}, ticks: {callback: v => IP.fmt(v)} },
+        },
+        plugins: { tooltip: { filter: i => i.raw !== null, callbacks: { label: c => ` ${c.dataset.label}: ${IP.fmt(c.raw)}` } } },
+      },
+    });
+  }
+
+  const alloc = document.getElementById('alloc');
+  if (alloc) {
+    const items = data.alloc.concat(data.wallet > 0 ? [{label: 'Wallet (not invested)', value: data.wallet}] : []);
+    const palette = ['#2f5d8a', '#1f8a5b', '#5b8fb9', '#4fae84', '#7a9cc0', '#93c7ad', '#a7b8c6'];
+    new Chart(alloc, {
+      type: 'doughnut',
+      data: { labels: items.map(i => i.label), datasets: [{ data: items.map(i => i.value),
+        backgroundColor: items.map((i, n) => i.label.startsWith('Wallet') ? '#d4dedc' : palette[n % palette.length]), borderWidth: 2, borderColor: '#fff' }] },
+      options: { maintainAspectRatio: false, cutout: '66%',
+        plugins: { legend: { display: true, position: 'right', labels: { boxWidth: 10, font: { size: 12 } } },
+                   tooltip: { callbacks: { label: c => ` ${c.label}: ${IP.fmt(c.raw)}` } } } },
+    });
+  }
+})();
+</script>
+{% endblock %}

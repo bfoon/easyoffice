@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% load invest_tags %}
+{% block title %}Profit payouts{% endblock %}
+{% block breadcrumb %}<a href="{% url 'investments:dashboard' %}">Investments</a> / <strong>Payouts</strong>{% endblock %}
+{% block content %}
+<div class="container-fluid py-3">
+  <h4 class="mb-3"><i class="bi bi-graph-up-arrow me-2"></i>Investments</h4>
+  {% include "investments/admin/_nav.html" %}
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <form method="get"><select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+      <option value="">All</option>{% for k, l in statuses %}<option value="{{ k }}" {% if k == status %}selected{% endif %}>{{ l }}</option>{% endfor %}
+    </select></form>
+    <form method="post">{% csrf_token %}<button class="btn btn-primary btn-sm"><i class="bi bi-calculator me-1"></i>Calculate all completed periods</button></form>
+  </div>
+  <p class="small text-muted">A nightly job calculates each listing’s finished periods. Listings set to approve manually wait here as “Awaiting approval” until you post them.</p>
+  <div class="inv-card"><div class="table-responsive"><table class="table table-sm align-middle mb-0">
+    <thead><tr><th class="ps-3">Listing</th><th>Period</th><th class="text-end">Revenue</th><th class="text-end">Net profit</th><th class="text-end">Avg capital</th><th class="text-end">To investors</th><th class="text-end">Return</th><th class="pe-3">Status</th></tr></thead>
+    <tbody>
+    {% for x in distributions %}
+      <tr>
+        <td class="ps-3">{{ x.opportunity.title }}</td>
+        <td><a href="{% url 'investments:distribution_detail' x.pk %}">{{ x.period_start|date:"j M" }} – {{ x.period_end|date:"j M Y" }}</a></td>
+        <td class="text-end num">{{ x.revenue|money:0 }}</td>
+        <td class="text-end num {% if x.net_profit < 0 %}text-danger{% endif %}">{{ x.net_profit|money:0 }}</td>
+        <td class="text-end num">{{ x.avg_capital|money:0 }}</td>
+        <td class="text-end num text-profit">{{ x.investor_pool|money:0 }}</td>
+        <td class="text-end">{{ x.yield_pct|pct:2 }}</td>
+        <td class="pe-3"><span class="badge bg-{% if x.status == 'posted' %}success{% elif x.status == 'draft' %}warning text-dark{% else %}light text-dark{% endif %}">{{ x.get_status_display }}</span></td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="8" class="text-muted p-4 text-center">No payouts calculated yet. The first appears after a listing’s first full period with investors.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div></div>
+</div>
+{% endblock %}

@@ -1,0 +1,174 @@
+{% extends "investments/public/base.html" %}
+{% load invest_tags %}
+{% block title %}Investor application{% endblock %}
+
+{% block extra_css %}
+<style>
+  .wrap { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 32px; align-items: start; }
+  @media (max-width: 860px) { .wrap { grid-template-columns: 1fr; } .rail { display: none; } }
+  .rail { position: sticky; top: 24px; }
+  .rail ol { list-style: none; padding: 0; margin: 0; counter-reset: s; }
+  .rail li { counter-increment: s; }
+  .rail a { display: flex; gap: 12px; align-items: center; padding: 9px 0; color: var(--ink-2); text-decoration: none; }
+  .rail a::before { content: counter(s); width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #b8c9c5; display: grid; place-items: center; font-size: 13px; font-weight: 700; flex: none; }
+  .rail a.done::before { content: "✓"; background: var(--profit); border-color: var(--profit); color: #fff; }
+  .rail a.bad::before { border-color: var(--loss); color: var(--loss); }
+  .intro h1 { font-size: clamp(28px, 4vw, 38px); margin: 0 0 8px; line-height: 1.15; }
+  .intro p { color: var(--ink-2); max-width: 62ch; font-size: 16px; }
+  fieldset { border: 1px solid var(--rule); border-radius: var(--r); background: var(--card); padding: 24px; margin: 0 0 18px; }
+  legend { font-weight: 700; font-size: 18px; padding: 0 8px; margin-left: -8px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+  @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+  .has-err .input, .has-err select { border-color: var(--loss); }
+  .pick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  @media (max-width: 640px) { .pick { grid-template-columns: 1fr; } }
+  .pick label { border: 1px solid var(--rule); border-radius: 10px; padding: 10px 12px; font-weight: 500; display: flex; gap: 8px; align-items: flex-start; cursor: pointer; margin: 0; }
+  .pick input { accent-color: var(--river); margin-top: 4px; }
+  .terms-box { background: var(--surface); border-radius: 10px; padding: 14px 16px; font-size: 14px; color: var(--ink-2); max-height: 220px; overflow: auto; margin-bottom: 14px; }
+  .terms-box p { margin: 0 0 8px; }
+  .check { display: flex; gap: 10px; align-items: flex-start; font-weight: 500; }
+  .check input { width: 18px; height: 18px; accent-color: var(--river); margin-top: 3px; }
+  .sig { font-family: "Bricolage Grotesque", serif; font-size: 22px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="wrap">
+  <nav class="rail" aria-label="Application sections">
+    <ol>
+      <li><a href="#s-about" data-sec="s-about">About you</a></li>
+      <li><a href="#s-id" data-sec="s-id">Identity</a></li>
+      <li><a href="#s-money" data-sec="s-money">Investing and payouts</a></li>
+      <li><a href="#s-agree" data-sec="s-agree">Agreement</a></li>
+    </ol>
+  </nav>
+
+  <div>
+    <div class="intro">
+      <h1 class="display">Apply to invest with {{ brand }}</h1>
+      <p>Investors put money into listings of goods we sell and receive a share of the profit when they sell. This form takes about 10 minutes. We review it within two working days.</p>
+      {% if app and app.status == 'info_requested' %}
+        <div class="ip-flash warning"><b>We need a little more from you:</b> {{ app.info_request_note }}</div>
+      {% endif %}
+      {% if errors %}<div class="ip-flash error" role="alert">{% if form_error %}{{ form_error }}{% else %}Please fix the {{ errors|length }} highlighted field{{ errors|length|pluralize }} below.{% endif %}</div>{% endif %}
+    </div>
+
+    <form method="post" enctype="multipart/form-data" novalidate id="applyForm">
+      {% csrf_token %}
+
+      <fieldset id="s-about">
+        <legend>About you</legend>
+        <div class="row">
+          <div class="field {% if errors.full_name %}has-err{% endif %}"><label for="full_name">Full name, as on your ID</label><input class="input" id="full_name" name="full_name" value="{{ d.full_name|default:'' }}" autocomplete="name" required>{% if errors.full_name %}<div class="err">{{ errors.full_name }}</div>{% endif %}</div>
+          <div class="field {% if errors.date_of_birth %}has-err{% endif %}"><label for="dob">Date of birth</label><input class="input" id="dob" type="date" name="date_of_birth" value="{{ d.date_of_birth|default:'' }}" required>{% if errors.date_of_birth %}<div class="err">{{ errors.date_of_birth }}</div>{% endif %}</div>
+          <div class="field {% if errors.email %}has-err{% endif %}"><label for="email">Email</label><input class="input" id="email" type="email" name="email" value="{{ d.email|default:'' }}" autocomplete="email" required>{% if errors.email %}<div class="err">{{ errors.email }}</div>{% endif %}</div>
+          <div class="field {% if errors.phone %}has-err{% endif %}"><label for="phone">Phone</label><input class="input" id="phone" name="phone" value="{{ d.phone|default:'' }}" autocomplete="tel" placeholder="+220 …" required>{% if errors.phone %}<div class="err">{{ errors.phone }}</div>{% endif %}</div>
+          <div class="field {% if errors.nationality %}has-err{% endif %}"><label for="nationality">Nationality</label><input class="input" id="nationality" name="nationality" value="{{ d.nationality|default:'' }}" required>{% if errors.nationality %}<div class="err">{{ errors.nationality }}</div>{% endif %}</div>
+          <div class="field"><label for="occupation">Occupation</label><input class="input" id="occupation" name="occupation" value="{{ d.occupation|default:'' }}"></div>
+        </div>
+        <div class="field {% if errors.address %}has-err{% endif %}"><label for="address">Home address</label><input class="input" id="address" name="address" value="{{ d.address|default:'' }}" autocomplete="street-address" required>{% if errors.address %}<div class="err">{{ errors.address }}</div>{% endif %}</div>
+        <div class="row">
+          <div class="field"><label for="city">Town or city</label><input class="input" id="city" name="city" value="{{ d.city|default:'' }}"></div>
+          <div class="field"><label for="country">Country of residence</label><input class="input" id="country" name="country" value="{{ d.country|default:'The Gambia' }}"></div>
+          <div class="field"><label for="employer">Employer or business</label><input class="input" id="employer" name="employer" value="{{ d.employer|default:'' }}"></div>
+        </div>
+      </fieldset>
+
+      <fieldset id="s-id">
+        <legend>Identity</legend>
+        <p class="faint" style="margin-top:0">We check every investor’s identity to keep accounts and payouts safe. Documents are stored privately and seen only by our review team.</p>
+        <div class="row">
+          <div class="field"><label for="id_type">ID type</label><select id="id_type" name="id_type">{% for k, l in id_types %}<option value="{{ k }}" {% if d.id_type == k %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></div>
+          <div class="field {% if errors.id_number %}has-err{% endif %}"><label for="id_number">ID number</label><input class="input" id="id_number" name="id_number" value="{{ d.id_number|default:'' }}" required>{% if errors.id_number %}<div class="err">{{ errors.id_number }}</div>{% endif %}</div>
+        </div>
+        <div class="field {% if errors.id_document %}has-err{% endif %}">
+          <label for="id_document">Photo or scan of your ID</label>
+          <input class="input" id="id_document" type="file" name="id_document" accept=".pdf,.jpg,.jpeg,.png">
+          <div class="help">{% if app and app.id_document %}We already have one; upload again only to replace it. {% endif %}PDF, JPG or PNG, up to 10 MB. Both sides if it is a card.</div>
+          {% if errors.id_document %}<div class="err">{{ errors.id_document }}</div>{% endif %}
+        </div>
+        <div class="field {% if errors.proof_of_address %}has-err{% endif %}">
+          <label for="proof_of_address">Proof of address <span class="faint">(optional)</span></label>
+          <input class="input" id="proof_of_address" type="file" name="proof_of_address" accept=".pdf,.jpg,.jpeg,.png">
+          <div class="help">A utility bill or bank letter from the last three months.</div>
+          {% if errors.proof_of_address %}<div class="err">{{ errors.proof_of_address }}</div>{% endif %}
+        </div>
+        <div class="row">
+          <div class="field"><label for="nok">Next of kin</label><input class="input" id="nok" name="next_of_kin_name" value="{{ d.next_of_kin_name|default:'' }}"></div>
+          <div class="field"><label for="nokp">Next of kin phone</label><input class="input" id="nokp" name="next_of_kin_phone" value="{{ d.next_of_kin_phone|default:'' }}"></div>
+          <div class="field"><label for="nokr">Relationship</label><input class="input" id="nokr" name="next_of_kin_relationship" value="{{ d.next_of_kin_relationship|default:'' }}" placeholder="Spouse, sibling, parent…"></div>
+        </div>
+      </fieldset>
+
+      <fieldset id="s-money">
+        <legend>Investing and payouts</legend>
+        <div class="row">
+          <div class="field"><label for="sof">Where the money comes from</label><select id="sof" name="source_of_funds">{% for k, l in funds %}<option value="{{ k }}" {% if d.source_of_funds == k %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></div>
+          <div class="field"><label for="sofd">Details <span class="faint">(optional)</span></label><input class="input" id="sofd" name="source_of_funds_detail" value="{{ d.source_of_funds_detail|default:'' }}"></div>
+        </div>
+        <div class="field {% if errors.expected_amount %}has-err{% endif %}" style="max-width:320px">
+          <label for="exp">How much you expect to invest</label>
+          <div class="input-money"><span>{{ currency }}</span><input class="input" id="exp" name="expected_amount" inputmode="decimal" value="{{ d.expected_amount|default:'' }}"></div>
+          {% if errors.expected_amount %}<div class="err">{{ errors.expected_amount }}</div>{% endif %}
+        </div>
+        <div class="field"><label>How much risk are you comfortable with?</label>
+          <div class="pick">{% for k, l in risks %}<label><input type="radio" name="risk_tolerance" value="{{ k }}" {% if d.risk_tolerance == k or not d.risk_tolerance and k == 'medium' %}checked{% endif %}>{{ l }}</label>{% endfor %}</div></div>
+        <div class="field"><label>How long do you plan to stay invested?</label>
+          <div class="pick">{% for k, l in horizons %}<label><input type="radio" name="horizon" value="{{ k }}" {% if d.horizon == k or not d.horizon and k == 'mid' %}checked{% endif %}>{{ l }}</label>{% endfor %}</div></div>
+        <div class="row">
+          <div class="field"><label for="pm">Send my withdrawals by</label><select id="pm" name="payout_method">{% for k, l in methods %}<option value="{{ k }}" {% if d.payout_method == k %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></div>
+          <div class="field"><label for="pan">Account name</label><input class="input" id="pan" name="payout_account_name" value="{{ d.payout_account_name|default:'' }}"></div>
+          <div class="field {% if errors.payout_account_number %}has-err{% endif %}"><label for="panum">Account or phone number</label><input class="input" id="panum" name="payout_account_number" value="{{ d.payout_account_number|default:'' }}">{% if errors.payout_account_number %}<div class="err">{{ errors.payout_account_number }}</div>{% endif %}</div>
+          <div class="field"><label for="pbank">Bank <span class="faint">(bank transfers only)</span></label><input class="input" id="pbank" name="payout_bank_name" value="{{ d.payout_bank_name|default:'' }}"></div>
+        </div>
+      </fieldset>
+
+      <fieldset id="s-agree">
+        <legend>Agreement</legend>
+        <div class="terms-box" tabindex="0" aria-label="Terms and risk statement">
+          <p><b>How returns work.</b> Each listing is tied to specific items. When they sell, the profit (sale price minus cost and direct expenses) is shared with investors in the listing, in proportion to how much each investor had invested and for how long.</p>
+          <p><b>Returns are not guaranteed.</b> Profit depends on sales and can be low or zero in some periods. Where a listing states that investors share losses, a loss-making period reduces your capital.</p>
+          <p><b>Your money.</b> Money in your wallet is not invested and earns nothing. Withdrawals are paid after approval to the details you give us. Taking capital out of a listing during its lock-in period carries the stated early-exit fee.</p>
+          <p><b>Checks.</b> We may ask for more documents, and may decline or suspend an account to meet legal obligations.</p>
+          <p><b>Records.</b> Every movement of your money is recorded and available as a statement in your portal.</p>
+        </div>
+        <label class="check {% if errors.agreed_terms %}has-err{% endif %}"><input type="checkbox" name="agreed_terms" value="1" {% if d.agreed_terms %}checked{% endif %}> I have read the terms and risk statement and confirm the information I gave is true.</label>
+        {% if errors.agreed_terms %}<div class="err">{{ errors.agreed_terms }}</div>{% endif %}
+        <div class="field {% if errors.signature_name %}has-err{% endif %}" style="margin-top:16px;max-width:420px">
+          <label for="sig">Type your full name to sign</label>
+          <input class="input sig" id="sig" name="signature_name" value="{{ d.signature_name|default:'' }}" autocomplete="off">
+          {% if errors.signature_name %}<div class="err">{{ errors.signature_name }}</div>{% endif %}
+        </div>
+        <button class="btn btn-go" type="submit" style="min-width:220px">Send application</button>
+      </fieldset>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const form = document.getElementById('applyForm');
+  const errs = {{ errors|length }};
+  const links = document.querySelectorAll('.rail a');
+  function mark() {
+    links.forEach(a => {
+      const sec = document.getElementById(a.dataset.sec);
+      const req = sec.querySelectorAll('input[required]');
+      const filled = [...req].every(i => i.value.trim());
+      a.classList.toggle('done', req.length > 0 && filled && !sec.querySelector('.has-err'));
+      a.classList.toggle('bad', !!sec.querySelector('.has-err'));
+    });
+    const agree = document.getElementById('s-agree');
+    const ok = agree.querySelector('[name=agreed_terms]').checked && agree.querySelector('[name=signature_name]').value.trim();
+    document.querySelector('[data-sec=s-agree]').classList.toggle('done', !!ok);
+  }
+  form.addEventListener('input', mark);
+  form.addEventListener('change', mark);
+  mark();
+  if (errs) { const first = document.querySelector('.has-err'); if (first) first.scrollIntoView({block: 'center'}); }
+  form.addEventListener('submit', () => { form.querySelector('[type=submit]').disabled = true; });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% load invest_tags %}
+{% block title %}Payout — {{ d.opportunity.title }}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'investments:distribution_list' %}">Payouts</a> / <strong>{{ d.period_start|date:"j M" }} – {{ d.period_end|date:"j M Y" }}</strong>{% endblock %}
+{% block content %}
+<div class="container-fluid py-3">
+  <h4 class="mb-3"><i class="bi bi-graph-up-arrow me-2"></i>Investments</h4>
+  {% include "investments/admin/_nav.html" %}
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+    <div>
+      <h5 class="mb-1"><a href="{% url 'investments:opportunity_detail' d.opportunity.pk %}">{{ d.opportunity.title }}</a>: {{ d.period_start|date:"j M" }} – {{ d.period_end|date:"j M Y" }}</h5>
+      <span class="badge bg-{% if d.status == 'posted' %}success{% elif d.status == 'draft' %}warning text-dark{% else %}light text-dark{% endif %}">{{ d.get_status_display }}</span>
+      {% if d.posted_at %}<small class="text-muted ms-2">Posted {{ d.posted_at|date:"j M Y H:i" }} by {{ d.posted_by.get_full_name|default:d.posted_by.email|default:"the nightly job" }}</small>{% endif %}
+    </div>
+    {% if d.status == 'draft' %}
+    <div class="d-flex gap-2">
+      <form method="post">{% csrf_token %}<input type="hidden" name="action" value="recalculate"><button class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-clockwise me-1"></i>Recalculate</button></form>
+      <form method="post">{% csrf_token %}<input type="hidden" name="action" value="post"><button class="btn btn-success btn-sm" onclick="return confirm('Post {{ d.investor_pool|money }} to {{ allocations|length }} investor(s)? This cannot be undone.')"><i class="bi bi-check2-circle me-1"></i>Approve and pay investors</button></form>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-lg-5">
+      <div class="inv-card h-100"><div class="h">How the pool was worked out</div><div class="b">
+        <table class="table table-sm mb-0 small">
+          <tr><td>Revenue from the items</td><td class="text-end num">{{ d.revenue|money }}</td></tr>
+          <tr><td>− Cost of goods ({{ d.units_sold|floatformat:0 }} units)</td><td class="text-end num">{{ d.cost|money }}</td></tr>
+          <tr><td>± Expenses / extra revenue</td><td class="text-end num">{{ d.adjustments_net|signed_money }}</td></tr>
+          <tr class="fw-semibold"><td>= Net profit</td><td class="text-end num">{{ d.net_profit|money }}</td></tr>
+          <tr><td>Investor share</td><td class="text-end">{{ d.opportunity.investor_share_pct|pct:2 }}</td></tr>
+          <tr><td>× Funding ratio (avg capital {{ d.avg_capital|money:0 }} ÷ target)</td><td class="text-end">{{ d.funding_ratio|floatformat:4 }}</td></tr>
+          <tr><td>= Effective share</td><td class="text-end">{{ d.effective_share_pct|floatformat:3 }}%</td></tr>
+          <tr class="fw-semibold text-profit"><td>Investor pool</td><td class="text-end num">{{ d.investor_pool|money }}</td></tr>
+          <tr><td>Company keeps</td><td class="text-end num">{{ d.company_share|money }}</td></tr>
+          <tr><td>Return on capital this period</td><td class="text-end">{{ d.yield_pct|pct:3 }}</td></tr>
+        </table>
+      </div></div>
+    </div>
+    <div class="col-lg-7">
+      <div class="inv-card h-100"><div class="h">Sales counted</div><div class="b">
+        {% if d.breakdown.products %}
+        <div class="table-responsive"><table class="table table-sm small mb-2">
+          <thead><tr><th>Item</th><th class="text-end">Sold</th><th class="text-end">Revenue</th><th class="text-end">Profit</th></tr></thead>
+          <tbody>{% for p in d.breakdown.products %}<tr><td>{{ p.name }} <span class="text-muted">{{ p.sku }}</span></td><td class="text-end num">{{ p.qty }}</td><td class="text-end num">{{ p.revenue }}</td><td class="text-end num">{{ p.profit }}</td></tr>{% endfor %}</tbody>
+        </table></div>
+        {% else %}<p class="small text-muted">No sales of the linked items in this period.</p>{% endif %}
+        {% if d.breakdown.sources %}<div class="small text-muted">{% for k, v in d.breakdown.sources.items %}{{ k|upper }}: {{ v.count }} line{{ v.count|pluralize }}, {{ v.revenue }}{% if not forloop.last %}; {% endif %}{% endfor %}</div>{% endif %}
+        {% for a in d.breakdown.adjustments %}<div class="small">{{ a.date }} {{ a.kind }} {{ a.amount }} — {{ a.description }}</div>{% endfor %}
+        {% for n in d.breakdown.notes %}<div class="small text-warning">{{ n }}</div>{% endfor %}
+      </div></div>
+    </div>
+  </div>
+
+  <div class="inv-card"><div class="h">Split between investors <small class="text-muted fw-normal">weighted by capital × time held during the period</small></div>
+    <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+      <thead><tr><th class="ps-3">Investor</th><th class="text-end">Avg capital in period</th><th class="text-end">Share</th><th class="text-end">Amount</th><th class="pe-3">Applied as</th></tr></thead>
+      <tbody>{% for a in allocations %}
+        <tr><td class="ps-3"><a href="{% url 'investments:investor_detail' a.holding.account.pk %}">{{ a.holding.account.display_name }}</a></td>
+          <td class="text-end num">{{ a.weight_capital|money }}</td><td class="text-end">{% widthratio a.share_ratio 1 100 %}%</td>
+          <td class="text-end num {% if a.amount >= 0 %}text-profit{% else %}text-danger{% endif %}">{{ a.amount|signed_money }}</td>
+          <td class="pe-3 small">{% if a.mode_applied %}{{ a.mode_applied }}{% else %}<span class="text-muted">{{ a.holding.get_payout_mode_display }} (on posting)</span>{% endif %}</td></tr>
+      {% empty %}<tr><td colspan="5" class="text-muted p-3">No investors held capital in this period.</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </div>
+</div>
+{% endblock %}

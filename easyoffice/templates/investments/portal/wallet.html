@@ -1,0 +1,145 @@
+{% extends "investments/portal/base.html" %}
+{% load invest_tags %}
+{% block title %}Wallet{% endblock %}
+
+{% block extra_css %}
+<style>
+  .wtop { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 18px; margin-bottom: 18px; }
+  @media (max-width: 900px) { .wtop { grid-template-columns: 1fr; } }
+  .bal { background: var(--river); color: #e6f1ef; border-radius: var(--r-lg); padding: 26px; }
+  .bal .big { font-size: clamp(32px, 4.5vw, 44px); color: #fff; margin: 4px 0 18px; }
+  .bal .btn-go { background: #e6f1ef; color: var(--river); }
+  .bal .btn-quiet { color: #e6f1ef; border-color: rgba(255,255,255,.25); }
+  .totals { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: var(--r-lg); overflow: hidden; }
+  .totals > div { background: var(--card); padding: 16px 18px; }
+  .totals b { display: block; font-variant-numeric: tabular-nums; font-size: 19px; }
+  .totals span { font-size: 13px; color: var(--ink-3); }
+  .req { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid #edf2f1; font-size: 14px; }
+  .req:last-child { border-bottom: 0; }
+  .st { font-size: 12.5px; font-weight: 600; border-radius: 999px; padding: 1px 9px; }
+  .st-pending { background: var(--forecast-bg); color: #8a6114; }
+  .st-confirmed, .st-paid { background: var(--profit-bg); color: var(--profit); }
+  .st-rejected, .st-cancelled { background: var(--surface); color: var(--ink-3); }
+  .howto { background: var(--surface); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; font-size: 14px; }
+  .howto div + div { margin-top: 4px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="wtop">
+  <div class="bal">
+    <div style="color:#a9c7c2;font-size:14px">Available in your wallet</div>
+    <div class="big display num">{{ account.wallet_balance|money }}</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-go" type="button" onclick="IP.open('depModal')"><i class="bi bi-plus-lg"></i>Add money</button>
+      <button class="btn btn-quiet" type="button" onclick="IP.open('wdModal')">Withdraw</button>
+      <a class="btn btn-quiet" href="{% url 'invest:statement' %}"><i class="bi bi-download"></i>Statement</a>
+    </div>
+  </div>
+  <div class="totals">
+    <div><span>Total deposited</span><b>{{ totals.deposit|money }}</b></div>
+    <div><span>Profit paid to wallet</span><b class="pos">{{ totals.profit|money }}</b></div>
+    <div><span>Total withdrawn</span><b>{{ totals.withdrawal|money }}</b></div>
+    <div><span>Moved into investments</span><b>{{ totals.invest|money }}</b></div>
+  </div>
+</div>
+
+<div class="grid g-main">
+  <section class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <h2 style="margin:0">Transactions</h2>
+      <form method="get"><select name="kind" onchange="this.form.submit()" aria-label="Filter by type" style="width:auto">
+        <option value="">All types</option>
+        {% for k, label in kinds %}<option value="{{ k }}" {% if k == kind %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select></form>
+    </div>
+    <div class="scroll-x">
+    <table class="list">
+      <thead><tr><th>Date</th><th>Details</th><th class="t-right">Amount</th><th class="t-right">Balance</th></tr></thead>
+      <tbody>
+      {% for t in txns %}
+        <tr>
+          <td class="num" style="white-space:nowrap">{{ t.created_at|date:"j M Y" }}<div class="faint">{{ t.created_at|date:"H:i" }}</div></td>
+          <td>{{ t.description|default:t.get_kind_display }}{% if t.reference %}<div class="faint">Ref {{ t.reference }}</div>{% endif %}</td>
+          <td class="t-right num {% if t.amount > 0 %}pos{% else %}neg{% endif %}" style="white-space:nowrap">{{ t.amount|signed_money }}</td>
+          <td class="t-right num faint" style="white-space:nowrap">{{ t.balance_after|money }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="4" class="faint" style="padding:26px;text-align:center">No transactions yet. Add money to get started.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <aside>
+    <section class="card">
+      <h2>Deposits</h2>
+      {% for d in deposits %}
+        <div class="req"><div>{{ d.amount|money }}<div class="faint">{{ d.get_method_display }}, {{ d.created_at|date:"j M" }}{% if d.status == 'rejected' and d.review_note %} — {{ d.review_note }}{% endif %}</div></div><span class="st st-{{ d.status }}">{{ d.get_status_display }}</span></div>
+      {% empty %}<p class="faint">No deposits yet.</p>{% endfor %}
+    </section>
+    <section class="card">
+      <h2>Withdrawals</h2>
+      {% for w in withdrawals %}
+        <div class="req">
+          <div>{{ w.amount|money }}<div class="faint">{{ w.get_method_display }} {{ w.account_number }}, {{ w.created_at|date:"j M" }}{% if w.payout_reference %} — ref {{ w.payout_reference }}{% endif %}</div></div>
+          <div class="t-right"><span class="st st-{{ w.status }}">{{ w.get_status_display }}</span>
+            {% if w.status == 'pending' %}
+            <form method="post" style="margin-top:6px">{% csrf_token %}<input type="hidden" name="action" value="cancel_withdrawal"><input type="hidden" name="id" value="{{ w.pk }}"><button class="btn btn-quiet btn-sm">Cancel</button></form>
+            {% endif %}
+          </div>
+        </div>
+      {% empty %}<p class="faint">No withdrawals yet.</p>{% endfor %}
+    </section>
+  </aside>
+</div>
+
+<div class="modal" id="depModal" role="dialog" aria-modal="true" aria-labelledby="depTitle">
+  <div>
+    <h3 id="depTitle">Add money</h3>
+    <p class="faint">Send the money first, then tell us here. We match it and credit your wallet, usually the same working day.</p>
+    {% if pay_to %}
+    <div class="howto">{% for p in pay_to %}<div><b>{{ p.method }}:</b> {{ p.detail }}</div>{% endfor %}<div class="faint" style="margin-top:6px">Use your account number <b>{{ account.account_no }}</b> as the reference.</div></div>
+    {% endif %}
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}<input type="hidden" name="action" value="deposit">
+      <div class="field"><label for="dAmount">Amount sent</label>
+        <div class="input-money"><span>{% currency %}</span><input class="input" id="dAmount" name="amount" inputmode="decimal" required></div>
+        <div class="help">Minimum {{ min_deposit|money:0 }}</div></div>
+      <div class="field"><label for="dMethod">Sent with</label>
+        <select id="dMethod" name="method">{% for k, l in methods %}<option value="{{ k }}">{{ l }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="dRef">Transaction ID</label><input class="input" id="dRef" name="reference" maxlength="80" placeholder="From your Wave / QMoney / bank SMS"></div>
+      <div class="field"><label for="dProof">Receipt or screenshot <span class="faint">(optional)</span></label><input class="input" id="dProof" type="file" name="proof" accept=".pdf,.jpg,.jpeg,.png"></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end"><button type="button" class="btn btn-quiet" onclick="IP.close(this)">Cancel</button><button class="btn btn-primary">I have sent it</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="wdModal" role="dialog" aria-modal="true" aria-labelledby="wdTitle">
+  <div>
+    <h3 id="wdTitle">Withdraw</h3>
+    <p class="faint">The amount is held as soon as you ask and sent once approved. Only wallet money can be withdrawn; to use invested capital, move it to your wallet first.</p>
+    <form method="post">
+      {% csrf_token %}<input type="hidden" name="action" value="withdraw">
+      <div class="field"><label for="wAmount">Amount</label>
+        <div class="input-money"><span>{% currency %}</span><input class="input" id="wAmount" name="amount" inputmode="decimal" required></div>
+        <div class="help">Available {{ account.wallet_balance|money }}. Minimum {{ min_withdrawal|money:0 }}.</div></div>
+      <div class="field"><label for="wMethod">Send to</label>
+        <select id="wMethod" name="method">{% for k, l in methods %}<option value="{{ k }}" {% if k == account.payout_method %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="wName">Account name</label><input class="input" id="wName" name="account_name" value="{{ account.payout_account_name }}"></div>
+      <div class="field"><label for="wNum">Account or phone number</label><input class="input" id="wNum" name="account_number" value="{{ account.payout_account_number }}"></div>
+      <div class="field"><label for="wBank">Bank <span class="faint">(bank transfers only)</span></label><input class="input" id="wBank" name="bank_name" value="{{ account.payout_bank_name }}"></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end"><button type="button" class="btn btn-quiet" onclick="IP.close(this)">Cancel</button><button class="btn btn-primary">Request withdrawal</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  const want = new URLSearchParams(location.search).get('do');
+  if (want === 'deposit') IP.open('depModal');
+  if (want === 'withdraw') IP.open('wdModal');
+</script>
+{% endblock %}

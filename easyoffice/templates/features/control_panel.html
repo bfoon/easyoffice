@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% block title %}Feature control{% endblock %}
+{% block breadcrumb %}<span>Platform</span> / <strong>Feature control</strong>{% endblock %}
+
+{% block extra_css %}
+<style>
+  .fc-wrap { max-width: 1180px; }
+  .fc-summary { display:flex; gap:.75rem; flex-wrap:wrap; }
+  .fc-pill { border:1px solid var(--bs-border-color); border-radius:999px; padding:.3rem .85rem; font-size:.85rem; background:var(--bs-body-bg); }
+  .fc-pill b { font-variant-numeric: tabular-nums; }
+  .fc-cat { border:1px solid var(--bs-border-color); border-radius:14px; background:var(--bs-body-bg); margin-bottom:1.25rem; overflow:hidden; }
+  .fc-cat > header { padding:.8rem 1.1rem; font-weight:600; border-bottom:1px solid var(--bs-border-color); background:var(--bs-tertiary-bg); display:flex; justify-content:space-between; align-items:center; }
+  .fc-row { display:grid; grid-template-columns: 42px 1fr auto; gap:.9rem; align-items:center; padding:.85rem 1.1rem; border-bottom:1px solid var(--bs-border-color-translucent); }
+  .fc-row:last-child { border-bottom:0; }
+  .fc-row.is-off { background: repeating-linear-gradient(-45deg, transparent 0 10px, rgba(0,0,0,.018) 10px 20px); }
+  .fc-row.is-off .fc-name { color: var(--bs-secondary-color); }
+  .fc-icon { width:42px; height:42px; border-radius:11px; display:grid; place-items:center; font-size:1.2rem; background:var(--bs-tertiary-bg); }
+  .fc-row.is-on .fc-icon { background:#e7f5ee; color:#16794a; }
+  .fc-row.is-pilot .fc-icon { background:#fff4dc; color:#9a6a00; }
+  .fc-row.is-off .fc-icon { background:#f1f1f3; color:#8a8a93; }
+  .fc-name { font-weight:600; }
+  .fc-desc { font-size:.85rem; color:var(--bs-secondary-color); }
+  .fc-meta { font-size:.78rem; color:var(--bs-secondary-color); margin-top:.2rem; }
+  .fc-meta code { font-size:.75rem; }
+  .fc-seg { display:inline-flex; border:1px solid var(--bs-border-color); border-radius:10px; overflow:hidden; }
+  .fc-seg button { border:0; background:transparent; padding:.38rem .8rem; font-size:.82rem; font-weight:500; color:var(--bs-secondary-color); }
+  .fc-seg button + button { border-left:1px solid var(--bs-border-color); }
+  .fc-seg button:focus-visible { outline:2px solid #0d6efd; outline-offset:-2px; }
+  .fc-seg button.active[data-mode=on] { background:#16794a; color:#fff; }
+  .fc-seg button.active[data-mode=pilot] { background:#c48a00; color:#fff; }
+  .fc-seg button.active[data-mode=off] { background:#5b5b66; color:#fff; }
+  .fc-seg button:disabled { opacity:.5; }
+  .fc-lock { font-size:.8rem; color:var(--bs-secondary-color); }
+  .fc-settings { grid-column: 1 / -1; background:var(--bs-tertiary-bg); border-radius:10px; padding:1rem; }
+  .fc-warn { color:#b54708; font-size:.78rem; }
+  @media (max-width: 720px) { .fc-row { grid-template-columns: 42px 1fr; } .fc-actions { grid-column: 1 / -1; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3 fc-wrap">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+    <div>
+      <h4 class="mb-1"><i class="bi bi-toggles me-2"></i>Feature control</h4>
+      <p class="text-muted mb-0 small">Switch modules on, off, or into a pilot for selected people. Changes apply within a minute for everyone.</p>
+    </div>
+    <div class="d-flex gap-2">
+      <a href="{% url 'features:audit' %}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-clock-history me-1"></i>Change history</a>
+    </div>
+  </div>
+
+  <div class="fc-summary mb-4">
+    <span class="fc-pill"><b>{{ totals.on }}</b> on</span>
+    <span class="fc-pill"><b>{{ totals.pilot }}</b> in pilot</span>
+    <span class="fc-pill"><b>{{ totals.off }}</b> off</span>
+    <span class="fc-pill"><b>{{ totals.locked }}</b> core (always on)</span>
+  </div>
+
+  <div id="fcToast" class="alert d-none" role="status"></div>
+
+  {% for category, rows in groups %}
+  <section class="fc-cat">
+    <header><span>{{ category }}</span><small class="text-muted fw-normal">{{ rows|length }} module{{ rows|length|pluralize }}</small></header>
+    {% for r in rows %}
+    <div class="fc-row is-{% if r.spec.locked %}on{% else %}{{ r.mode }}{% endif %}" id="row-{{ r.spec.key }}" data-key="{{ r.spec.key }}">
+      <div class="fc-icon"><i class="bi {{ r.spec.icon }}"></i></div>
+      <div>
+        <div class="fc-name">{{ r.spec.name }}</div>
+        <div class="fc-desc">{{ r.spec.description }}</div>
+        <div class="fc-meta">
+          {% for p in r.spec.url_prefixes|slice:":3" %}<code>{{ p }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}{% if r.spec.url_prefixes|length > 3 %} +{{ r.spec.url_prefixes|length|add:"-3" }} more{% endif %}
+          {% if r.requires %}<span class="ms-2">Needs {% for q in r.requires %}{{ q.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</span>{% endif %}
+          {% if r.dependents %}<span class="ms-2">Used by {% for d in r.dependents %}{{ d.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</span>{% endif %}
+          {% if r.mode == 'pilot' %}<span class="ms-2">{{ r.pilot_count }} pilot audience entr{{ r.pilot_count|pluralize:"y,ies" }}</span>{% endif %}
+        </div>
+        {% if r.blocked_by and r.mode != 'off' %}
+          <div class="fc-warn mt-1"><i class="bi bi-exclamation-triangle me-1"></i>Unavailable until {% for b in r.blocked_by %}{{ b.name }}{% if not forloop.last %}, {% endif %}{% endfor %} is switched on.</div>
+        {% endif %}
+      </div>
+      <div class="fc-actions d-flex align-items-center gap-2 justify-content-end">
+        {% if r.spec.locked %}
+          <span class="fc-lock"><i class="bi bi-lock me-1"></i>Always on</span>
+        {% else %}
+          <div class="fc-seg" role="group" aria-label="{{ r.spec.name }} mode">
+            <button type="button" data-mode="on"    class="{% if r.mode == 'on' %}active{% endif %}">On</button>
+            <button type="button" data-mode="pilot" class="{% if r.mode == 'pilot' %}active{% endif %}">Pilot</button>
+            <button type="button" data-mode="off"   class="{% if r.mode == 'off' %}active{% endif %}">Off</button>
+          </div>
+          <button class="btn btn-sm btn-light" type="button" data-bs-toggle="collapse" data-bs-target="#set-{{ r.spec.key }}" aria-label="Settings for {{ r.spec.name }}"><i class="bi bi-sliders"></i></button>
+        {% endif %}
+      </div>
+      {% if not r.spec.locked %}
+      <div class="collapse fc-settings" id="set-{{ r.spec.key }}">
+        <form method="post" action="{% url 'features:settings' r.spec.key %}" class="row g-3">
+          {% csrf_token %}
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Pilot people (emails)</label>
+            <textarea name="pilot_emails" rows="2" class="form-control form-control-sm" placeholder="amie@easysolutions.gm, lamin@easysolutions.gm">{% if r.flag %}{% for u in r.flag.pilot_users.all %}{{ u.email }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}</textarea>
+            <div class="form-text">Used only when the module is in Pilot. Superusers are always included.</div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Pilot groups</label>
+            <select name="pilot_groups" multiple class="form-select form-select-sm" size="3">
+              {% for g in all_groups %}
+                <option value="{{ g.pk }}" {% if r.flag and g in r.flag.pilot_groups.all %}selected{% endif %}>{{ g.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-8">
+            <label class="form-label small fw-semibold">Message when off</label>
+            <input name="off_message" class="form-control form-control-sm" maxlength="300" value="{{ r.flag.off_message|default:'' }}" placeholder="{{ r.spec.name }} is paused for maintenance. Contact IT for help.">
+          </div>
+          <div class="col-md-4 d-flex align-items-end">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="superuser_preview" value="1" id="pv-{{ r.spec.key }}" {% if r.flag.superuser_preview %}checked{% endif %}>
+              <label class="form-check-label small" for="pv-{{ r.spec.key }}">Let superusers open it while off</label>
+            </div>
+          </div>
+          <div class="col-12"><button class="btn btn-sm btn-primary"><i class="bi bi-check2 me-1"></i>Save settings</button></div>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+
+  {% if unknown_flags %}
+  <section class="fc-cat">
+    <header><span>Flags with no matching module</span></header>
+    {% for f in unknown_flags %}
+      <div class="fc-row is-off"><div class="fc-icon"><i class="bi bi-question"></i></div><div><div class="fc-name">{{ f.key }}</div><div class="fc-desc">Stored mode “{{ f.mode }}”. The app that defined it is not installed; this row has no effect.</div></div><div></div></div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <section class="fc-cat">
+    <header><span>Recent changes</span><a class="small" href="{% url 'features:audit' %}">See all</a></header>
+    <div class="table-responsive">
+      <table class="table table-sm mb-0 align-middle">
+        <tbody>
+        {% for e in recent_log %}
+          <tr>
+            <td class="text-muted small text-nowrap ps-3">{{ e.created_at|date:"j M, H:i" }}</td>
+            <td><code>{{ e.key }}</code></td>
+            <td class="small">{% if e.old_mode != e.new_mode %}{{ e.old_mode|default:"default" }} → <b>{{ e.new_mode }}</b>{% else %}settings{% endif %}</td>
+            <td class="small text-muted">{{ e.note }}</td>
+            <td class="small pe-3">{{ e.actor.get_full_name|default:e.actor.email|default:"system" }}</td>
+          </tr>
+        {% empty %}
+          <tr><td class="text-muted small p-3">No changes yet. Every switch you flip is recorded here.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<div class="modal fade" id="fcCascadeModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+    <div class="modal-header"><h6 class="modal-title">Other modules depend on this</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body"><p id="fcCascadeText" class="mb-0 small"></p></div>
+    <div class="modal-footer">
+      <button class="btn btn-sm btn-light" data-bs-dismiss="modal">Keep it on</button>
+      <button class="btn btn-sm btn-danger" id="fcCascadeGo">Turn them all off</button>
+    </div>
+  </div></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const csrf = '{{ csrf_token }}';
+  const toast = document.getElementById('fcToast');
+  const modalEl = document.getElementById('fcCascadeModal');
+  let pending = null;
+
+  function show(msg, kind) {
+    toast.className = 'alert alert-' + kind;
+    toast.textContent = msg;
+    toast.classList.remove('d-none');
+    toast.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+  }
+
+  function paint(modes) {
+    Object.entries(modes).forEach(([key, mode]) => {
+      const row = document.getElementById('row-' + key);
+      if (!row || !row.querySelector('.fc-seg')) return;
+      row.classList.remove('is-on', 'is-pilot', 'is-off');
+      row.classList.add('is-' + mode);
+      row.querySelectorAll('.fc-seg button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+    });
+  }
+
+  async function send(key, mode, cascade) {
+    const body = new URLSearchParams({mode, cascade: cascade ? '1' : '0'});
+    const url = '{% url "features:set_mode" "__KEY__" %}'.replace('__KEY__', key);
+    const res = await fetch(url, {
+      method: 'POST', body,
+      headers: {'X-CSRFToken': csrf, 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json'},
+    });
+    const data = await res.json().catch(() => ({ok: false, error: 'Unexpected server response.'}));
+    if (res.status === 409 && data.needs_cascade) {
+      pending = {key, mode};
+      document.getElementById('fcCascadeText').textContent = data.error;
+      bootstrap.Modal.getOrCreateInstance(modalEl).show();
+      return;
+    }
+    if (!data.ok) { show(data.error || 'Could not change the module.', 'danger'); return; }
+    paint(data.modes);
+    show(data.message, 'success');
+  }
+
+  document.querySelectorAll('.fc-seg button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.classList.contains('active')) return;
+      const key = btn.closest('.fc-row').dataset.key;
+      send(key, btn.dataset.mode, false);
+    });
+  });
+
+  document.getElementById('fcCascadeGo').addEventListener('click', () => {
+    bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+    if (pending) send(pending.key, pending.mode, true);
+    pending = null;
+  });
+})();
+</script>
+{% endblock %}

@@ -82,6 +82,12 @@ urlpatterns = [
     path('forms/', include('apps.customforms.urls')),
     path('marketing/', include('apps.marketing.urls')),
 
+    # Feature control (superusers) — switch modules on/off/pilot
+    path('features/', include('apps.features.urls')),
+
+    # Investments: staff management + investor portal
+    path('investments/', include('apps.investments.urls_admin')),
+    path('invest/', include('apps.investments.urls_portal')),
 ]
 
 if settings.DEBUG:

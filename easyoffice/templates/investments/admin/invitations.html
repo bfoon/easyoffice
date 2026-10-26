@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Invite investors{% endblock %}
+{% block breadcrumb %}<a href="{% url 'investments:dashboard' %}">Investments</a> / <strong>Invitations</strong>{% endblock %}
+{% block content %}
+<div class="container-fluid py-3">
+  <h4 class="mb-3"><i class="bi bi-graph-up-arrow me-2"></i>Investments</h4>
+  {% include "investments/admin/_nav.html" %}
+  <div class="row g-3">
+    <div class="col-lg-4">
+      <div class="inv-card">
+        <div class="h">Send invitations</div>
+        <form method="post" class="b">
+          {% csrf_token %}
+          <label class="form-label small fw-semibold" for="rcp">Who to invite</label>
+          <textarea id="rcp" name="recipients" rows="6" class="form-control form-control-sm" placeholder="Awa Jallow &lt;awa@example.com&gt;&#10;Lamin Ceesay, lamin@example.com&#10;fatou@example.com" required></textarea>
+          <div class="form-text">One person per line. A name is optional.</div>
+          <label class="form-label small fw-semibold mt-3" for="msg">Personal message <span class="text-muted fw-normal">(optional)</span></label>
+          <textarea id="msg" name="message" rows="3" class="form-control form-control-sm" placeholder="Following our conversation last week…"></textarea>
+          <button class="btn btn-primary btn-sm mt-3 w-100"><i class="bi bi-send me-1"></i>Send invitations</button>
+          <p class="small text-muted mt-2 mb-0">Each person gets a private link to the application form. Links expire after the configured number of days and stop working once revoked.</p>
+        </form>
+      </div>
+    </div>
+    <div class="col-lg-8">
+      <div class="inv-card">
+        <div class="h">Sent
+          <form method="get"><select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+            <option value="">All</option>{% for k, l in statuses %}<option value="{{ k }}" {% if k == status %}selected{% endif %}>{{ l }}</option>{% endfor %}
+          </select></form>
+        </div>
+        <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+          <thead><tr><th class="ps-3">Invitee</th><th>Status</th><th>Sent</th><th>Expires</th><th class="pe-3"></th></tr></thead>
+          <tbody>
+          {% for i in invitations %}
+            <tr>
+              <td class="ps-3">{{ i.full_name|default:"—" }}<br><small class="text-muted">{{ i.email }}</small></td>
+              <td><span class="badge bg-{% if i.status == 'submitted' %}success{% elif i.status == 'revoked' %}secondary{% elif i.is_expired %}light text-dark{% else %}info text-dark{% endif %}">{% if i.is_expired and i.status != 'submitted' and i.status != 'revoked' %}Expired{% else %}{{ i.get_status_display }}{% endif %}</span>{% if i.opened_at %}<br><small class="text-muted">opened {{ i.opened_at|date:"j M" }}</small>{% endif %}</td>
+              <td class="small">{{ i.last_sent_at|date:"j M Y"|default:"—" }}<br><span class="text-muted">{{ i.sent_count }}×, by {{ i.invited_by.get_full_name|default:i.invited_by.email|default:"—" }}</span></td>
+              <td class="small">{{ i.expires_at|date:"j M Y" }}</td>
+              <td class="pe-3 text-end text-nowrap">
+                {% if i.status != 'submitted' and i.status != 'revoked' %}
+                <button type="button" class="btn btn-light btn-sm" title="Copy link" onclick="navigator.clipboard.writeText('{{ i.public_url }}');this.innerHTML='<i class=\'bi bi-check2\'></i>'"><i class="bi bi-link-45deg"></i></button>
+                <form method="post" action="{% url 'investments:invitation_action' i.pk %}" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="resend"><button class="btn btn-light btn-sm" title="Resend"><i class="bi bi-arrow-repeat"></i></button></form>
+                <form method="post" action="{% url 'investments:invitation_action' i.pk %}" class="d-inline" onsubmit="return confirm('Revoke this invitation? The link will stop working.')">{% csrf_token %}<input type="hidden" name="action" value="revoke"><button class="btn btn-light btn-sm text-danger" title="Revoke"><i class="bi bi-x-lg"></i></button></form>
+                {% elif i.status == 'submitted' and i.application %}
+                <a class="btn btn-light btn-sm" href="{% url 'investments:application_detail' i.application.pk %}">View application</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5" class="text-muted p-4 text-center">No invitations yet. Add people on the left to send their first link.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

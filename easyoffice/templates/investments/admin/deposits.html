@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% load invest_tags %}
+{% block title %}Deposits{% endblock %}
+{% block breadcrumb %}<a href="{% url 'investments:dashboard' %}">Investments</a> / <strong>Deposits</strong>{% endblock %}
+{% block content %}
+<div class="container-fluid py-3">
+  <h4 class="mb-3"><i class="bi bi-graph-up-arrow me-2"></i>Investments</h4>
+  {% include "investments/admin/_nav.html" %}
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <form method="get"><select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+      {% for k, l in statuses %}<option value="{{ k }}" {% if k == status %}selected{% endif %}>{{ l }}</option>{% endfor %}<option value="all" {% if status == 'all' %}selected{% endif %}>All</option>
+    </select></form>
+    <div class="small text-muted">Total shown: <strong class="num">{{ total|money }}</strong></div>
+  </div>
+  <p class="small text-muted">Check each amount against your Wave/QMoney/Afrimoney or bank statement before confirming. Confirming credits the investor’s wallet immediately.</p>
+  <div class="inv-card"><div class="table-responsive"><table class="table table-sm align-middle mb-0">
+    <thead><tr><th class="ps-3">Investor</th><th class="text-end">Amount</th><th>Method</th><th>Reference</th><th>Proof</th><th>Sent</th><th class="pe-3">{% if status == 'pending' %}Action{% else %}Status{% endif %}</th></tr></thead>
+    <tbody>
+    {% for d in deposits %}
+      <tr>
+        <td class="ps-3"><a href="{% url 'investments:investor_detail' d.account.pk %}">{{ d.account.display_name }}</a><br><small class="text-muted num">{{ d.account.account_no }}</small></td>
+        <td class="text-end num fw-semibold">{{ d.amount|money }}</td>
+        <td class="small">{{ d.get_method_display }}</td>
+        <td class="small num">{{ d.reference|default:"—" }}{% if d.note %}<br><span class="text-muted">{{ d.note }}</span>{% endif %}</td>
+        <td>{% if d.proof %}<a href="{% url 'investments:private_file' 'deposit' d.pk 'proof' %}" target="_blank" rel="noopener" class="small"><i class="bi bi-paperclip"></i> View</a>{% else %}<span class="text-muted small">—</span>{% endif %}</td>
+        <td class="small text-nowrap">{{ d.created_at|date:"j M H:i" }}</td>
+        <td class="pe-3">
+          {% if d.status == 'pending' %}
+          <form method="post" class="d-flex gap-1 flex-wrap">{% csrf_token %}<input type="hidden" name="id" value="{{ d.pk }}">
+            <input name="note" class="form-control form-control-sm" style="width:150px" placeholder="Note (optional)">
+            <button name="action" value="confirm" class="btn btn-success btn-sm" onclick="return confirm('Confirm {{ d.amount|money }} received?')">Confirm</button>
+            <button name="action" value="reject" class="btn btn-outline-danger btn-sm">Reject</button>
+          </form>
+          {% else %}
+          <span class="badge bg-{% if d.status == 'confirmed' %}success{% else %}secondary{% endif %}">{{ d.get_status_display }}</span>
+          <small class="text-muted d-block">{{ d.reviewed_by.get_full_name|default:d.reviewed_by.email }} {{ d.reviewed_at|date:"j M H:i" }}</small>
+          {% endif %}
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="7" class="text-muted p-4 text-center">No deposits {% if status == 'pending' %}waiting for confirmation{% endif %}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div></div>
+</div>
+{% endblock %}

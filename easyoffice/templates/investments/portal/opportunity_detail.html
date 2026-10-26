@@ -1,0 +1,227 @@
+{% extends "investments/portal/base.html" %}
+{% load invest_tags %}
+{% block title %}{{ o.title }}{% endblock %}
+
+{% block extra_css %}
+<style>
+  .back { display: inline-flex; gap: 6px; margin-bottom: 14px; text-decoration: none; font-size: 14px; }
+  .cover { height: 220px; border-radius: var(--r-lg); background: var(--capital-bg) center/cover no-repeat; margin-bottom: 20px; }
+  h1 { font-size: clamp(26px, 4vw, 36px); margin: 8px 0 6px; line-height: 1.15; }
+  .lead { font-size: 17px; color: var(--ink-2); max-width: 64ch; }
+  .terms { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: var(--r); overflow: hidden; margin: 22px 0; }
+  .terms > div { background: var(--card); padding: 14px 16px; }
+  .terms b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
+  .terms span { font-size: 13px; color: var(--ink-3); }
+  .desc { max-width: 68ch; white-space: pre-line; }
+  .products { display: flex; flex-wrap: wrap; gap: 8px; }
+  .sticky { position: sticky; top: 18px; }
+  .sim-out { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
+  .sim-out > div { border-radius: 10px; padding: 10px 12px; background: var(--surface); }
+  .sim-out .base { background: var(--profit-bg); }
+  .sim-out b { display: block; font-variant-numeric: tabular-nums; font-size: 17px; }
+  .sim-out span { font-size: 12.5px; color: var(--ink-3); }
+  input[type=range] { width: 100%; accent-color: var(--river); }
+  .mode { display: grid; gap: 8px; margin: 14px 0; }
+  .mode label { display: flex; gap: 10px; align-items: flex-start; font-weight: 500; border: 1px solid var(--rule); border-radius: 10px; padding: 10px 12px; cursor: pointer; margin: 0; }
+  .mode input { margin-top: 4px; accent-color: var(--river); }
+  .mode small { display: block; color: var(--ink-3); font-weight: 400; }
+  .upd { padding: 14px 0; border-bottom: 1px solid #edf2f1; }
+  .upd:last-child { border-bottom: 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<a class="back" href="{% url 'invest:opportunities' %}"><i class="bi bi-arrow-left"></i>All listings</a>
+
+<div class="grid g-main">
+  <div>
+    {% if o.cover_image %}<div class="cover" style="background-image:url('{{ o.cover_image.url }}')" role="img" aria-label="{{ o.title }}"></div>{% endif %}
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <span class="tag tag-{{ o.risk_level }}">{{ o.get_risk_level_display }} risk</span>
+      {% if o.category %}<span class="tag">{{ o.category }}</span>{% endif %}
+      {% if o.status != 'open' %}<span class="tag">{{ o.get_status_display }}</span>{% endif %}
+    </div>
+    <h1 class="display">{{ o.title }}</h1>
+    {% if o.tagline %}<p class="lead">{{ o.tagline }}</p>{% endif %}
+
+    <div class="terms">
+      <div><b class="{% if rate.basis == 'actual' %}pos{% endif %}">{% if rate.basis == 'none' %}—{% else %}{{ annual|floatformat:1 }}%{% endif %}</b><span>{% if rate.basis == 'actual' %}yearly return if reinvested{% elif rate.basis == 'estimated' %}estimated yearly return{% else %}no estimate yet{% endif %}</span></div>
+      <div><b>{{ o.investor_share_pct|pct:0 }}</b><span>of net profit to investors{% if o.scale_by_funding %}, at full funding{% endif %}</span></div>
+      <div><b>{{ o.get_distribution_frequency_display }}</b><span>payouts, next {{ next_payout|date:"j M" }}</span></div>
+      <div><b>{{ o.min_investment|money:0 }}</b><span>minimum{% if o.max_per_investor %}, up to {{ o.max_per_investor|money:0 }}{% endif %}</span></div>
+      <div><b>{{ o.lock_in_days }} day{{ o.lock_in_days|pluralize }}</b><span>lock-in, {{ o.early_exit_fee_pct|pct:1 }} fee to exit earlier</span></div>
+      <div><b>{% if o.loss_policy == 'absorb' %}We cover them{% else %}Shared{% endif %}</b><span>losses in a bad period</span></div>
+    </div>
+
+    {% if o.target_capital %}
+    <section class="card">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div><b class="num">{{ raised|money:0 }}</b> <span class="faint">raised of {{ o.target_capital|money:0 }}</span></div>
+        <div class="faint">{{ investors }} investor{{ investors|pluralize }}{% if room is not None %}, {{ room|money:0 }} still open{% endif %}</div>
+      </div>
+      <div class="bar" style="margin-top:10px"><i style="width:{{ funded|floatformat:0 }}%"></i></div>
+      {% if o.scale_by_funding %}<p class="faint" style="margin:10px 0 0">The investor share grows with funding: at {{ funded|floatformat:0 }}% funded, investors receive {{ funded|floatformat:0 }}% of the {{ o.investor_share_pct|pct:0 }} share.</p>{% endif %}
+    </section>
+    {% endif %}
+
+    {% if o.description %}
+    <section class="card">
+      <h2>About this listing</h2>
+      <div class="desc muted">{{ o.description }}</div>
+    </section>
+    {% endif %}
+
+    <section class="card">
+      <h2>Items that earn for this listing</h2>
+      <div class="products">{% for p in products %}<span class="tag">{{ p.name }}</span>{% endfor %}</div>
+      <p class="faint" style="margin:12px 0 0">Profit = what these items sell for, minus what they cost us, minus direct expenses such as transport. Sales are counted from {{ o.sales_start|date:"j M Y" }}.</p>
+    </section>
+
+    {% if dists %}
+    <section class="card">
+      <h2>Payout history</h2>
+      <div style="position:relative;height:200px;margin-bottom:12px"><canvas id="yieldChart" aria-label="Return per period"></canvas></div>
+      <div class="scroll-x">
+      <table class="list">
+        <thead><tr><th>Period</th><th class="t-right">Items sold</th><th class="t-right">Net profit</th><th class="t-right">Paid to investors</th><th class="t-right">Return</th></tr></thead>
+        <tbody>
+        {% for d in dists %}
+          <tr>
+            <td>{{ d.period_start|date:"j M" }} – {{ d.period_end|date:"j M Y" }}</td>
+            <td class="t-right num">{{ d.units_sold|floatformat:0 }}</td>
+            <td class="t-right num">{{ d.net_profit|money:0 }}</td>
+            <td class="t-right num">{{ d.investor_pool|money:0 }}</td>
+            <td class="t-right num {% if d.yield_pct >= 0 %}pos{% else %}neg{% endif %}">{{ d.yield_pct|pct:2 }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if updates %}
+    <section class="card">
+      <h2>Updates</h2>
+      {% for u in updates %}
+        <div class="upd"><b>{{ u.title }}</b> <span class="faint">{{ u.created_at|date:"j M Y" }}</span><div class="muted" style="white-space:pre-line;margin-top:4px">{{ u.body }}</div></div>
+      {% endfor %}
+    </section>
+    {% endif %}
+  </div>
+
+  <aside>
+    <div class="sticky">
+      {% if holding %}
+      <section class="card" style="background:var(--capital-bg);border-color:#cfdcea">
+        <div class="faint">Your investment</div>
+        <div class="display num" style="font-size:26px;color:var(--capital)">{{ holding.capital|money }}</div>
+        <div class="faint">Profit so far <b class="pos num">{{ holding.profit_total|money }}</b></div>
+        <a class="btn btn-quiet btn-sm" style="margin-top:12px;background:#fff" href="{% url 'invest:holding_detail' holding.pk %}">Manage</a>
+      </section>
+      {% endif %}
+
+      <section class="card">
+        <h2>{% if holding %}Add to this investment{% else %}Invest{% endif %}</h2>
+        {% if o.status == 'open' %}
+        <form method="post" id="investForm">
+          {% csrf_token %}
+          <div class="field">
+            <label for="amount">Amount</label>
+            <div class="input-money"><span>{% currency %}</span>
+              <input class="input" id="amount" name="amount" inputmode="decimal" autocomplete="off" required
+                     value="{% if not holding %}{{ o.min_investment|floatformat:0 }}{% endif %}">
+            </div>
+            <div class="help">Wallet: <b class="num">{{ account.wallet_balance|money }}</b>
+              {% if account.wallet_balance < o.min_investment %} · <a href="{% url 'invest:wallet' %}?do=deposit">add money first</a>{% endif %}</div>
+          </div>
+          {% if not holding %}
+          <div class="mode" role="radiogroup" aria-label="What to do with profit">
+            <label><input type="radio" name="payout_mode" value="reinvest" checked> <span>Reinvest profit<small>Profit is added to your capital, so it earns too.</small></span></label>
+            <label><input type="radio" name="payout_mode" value="wallet"> <span>Pay profit to my wallet<small>Capital stays the same; profit is yours to withdraw.</small></span></label>
+          </div>
+          {% endif %}
+          <button class="btn btn-go" style="width:100%" type="submit">Invest now</button>
+          <p class="faint" style="margin:10px 0 0">The amount moves from your wallet straight away. You can take capital back out later{% if o.lock_in_days %}; within {{ o.lock_in_days }} days of your last top-up a {{ o.early_exit_fee_pct|pct:1 }} fee applies{% endif %}.</p>
+        </form>
+        {% else %}
+          <p class="muted" style="margin:0">This listing is not taking new money right now.</p>
+        {% endif %}
+      </section>
+
+      {% if rate.basis != 'none' %}
+      <section class="card">
+        <h2>What could it earn?</h2>
+        <div class="field">
+          <label for="simAmount">If I invest <span class="num" id="simAmountOut"></span></label>
+          <input type="range" id="simAmount" min="{{ o.min_investment|floatformat:0 }}" max="1000000" step="500" value="{{ o.min_investment|floatformat:0 }}">
+        </div>
+        <div class="field">
+          <label for="simMonths">for <span id="simMonthsOut"></span></label>
+          <input type="range" id="simMonths" min="1" max="36" value="12">
+        </div>
+        <div class="seg" role="group" aria-label="Profit handling" id="simMode">
+          <button type="button" data-c="1" class="on">Reinvest</button>
+          <button type="button" data-c="0">Pay out</button>
+        </div>
+        <div class="sim-out">
+          <div><span>Cautious</span><b id="simLow"></b></div>
+          <div class="base"><span>Expected</span><b id="simBase"></b></div>
+          <div><span>Strong</span><b id="simHigh"></b></div>
+        </div>
+        <p class="faint" style="margin:10px 0 0">{% if rate.basis == 'actual' %}Based on the last {{ rate.periods }} payout{{ rate.periods|pluralize }}.{% else %}Estimated from the last 90 days of sales, at full funding.{% endif %} Not a promise.</p>
+      </section>
+      {% endif %}
+    </div>
+  </aside>
+</div>
+{{ sim|json_script:"sim-data" }}
+{{ yield_series|json_script:"yield-data" }}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const sim = JSON.parse(JSON.parse(document.getElementById('sim-data').textContent));
+  const a = document.getElementById('simAmount');
+  if (a) {
+    const m = document.getElementById('simMonths');
+    let compound = true;
+    const earn = (amt, r, days) => compound ? amt * (Math.pow(1 + r, days) - 1) : amt * r * days;
+    function run() {
+      const amt = +a.value, months = +m.value, days = Math.round(months * 30.437);
+      document.getElementById('simAmountOut').textContent = IP.fmt(amt);
+      document.getElementById('simMonthsOut').textContent = months + (months === 1 ? ' month' : ' months');
+      document.getElementById('simLow').textContent = '+' + IP.fmt(earn(amt, sim.low, days));
+      document.getElementById('simBase').textContent = '+' + IP.fmt(earn(amt, sim.daily, days));
+      document.getElementById('simHigh').textContent = '+' + IP.fmt(earn(amt, sim.high, days));
+    }
+    a.addEventListener('input', run); m.addEventListener('input', run);
+    document.querySelectorAll('#simMode button').forEach(b => b.addEventListener('click', () => {
+      compound = b.dataset.c === '1';
+      document.querySelectorAll('#simMode button').forEach(x => x.classList.toggle('on', x === b));
+      run();
+    }));
+    const amountInput = document.getElementById('amount');
+    if (amountInput) amountInput.addEventListener('input', () => {
+      const v = parseFloat(amountInput.value.replace(/,/g, ''));
+      if (v >= +a.min) { a.value = Math.min(v, +a.max); run(); }
+    });
+    run();
+  }
+
+  const series = JSON.parse(JSON.parse(document.getElementById('yield-data').textContent));
+  const yc = document.getElementById('yieldChart');
+  if (yc && series.length) {
+    new Chart(yc, {
+      type: 'bar',
+      data: { labels: series.map(s => s.label), datasets: [{ data: series.map(s => s.yield),
+        backgroundColor: series.map(s => s.yield >= 0 ? '#1f8a5b' : '#b4442f'), borderRadius: 6 }] },
+      options: { maintainAspectRatio: false,
+        scales: { x: { grid: { display: false } }, y: { grid: { color: '#edf2f1' }, ticks: { callback: v => v + '%' } } },
+        plugins: { tooltip: { callbacks: { label: c => ` Return: ${c.raw}%` } } } },
+    });
+  }
+})();
+</script>
+{% endblock %}

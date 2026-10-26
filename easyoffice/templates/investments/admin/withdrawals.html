@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% load invest_tags %}
+{% block title %}Withdrawals{% endblock %}
+{% block breadcrumb %}<a href="{% url 'investments:dashboard' %}">Investments</a> / <strong>Withdrawals</strong>{% endblock %}
+{% block content %}
+<div class="container-fluid py-3">
+  <h4 class="mb-3"><i class="bi bi-graph-up-arrow me-2"></i>Investments</h4>
+  {% include "investments/admin/_nav.html" %}
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <form method="get"><select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+      {% for k, l in statuses %}<option value="{{ k }}" {% if k == status %}selected{% endif %}>{{ l }}</option>{% endfor %}<option value="all" {% if status == 'all' %}selected{% endif %}>All</option>
+    </select></form>
+    <div class="small text-muted">Total shown: <strong class="num">{{ total|money }}</strong></div>
+  </div>
+  <p class="small text-muted">The amount is already held from the investor’s wallet. Send the money first, then mark it paid with the transaction reference. Rejecting returns the money to their wallet.</p>
+  <div class="inv-card"><div class="table-responsive"><table class="table table-sm align-middle mb-0">
+    <thead><tr><th class="ps-3">Investor</th><th class="text-end">Amount</th><th>Pay to</th><th>Requested</th><th class="pe-3">{% if status == 'pending' %}Action{% else %}Status{% endif %}</th></tr></thead>
+    <tbody>
+    {% for w in withdrawals %}
+      <tr>
+        <td class="ps-3"><a href="{% url 'investments:investor_detail' w.account.pk %}">{{ w.account.display_name }}</a><br><small class="text-muted num">{{ w.account.account_no }}</small></td>
+        <td class="text-end num fw-semibold">{{ w.amount|money }}</td>
+        <td class="small"><strong>{{ w.get_method_display }}</strong> {{ w.account_number }}<br>{{ w.account_name }} {{ w.bank_name }}{% if w.note %}<br><span class="text-muted">{{ w.note }}</span>{% endif %}</td>
+        <td class="small text-nowrap">{{ w.created_at|date:"j M H:i" }}</td>
+        <td class="pe-3">
+          {% if w.status == 'pending' %}
+          <form method="post" class="d-flex gap-1 flex-wrap">{% csrf_token %}<input type="hidden" name="id" value="{{ w.pk }}">
+            <input name="payout_reference" class="form-control form-control-sm" style="width:150px" placeholder="Payout reference">
+            <input name="note" class="form-control form-control-sm" style="width:140px" placeholder="Note / reason">
+            <button name="action" value="paid" class="btn btn-success btn-sm">Mark paid</button>
+            <button name="action" value="reject" class="btn btn-outline-danger btn-sm" onclick="return confirm('Reject and return the money to the wallet?')">Reject</button>
+          </form>
+          {% else %}
+          <span class="badge bg-{% if w.status == 'paid' %}success{% else %}secondary{% endif %}">{{ w.get_status_display }}</span>
+          <small class="text-muted d-block">{% if w.payout_reference %}Ref {{ w.payout_reference }} · {% endif %}{{ w.reviewed_at|date:"j M H:i" }}</small>
+          {% endif %}
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="5" class="text-muted p-4 text-center">No withdrawals {% if status == 'pending' %}to pay{% endif %}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div></div>
+</div>
+{% endblock %}

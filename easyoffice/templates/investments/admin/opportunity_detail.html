@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% load invest_tags %}
+{% block title %}{{ opp.title }}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'investments:opportunity_list' %}">Listings</a> / <strong>{{ opp.title }}</strong>{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3">
+  <h4 class="mb-3"><i class="bi bi-graph-up-arrow me-2"></i>Investments</h4>
+  {% include "investments/admin/_nav.html" %}
+
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+    <div>
+      <h5 class="mb-1">{{ opp.title }}</h5>
+      <span class="badge bg-{% if opp.status == 'open' %}success{% elif opp.status == 'paused' %}warning text-dark{% elif opp.status == 'draft' %}light text-dark{% else %}secondary{% endif %}">{{ opp.get_status_display }}</span>
+      <small class="text-muted ms-2">{{ opp.investor_share_pct|pct:0 }} to investors{% if opp.scale_by_funding %} at full funding{% endif %} · {{ opp.get_distribution_frequency_display|lower }} payouts · {{ opp.get_loss_policy_display|lower }}</small>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary btn-sm" href="{% url 'investments:opportunity_edit' opp.pk %}"><i class="bi bi-pencil me-1"></i>Edit</a>
+      <form method="post" class="d-flex gap-1">{% csrf_token %}<input type="hidden" name="action" value="status">
+        {% if opp.status != 'open' %}<button name="status" value="open" class="btn btn-success btn-sm">Open for investment</button>{% endif %}
+        {% if opp.status == 'open' %}<button name="status" value="paused" class="btn btn-outline-warning btn-sm">Pause new money</button>{% endif %}
+        {% if opp.status != 'closed' and opp.status != 'draft' %}<button name="status" value="closed" class="btn btn-outline-secondary btn-sm" onclick="return confirm('Close this listing? Existing holdings keep earning until investors withdraw.')">Close</button>{% endif %}
+      </form>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-lg"><div class="inv-kpi"><div class="l">Raised</div><div class="v text-capital">{{ raised|money:0 }}</div><div class="s">{{ funded|floatformat:0 }}% of {{ opp.target_capital|money:0 }}</div></div></div>
+    <div class="col-6 col-lg"><div class="inv-kpi"><div class="l">Investors</div><div class="v">{{ holders|length }}</div><div class="s">min {{ opp.min_investment|money:0 }}</div></div></div>
+    <div class="col-6 col-lg"><div class="inv-kpi"><div class="l">Yearly return</div><div class="v text-profit">{% if rate.basis == 'none' %}—{% else %}{{ annual|floatformat:1 }}%{% endif %}</div><div class="s">{% if rate.basis == 'actual' %}from {{ rate.periods }} payouts{% elif rate.basis == 'estimated' %}estimated from last 90 days of sales{% else %}no data yet{% endif %}</div></div></div>
+    <div class="col-6 col-lg"><div class="inv-kpi"><div class="l">This period so far</div><div class="v">{{ live.net_profit|money:0 }}</div><div class="s">profit, {{ live.investor_pool|money:0 }} to investors if it ended now</div></div></div>
+  </div>
+
+  {% if due %}
+  <div class="alert alert-info d-flex flex-wrap align-items-center gap-2 py-2">
+    <span>{{ due|length }} completed period{{ due|length|pluralize }} not calculated yet (the nightly job does this automatically).</span>
+    <form method="post" class="ms-auto">{% csrf_token %}<input type="hidden" name="action" value="run_due"><button class="btn btn-sm btn-primary">Calculate now</button></form>
+  </div>
+  {% endif %}
+
+  <div class="row g-3">
+    <div class="col-lg-8">
+      <div class="inv-card mb-3">
+        <div class="h">Current period: {{ period_start|date:"j M" }} – {{ period_end|date:"j M Y" }} <small class="text-muted fw-normal">live preview, nothing posted</small></div>
+        <div class="b">
+          <div class="row small g-2 mb-3">
+            <div class="col-6 col-md-3"><div class="text-muted">Revenue</div><strong class="num">{{ live.revenue|money:0 }}</strong></div>
+            <div class="col-6 col-md-3"><div class="text-muted">Cost of goods</div><strong class="num">{{ live.cost|money:0 }}</strong></div>
+            <div class="col-6 col-md-3"><div class="text-muted">Adjustments</div><strong class="num">{{ live.adjustments_net|signed_money }}</strong></div>
+            <div class="col-6 col-md-3"><div class="text-muted">Net profit</div><strong class="num">{{ live.net_profit|money:0 }}</strong></div>
+            <div class="col-6 col-md-3"><div class="text-muted">Avg capital</div><strong class="num">{{ live.avg_capital|money:0 }}</strong></div>
+            <div class="col-6 col-md-3"><div class="text-muted">Funding ratio</div><strong>{{ live.funding_ratio|floatformat:2 }}</strong></div>
+            <div class="col-6 col-md-3"><div class="text-muted">Effective share</div><strong>{{ live.effective_share_pct|floatformat:2 }}%</strong></div>
+            <div class="col-6 col-md-3"><div class="text-muted">Investor pool</div><strong class="num text-profit">{{ live.investor_pool|money:0 }}</strong></div>
+          </div>
+          {% if live.breakdown.products %}
+          <div class="table-responsive"><table class="table table-sm mb-0">
+            <thead><tr><th>Item</th><th class="text-end">Sold</th><th class="text-end">Revenue</th><th class="text-end">Cost</th><th class="text-end">Profit</th></tr></thead>
+            <tbody>{% for p in live.breakdown.products %}<tr><td>{{ p.name }} <small class="text-muted">{{ p.sku }}</small></td><td class="text-end num">{{ p.qty }}</td><td class="text-end num">{{ p.revenue }}</td><td class="text-end num">{{ p.cost }}</td><td class="text-end num">{{ p.profit }}</td></tr>{% endfor %}</tbody>
+          </table></div>
+          {% else %}<p class="small text-muted mb-0">No sales of the linked items yet this period.</p>{% endif %}
+          {% for n in live.breakdown.notes %}<div class="small text-warning mt-2">{{ n }}</div>{% endfor %}
+        </div>
+      </div>
+
+      <div class="inv-card mb-3">
+        <div class="h">Payout history</div>
+        {% if distributions %}<div class="b pb-0"><div style="height:200px"><canvas id="dchart"></canvas></div></div>{% endif %}
+        <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+          <thead><tr><th class="ps-3">Period</th><th class="text-end">Net profit</th><th class="text-end">Avg capital</th><th class="text-end">Investors get</th><th class="text-end">Return</th><th class="pe-3">Status</th></tr></thead>
+          <tbody>{% for x in distributions %}
+            <tr><td class="ps-3"><a href="{% url 'investments:distribution_detail' x.pk %}">{{ x.period_start|date:"j M" }} – {{ x.period_end|date:"j M Y" }}</a></td>
+              <td class="text-end num">{{ x.net_profit|money:0 }}</td><td class="text-end num">{{ x.avg_capital|money:0 }}</td>
+              <td class="text-end num text-profit">{{ x.investor_pool|money:0 }}</td><td class="text-end">{{ x.yield_pct|pct:2 }}</td>
+              <td class="pe-3"><span class="badge bg-{% if x.status == 'posted' %}success{% elif x.status == 'draft' %}warning text-dark{% else %}light text-dark{% endif %}">{{ x.get_status_display }}</span></td></tr>
+          {% empty %}<tr><td colspan="6" class="text-muted p-3">No periods calculated yet.</td></tr>{% endfor %}</tbody>
+        </table></div>
+      </div>
+
+      <div class="inv-card">
+        <div class="h">Investors</div>
+        <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+          <thead><tr><th class="ps-3">Investor</th><th class="text-end">Capital</th><th class="text-end">Profit earned</th><th>Profit goes to</th><th class="pe-3">Since</th></tr></thead>
+          <tbody>{% for h in holders %}
+            <tr><td class="ps-3"><a href="{% url 'investments:investor_detail' h.account.pk %}">{{ h.account.display_name }}</a></td>
+              <td class="text-end num">{{ h.capital|money }}</td><td class="text-end num text-profit">{{ h.profit_total|money }}</td>
+              <td class="small">{{ h.get_payout_mode_display }}</td><td class="pe-3 small">{{ h.first_invested_at|date:"j M Y" }}</td></tr>
+          {% empty %}<tr><td colspan="5" class="text-muted p-3">No investors yet.</td></tr>{% endfor %}</tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="inv-card mb-3"><div class="h">Linked items</div><ul class="list-group list-group-flush small">
+        {% for p in opp.products.all %}<li class="list-group-item d-flex justify-content-between"><span>{{ p.name }}<br><span class="text-muted">{{ p.sku }}</span></span><span class="text-end num text-muted">cost {{ p.cost_price|num:0 }}<br>sells {{ p.sell_price|num:0 }}</span></li>
+        {% empty %}<li class="list-group-item text-danger">No items linked — this listing cannot earn.</li>{% endfor %}
+      </ul></div>
+
+      <div class="inv-card mb-3"><div class="h">Expenses &amp; extra revenue</div><div class="b">
+        <form method="post" class="row g-2 mb-3">{% csrf_token %}<input type="hidden" name="action" value="adjustment">
+          <div class="col-6"><select name="kind" class="form-select form-select-sm">{% for k, l in Kinds.choices %}<option value="{{ k }}" {% if k == 'expense' %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></div>
+          <div class="col-6"><input type="date" name="date" class="form-control form-control-sm"></div>
+          <div class="col-12"><input name="amount" class="form-control form-control-sm" placeholder="Amount" inputmode="decimal" required></div>
+          <div class="col-12"><input name="description" class="form-control form-control-sm" placeholder="Transport from Banjul port" required></div>
+          <div class="col-12"><button class="btn btn-outline-primary btn-sm w-100">Record</button></div>
+        </form>
+        <ul class="list-group list-group-flush small">
+          {% for a in adjustments %}<li class="list-group-item px-0 d-flex justify-content-between gap-2">
+            <span>{{ a.date|date:"j M" }} {{ a.description }}</span>
+            <span class="text-nowrap num {% if a.kind == 'revenue' %}text-profit{% else %}text-danger{% endif %}">{{ a.signed_amount|signed_money }}
+              <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="id" value="{{ a.pk }}"><button class="btn btn-link btn-sm p-0 text-muted" title="Remove" onclick="return confirm('Remove this entry?')"><i class="bi bi-x"></i></button></form></span>
+          </li>{% empty %}<li class="list-group-item px-0 text-muted">None. Direct costs here reduce the profit investors share.</li>{% endfor %}
+        </ul>
+      </div></div>
+
+      <div class="inv-card"><div class="h">Post an update to investors</div><form method="post" class="b">
+        {% csrf_token %}<input type="hidden" name="action" value="update">
+        <input name="title" class="form-control form-control-sm mb-2" placeholder="New shipment arrived" required>
+        <textarea name="body" rows="3" class="form-control form-control-sm mb-2" placeholder="What changed and what it means for sales" required></textarea>
+        <div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="email" value="1" id="em" checked><label class="form-check-label small" for="em">Also email current investors</label></div>
+        <button class="btn btn-outline-primary btn-sm w-100">Post update</button>
+        {% for u in updates|slice:":3" %}<div class="small mt-3"><strong>{{ u.title }}</strong> <span class="text-muted">{{ u.created_at|date:"j M" }}</span></div>{% endfor %}
+      </form></div>
+    </div>
+  </div>
+</div>
+{{ chart|json_script:"opp-chart" }}
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script>
+(function () {
+  const el = document.getElementById('dchart');
+  if (!el) return;
+  const d = JSON.parse(JSON.parse(document.getElementById('opp-chart').textContent));
+  new Chart(el, { type: 'bar', data: { labels: d.labels, datasets: [
+      { label: 'Net profit', data: d.profit, backgroundColor: '#a7bfd6', borderRadius: 4 },
+      { label: 'Paid to investors', data: d.pool, backgroundColor: '#1f8a5b', borderRadius: 4 } ] },
+    options: { maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } }, scales: { x: { grid: { display: false } } } } });
+})();
+</script>
+{% endblock %}

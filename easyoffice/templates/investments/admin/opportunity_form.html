@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% load invest_tags %}
+{% block title %}{% if opp %}Edit {{ opp.title }}{% else %}New listing{% endif %}{% endblock %}
+{% block breadcrumb %}<a href="{% url 'investments:opportunity_list' %}">Listings</a> / <strong>{% if opp %}Edit{% else %}New{% endif %}</strong>{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3" style="max-width:1100px">
+  <h4 class="mb-3"><i class="bi bi-graph-up-arrow me-2"></i>{% if opp %}Edit “{{ opp.title }}”{% else %}New investment listing{% endif %}</h4>
+  {% include "investments/admin/_nav.html" %}
+  {% if errors %}<div class="alert alert-danger small">Please fix the highlighted fields.</div>{% endif %}
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <div class="row g-3">
+      <div class="col-lg-7">
+        <div class="inv-card mb-3"><div class="h">What investors see</div><div class="b">
+          <div class="mb-3"><label class="form-label small fw-semibold" for="title">Title</label>
+            <input id="title" name="title" class="form-control {% if errors.title %}is-invalid{% endif %}" maxlength="160" value="{{ d.title }}" placeholder="Solar panels and inverters, Q1 stock" required>
+            {% if errors.title %}<div class="invalid-feedback">{{ errors.title }}</div>{% endif %}</div>
+          <div class="mb-3"><label class="form-label small fw-semibold" for="tagline">One-line summary</label>
+            <input id="tagline" name="tagline" class="form-control" maxlength="220" value="{{ d.tagline }}" placeholder="Fast-moving solar stock sold through our shop and installation jobs"></div>
+          <div class="mb-3"><label class="form-label small fw-semibold" for="desc">Description</label>
+            <textarea id="desc" name="description" rows="6" class="form-control" placeholder="What is being sold, to whom, how fast it moves, what could go wrong.">{{ d.description }}</textarea></div>
+          <div class="row g-2">
+            <div class="col-md-4"><label class="form-label small fw-semibold" for="cat">Category</label><input id="cat" name="category" class="form-control" value="{{ d.category }}" placeholder="Electronics"></div>
+            <div class="col-md-4"><label class="form-label small fw-semibold" for="risk">Risk level</label>
+              <select id="risk" name="risk_level" class="form-select">{% for k, l in O.Risk.choices %}<option value="{{ k }}" {% if d.risk_level == k %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></div>
+            <div class="col-md-4"><label class="form-label small fw-semibold" for="cover">Cover image</label><input id="cover" type="file" name="cover_image" accept="image/*" class="form-control"></div>
+          </div>
+        </div></div>
+
+        <div class="inv-card mb-3"><div class="h">Items that earn for this listing {% if errors.products %}<span class="text-danger small fw-normal">{{ errors.products }}</span>{% endif %}</div><div class="b">
+          <input type="search" class="form-control form-control-sm mb-2" placeholder="Filter by name or SKU" id="pfilter" aria-label="Filter items">
+          <div style="max-height:320px;overflow:auto;border:1px solid var(--bs-border-color);border-radius:8px" id="plist">
+            {% for p in products %}
+              {% with pid=p.pk|stringformat:"s" %}
+              <label class="d-flex align-items-center gap-2 px-3 py-2 border-bottom small mb-0" data-q="{{ p.name|lower }} {{ p.sku|lower }}" {% if pid in taken %}style="opacity:.55"{% endif %}>
+                <input type="checkbox" name="products" value="{{ p.pk }}" class="form-check-input mt-0" {% if pid in selected %}checked{% endif %} {% if pid in taken and pid not in selected %}disabled{% endif %}>
+                <span class="flex-grow-1">{{ p.name }} <span class="text-muted">{{ p.sku }}</span>{% for k, v in taken.items %}{% if k == pid %}<span class="badge bg-light text-dark ms-1">in {{ v }}</span>{% endif %}{% endfor %}</span>
+                <span class="text-muted num">cost {{ p.cost_price|num:0 }} → sells {{ p.sell_price|num:0 }}</span>
+              </label>
+              {% endwith %}
+            {% empty %}
+              <div class="p-3 text-muted small">No active inventory items. Add products in Inventory first.</div>
+            {% endfor %}
+          </div>
+          <div class="form-text">Profit = sale price − cost price for these items. An item can earn for only one live listing at a time, so investors are never paid twice for the same sale.</div>
+        </div></div>
+      </div>
+
+      <div class="col-lg-5">
+        <div class="inv-card mb-3"><div class="h">Money terms</div><div class="b">
+          <div class="row g-2">
+            <div class="col-6"><label class="form-label small fw-semibold" for="share">Investor share of profit (%)</label><input id="share" name="investor_share_pct" class="form-control {% if errors.investor_share_pct %}is-invalid{% endif %}" value="{{ d.investor_share_pct }}" inputmode="decimal">{% if errors.investor_share_pct %}<div class="invalid-feedback">{{ errors.investor_share_pct }}</div>{% endif %}</div>
+            <div class="col-6"><label class="form-label small fw-semibold" for="target">Target capital</label><input id="target" name="target_capital" class="form-control {% if errors.target_capital %}is-invalid{% endif %}" value="{{ d.target_capital }}" inputmode="decimal"></div>
+            <div class="col-6"><label class="form-label small fw-semibold" for="min">Minimum per investor</label><input id="min" name="min_investment" class="form-control" value="{{ d.min_investment }}" inputmode="decimal"></div>
+            <div class="col-6"><label class="form-label small fw-semibold" for="max">Maximum per investor</label><input id="max" name="max_per_investor" class="form-control" value="{{ d.max_per_investor }}" inputmode="decimal" placeholder="No limit"></div>
+          </div>
+          <div class="form-check mt-3"><input class="form-check-input" type="checkbox" name="scale_by_funding" value="1" id="scale" {% if d.scale_by_funding %}checked{% endif %}><label class="form-check-label small" for="scale">Scale the share by funding (50% funded → half the share)</label></div>
+          <div class="form-check"><input class="form-check-input" type="checkbox" name="allow_overfunding" value="1" id="over" {% if d.allow_overfunding %}checked{% endif %}><label class="form-check-label small" for="over">Accept money beyond the target</label></div>
+          <div class="alert alert-light small mt-3 mb-0" id="example"></div>
+        </div></div>
+
+        <div class="inv-card mb-3"><div class="h">Payouts</div><div class="b">
+          <div class="row g-2">
+            <div class="col-6"><label class="form-label small fw-semibold" for="freq">How often</label><select id="freq" name="distribution_frequency" class="form-select">{% for k, l in O.Frequency.choices %}<option value="{{ k }}" {% if d.distribution_frequency == k %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></div>
+            <div class="col-6"><label class="form-label small fw-semibold" for="loss">Loss-making period</label><select id="loss" name="loss_policy" class="form-select">{% for k, l in O.LossPolicy.choices %}<option value="{{ k }}" {% if d.loss_policy == k %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></div>
+            <div class="col-6"><label class="form-label small fw-semibold" for="lock">Lock-in (days)</label><input id="lock" name="lock_in_days" class="form-control" value="{{ d.lock_in_days }}" inputmode="numeric"></div>
+            <div class="col-6"><label class="form-label small fw-semibold" for="fee">Early-exit fee (%)</label><input id="fee" name="early_exit_fee_pct" class="form-control" value="{{ d.early_exit_fee_pct }}" inputmode="decimal"></div>
+          </div>
+          <div class="form-check mt-3"><input class="form-check-input" type="checkbox" name="auto_post" value="1" id="auto" {% if d.auto_post %}checked{% endif %}><label class="form-check-label small" for="auto">Post payouts automatically (otherwise each one waits for your approval)</label></div>
+        </div></div>
+
+        <div class="inv-card mb-3"><div class="h">Which sales count</div><div class="b">
+          <label class="form-label small fw-semibold" for="ss">Count sales from</label>
+          <input id="ss" type="date" name="sales_start" class="form-control mb-2" value="{{ d.sales_start|default:'' }}">
+          <div class="form-check"><input class="form-check-input" type="checkbox" name="include_pos" value="1" id="ipos" {% if d.include_pos %}checked{% endif %}><label class="form-check-label small" for="ipos">Point-of-sale receipts</label></div>
+          <div class="form-check"><input class="form-check-input" type="checkbox" name="include_invoices" value="1" id="iinv" {% if d.include_invoices %}checked{% endif %}><label class="form-check-label small" for="iinv">Invoices (lines matched to the item name or SKU)</label></div>
+          <label class="form-label small fw-semibold mt-2" for="ib">Count an invoice</label>
+          <select id="ib" name="invoice_basis" class="form-select form-select-sm">{% for k, l in O.InvoiceBasis.choices %}<option value="{{ k }}" {% if d.invoice_basis == k %}selected{% endif %}>{{ l }}</option>{% endfor %}</select>
+        </div></div>
+
+        <div class="d-flex gap-2">
+          <button class="btn btn-primary"><i class="bi bi-check2 me-1"></i>Save listing</button>
+          <a class="btn btn-light" href="{% if opp %}{% url 'investments:opportunity_detail' opp.pk %}{% else %}{% url 'investments:opportunity_list' %}{% endif %}">Cancel</a>
+        </div>
+        <p class="small text-muted mt-2">New listings start as drafts. Open them from the listing page when ready.</p>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const f = document.getElementById('pfilter');
+  f.addEventListener('input', () => {
+    const q = f.value.trim().toLowerCase();
+    document.querySelectorAll('#plist [data-q]').forEach(l => { l.style.display = !q || l.dataset.q.includes(q) ? '' : 'none'; });
+  });
+  const cur = '{% currency %}';
+  const fmt = v => cur + ' ' + Math.round(v).toLocaleString('en-GB');
+  function example() {
+    const share = parseFloat(document.getElementById('share').value) || 0;
+    const target = parseFloat((document.getElementById('target').value || '').replace(/,/g, '')) || 0;
+    const scale = document.getElementById('scale').checked;
+    const profit = 100000, raised = target / 2;
+    const eff = scale && target ? share * 0.5 : share;
+    document.getElementById('example').innerHTML = target
+      ? `Example: a period makes ${fmt(profit)} net profit and ${fmt(raised)} (half the target) is invested. Investors receive <strong>${fmt(profit * eff / 100)}</strong> (${eff.toFixed(1)}%), split by how much each had in and for how long. The company keeps ${fmt(profit - profit * eff / 100)}.`
+      : 'Set a target to see an example payout.';
+  }
+  ['share', 'target', 'scale'].forEach(id => document.getElementById(id).addEventListener('input', example));
+  document.getElementById('scale').addEventListener('change', example);
+  example();
+})();
+</script>
+{% endblock %}

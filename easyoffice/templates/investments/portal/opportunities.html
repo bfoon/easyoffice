@@ -1,0 +1,92 @@
+{% extends "investments/portal/base.html" %}
+{% load invest_tags %}
+{% block title %}Listings{% endblock %}
+
+{% block extra_css %}
+<style>
+  .head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  .head h1 { margin: 0; font-size: 30px; }
+  .filters { display: flex; gap: 10px; flex-wrap: wrap; }
+  .listing { display: grid; grid-template-columns: 220px minmax(0, 1fr) 220px; gap: 0; background: var(--card); border: 1px solid var(--rule); border-radius: var(--r-lg); overflow: hidden; margin-bottom: 16px; text-decoration: none; color: inherit; }
+  .listing:hover { border-color: #b8cbc7; }
+  .listing .pic { background: var(--capital-bg) center/cover no-repeat; min-height: 170px; display: grid; place-items: center; color: var(--capital); font-size: 40px; }
+  .listing .body { padding: 20px 22px; }
+  .listing .body h2 { margin: 6px 0 4px; font-size: 20px; }
+  .listing .side { padding: 20px 22px; border-left: 1px solid var(--rule); background: #fafcfb; display: flex; flex-direction: column; justify-content: center; }
+  .rate { font-size: 30px; color: var(--profit); line-height: 1.1; }
+  .rate.est { color: #9c6e18; }
+  .facts { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 14px; font-size: 14px; }
+  .facts b { display: block; font-variant-numeric: tabular-nums; }
+  .facts span { color: var(--ink-3); font-size: 13px; }
+  .mine { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; font-weight: 600; color: var(--capital); background: var(--capital-bg); border-radius: 999px; padding: 2px 10px; }
+  @media (max-width: 900px) {
+    .listing { grid-template-columns: 1fr; }
+    .listing .pic { min-height: 120px; }
+    .listing .side { border-left: 0; border-top: 1px solid var(--rule); }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="head">
+  <div>
+    <h1 class="display">Listings</h1>
+    <div class="muted">Each listing is a set of items we sell. When they sell, investors share the profit.</div>
+  </div>
+  <div class="filters">
+    <div class="seg" role="group" aria-label="Risk">
+      <a href="?sort={{ sort }}" class="{% if not risk %}on{% endif %}">All</a>
+      <a href="?risk=low&sort={{ sort }}" class="{% if risk == 'low' %}on{% endif %}">Low risk</a>
+      <a href="?risk=medium&sort={{ sort }}" class="{% if risk == 'medium' %}on{% endif %}">Medium</a>
+      <a href="?risk=high&sort={{ sort }}" class="{% if risk == 'high' %}on{% endif %}">High</a>
+    </div>
+    <div class="seg" role="group" aria-label="Sort">
+      <a href="?risk={{ risk }}&sort=return" class="{% if sort == 'return' %}on{% endif %}">Best return</a>
+      <a href="?risk={{ risk }}&sort=funded" class="{% if sort == 'funded' %}on{% endif %}">Most funded</a>
+      <a href="?risk={{ risk }}&sort=new" class="{% if sort == 'new' %}on{% endif %}">Newest</a>
+    </div>
+  </div>
+</div>
+
+{% for r in rows %}
+  <a class="listing" href="{% url 'invest:opportunity_detail' r.o.slug %}">
+    <div class="pic" {% if r.o.cover_image %}style="background-image:url('{{ r.o.cover_image.url }}')"{% endif %}>
+      {% if not r.o.cover_image %}<i class="bi bi-box-seam"></i>{% endif %}
+    </div>
+    <div class="body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span class="tag tag-{{ r.o.risk_level }}">{{ r.o.get_risk_level_display }} risk</span>
+        {% if r.o.category %}<span class="tag">{{ r.o.category }}</span>{% endif %}
+        {% if r.o.status == 'paused' %}<span class="tag">Not taking new money</span>{% endif %}
+        {% if r.mine %}<span class="mine"><i class="bi bi-check2"></i>You hold {{ r.mine.capital|money:0 }}</span>{% endif %}
+      </div>
+      <h2>{{ r.o.title }}</h2>
+      <div class="muted">{{ r.o.tagline }}</div>
+      <div class="facts">
+        <div><b>{{ r.o.investor_share_pct|pct:0 }}</b><span>of profit to investors</span></div>
+        <div><b>{{ r.o.min_investment|money:0 }}</b><span>minimum</span></div>
+        <div><b>{{ r.o.get_distribution_frequency_display }}</b><span>payouts</span></div>
+        <div><b>{{ r.investors }}</b><span>investor{{ r.investors|pluralize }}</span></div>
+      </div>
+    </div>
+    <div class="side">
+      {% if r.rate.basis == 'none' %}
+        <div class="faint">No return estimate yet</div>
+      {% else %}
+        <div class="rate display num {% if r.rate.basis == 'estimated' %}est{% endif %}">{{ r.annual|floatformat:1 }}%</div>
+        <div class="faint">{% if r.rate.basis == 'actual' %}a year, based on {{ r.rate.periods }} payout{{ r.rate.periods|pluralize }}{% else %}a year, estimated from recent sales{% endif %}</div>
+      {% endif %}
+      {% if r.o.target_capital %}
+        <div class="bar" style="margin-top:16px"><i style="width:{{ r.funded|floatformat:0 }}%"></i></div>
+        <div class="faint num" style="margin-top:6px">{{ r.raised|money:0 }} of {{ r.o.target_capital|money:0 }}</div>
+      {% endif %}
+    </div>
+  </a>
+{% empty %}
+  <div class="card" style="text-align:center;padding:40px">
+    <p class="muted" style="margin:0">No listings match. {% if risk %}<a href="?">Show all risk levels</a>.{% else %}New listings will appear here; we will email you when one opens.{% endif %}</p>
+  </div>
+{% endfor %}
+
+<p class="faint" style="margin-top:22px">Returns come from selling real goods and change with sales. Past payouts do not guarantee future ones. Estimates for new listings use the last 90 days of sales of the same items.</p>
+{% endblock %}
